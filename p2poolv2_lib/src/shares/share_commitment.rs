@@ -534,11 +534,8 @@ mod tests {
         assert!(result.unwrap().is_none());
     }
 
-    /// Build a ShareHeader from a commitment and a realistic bitcoin coinbase,
-    /// returning both the header and the bitcoin transactions list.
-    fn header_and_bitcoin_transactions_from_commitment(
-        commitment: ShareCommitment,
-    ) -> (ShareHeader, Vec<bitcoin::Transaction>) {
+    /// Build a ShareHeader from a commitment and a realistic bitcoin coinbase.
+    fn header_from_commitment(commitment: ShareCommitment) -> ShareHeader {
         let coinbase = test_coinbase_transaction(1);
 
         let share_merkle_root: TxMerkleNode = bitcoin::merkle_tree::calculate_root(
@@ -574,7 +571,7 @@ mod tests {
             nonce: 0,
         };
 
-        let header = ShareHeader::from_commitment_and_header(
+        ShareHeader::from_commitment_and_header(
             commitment,
             bitcoin_header,
             share_merkle_root,
@@ -590,9 +587,7 @@ mod tests {
             template.height as u64,
             0,
             Extranonce::default(),
-        );
-
-        (header, bitcoin_transactions)
+        )
     }
 
     #[test]
@@ -604,8 +599,7 @@ mod tests {
         let expected_bits = commitment.bits;
         let expected_time = commitment.time;
 
-        let (header, _bitcoin_transactions) =
-            header_and_bitcoin_transactions_from_commitment(commitment);
+        let header = header_from_commitment(commitment);
 
         let reconstructed = ShareCommitment::from_share_header(&header);
 
@@ -628,8 +622,7 @@ mod tests {
         let commitment = create_test_commitment();
         let expected_hash = commitment.hash();
 
-        let (header, _bitcoin_transactions) =
-            header_and_bitcoin_transactions_from_commitment(commitment);
+        let header = header_from_commitment(commitment);
 
         let reconstructed = ShareCommitment::from_share_header(&header);
 
@@ -707,8 +700,7 @@ mod tests {
 
         let expected_hash = commitment.hash();
 
-        let (header, _bitcoin_transactions) =
-            header_and_bitcoin_transactions_from_commitment(commitment);
+        let header = header_from_commitment(commitment);
 
         assert_eq!(header.donation_address, Some(donation_address));
         assert_eq!(header.donation, Some(150));

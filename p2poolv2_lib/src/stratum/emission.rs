@@ -27,7 +27,6 @@ use tokio::sync::mpsc;
 pub struct Emission {
     pub pplns: SimplePplnsShare,
     pub header: Header,
-    pub coinbase: bitcoin::Transaction,
     pub blocktemplate: Arc<BlockTemplate>,
     pub share_commitment: Option<ShareCommitment>,
     /// Nanosecond timestamp embedded in the coinbase scriptSig.

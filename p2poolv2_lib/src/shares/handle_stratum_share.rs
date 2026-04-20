@@ -39,7 +39,6 @@ pub async fn handle_stratum_share(
     let Emission {
         pplns,
         header,
-        coinbase,
         blocktemplate,
         share_commitment,
         coinbase_nsecs,
@@ -89,14 +88,9 @@ pub async fn handle_stratum_share(
             extranonce,
         );
 
-        let mut bitcoin_transactions = Vec::with_capacity(blocktemplate.transactions.len() + 1);
-        bitcoin_transactions.push(coinbase);
-        bitcoin_transactions.extend(blocktemplate.decode_transactions());
-
         let share_block = ShareBlock {
             header: share_header,
             transactions: share_transactions,
-            bitcoin_transactions,
             template_merkle_branches,
         };
 
@@ -188,18 +182,9 @@ mod tests {
             nonce: 12345,
         };
 
-        // Create a minimal coinbase transaction
-        let coinbase = Transaction {
-            version: Version::TWO,
-            lock_time: LockTime::ZERO,
-            input: vec![],
-            output: vec![],
-        };
-
         Emission {
             pplns,
             header: bitcoin_header,
-            coinbase,
             blocktemplate: Arc::new(create_test_blocktemplate()),
             share_commitment: None,
             coinbase_nsecs: TEST_COINBASE_NSECS,
@@ -230,20 +215,11 @@ mod tests {
             nonce: 12345,
         };
 
-        // Create a minimal coinbase transaction
-        let coinbase = Transaction {
-            version: Version::TWO,
-            lock_time: LockTime::ZERO,
-            input: vec![],
-            output: vec![],
-        };
-
         let commitment = create_test_commitment();
 
         Emission {
             pplns,
             header: bitcoin_header,
-            coinbase,
             blocktemplate: Arc::new(create_test_blocktemplate()),
             share_commitment: Some(commitment),
             coinbase_nsecs: TEST_COINBASE_NSECS,
@@ -289,8 +265,6 @@ mod tests {
         let share_block = share_block.unwrap();
         // Verify the share block has the expected structure
         assert_eq!(share_block.transactions.len(), 1); // One share coinbase
-        // bitcoin_transactions includes the emission coinbase (1) + decoded template txs (0)
-        assert_eq!(share_block.bitcoin_transactions.len(), 1);
     }
 
     #[tokio::test]
@@ -379,14 +353,6 @@ mod tests {
             nonce: 12345,
         };
 
-        // Create a coinbase transaction
-        let coinbase = Transaction {
-            version: Version::TWO,
-            lock_time: LockTime::ZERO,
-            input: vec![],
-            output: vec![],
-        };
-
         // Create a valid template transaction by serializing a real Transaction
         let template_source_tx = Transaction {
             version: Version::TWO,
@@ -416,7 +382,6 @@ mod tests {
         let emission = Emission {
             pplns,
             header: bitcoin_header,
-            coinbase,
             blocktemplate: Arc::new(blocktemplate),
             share_commitment: Some(commitment),
             coinbase_nsecs: TEST_COINBASE_NSECS,
@@ -431,9 +396,6 @@ mod tests {
 
         assert!(result.is_ok());
         let share_block = result.unwrap().unwrap();
-
-        // Verify bitcoin transactions are included (1 coinbase + 2 from template)
-        assert_eq!(share_block.bitcoin_transactions.len(), 3);
 
         // Verify merkle branches are passed through from Emission to ShareBlock
         assert_eq!(share_block.template_merkle_branches.len(), 2);

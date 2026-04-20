@@ -469,7 +469,6 @@ pub fn build_block_from_work_components(path: &str, nsecs: u64) -> ShareBlock {
     ShareBlock {
         header: share_header,
         transactions: vec![ShareTransaction(share_coinbase)],
-        bitcoin_transactions,
         template_merkle_branches,
     }
 }
@@ -594,7 +593,6 @@ pub fn empty_share_block_from_header(header: ShareHeader) -> ShareBlock {
     ShareBlock {
         header,
         transactions: Vec::new(),
-        bitcoin_transactions: Vec::new(),
         template_merkle_branches: vec![],
     }
 }
@@ -607,7 +605,6 @@ pub fn valid_share_block_from_fixture() -> ShareBlock {
     ShareBlock {
         header,
         transactions: Vec::new(),
-        bitcoin_transactions: Vec::new(),
         template_merkle_branches: vec![],
     }
 }
@@ -640,7 +637,7 @@ fn test_share_block(
     let share_time = time.unwrap_or(1700000000u32);
     let prev_blockhash = BlockHash::from_str(prev_share_blockhash).unwrap();
 
-    let (bitcoin_header, bitcoin_transactions) = match bitcoin_block {
+    let (bitcoin_header, _bitcoin_transactions) = match bitcoin_block {
         Some(block) => (block.header, block.txdata),
         None => {
             // Build a commitment matching the share header fields
@@ -718,7 +715,6 @@ fn test_share_block(
     ShareBlock {
         header,
         transactions,
-        bitcoin_transactions,
         template_merkle_branches: vec![],
     }
 }

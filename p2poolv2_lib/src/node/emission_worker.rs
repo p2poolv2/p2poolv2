@@ -113,7 +113,6 @@ mod tests {
     use bitcoin::block::Header;
     use bitcoin::hashes::Hash;
     use bitcoin::{BlockHash, CompactTarget};
-    use bitcoin::{Transaction, absolute::LockTime, transaction::Version};
     use std::collections::HashMap;
     use std::sync::Arc;
     use std::time::Duration;
@@ -165,17 +164,9 @@ mod tests {
             nonce: 12345,
         };
 
-        let coinbase = Transaction {
-            version: Version::TWO,
-            lock_time: LockTime::ZERO,
-            input: vec![],
-            output: vec![],
-        };
-
         Emission {
             pplns,
             header: bitcoin_header,
-            coinbase,
             blocktemplate: Arc::new(create_test_blocktemplate()),
             share_commitment: None,
             coinbase_nsecs: TEST_COINBASE_NSECS,
@@ -205,19 +196,11 @@ mod tests {
             nonce: 12345,
         };
 
-        let coinbase = Transaction {
-            version: Version::TWO,
-            lock_time: LockTime::ZERO,
-            input: vec![],
-            output: vec![],
-        };
-
         let commitment = create_test_commitment();
 
         Emission {
             pplns,
             header: bitcoin_header,
-            coinbase,
             blocktemplate: Arc::new(create_test_blocktemplate()),
             share_commitment: Some(commitment),
             coinbase_nsecs: TEST_COINBASE_NSECS,

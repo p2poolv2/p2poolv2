@@ -26,8 +26,7 @@ use crate::shares::witness_commitment::WitnessCommitment;
 use crate::stratum::work::coinbase::extract_height_from_coinbase;
 use bitcoin::consensus::encode::Error::ParseFailed;
 use bitcoin::{
-    Address, BlockHash, CompactTarget, CompressedPublicKey, Target, Transaction, TxMerkleNode,
-    Txid, VarInt,
+    Address, BlockHash, CompactTarget, CompressedPublicKey, Target, TxMerkleNode, Txid, VarInt,
     block::Header,
     consensus::{Decodable, Encodable},
     hashes::Hash,
@@ -306,11 +305,6 @@ pub struct ShareBlock {
     pub header: ShareHeader,
     /// Share chain transactions - including the coinbase for the share.
     pub transactions: Vec<ShareTransaction>,
-    /// Bitcoin transactions, making for a full share block. These are
-    /// only useful when building a block to submitting to
-    /// bitcoin. These are not stored, or used in share validation.
-    #[serde(skip)]
-    pub bitcoin_transactions: Vec<Transaction>,
     /// Merkle path (branches) from coinbase position to the bitcoin
     /// merkle root. Used by validators to verify the bitcoin header's
     /// merkle_root matches the reconstructed coinbase.
@@ -404,7 +398,6 @@ impl ShareBlock {
         Ok(Self {
             header,
             transactions,
-            bitcoin_transactions: vec![],
             template_merkle_branches: vec![],
         })
     }
@@ -413,9 +406,7 @@ impl ShareBlock {
 /// Encode ShareBlock using rust-bitcoin Encodable support
 ///
 /// We have a new type ShareTransaction and have to encode a vector of
-/// `transactions` manually. The `bitcoin_transactions` is a vector of
-/// Transaction and rust-bitcoin provides encoding for vec of their
-/// types out of the box.
+/// `transactions` manually.
 impl Encodable for ShareBlock {
     fn consensus_encode<W: bitcoin::io::Write + ?Sized>(
         &self,
@@ -428,7 +419,6 @@ impl Encodable for ShareBlock {
         for tx in &self.transactions {
             len += tx.consensus_encode(w)?;
         }
-        len += self.bitcoin_transactions.consensus_encode(w)?;
         // Encode template merkle path
         len += VarInt(self.template_merkle_branches.len() as u64).consensus_encode(w)?;
         for node in &self.template_merkle_branches {
@@ -440,7 +430,7 @@ impl Encodable for ShareBlock {
 
 /// Decode ShareBlock using rust-bitcoin.
 ///
-/// See comment on Encodable for handling `transactions` vs `bitcoin_transactions`
+/// See comment on Encodable for handling `transactions`.
 impl Decodable for ShareBlock {
     fn consensus_decode<R: bitcoin::io::Read + ?Sized>(
         r: &mut R,
@@ -454,7 +444,6 @@ impl Decodable for ShareBlock {
         for _ in 0..tx_count {
             transactions.push(ShareTransaction::consensus_decode(r)?);
         }
-        let bitcoin_transactions = Vec::<Transaction>::consensus_decode(r)?;
         // Decode template merkle path
         let path_count = VarInt::consensus_decode(r)?.0 as usize;
         let max_path_capacity = 32; // merkle path depth is at most ~30 for any realistic block
@@ -468,7 +457,6 @@ impl Decodable for ShareBlock {
         Ok(ShareBlock {
             header,
             transactions,
-            bitcoin_transactions,
             template_merkle_branches,
         })
     }
