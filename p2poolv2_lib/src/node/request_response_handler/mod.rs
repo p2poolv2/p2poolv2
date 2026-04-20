@@ -580,6 +580,7 @@ mod tests {
         let mut chain_store_handle = ChainStoreHandle::default();
         chain_store_handle.expect_clone().returning(|| {
             let mut cloned = ChainStoreHandle::default();
+            cloned.expect_is_current().returning(|| true);
             cloned
                 .expect_get_missing_blockhashes()
                 .returning(|_| Vec::with_capacity(0));
@@ -682,6 +683,7 @@ mod tests {
         let mut chain_store_handle = ChainStoreHandle::default();
         chain_store_handle.expect_clone().returning(|| {
             let mut cloned = ChainStoreHandle::default();
+            cloned.expect_is_current().returning(|| true);
             cloned
                 .expect_get_missing_blockhashes()
                 .returning(|_| Vec::with_capacity(0));

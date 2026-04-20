@@ -15,7 +15,8 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::node::SwarmSend;
-use crate::node::messages::{GetData, InventoryMessage, Message};
+use crate::node::messages::InventoryMessage;
+use crate::node::p2p_message_handlers::senders::send_getheaders;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -27,13 +28,14 @@ use tracing::debug;
 
 /// Handle an Inventory message received from a peer.
 ///
-/// Inventory is sent unsolicited when a node becomes aware of a
-/// block, or in response to a getblocks message.  For BlockHashes, we
-/// check which blocks we are missing and send GetData requests back
-/// to the originating peer for each missing block.
+/// When the candidate chain is current, responds to block
+/// announcements by sending a getheaders request to sync any missing
+/// headers from the announcing peer. The headers-first pipeline then
+/// fetches the actual block data.
 ///
-/// The inventory supports list of blockhashes and transactions. Even
-/// though for now we only ever send a vector with a single blockhash.
+/// When the candidate chain is not current (initial sync in
+/// progress), inv messages are ignored because header sync will
+/// catch up independently.
 pub async fn handle_inventory<C: Send + Sync>(
     inventory: InventoryMessage,
     peer: libp2p::PeerId,
@@ -46,25 +48,20 @@ pub async fn handle_inventory<C: Send + Sync>(
         InventoryMessage::BlockHashes(blockhashes) => {
             debug!("Received block hashes locator: {:?}", blockhashes);
 
+            if !chain_store_handle.is_current() {
+                debug!("Chain not current, ignoring inv from peer {peer}");
+                return Ok(());
+            }
+
             let missing_blocks = chain_store_handle.get_missing_blockhashes(&blockhashes);
 
             if !missing_blocks.is_empty() {
                 debug!(
-                    "Requesting {} missing blocks from peer {}",
+                    "Have {} missing blocks from peer {}, sending getheaders",
                     missing_blocks.len(),
                     peer
                 );
-                for block_hash in missing_blocks {
-                    let get_block_request = Message::GetData(GetData::Block(block_hash));
-                    swarm_tx
-                        .send(SwarmSend::Request(peer, get_block_request))
-                        .await
-                        .map_err(|send_error| {
-                            format!(
-                                "Failed to send GetData request for block {block_hash}: {send_error}"
-                            )
-                        })?;
-                }
+                send_getheaders(peer, chain_store_handle, swarm_tx).await?;
             }
         }
         InventoryMessage::TransactionHashes(transaction_hashes) => {
@@ -81,34 +78,34 @@ pub async fn handle_inventory<C: Send + Sync>(
 #[cfg(test)]
 mod tests {
     use super::ChainStoreHandle;
-    use crate::node::messages::{GetData, InventoryMessage};
+    use crate::node::messages::InventoryMessage;
     use crate::node::p2p_message_handlers::receivers::inventory::handle_inventory;
     use crate::node::{Message, SwarmSend};
     use crate::test_utils::TestShareBlockBuilder;
     use bitcoin::BlockHash;
+    use bitcoin::hashes::Hash;
     use mockall::predicate::*;
     use tokio::sync::mpsc;
 
     #[tokio::test]
-    async fn test_handle_inventory_block_hashes() {
+    async fn test_handle_inventory_sends_getheaders_when_current() {
         let mut chain_store_handle = ChainStoreHandle::default();
         let peer_id = libp2p::PeerId::random();
 
         let block1 = TestShareBlockBuilder::new().build();
-        let block2 = TestShareBlockBuilder::new().build();
-        let block3 = TestShareBlockBuilder::new().build();
-
         let block_hash1: BlockHash = block1.block_hash();
-        let block_hash2: BlockHash = block2.block_hash();
-        let block_hash3: BlockHash = block3.block_hash();
 
-        let blockhashes = vec![block_hash1, block_hash2, block_hash3];
-        let missing_blocks = vec![block_hash1, block_hash3];
+        let blockhashes = vec![block_hash1];
+        let missing_blocks = vec![block_hash1];
 
+        chain_store_handle.expect_is_current().returning(|| true);
         chain_store_handle
             .expect_get_missing_blockhashes()
             .with(eq(blockhashes.clone()))
             .returning(move |_| missing_blocks.clone());
+        chain_store_handle
+            .expect_build_locator()
+            .return_once(|| Ok(vec![BlockHash::all_zeros()]));
 
         let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<u32>>(10);
 
@@ -117,27 +114,41 @@ mod tests {
 
         assert!(result.is_ok(), "handle_inventory should return Ok");
 
-        let message1 = swarm_rx.recv().await.unwrap();
-        match message1 {
-            SwarmSend::Request(sent_peer, Message::GetData(GetData::Block(hash))) => {
+        let message = swarm_rx.recv().await.unwrap();
+        match message {
+            SwarmSend::Request(sent_peer, Message::GetShareHeaders(locator, stop_hash)) => {
                 assert_eq!(sent_peer, peer_id);
-                assert_eq!(hash, block_hash1);
+                assert_eq!(locator, vec![BlockHash::all_zeros()]);
+                assert_eq!(stop_hash, BlockHash::all_zeros());
             }
-            _ => panic!("Expected SwarmSend::Request with GetData::Block for block_hash1"),
-        }
-
-        let message2 = swarm_rx.recv().await.unwrap();
-        match message2 {
-            SwarmSend::Request(sent_peer, Message::GetData(GetData::Block(hash))) => {
-                assert_eq!(sent_peer, peer_id);
-                assert_eq!(hash, block_hash3);
-            }
-            _ => panic!("Expected SwarmSend::Request with GetData::Block for block_hash3"),
+            _ => panic!("Expected SwarmSend::Request with GetShareHeaders"),
         }
 
         assert!(
             swarm_rx.try_recv().is_err(),
             "No more messages should have been sent"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_inventory_ignored_when_not_current() {
+        let mut chain_store_handle = ChainStoreHandle::default();
+        let peer_id = libp2p::PeerId::random();
+
+        let block1 = TestShareBlockBuilder::new().build();
+        let block_hash1: BlockHash = block1.block_hash();
+
+        chain_store_handle.expect_is_current().returning(|| false);
+
+        let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<u32>>(10);
+
+        let inventory = InventoryMessage::BlockHashes(vec![block_hash1]);
+        let result = handle_inventory(inventory, peer_id, chain_store_handle, swarm_tx).await;
+
+        assert!(result.is_ok());
+        assert!(
+            swarm_rx.try_recv().is_err(),
+            "No messages should be sent when chain is not current"
         );
     }
 
@@ -149,6 +160,7 @@ mod tests {
         let block1 = TestShareBlockBuilder::new().build();
         let block_hash1: BlockHash = block1.block_hash();
 
+        chain_store_handle.expect_is_current().returning(|| true);
         chain_store_handle
             .expect_get_missing_blockhashes()
             .returning(|_| Vec::with_capacity(0));
