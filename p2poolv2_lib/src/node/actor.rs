@@ -347,7 +347,7 @@ impl NodeActor {
     }
 
     async fn run(mut self) {
-        // Spawn emission worker - processes shares in separate task and enqueues SwarmSend::Broadcast
+        // Spawn emission worker - processes shares in separate task and enqueues SwarmSend::Inv
         let emission_worker = EmissionWorker::new(
             self.emissions_rx,
             self.node.swarm_tx.clone(),
@@ -406,16 +406,6 @@ impl NodeActor {
                                 error!("Error disconnecting peer {peer_id}");
                             } else {
                                 debug!("Disconnected peer: {peer_id}");
-                            }
-                        }
-                        Some(SwarmSend::Broadcast(share_block)) => {
-                            // Broadcast share to all peers (from emission worker)
-                            debug!("Broadcasting share to peers");
-                            if let Err(e) = self
-                                .node
-                                .send_to_all_peers(Message::ShareBlock(share_block))
-                            {
-                                error!("Error sending share to all peers {e}");
                             }
                         }
                         None => {

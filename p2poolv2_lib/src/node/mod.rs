@@ -38,7 +38,6 @@ use crate::node::validation_worker::ValidationSender;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
-use crate::shares::share_block::ShareBlock;
 use crate::shares::validation::ShareValidator;
 use behaviour::{P2PoolBehaviour, P2PoolBehaviourEvent};
 use bitcoin::BlockHash;
@@ -89,8 +88,6 @@ pub enum SwarmSend<C> {
     /// that other peers learn about the block and can request it via GetData.
     Inv(BlockHash),
     Disconnect(PeerId),
-    /// Broadcast a share block to all connected peers (from emission worker)
-    Broadcast(ShareBlock),
 }
 
 /// Node is the main struct that represents the node
