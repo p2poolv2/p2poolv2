@@ -516,7 +516,7 @@ dependencies = [
 
 [[package]]
 name = "bitcoindrpc"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "base64 0.22.1",
  "bitcoin",
@@ -3252,7 +3252,7 @@ checksum = "b15813163c1d831bf4a13c3610c05c0d03b39feb07f7e09fa234dac9b15aaf39"
 
 [[package]]
 name = "p2poolv2_api"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -3280,7 +3280,7 @@ dependencies = [
 
 [[package]]
 name = "p2poolv2_cli"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -3303,7 +3303,7 @@ dependencies = [
 
 [[package]]
 name = "p2poolv2_config"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "bitcoin",
  "bitcoindrpc",
@@ -3315,7 +3315,7 @@ dependencies = [
 
 [[package]]
 name = "p2poolv2_lib"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -3360,7 +3360,7 @@ dependencies = [
 
 [[package]]
 name = "p2poolv2_node"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "bitcoin",
  "bitcoindrpc",
@@ -3380,7 +3380,7 @@ dependencies = [
 
 [[package]]
 name = "p2poolv2_tests"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "base64 0.22.1",
  "bitcoin",
