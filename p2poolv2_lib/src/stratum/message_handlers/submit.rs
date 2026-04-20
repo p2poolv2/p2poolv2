@@ -160,7 +160,6 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
         .send(Emission {
             pplns: stratum_share.clone(),
             header: validation_result.header,
-            coinbase: validation_result.coinbase,
             blocktemplate: job.blocktemplate.clone(),
             share_commitment: job.share_commitment.clone(),
             coinbase_nsecs: job.coinbase_nsecs,

@@ -2628,7 +2628,6 @@ mod tests {
         .unwrap();
 
         share_block.header.bitcoin_header.merkle_root = coinbase_tx.compute_txid().into();
-        share_block.bitcoin_transactions = vec![coinbase_tx];
 
         // Mock PplnsWindow returning matching 60/40 distribution
         let mut mock_window = PplnsWindow::default();
@@ -2699,7 +2698,6 @@ mod tests {
         .unwrap();
 
         share_block.header.bitcoin_header.merkle_root = coinbase_tx.compute_txid().into();
-        share_block.bitcoin_transactions = vec![coinbase_tx];
 
         // Mock PplnsWindow returning 60/40 distribution
         let mut mock_window = PplnsWindow::default();
@@ -2783,7 +2781,6 @@ mod tests {
         let mut share_block = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
-        share_block.bitcoin_transactions = vec![coinbase_tx];
 
         let mut mock_window = PplnsWindow::default();
         mock_window
@@ -2838,7 +2835,6 @@ mod tests {
         .unwrap();
 
         share_block.header.bitcoin_header.merkle_root = coinbase_tx.compute_txid().into();
-        share_block.bitcoin_transactions = vec![coinbase_tx];
 
         let mut mock_window = PplnsWindow::default();
         mock_window
@@ -2952,7 +2948,6 @@ mod tests {
         .unwrap();
 
         share_block.header.bitcoin_header.merkle_root = coinbase_tx.compute_txid().into();
-        share_block.bitcoin_transactions = vec![coinbase_tx];
 
         // Mock PplnsWindow returning 3 miners with difficulties 500, 300, 200
         let mut mock_window = PplnsWindow::default();
@@ -3063,11 +3058,6 @@ mod tests {
             .map(TxMerkleNode::from_raw_hash)
             .collect();
 
-        let mut bitcoin_transactions = Vec::with_capacity(template_transactions.len() + 1);
-        bitcoin_transactions.push(coinbase_tx);
-        bitcoin_transactions.extend(template_transactions);
-        share_block.bitcoin_transactions = bitcoin_transactions;
-
         // Mock PplnsWindow returning 100% to address_a
         let mut mock_window = PplnsWindow::default();
         mock_window
@@ -3093,27 +3083,6 @@ mod tests {
             share_block.template_merkle_branches.len(),
             3,
             "Expected 3 merkle branches for 4 template transactions"
-        );
-
-        // Validation should still pass with empty bitcoin_transactions,
-        // proving the validator uses merkle branches, not the raw transactions.
-        share_block.bitcoin_transactions = vec![];
-
-        let mut mock_window = PplnsWindow::default();
-        mock_window
-            .expect_network()
-            .return_const(bitcoin::Network::Signet);
-        let addr_a_clone = address_a.clone();
-        mock_window
-            .expect_get_distribution_from_start_hash()
-            .returning(move |_, _| Some(HashMap::from([(addr_a_clone.clone(), 1000u128)])));
-        let pplns_window = Arc::new(RwLock::new(mock_window));
-
-        let result = validator.validate_bitcoin_payout(&share_block, pplns_window);
-        assert!(
-            result.is_ok(),
-            "Validation should pass without bitcoin_transactions, got: {}",
-            result.unwrap_err()
         );
     }
 
