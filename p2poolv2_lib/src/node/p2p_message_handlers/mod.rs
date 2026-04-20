@@ -39,7 +39,7 @@ use receivers::share_headers::handle_share_headers;
 use std::error::Error;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 const MAX_HEADERS_IN_RESPONSE: usize = 2000;
 
@@ -98,18 +98,13 @@ pub async fn handle_request<C: Send + Sync, T: TimeProvider + Send + Sync>(
             info!("Received transaction: {:?}", transaction);
             Ok(())
         }
-        Message::ShareBlock(share_block) => handle_share_block(
-            share_block,
-            &ctx.chain_store_handle,
-            ctx.validation_tx,
-            &ctx.block_receiver_handle,
-            ctx.share_validator.as_ref(),
-        )
-        .await
-        .map_err(|e| {
-            error!("Failed to add share from request: {}", e);
-            format!("Failed to add share from request: {e}").into()
-        }),
+        Message::ShareBlock(_) => {
+            warn!(
+                "Ignoring unsolicited ShareBlock from peer {}; blocks should be announced via inv",
+                ctx.peer
+            );
+            Ok(())
+        }
         other => {
             info!("Unexpected request type {other}");
             Ok(())
@@ -180,7 +175,6 @@ mod tests {
     use super::*;
     use crate::node::SwarmSend;
     use crate::node::messages::InventoryMessage;
-    use crate::node::p2p_message_handlers::receivers::block_receiver::BlockReceiverEvent::ShareBlockReceived;
     use crate::node::p2p_message_handlers::receivers::block_receiver::create_block_receiver_channel;
     use crate::node::request_response_handler::block_fetcher::BlockFetcherHandle;
     use crate::node::request_response_handler::block_fetcher::create_block_fetcher_channel;
@@ -628,82 +622,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_request_share_block() {
+    async fn test_handle_request_share_block_ignored() {
         let peer_id = libp2p::PeerId::random();
         let (swarm_tx, _swarm_rx) = mpsc::channel(32);
         let response_channel = 1u32;
-        let mut chain_store_handle = ChainStoreHandle::default();
+        let chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
-        let (block_fetcher_tx, _) = create_block_fetcher_channel();
-        let (validation_tx, _validation_rx) = create_validation_channel();
-        let (block_receiver_handle, mut block_receiver_rx) = create_block_receiver_channel();
+        let (block_fetcher_handle, validation_tx, block_receiver_handle) = test_handles();
 
         let share_block = valid_share_block_from_fixture();
-
-        // Block not yet in store
-        chain_store_handle
-            .expect_share_block_exists()
-            .returning(|_| false);
-
-        // Mock share validator to accept the share header
-        let mut mock_validator = MockDefaultShareValidator::default();
-        mock_validator
-            .expect_validate_share_header()
-            .returning(|_| Ok(()));
-
-        // Spawn a task to handle the BlockReceiver event and respond Ok
-        tokio::spawn(async move {
-            if let Some(ShareBlockReceived { result_tx, .. }) = block_receiver_rx.recv().await {
-                let _ = result_tx.send(Ok(()));
-            }
-        });
-
-        let ctx = RequestContext {
-            peer: peer_id,
-            request: Message::ShareBlock(share_block),
-            chain_store_handle,
-            response_channel,
-            swarm_tx,
-            time_provider,
-            block_fetcher_handle: block_fetcher_tx,
-            validation_tx,
-            block_receiver_handle,
-            share_validator: Arc::new(mock_validator),
-        };
-
-        let result = handle_request(ctx).await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_handle_request_share_block_store_error() {
-        let peer_id = libp2p::PeerId::random();
-        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
-        let response_channel = 1u32;
-        let mut chain_store_handle = ChainStoreHandle::default();
-        let time_provider = TestTimeProvider::new(SystemTime::now());
-        let (block_fetcher_handle, validation_tx, _) = test_handles();
-        let (block_receiver_handle, mut block_receiver_rx) = create_block_receiver_channel();
-
-        let share_block = valid_share_block_from_fixture();
-
-        // Block not yet in store
-        chain_store_handle
-            .expect_share_block_exists()
-            .returning(|_| false);
-
-        // Mock share validator to accept the share header
-        let mut mock_validator = MockDefaultShareValidator::default();
-        mock_validator
-            .expect_validate_share_header()
-            .returning(|_| Ok(()));
-
-        // Spawn a task to handle the BlockReceiver event and respond with error
-        tokio::spawn(async move {
-            if let Some(ShareBlockReceived { result_tx, .. }) = block_receiver_rx.recv().await {
-                let _ = result_tx.send(Err("test store error".into()));
-            }
-        });
 
         let ctx = RequestContext {
             peer: peer_id,
@@ -715,11 +642,14 @@ mod tests {
             block_fetcher_handle,
             validation_tx,
             block_receiver_handle,
-            share_validator: Arc::new(mock_validator),
+            share_validator: Arc::new(MockDefaultShareValidator::default()),
         };
 
         let result = handle_request(ctx).await;
-        assert!(result.is_err());
+        assert!(
+            result.is_ok(),
+            "Unsolicited ShareBlock should be ignored, not error"
+        );
     }
 
     #[tokio::test]
