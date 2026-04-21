@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.10.6] - 2026-04-21
+
+- Change the testnet4 genesis to today. This is our testnet4 daa
+  anchor.
+
 ## [v0.10.5] - 2026-04-20
 
 ### Fixed
