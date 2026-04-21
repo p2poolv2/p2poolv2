@@ -275,7 +275,7 @@ impl Default for NetworkConfig {
             max_miningshare_per_second: 100,
             max_inventory_per_second: 100,
             max_transaction_per_second: 100,
-            max_requests_per_second: 1,
+            max_requests_per_second: 100,
             dial_timeout_secs: 30,
         }
     }
