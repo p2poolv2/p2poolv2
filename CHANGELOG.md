@@ -26,6 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Remove rate limit window config option. The rate limit config uses
+  per second semantics, so the window option was unnecessary.
+
 - Check candidate chain (not just confirmed) for is_current
 
 - Send Inv messages with peer block knowledge for protocol correctness
