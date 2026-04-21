@@ -35,7 +35,7 @@ where
 
     let builder = ServiceBuilder::new().layer(RateLimitLayer::new(
         config.max_requests_per_second,
-        Duration::from_secs(1),
+        Duration::from_secs(1), // We have rate limit per second, so duration hardcoded to 1s
     ));
 
     let service = builder.service(base_service);
