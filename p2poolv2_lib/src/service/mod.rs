@@ -16,31 +16,152 @@
 
 pub mod p2p_service;
 
-use crate::config::NetworkConfig;
+use crate::node::SwarmSend;
 use crate::service::p2p_service::{P2PService, RequestContext};
 use crate::utils::time_provider::TimeProvider;
+use libp2p::PeerId;
 use std::error::Error;
 use std::time::Duration;
-use tower::{ServiceBuilder, limit::RateLimitLayer, util::BoxService};
+use tokio::sync::mpsc;
+use tower::limit::RateLimit;
+use tower::{Service, ServiceBuilder, ServiceExt, limit::RateLimitLayer};
+use tracing::{debug, error, info};
 
-/// Build the full service stack with rate limiting.
-pub fn build_service<C, T>(
-    config: NetworkConfig,
-) -> BoxService<RequestContext<C, T>, (), Box<dyn Error + Send + Sync>>
+/// Minimum per-peer channel capacity, matching the block fetcher's
+/// maximum in-flight requests per peer so a legitimate sync burst
+/// always fits without dropping.
+const MIN_PEER_CHANNEL_CAPACITY: u64 = 16;
+
+/// Handle to a per-peer service task.
+///
+/// Wraps the sender half of the channel used to forward inbound
+/// requests to the peer's dedicated processing task.
+pub struct PeerHandle<C, T> {
+    sender: mpsc::Sender<RequestContext<C, T>>,
+}
+
+impl<C, T> PeerHandle<C, T> {
+    /// Try to forward a request to the peer's task without blocking.
+    ///
+    /// Returns an error if the channel is full, meaning the peer's
+    /// task cannot keep up with the inbound request rate.
+    pub fn try_send(
+        &self,
+        request: RequestContext<C, T>,
+    ) -> Result<(), mpsc::error::TrySendError<RequestContext<C, T>>> {
+        self.sender.try_send(request)
+    }
+}
+
+/// Calculate the per-peer channel capacity.
+///
+/// Uses the larger of the configured rate limit and the minimum
+/// capacity needed for block sync bursts.
+fn peer_channel_capacity(max_requests_per_second: u64) -> usize {
+    std::cmp::max(max_requests_per_second, MIN_PEER_CHANNEL_CAPACITY) as usize
+}
+
+/// Build a rate-limited service for a single peer.
+fn build_rate_limited_service(max_requests_per_second: u64) -> RateLimit<P2PService> {
+    ServiceBuilder::new()
+        .layer(RateLimitLayer::new(
+            max_requests_per_second,
+            Duration::from_secs(1),
+        ))
+        .service(P2PService::new())
+}
+
+/// Spawn a per-peer service task and return a handle to send requests.
+///
+/// Creates a bounded channel and a rate-limited service, then spawns
+/// a tokio task that processes requests from the channel. The task
+/// exits when the channel closes (peer disconnected) or when the
+/// service fails (rate limit timeout or processing error), sending a
+/// disconnect command in the latter case.
+pub fn spawn_peer_service<C, T>(
+    peer_id: PeerId,
+    max_requests_per_second: u64,
+    swarm_tx: mpsc::Sender<SwarmSend<C>>,
+) -> PeerHandle<C, T>
 where
     C: Send + Sync + 'static,
     T: TimeProvider + Send + Sync + 'static,
 {
-    let base_service = P2PService::new();
+    let capacity = peer_channel_capacity(max_requests_per_second);
+    let service = build_rate_limited_service(max_requests_per_second);
+    let (sender, receiver) = mpsc::channel(capacity);
 
-    let builder = ServiceBuilder::new().layer(RateLimitLayer::new(
-        config.max_requests_per_second,
-        Duration::from_secs(1), // We have rate limit per second, so duration hardcoded to 1s
-    ));
+    tokio::spawn(run_peer_service(service, receiver, peer_id, swarm_tx));
 
-    let service = builder.service(base_service);
+    PeerHandle { sender }
+}
 
-    BoxService::new(service)
+/// Run the per-peer service loop.
+///
+/// Receives requests from the channel and processes each through the
+/// rate-limited service. Applies a 1-second timeout on service
+/// readiness to detect sustained overload.
+///
+/// Exits when:
+/// - The channel closes (sender dropped, peer disconnected)
+/// - The rate limiter is not ready within 1 second (sustained flood)
+/// - The service returns an error on call
+///
+/// On service failure, sends a disconnect command before exiting.
+async fn run_peer_service<C, T>(
+    mut service: RateLimit<P2PService>,
+    mut receiver: mpsc::Receiver<RequestContext<C, T>>,
+    peer_id: PeerId,
+    swarm_tx: mpsc::Sender<SwarmSend<C>>,
+) where
+    C: Send + Sync + 'static,
+    T: TimeProvider + Send + Sync + 'static,
+{
+    while let Some(request) = receiver.recv().await {
+        let ready_future = ServiceExt::<RequestContext<C, T>>::ready(&mut service);
+        match tokio::time::timeout(Duration::from_secs(1), ready_future).await {
+            Ok(Ok(_)) => {
+                if let Err(err) = service.call(request).await {
+                    error!("Service call failed for peer {}: {}", peer_id, err);
+                    let _ = swarm_tx.send(SwarmSend::Disconnect(peer_id)).await;
+                    return;
+                }
+            }
+            Ok(Err(err)) => {
+                error!("Service not ready for peer {}: {}", peer_id, err);
+                info!("Disconnecting peer {} due to service error", peer_id);
+                let _ = swarm_tx.send(SwarmSend::Disconnect(peer_id)).await;
+                return;
+            }
+            Err(_) => {
+                error!("Rate limit timeout for peer {}", peer_id);
+                info!(
+                    "Disconnecting peer {} due to sustained rate limit violation",
+                    peer_id
+                );
+                let _ = swarm_tx.send(SwarmSend::Disconnect(peer_id)).await;
+                return;
+            }
+        }
+    }
+    debug!(
+        "Peer service task exiting for peer {} -- channel closed",
+        peer_id
+    );
+}
+
+/// Build a boxed service stack with rate limiting.
+///
+/// Used by RequestResponseHandler until per-peer services are wired in.
+pub fn build_service<C, T>(
+    config: crate::config::NetworkConfig,
+) -> tower::util::BoxService<RequestContext<C, T>, (), Box<dyn Error + Send + Sync>>
+where
+    C: Send + Sync + 'static,
+    T: TimeProvider + Send + Sync + 'static,
+{
+    let service = build_rate_limited_service(config.max_requests_per_second);
+    tower::util::BoxService::new(service)
 }
 
 #[cfg(test)]
