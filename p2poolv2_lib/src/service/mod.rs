@@ -32,6 +32,12 @@ use tracing::{debug, error, info};
 /// always fits without dropping.
 const MIN_PEER_CHANNEL_CAPACITY: u64 = 16;
 
+/// How long to wait for a peer's service to become ready before
+/// declaring the peer is flooding and disconnecting it. Must be
+/// longer than the rate limit refill interval to avoid false
+/// positives from legitimate rate limit backpressure.
+const READY_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// Handle to a per-peer service task.
 ///
 /// Wraps the sender half of the channel used to forward inbound
@@ -91,7 +97,13 @@ where
     let service = build_rate_limited_service(max_requests_per_second);
     let (sender, receiver) = mpsc::channel(capacity);
 
-    tokio::spawn(run_peer_service(service, receiver, peer_id, swarm_tx));
+    tokio::spawn(run_peer_service(
+        service,
+        receiver,
+        peer_id,
+        swarm_tx,
+        READY_TIMEOUT,
+    ));
 
     PeerHandle { sender }
 }
@@ -99,12 +111,12 @@ where
 /// Run the per-peer service loop.
 ///
 /// Receives requests from the channel and processes each through the
-/// rate-limited service. Applies a 1-second timeout on service
+/// rate-limited service. Applies a configurable timeout on service
 /// readiness to detect sustained overload.
 ///
 /// Exits when:
 /// - The channel closes (sender dropped, peer disconnected)
-/// - The rate limiter is not ready within 1 second (sustained flood)
+/// - The rate limiter is not ready within `ready_timeout` (sustained flood)
 /// - The service returns an error on call
 ///
 /// On service failure, sends a disconnect command before exiting.
@@ -113,13 +125,14 @@ async fn run_peer_service<C, T>(
     mut receiver: mpsc::Receiver<RequestContext<C, T>>,
     peer_id: PeerId,
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
+    ready_timeout: Duration,
 ) where
     C: Send + Sync + 'static,
     T: TimeProvider + Send + Sync + 'static,
 {
     while let Some(request) = receiver.recv().await {
         let ready_future = ServiceExt::<RequestContext<C, T>>::ready(&mut service);
-        match tokio::time::timeout(Duration::from_secs(1), ready_future).await {
+        match tokio::time::timeout(ready_timeout, ready_future).await {
             Ok(Ok(_)) => {
                 if let Err(err) = service.call(request).await {
                     error!("Service call failed for peer {}: {}", peer_id, err);
@@ -150,455 +163,221 @@ async fn run_peer_service<C, T>(
     );
 }
 
-/// Build a boxed service stack with rate limiting.
-///
-/// Used by RequestResponseHandler until per-peer services are wired in.
-pub fn build_service<C, T>(
-    config: crate::config::NetworkConfig,
-) -> tower::util::BoxService<RequestContext<C, T>, (), Box<dyn Error + Send + Sync>>
-where
-    C: Send + Sync + 'static,
-    T: TimeProvider + Send + Sync + 'static,
-{
-    let service = build_rate_limited_service(config.max_requests_per_second);
-    tower::util::BoxService::new(service)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::NetworkConfig;
     use crate::node::SwarmSend;
     use crate::node::messages::Message;
-    use crate::node::p2p_message_handlers::receivers::block_receiver::BlockReceiverHandle;
     use crate::node::p2p_message_handlers::receivers::block_receiver::create_block_receiver_channel;
     use crate::node::request_response_handler::block_fetcher;
     use crate::node::validation_worker;
-    use crate::service::p2p_service::{P2PService, RequestContext};
     #[mockall_double::double]
     use crate::shares::chain::chain_store_handle::ChainStoreHandle;
     use crate::shares::validation::MockDefaultShareValidator;
     use crate::utils::time_provider::TestTimeProvider;
     use libp2p::PeerId;
-    use std::future::Future;
-    use std::pin::Pin;
     use std::sync::Arc;
-    use std::task::{Context, Poll};
-    use std::time::Instant;
     use std::time::SystemTime;
     use tokio::sync::mpsc;
-    use tokio::sync::mpsc::Sender;
     use tokio::sync::oneshot;
-    use tokio::time::{Duration, advance, timeout};
-    use tower::limit::RateLimit;
-    use tower::{Service, ServiceBuilder, ServiceExt, limit::RateLimitLayer};
+    use tokio::time::Duration;
 
-    fn fetcher_validation_handles_for_tests() -> (
-        block_fetcher::BlockFetcherHandle,
-        validation_worker::ValidationSender,
-        BlockReceiverHandle,
-    ) {
+    /// Build a RequestContext for testing with a oneshot response channel.
+    fn make_test_context(
+        peer_id: PeerId,
+        swarm_tx: mpsc::Sender<SwarmSend<oneshot::Sender<Message>>>,
+        response_channel: oneshot::Sender<Message>,
+    ) -> RequestContext<oneshot::Sender<Message>, TestTimeProvider> {
+        let mut chain_store_handle = ChainStoreHandle::default();
+        chain_store_handle
+            .expect_clone()
+            .returning(ChainStoreHandle::default);
         let (block_fetcher_tx, _) = block_fetcher::create_block_fetcher_channel();
         let (validation_tx, _) = validation_worker::create_validation_channel();
         let (block_receiver_handle, _) = create_block_receiver_channel();
-        (block_fetcher_tx, validation_tx, block_receiver_handle)
-    }
 
-    // This struct simulates a service that always fails on poll_ready()
-    struct AlwaysFailReadyService;
-
-    impl<C, T> tower::Service<RequestContext<C, T>> for AlwaysFailReadyService {
-        type Response = ();
-        type Error = Box<dyn std::error::Error + Send + Sync>;
-        type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
-
-        fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-            Poll::Ready(Err("simulated readiness failure".into()))
-        }
-
-        fn call(&mut self, _req: RequestContext<C, T>) -> Self::Future {
-            Box::pin(async { Ok(()) }) // Won't be called in this test
-        }
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn test_rate_limit_blocks_excess_requests() {
-        //! Verifies that Tower's RateLimitLayer enforces backpressure by making the service
-        //! not ready after the allowed rate is exceeded, and that readiness resumes after the interval.
-
-        const RATE: u64 = 1;
-        const INTERVAL: Duration = Duration::from_secs(1);
-        const TIMEOUT_MS: u64 = 100;
-
-        let svc = tower::service_fn(|_req| async {
-            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
-        });
-
-        let mut service = ServiceBuilder::new()
-            .layer(RateLimitLayer::new(RATE, INTERVAL))
-            .service(svc);
-
-        // First request should succeed
-        let result1 = service.ready().await.unwrap().call(()).await;
-        assert!(result1.is_ok(), "First request should succeed");
-
-        // All further requests within the interval should be rate limited (not ready)
-        for i in 1..=3 {
-            let not_ready = timeout(Duration::from_millis(TIMEOUT_MS), service.ready()).await;
-            assert!(
-                not_ready.is_err(),
-                "Request {i} should be rate limited (not ready yet), got: {not_ready:?}"
-            );
-        }
-
-        // Advance time and verify service becomes ready again
-        for i in 1..=3 {
-            advance(INTERVAL).await;
-            let ready = timeout(Duration::from_millis(TIMEOUT_MS), service.ready()).await;
-            assert!(ready.is_ok(), "Service should be ready after interval {i}");
-            let result = service.call(()).await;
-            assert!(result.is_ok(), "Request {i} after interval should succeed");
-        }
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn test_tower_rate_limiter_with_inline_request_context() {
-        // Setup a channel for the swarm sender
-        let (swarm_tx, _rx) = mpsc::channel(8);
-
-        // Create a response channel for the request context
-        let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
-
-        let (response_channel_tx1, _response_channel_rx1) = oneshot::channel::<Message>();
-
-        let (response_channel_tx2, _response_channel_rx2) = oneshot::channel::<Message>();
-
-        // Create a dummy ChainHandle and TimeProvider
-        let mut chain_store_handle = ChainStoreHandle::default();
-        chain_store_handle
-            .expect_clone()
-            .returning(ChainStoreHandle::default);
-
-        // Create a TestTimeProvider with the current system time
-        let time_provider = TestTimeProvider::new(SystemTime::now());
-
-        // Configure Tower RateLimitLayer: 2 requests per second
-        let mut service = ServiceBuilder::new()
-            .layer(RateLimitLayer::new(2, Duration::from_secs(1)))
-            .service(P2PService::new());
-
-        // Inline RequestContext construction
-        let (block_fetcher_handle, validation_tx, block_receiver_handle) =
-            fetcher_validation_handles_for_tests();
-        let ctx1 = RequestContext {
-            peer: PeerId::random(),
-            request: Message::NotFound(()),
-            chain_store_handle: chain_store_handle.clone(),
-            response_channel: response_channel_tx,
-            swarm_tx: swarm_tx.clone(),
-            time_provider: time_provider.clone(),
-            block_fetcher_handle: block_fetcher_handle.clone(),
-            validation_tx: validation_tx.clone(),
-            block_receiver_handle: block_receiver_handle.clone(),
-            share_validator: Arc::new(MockDefaultShareValidator::default()),
-        };
-
-        let ctx2 = RequestContext {
-            peer: PeerId::random(),
-            request: Message::NotFound(()),
-            chain_store_handle: chain_store_handle.clone(),
-            response_channel: response_channel_tx1,
-            swarm_tx: swarm_tx.clone(),
-            time_provider: time_provider.clone(),
-            block_fetcher_handle: block_fetcher_handle.clone(),
-            validation_tx: validation_tx.clone(),
-            block_receiver_handle: block_receiver_handle.clone(),
-            share_validator: Arc::new(MockDefaultShareValidator::default()),
-        };
-
-        let ctx3 = RequestContext {
-            peer: PeerId::random(),
-            request: Message::NotFound(()),
-            chain_store_handle: chain_store_handle.clone(),
-            response_channel: response_channel_tx2,
-            swarm_tx: swarm_tx.clone(),
-            time_provider: time_provider.clone(),
-            block_fetcher_handle,
-            validation_tx,
-            block_receiver_handle: block_receiver_handle.clone(),
-            share_validator: Arc::new(MockDefaultShareValidator::default()),
-        };
-
-        // First request should succeed
-        assert!(
-            <RateLimit<P2PService> as tower::ServiceExt<
-                p2p_service::RequestContext<
-                    tokio::sync::oneshot::Sender<Message>,
-                    TestTimeProvider,
-                >,
-            >>::ready(&mut service)
-            .await
-            .is_ok()
-        );
-
-        assert!(service.call(ctx1).await.is_ok());
-
-        // Second request should succeed
-        assert!(
-            <RateLimit<P2PService> as tower::ServiceExt<
-                p2p_service::RequestContext<
-                    tokio::sync::oneshot::Sender<Message>,
-                    TestTimeProvider,
-                >,
-            >>::ready(&mut service)
-            .await
-            .is_ok()
-        );
-
-        assert!(service.call(ctx2).await.is_ok());
-
-        // Third request should be rate limited (not ready)
-        assert!(
-            <RateLimit<P2PService> as tower::ServiceExt<
-                p2p_service::RequestContext<
-                    tokio::sync::oneshot::Sender<Message>,
-                    TestTimeProvider,
-                >,
-            >>::ready(&mut service)
-            .await
-            .is_ok()
-        );
-
-        // Advance time window
-        tokio::time::advance(Duration::from_secs(1)).await;
-
-        // Should be ready again
-        assert!(
-            <RateLimit<P2PService> as tower::ServiceExt<
-                p2p_service::RequestContext<
-                    tokio::sync::oneshot::Sender<Message>,
-                    TestTimeProvider,
-                >,
-            >>::ready(&mut service)
-            .await
-            .is_ok()
-        );
-        assert!(service.call(ctx3).await.is_ok());
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn test_service_disconnects_peer_on_ready_failure() {
-        // Setup a channel to observe swarm events
-        let (swarm_tx, mut swarm_rx) = mpsc::channel(8);
-        let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
-
-        // Dummy chain handle
-        let mut chain_store_handle = ChainStoreHandle::default();
-        chain_store_handle
-            .expect_clone()
-            .returning(ChainStoreHandle::default);
-
-        let time_provider = TestTimeProvider::new(SystemTime::now());
-
-        // Wrap with rate limit (though here rate limit is not really triggered)
-        let mut service = ServiceBuilder::new()
-            .layer(RateLimitLayer::new(1, Duration::from_secs(1)))
-            .service(AlwaysFailReadyService);
-
-        // Build a request context
-        let peer_id = PeerId::random();
-        let (block_fetcher_handle, validation_tx, block_receiver_handle) =
-            fetcher_validation_handles_for_tests();
-        let ctx = RequestContext {
+        RequestContext {
             peer: peer_id,
             request: Message::NotFound(()),
-            chain_store_handle: chain_store_handle.clone(),
-            response_channel: response_channel_tx,
-            swarm_tx: swarm_tx.clone(),
-            time_provider: time_provider.clone(),
-            block_fetcher_handle,
+            chain_store_handle,
+            response_channel,
+            swarm_tx,
+            time_provider: TestTimeProvider::new(SystemTime::now()),
+            block_fetcher_handle: block_fetcher_tx,
             validation_tx,
-            block_receiver_handle: block_receiver_handle.clone(),
+            block_receiver_handle,
             share_validator: Arc::new(MockDefaultShareValidator::default()),
-        };
-
-        // Try service.ready(), and on failure, trigger disconnect manually
-
-        if <RateLimit<AlwaysFailReadyService> as ServiceExt<
-            RequestContext<tokio::sync::oneshot::Sender<Message>, TestTimeProvider>,
-        >>::ready(&mut service)
-        .await
-        .is_err()
-        {
-            let _ = swarm_tx.send(SwarmSend::Disconnect(ctx.peer)).await;
         }
+    }
 
-        // Verify that a Disconnect command was sent
-        let received = swarm_rx.try_recv().expect("Expected a SwarmSend message");
-        if let SwarmSend::Disconnect(received_peer) = received {
-            assert_eq!(
-                received_peer, peer_id,
-                "Expected Disconnect for the correct peer"
-            );
+    #[tokio::test]
+    async fn test_rate_limit_timeout_disconnects_peer() {
+        //! Uses run_peer_service directly with rate=1/s and a 500ms
+        //! ready timeout. The rate refills at 1s but the timeout fires
+        //! at 500ms, guaranteeing the Disconnect path is taken.
+        let (swarm_tx, mut swarm_rx) = mpsc::channel(8);
+        let peer_id = PeerId::random();
+
+        let service = build_rate_limited_service(1);
+        let (sender, receiver) = mpsc::channel(16);
+        let ready_timeout = Duration::from_millis(500);
+        tokio::spawn(run_peer_service(
+            service,
+            receiver,
+            peer_id,
+            swarm_tx.clone(),
+            ready_timeout,
+        ));
+
+        // First request -- consumes the rate limit bucket
+        let (response_tx, _response_rx) = oneshot::channel::<Message>();
+        let ctx = make_test_context(peer_id, swarm_tx.clone(), response_tx);
+        sender.send(ctx).await.unwrap();
+
+        // Give the task time to process the first request
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Second request -- rate limiter is exhausted
+        let (response_tx2, _response_rx2) = oneshot::channel::<Message>();
+        let ctx2 = make_test_context(peer_id, swarm_tx.clone(), response_tx2);
+        sender.send(ctx2).await.unwrap();
+
+        // Wait for the 500ms timeout to fire (well before 1s refill)
+        let received = tokio::time::timeout(Duration::from_secs(2), swarm_rx.recv())
+            .await
+            .expect("Timed out waiting for Disconnect")
+            .expect("Channel closed unexpectedly");
+
+        if let SwarmSend::Disconnect(disconnected_peer) = received {
+            assert_eq!(disconnected_peer, peer_id);
         } else {
             panic!("Expected SwarmSend::Disconnect, got {:?}", received);
         }
+    }
 
-        // Ensure no additional messages were sent
+    #[tokio::test]
+    async fn test_dropped_handle_stops_peer_task() {
+        //! Verifies that dropping the PeerHandle closes the channel,
+        //! causing the peer's service task to exit cleanly without
+        //! sending a Disconnect.
+        let (swarm_tx, mut swarm_rx) = mpsc::channel(8);
+        let peer_id = PeerId::random();
+
+        let handle: PeerHandle<oneshot::Sender<Message>, TestTimeProvider> =
+            spawn_peer_service(peer_id, 10, swarm_tx.clone());
+
+        // Drop the handle -- channel closes, task should exit
+        drop(handle);
+
+        // Give the task a moment to notice the closed channel
+        tokio::task::yield_now().await;
+
+        // No Disconnect should be sent -- this is a clean shutdown
         assert!(
             swarm_rx.try_recv().is_err(),
-            "No additional SwarmSend messages expected"
+            "No Disconnect expected on clean handle drop"
         );
     }
 
     #[tokio::test]
-    async fn test_rate_limiter_limits_requests() {
-        // Setup a channel to observe swarm events
-        let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<mpsc::Sender<Message>>>(10);
-        let (response_channel_tx, _response_channel_rx) = mpsc::channel::<Message>(10);
+    async fn test_per_peer_rate_limit_independence() {
+        //! Two peers each get their own rate limiter (rate=1/s) with
+        //! a 500ms ready timeout. Peer A exhausts its rate limit and
+        //! gets disconnected, but Peer B processes its request fine.
+        let (swarm_tx, mut swarm_rx) = mpsc::channel(16);
+        let peer_a = PeerId::random();
+        let peer_b = PeerId::random();
+        let ready_timeout = Duration::from_millis(500);
 
-        // Dummy chain handle
-        let mut chain_store_handle = ChainStoreHandle::default();
-        chain_store_handle
-            .expect_clone()
-            .returning(|| ChainStoreHandle::default());
+        let service_a = build_rate_limited_service(1);
+        let (sender_a, receiver_a) = mpsc::channel(16);
+        tokio::spawn(run_peer_service(
+            service_a,
+            receiver_a,
+            peer_a,
+            swarm_tx.clone(),
+            ready_timeout,
+        ));
 
-        let time_provider = TestTimeProvider::new(SystemTime::now());
+        let service_b = build_rate_limited_service(1);
+        let (sender_b, receiver_b) = mpsc::channel(16);
+        tokio::spawn(run_peer_service(
+            service_b,
+            receiver_b,
+            peer_b,
+            swarm_tx.clone(),
+            ready_timeout,
+        ));
 
-        // Create a config with a low rate limit
-        let network_config = NetworkConfig {
-            max_requests_per_second: 1,
-            ..NetworkConfig::default()
-        };
+        // Peer A -- first request consumes its rate bucket
+        let (response_tx_a, _) = oneshot::channel::<Message>();
+        let ctx_a = make_test_context(peer_a, swarm_tx.clone(), response_tx_a);
+        sender_a.send(ctx_a).await.unwrap();
 
-        let peer_id = PeerId::random();
-        let (block_fetcher_handle, validation_tx, block_receiver_handle) =
-            fetcher_validation_handles_for_tests();
-        let ctx = RequestContext {
-            peer: peer_id,
-            request: Message::NotFound(()),
-            chain_store_handle: chain_store_handle.clone(),
-            response_channel: response_channel_tx.clone(),
-            swarm_tx: swarm_tx.clone(),
-            time_provider: time_provider.clone(),
-            block_fetcher_handle: block_fetcher_handle.clone(),
-            validation_tx: validation_tx.clone(),
-            block_receiver_handle: block_receiver_handle.clone(),
-            share_validator: Arc::new(MockDefaultShareValidator::default()),
-        };
+        // Give task A time to process
+        tokio::time::sleep(Duration::from_millis(50)).await;
 
-        let ctx1 = RequestContext {
-            peer: peer_id,
-            request: Message::NotFound(()),
-            chain_store_handle: chain_store_handle.clone(),
-            response_channel: response_channel_tx.clone(),
-            swarm_tx: swarm_tx.clone(),
-            time_provider: time_provider.clone(),
-            block_fetcher_handle,
-            validation_tx,
-            block_receiver_handle: block_receiver_handle.clone(),
-            share_validator: Arc::new(MockDefaultShareValidator::default()),
-        };
+        // Peer A -- second request, will be rate limited
+        let (response_tx_a2, _) = oneshot::channel::<Message>();
+        let ctx_a2 = make_test_context(peer_a, swarm_tx.clone(), response_tx_a2);
+        sender_a.send(ctx_a2).await.unwrap();
 
-        let mut service = build_service::<Sender<Message>, _>(network_config.clone());
+        // Peer B -- should process immediately despite A being rate limited
+        let (response_tx_b, _) = oneshot::channel::<Message>();
+        let ctx_b = make_test_context(peer_b, swarm_tx.clone(), response_tx_b);
+        sender_b.send(ctx_b).await.unwrap();
 
-        // First request should succeed immediately
+        // Wait for A's timeout to fire (500ms) plus some margin
+        tokio::time::sleep(Duration::from_millis(700)).await;
+
+        // Collect all messages -- expect a Disconnect for peer A only
+        let mut disconnect_peers = Vec::new();
+        while let Ok(message) = swarm_rx.try_recv() {
+            if let SwarmSend::Disconnect(peer) = message {
+                disconnect_peers.push(peer);
+            }
+        }
+
         assert!(
-            service.ready().await.is_ok(),
-            "First request should be ready"
-        );
-        assert!(service.call(ctx).await.is_ok(), "First call should succeed");
-
-        // Second request should wait due to rate limit (1 req/sec)
-        let start = Instant::now();
-        assert!(
-            tokio::time::timeout(Duration::from_secs(2), service.ready())
-                .await
-                .is_ok(),
-            "Second request should be ready within 2 seconds"
-        );
-        let elapsed = start.elapsed();
-        assert!(
-            elapsed >= Duration::from_millis(900) && elapsed <= Duration::from_millis(1100),
-            "Expected wait of ~1 second due to rate limit, got {:?}",
-            elapsed
+            disconnect_peers.contains(&peer_a),
+            "Peer A should be disconnected due to rate limit timeout"
         );
         assert!(
-            service.call(ctx1).await.is_ok(),
-            "Second call should succeed"
+            !disconnect_peers.contains(&peer_b),
+            "Peer B should NOT be disconnected"
         );
 
-        // No disconnect should occur
-        assert!(swarm_rx.try_recv().is_err(), "No disconnect expected");
+        drop(sender_a);
+        drop(sender_b);
     }
 
     #[tokio::test]
-    async fn test_rate_limiter_disconnects_on_timeout() {
-        // Setup a channel to observe swarm events
-        let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<mpsc::Sender<Message>>>(10);
-
-        let (response_channel_tx, _response_channel_rx) = mpsc::channel::<Message>(10);
-
-        // Dummy chain handle
-        let mut chain_store_handle = ChainStoreHandle::default();
-        chain_store_handle
-            .expect_clone()
-            .returning(ChainStoreHandle::default);
-
-        let time_provider = TestTimeProvider::new(SystemTime::now());
-
-        // Create a network_config with a low rate limit
-        let network_config = NetworkConfig {
-            max_requests_per_second: 1,
-            ..NetworkConfig::default()
-        };
-
+    async fn test_spawn_peer_service_processes_single_request() {
+        //! Minimal test: spawn a peer service, send one request, verify
+        //! the task processes it without panicking.
+        let (swarm_tx, _swarm_rx) = mpsc::channel(8);
         let peer_id = PeerId::random();
-        let (block_fetcher_handle, validation_tx, block_receiver_handle) =
-            fetcher_validation_handles_for_tests();
-        let ctx = RequestContext {
-            peer: peer_id,
-            request: Message::NotFound(()),
-            chain_store_handle: chain_store_handle.clone(),
-            response_channel: response_channel_tx,
-            swarm_tx: swarm_tx.clone(),
-            time_provider: time_provider.clone(),
-            block_fetcher_handle,
-            validation_tx,
-            block_receiver_handle: block_receiver_handle.clone(),
-            share_validator: Arc::new(MockDefaultShareValidator::default()),
-        };
 
-        let mut service = build_service::<Sender<Message>, _>(network_config.clone());
+        let handle: PeerHandle<oneshot::Sender<Message>, TestTimeProvider> =
+            spawn_peer_service(peer_id, 10, swarm_tx.clone());
 
-        // First request succeeds
-        assert!(
-            service.ready().await.is_ok(),
-            "First request should be ready"
-        );
-        assert!(service.call(ctx).await.is_ok(), "First call should succeed");
+        let (response_tx, _response_rx) = oneshot::channel::<Message>();
+        let ctx = make_test_context(peer_id, swarm_tx.clone(), response_tx);
+        handle.try_send(ctx).unwrap();
 
-        // Second request should timeout due to rate limit
-        let result = tokio::time::timeout(Duration::from_millis(500), service.ready()).await;
-        assert!(
-            result.is_err(),
-            "Second request should timeout due to rate limit"
-        );
+        // Drop the handle to close the channel, causing the task to exit
+        drop(handle);
 
-        if result.is_err() {
-            // Simulate a disconnect due to timeout
-            let _ = swarm_tx.send(SwarmSend::Disconnect(peer_id)).await;
-        }
+        // Give the task time to process and exit
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 
-        // Check that a disconnect was sent
-        let received = swarm_rx.try_recv().expect("Expected a SwarmSend message");
-        if let SwarmSend::Disconnect(received_peer) = received {
-            assert_eq!(
-                received_peer, peer_id,
-                "Expected Disconnect for the correct peer"
-            );
-        } else {
-            panic!("Expected SwarmSend::Disconnect, got {:?}", received);
-        }
+    #[tokio::test]
+    async fn test_peer_channel_capacity_calculation() {
+        //! Verifies channel capacity is max(rate, MIN_PEER_CHANNEL_CAPACITY).
+        assert_eq!(peer_channel_capacity(1), 16);
+        assert_eq!(peer_channel_capacity(16), 16);
+        assert_eq!(peer_channel_capacity(50), 50);
+        assert_eq!(peer_channel_capacity(100), 100);
     }
 }
