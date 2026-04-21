@@ -42,7 +42,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, warn};
 
 /// Handles request-response events from the libp2p network.
 ///
@@ -215,9 +215,12 @@ impl<C: Send + Sync + 'static> RequestResponseHandler<C> {
     /// Dispatch an inbound request to the peer's service task.
     ///
     /// Records peer block knowledge, then forwards the request
-    /// context to the peer's channel via try_send. If the channel
-    /// is full (peer is overwhelming us) or the peer has no handle,
-    /// the peer is disconnected.
+    /// context to the peer's channel via try_send.
+    ///
+    /// - Full: peer is overwhelming us, disconnect.
+    /// - Closed: task exited (rate limit or error), remove the stale
+    ///   handle so the next request spawns a fresh one.
+    /// - No handle: create one on the fly (defensive fallback).
     async fn dispatch_request(
         &mut self,
         peer: PeerId,
@@ -251,13 +254,16 @@ impl<C: Send + Sync + 'static> RequestResponseHandler<C> {
             }
         };
 
-        if let Err(send_error) = peer_handle.try_send(ctx) {
-            error!(
-                "Failed to forward request to peer {} service: {}",
-                peer, send_error
-            );
-            info!("Disconnecting peer {} due to channel overflow", peer);
-            let _ = self.swarm_tx.send(SwarmSend::Disconnect(peer)).await;
+        match peer_handle.try_send(ctx) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                error!("Peer {} service channel full, disconnecting", peer);
+                let _ = self.swarm_tx.send(SwarmSend::Disconnect(peer)).await;
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                warn!("Peer {} service task exited, removing stale handle", peer);
+                self.peer_handles.remove(&peer);
+            }
         }
 
         Ok(())
@@ -302,6 +308,7 @@ mod tests {
     use crate::node::p2p_message_handlers::receivers::block_receiver::create_block_receiver_channel;
     #[mockall_double::double]
     use crate::pool_difficulty::PoolDifficulty;
+    use crate::service::PeerHandle;
     #[mockall_double::double]
     use crate::shares::chain::chain_store_handle::ChainStoreHandle;
     use crate::shares::validation::MockDefaultShareValidator;
@@ -543,6 +550,39 @@ mod tests {
 
         // Verify the handle was created
         assert!(handler.peer_handles.contains_key(&peer_id));
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_request_removes_stale_handle_on_closed() {
+        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
+        let mut chain_store_handle = ChainStoreHandle::default();
+        chain_store_handle
+            .expect_clone()
+            .returning(ChainStoreHandle::default);
+
+        let mut handler = build_test_handler(chain_store_handle, swarm_tx);
+
+        let peer_id = PeerId::random();
+
+        // Create a channel where the receiver is immediately dropped,
+        // simulating a task that has exited.
+        let (sender, receiver) = mpsc::channel(16);
+        drop(receiver);
+        handler
+            .peer_handles
+            .insert(peer_id, PeerHandle::new_for_test(sender));
+
+        let (channel_tx, _channel_rx) = oneshot::channel::<Message>();
+        let result = handler
+            .dispatch_request(peer_id, Message::NotFound(()), channel_tx)
+            .await;
+        assert!(result.is_ok());
+
+        // Stale handle should have been removed on Closed
+        assert!(
+            !handler.peer_handles.contains_key(&peer_id),
+            "Stale handle should be removed after Closed error"
+        );
     }
 
     #[tokio::test]
