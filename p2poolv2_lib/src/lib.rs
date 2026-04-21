@@ -32,4 +32,4 @@ pub mod utils;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
 
-pub use service::build_service;
+pub use service::spawn_peer_service;

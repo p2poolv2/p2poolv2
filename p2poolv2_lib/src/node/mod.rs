@@ -329,6 +329,7 @@ impl Node {
                         info!("Inbound connection established from peer: {peer_id}");
                     }
                 }
+                self.request_response_handler.add_peer(peer_id);
                 let _ = self
                     .monitoring_event_sender
                     .send(MonitoringEvent::Peer(PeerResponse {
@@ -345,8 +346,7 @@ impl Node {
                     self.connected_dial_addresses.retain(|addr| addr != address);
                 }
                 self.swarm.behaviour_mut().remove_peer(&peer_id);
-                self.request_response_handler
-                    .remove_peer_knowledge(&peer_id);
+                self.request_response_handler.remove_peer(&peer_id);
                 let _ = self
                     .monitoring_event_sender
                     .send(MonitoringEvent::Peer(PeerResponse {
