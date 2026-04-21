@@ -26,6 +26,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Per-peer rate limiting with dedicated service tasks. Each connected
+  peer now gets its own spawned task with an independent rate limiter,
+  so one flooding peer cannot block requests from others. Requests are
+  forwarded via bounded channels with two-tier overload protection:
+  channel full (instant disconnect) and rate limit timeout (sustained
+  flood disconnect). Peer service tasks are spawned on connection and
+  cleaned up on disconnect.
+
+- Raise default max_requests_per_second from 1 to 100 to match sample
+  config and support legitimate sync traffic.
+
 - Remove rate limit window config option. The rate limit config uses
   per second semantics, so the window option was unnecessary.
 
