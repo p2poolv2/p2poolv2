@@ -20,7 +20,6 @@ use crate::node::SwarmSend;
 use crate::service::p2p_service::{P2PService, RequestContext};
 use crate::utils::time_provider::TimeProvider;
 use libp2p::PeerId;
-use std::error::Error;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tower::limit::RateLimit;
@@ -56,6 +55,13 @@ impl<C, T> PeerHandle<C, T> {
         request: RequestContext<C, T>,
     ) -> Result<(), mpsc::error::TrySendError<RequestContext<C, T>>> {
         self.sender.try_send(request)
+    }
+
+    /// Create a PeerHandle from a raw sender. Used in tests to
+    /// simulate a handle whose task has already exited.
+    #[cfg(test)]
+    pub fn new_for_test(sender: mpsc::Sender<RequestContext<C, T>>) -> Self {
+        Self { sender }
     }
 }
 
