@@ -131,18 +131,28 @@ impl Display for RawMessage {
     }
 }
 
+impl Message {
+    /// Returns the variant name as a static string slice.
+    ///
+    /// We need to avoid allocation for debug logging, when we don't
+    /// want to clone message.
+    pub fn message_type(&self) -> &'static str {
+        match self {
+            Message::Inventory(_) => "Inventory",
+            Message::NotFound(_) => "NotFound",
+            Message::GetShareHeaders(_, _) => "GetShareHeaders",
+            Message::GetShareBlocks(_, _) => "GetShareBlocks",
+            Message::ShareHeaders(_) => "ShareHeaders",
+            Message::ShareBlock(_) => "ShareBlock",
+            Message::GetData(_) => "GetData",
+            Message::Transaction(_) => "Transaction",
+        }
+    }
+}
+
 impl Display for Message {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Message::Inventory(_) => write!(f, "Inventory"),
-            Message::NotFound(_) => write!(f, "NotFound"),
-            Message::GetShareHeaders(_, _) => write!(f, "GetShareHeaders"),
-            Message::GetShareBlocks(_, _) => write!(f, "GetShareBlocks"),
-            Message::ShareHeaders(_) => write!(f, "ShareHeaders"),
-            Message::ShareBlock(_) => write!(f, "ShareBlock"),
-            Message::GetData(_) => write!(f, "GetData"),
-            Message::Transaction(_) => write!(f, "Transaction"),
-        }
+        f.write_str(self.message_type())
     }
 }
 

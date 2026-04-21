@@ -256,7 +256,6 @@ pub struct NetworkConfig {
     pub max_miningshare_per_second: u32,
     pub max_inventory_per_second: u32,
     pub max_transaction_per_second: u32,
-    pub rate_limit_window_secs: u64,
     pub max_requests_per_second: u64,
     pub dial_timeout_secs: u64,
 }
@@ -276,7 +275,6 @@ impl Default for NetworkConfig {
             max_miningshare_per_second: 100,
             max_inventory_per_second: 100,
             max_transaction_per_second: 100,
-            rate_limit_window_secs: 1,
             max_requests_per_second: 1,
             dial_timeout_secs: 30,
         }

@@ -42,7 +42,8 @@ const MAX_IN_FLIGHT_PER_PEER: usize = 16;
 const INITIAL_IN_FLIGHT_CAPACITY: usize = 64;
 
 /// Default timeout for a single block request before retrying.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// Should remain same as libp2p request timeout.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// How often the fetcher checks for timed-out requests.
 const TICK_INTERVAL: Duration = Duration::from_secs(5);

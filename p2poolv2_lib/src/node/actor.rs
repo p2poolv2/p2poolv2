@@ -367,13 +367,14 @@ impl NodeActor {
                 buf = self.node.swarm_rx.recv() => {
                     match buf {
                         Some(SwarmSend::Request(peer_id, msg)) => {
+                            let msg_type = msg.message_type();
                             let request_id = self
                                 .node
                                 .swarm
                                 .behaviour_mut()
                                 .request_response
                                 .send_request(&peer_id, msg);
-                            debug!("Sent message to peer: {peer_id}, request_id: {request_id}");
+                            debug!("Sent {msg_type} to peer: {peer_id}, request_id: {request_id}");
                         }
                         Some(SwarmSend::Response(response_channel, msg)) => {
                             let request_id = self

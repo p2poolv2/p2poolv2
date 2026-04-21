@@ -523,7 +523,6 @@ mod tests {
             max_miningshare_per_second: 10,
             max_inventory_per_second: 10,
             max_transaction_per_second: 10,
-            rate_limit_window_secs: 1,
             max_requests_per_second: 1,
             dial_timeout_secs: 2,
         };

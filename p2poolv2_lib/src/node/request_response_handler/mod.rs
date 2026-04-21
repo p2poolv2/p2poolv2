@@ -42,7 +42,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tower::util::BoxService;
 use tower::{Service, ServiceExt};
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
 /// Handles request-response events from the libp2p network.
 ///
@@ -129,8 +129,8 @@ impl RequestResponseHandler<ResponseChannel<Message>> {
                     },
             } => {
                 debug!(
-                    "Received response for request {} from peer {}",
-                    request_id, peer
+                    "Received response {} for request {} from peer {}",
+                    response, request_id, peer
                 );
                 self.dispatch_response(peer, response).await
             }
@@ -231,6 +231,7 @@ impl<C: Send + Sync> RequestResponseHandler<C> {
             }
             Ok(Err(err)) => {
                 error!("Service not ready for peer {}: {}", peer, err);
+                info!("Disconnecting peer {} due to service not ready", peer);
                 if let Err(send_err) = self.swarm_tx.send(SwarmSend::Disconnect(peer)).await {
                     error!(
                         "Failed to send disconnect command for peer {}: {:?}",
@@ -240,6 +241,10 @@ impl<C: Send + Sync> RequestResponseHandler<C> {
             }
             Err(_) => {
                 error!("Service readiness timed out for peer {}", peer);
+                info!(
+                    "Disconnecting peer {} due to rate limiter timeout on request {}",
+                    peer, request
+                );
                 if let Err(send_err) = self.swarm_tx.send(SwarmSend::Disconnect(peer)).await {
                     error!(
                         "Failed to send disconnect command for peer {}: {:?}",
