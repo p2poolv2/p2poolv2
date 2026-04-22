@@ -234,7 +234,7 @@ pub fn setup_pool_difficulty_mocks(
 
     pool_difficulty
         .expect_calculate_target_clamped()
-        .returning(move |_, _, _| CompactTarget::from_consensus(target_bits));
+        .returning(move |_, _| CompactTarget::from_consensus(target_bits));
 }
 
 #[cfg(test)]

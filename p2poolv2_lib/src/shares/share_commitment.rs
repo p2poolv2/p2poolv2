@@ -173,9 +173,7 @@ pub(crate) fn build_share_commitment(
 
     let (tip_height, parent_time) = chain_store_handle.get_tip_height_and_time()?;
     // tip_height is the parent height; ASERT internally adds 1 to height_delta
-    let bitcoin_bits = bitcoin::CompactTarget::from_unprefixed_hex(&template.bits)
-        .map_err(|error| format!("Failed to parse bitcoin bits from block template: {error}"))?;
-    let target = pool_difficulty.calculate_target_clamped(parent_time, tip_height, bitcoin_bits);
+    let target = pool_difficulty.calculate_target_clamped(parent_time, tip_height);
 
     let time = SystemTimeProvider.seconds_since_epoch() as u32;
 

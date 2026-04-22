@@ -264,39 +264,24 @@ impl PoolDifficulty {
     ///
     /// The returned target is clamped in two directions:
     /// 1. Never harder than bitcoin difficulty (floor) -- ASERT can produce a
-    ///    target smaller than the bitcoin target, which would be impossible to
-    ///    satisfy since no bitcoin block hash can beat bitcoin's own target.
+    ///    target smaller than the bitcoin target.
     /// 2. Never easier than MAX_POOL_TARGET (ceiling) -- ensures shares always
     ///    meet the pool's minimum difficulty requirement.
     pub fn calculate_target_clamped(
         &self,
         block_parent_time: u32,
         block_parent_height: u32,
-        bitcoin_bits: CompactTarget,
     ) -> CompactTarget {
         let asert_target = self.calculate_target(block_parent_time, block_parent_height);
-        let bitcoin_target = Target::from_compact(bitcoin_bits);
-        let pool_target = Target::from_compact(asert_target);
 
         let max_pool_target_compact = CompactTarget::from_consensus(MAX_POOL_TARGET);
         let max_pool_target = Target::from_compact(max_pool_target_compact);
 
-        // A smaller Target value means harder difficulty. If the pool target is
-        // harder than bitcoin, use bitcoin as the floor.
-        let result = if pool_target < bitcoin_target {
-            bitcoin_bits
-        } else {
-            asert_target
-        };
-
-        // Final clamp: never return a target easier than MAX_POOL_TARGET.
-        // This applies regardless of whether bitcoin clamping was used,
-        // ensuring shares always meet the pool's minimum difficulty.
-        let result_target = Target::from_compact(result);
+        let result_target = Target::from_compact(asert_target);
         if result_target > max_pool_target {
             max_pool_target_compact
         } else {
-            result
+            asert_target
         }
     }
 
@@ -321,7 +306,7 @@ mockall::mock! {
         pub fn new(anchor_target: CompactTarget, anchor_parent_time: u32, anchor_height: u32) -> Self;
         pub fn build(chain_store_handle: &ChainStoreHandle) -> Result<Self, PoolDifficultyError>;
         pub fn calculate_target(&self, block_parent_time: u32, block_parent_height: u32) -> CompactTarget;
-        pub fn calculate_target_clamped(&self, block_parent_time: u32, block_parent_height: u32, bitcoin_bits: CompactTarget) -> CompactTarget;
+        pub fn calculate_target_clamped(&self, block_parent_time: u32, block_parent_height: u32) -> CompactTarget;
         pub fn calculate_target_consensus(&self, block_parent_time: u32, block_parent_height: u32) -> u32;
     }
 
@@ -758,52 +743,13 @@ mod tests {
         // return a target easier than MAX_POOL_TARGET, so it gets clamped
         let anchor = CompactTarget::from_consensus(0x1b4188f5);
         let pool_diff = PoolDifficulty::new(anchor, 1700000000, 0);
-        // Bitcoin difficulty is much harder (smaller target)
-        let bitcoin_bits = CompactTarget::from_consensus(0x170f2e48);
 
-        let result = pool_diff.calculate_target_clamped(1700000000, 0, bitcoin_bits);
+        let result = pool_diff.calculate_target_clamped(1700000000, 0);
 
         assert_eq!(
             result.to_consensus(),
             MAX_POOL_TARGET,
             "Should clamp to MAX_POOL_TARGET when ASERT target is easier"
-        );
-    }
-
-    #[test]
-    fn test_calculate_target_clamped_clamps_easy_bitcoin_to_max_pool_target() {
-        // Use a very hard anchor target that is harder than bitcoin
-        let hard_anchor = CompactTarget::from_consensus(0x170f2e48);
-        let pool_diff = PoolDifficulty::new(hard_anchor, 1700000000, 0);
-        // Bitcoin difficulty is easier (signet-like) but still easier than
-        // MAX_POOL_TARGET, so the final clamp kicks in
-        let bitcoin_bits = CompactTarget::from_consensus(0x1b4188f5);
-
-        let result = pool_diff.calculate_target_clamped(1700000000, 0, bitcoin_bits);
-
-        // Bitcoin target (0x1b4188f5) is easier than MAX_POOL_TARGET (0x1b384bd7),
-        // so the final clamp returns MAX_POOL_TARGET
-        assert_eq!(
-            result.to_consensus(),
-            MAX_POOL_TARGET,
-            "Should clamp to MAX_POOL_TARGET when bitcoin target is easier than pool max"
-        );
-    }
-
-    #[test]
-    fn test_calculate_target_clamped_equal_targets() {
-        // When ASERT and bitcoin targets are equal but both easier than
-        // MAX_POOL_TARGET, the result is clamped to MAX_POOL_TARGET
-        let anchor = CompactTarget::from_consensus(0x1b4188f5);
-        let pool_diff = PoolDifficulty::new(anchor, 1700000000, 0);
-        let bitcoin_bits = pool_diff.calculate_target(1700000000, 0);
-
-        let result = pool_diff.calculate_target_clamped(1700000000, 0, bitcoin_bits);
-
-        assert_eq!(
-            result.to_consensus(),
-            MAX_POOL_TARGET,
-            "Should clamp to MAX_POOL_TARGET when both targets are easier"
         );
     }
 
@@ -856,12 +802,8 @@ mod tests {
 
             let parent = &blocks[index - 1];
             let parent_height = (index - 1) as u32;
-            let bitcoin_bits = block.header.bitcoin_header.bits;
-            let expected_target = pool_difficulty.calculate_target_clamped(
-                parent.header.time,
-                parent_height,
-                bitcoin_bits,
-            );
+            let expected_target =
+                pool_difficulty.calculate_target_clamped(parent.header.time, parent_height);
             assert_eq!(
                 block.header.bits,
                 expected_target,

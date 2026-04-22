@@ -664,7 +664,7 @@ mod tests {
         let mut pool_difficulty = PoolDifficulty::default();
         pool_difficulty
             .expect_calculate_target_clamped()
-            .returning(|_, _, _| {
+            .returning(|_, _| {
                 CompactTarget::from_consensus(crate::shares::share_block::MAX_POOL_TARGET)
             });
         mock_validator

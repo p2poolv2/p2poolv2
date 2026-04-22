@@ -382,7 +382,7 @@ impl ShareBlock {
             miner_bitcoin_address: btcaddress,
             bitcoin_header: bitcoin_block.header,
             merkle_root,
-            time: 1776801826u32,
+            time: 1776842294u32,
             bits: CompactTarget::from_consensus(0x1b4188f5),
             donation_address: None,
             donation: None,
