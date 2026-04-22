@@ -8,6 +8,52 @@
     <link rel="stylesheet" href="/static/pico.min.css" />
     <script defer src="/static/alpine.min.js"></script>
     <style>
+      .nav-links {
+        display: flex;
+        gap: 0;
+      }
+      .nav-menu-toggle {
+        display: none;
+        background: none;
+        border: none;
+        font-size: 1.5rem;
+        cursor: pointer;
+        padding: 0.25rem 0.5rem;
+        color: var(--pico-color);
+      }
+      .nav-dropdown {
+        display: none;
+        position: absolute;
+        right: 0;
+        top: 100%;
+        background: var(--pico-card-background-color);
+        border: 1px solid var(--pico-muted-border-color);
+        border-radius: var(--pico-border-radius);
+        padding: 0.5rem 0;
+        z-index: 10;
+        min-width: 10rem;
+      }
+      .nav-dropdown.open {
+        display: block;
+      }
+      .nav-dropdown a {
+        display: block;
+        padding: 0.5rem 1rem;
+      }
+      .nav-menu-wrapper {
+        display: none;
+      }
+      @media (max-width: 576px) {
+        .nav-links {
+          display: none;
+        }
+        .nav-menu-wrapper {
+          display: flex;
+        }
+        .nav-menu-toggle {
+          display: block;
+        }
+      }
     </style>
   </head>
   <body>
@@ -59,18 +105,48 @@
                   alt="P2Poolv2 Dashboard"
                   style="height: 2.5rem"
                 />
-                <small><em>Replace pool operators with miners</em></small>
               </li>
             </ul>
-            <ul>
+            <ul class="nav-links">
               <li>
-                <a href="https://p2poolv2.org" target="_blank">Mine on P2Poolv2</a>
+                <a href="https://p2poolv2.org" target="_blank"
+                  >Mine on P2Poolv2</a
+                >
               </li>
               <li>
-                <a href="#" @click.prevent="logout" x-show="credentials !== ''">Logout</a>
+                <a href="#" @click.prevent="logout" x-show="credentials !== ''"
+                  >Logout</a
+                >
+              </li>
+            </ul>
+            <ul class="nav-menu-wrapper">
+              <li style="position: relative">
+                <button
+                  class="nav-menu-toggle"
+                  @click="menuOpen = !menuOpen"
+                  @click.outside="menuOpen = false"
+                  aria-label="Menu"
+                >
+                  &#9776;
+                </button>
+                <div class="nav-dropdown" :class="menuOpen ? 'open' : ''">
+                  <a href="https://p2poolv2.org" target="_blank"
+                    >Mine on P2Poolv2</a
+                  >
+                  <a
+                    href="#"
+                    @click.prevent="logout; menuOpen = false"
+                    x-show="credentials !== ''"
+                    >Logout</a
+                  >
+                </div>
               </li>
             </ul>
           </nav>
+          <small
+            style="display: block; margin-top: -1rem; margin-bottom: 1.5rem"
+            ><em>Replace pool operators with miners</em></small
+          >
 
           <article>
             <header>
@@ -144,6 +220,7 @@
                       <th>Height</th>
                       <th>Blockhash</th>
                       <th>Miner</th>
+                      <th>Difficulty</th>
                       <th>Time</th>
                       <th>Uncles</th>
                     </tr>
@@ -169,6 +246,9 @@
                             x-text="formatHash(row.share.miner_address)"
                           ></code>
                         </td>
+                        <td
+                          x-text="row.share.bits ? difficultyFromBits(row.share.bits) : ''"
+                        ></td>
                         <td x-text="formatTimestamp(row.share.timestamp)"></td>
                         <td
                           x-text="row.isUncle ? 'uncle' : row.share.uncles.length"
@@ -271,7 +351,9 @@
               <tr>
                 <th scope="row">Bits</th>
                 <td>
-                  <code x-text="selectedShare ? selectedShare.bits + ' (Difficulty: ' + difficultyFromBits(selectedShare.bits) + ')' : ''"></code>
+                  <code
+                    x-text="selectedShare ? selectedShare.bits + ' (Difficulty: ' + difficultyFromBits(selectedShare.bits) + ')' : ''"
+                  ></code>
                 </td>
               </tr>
               <tr>
