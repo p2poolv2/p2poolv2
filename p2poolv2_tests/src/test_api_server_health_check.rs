@@ -45,6 +45,7 @@ async fn test_api_server_without_authentication() -> Result<(), ApiError> {
         auth_user: None,
         auth_token: None,
         auth_password: None,
+        cors_allowed: false,
     };
 
     // Start API server with the new signature
@@ -128,6 +129,7 @@ async fn test_api_server_with_authentication() -> Result<(), ApiError> {
         auth_user: Some("testuser".to_string()),
         auth_token: Some(test_token),
         auth_password: None,
+        cors_allowed: false,
     };
 
     // Start API server with authentication
@@ -245,6 +247,7 @@ async fn test_pplns_shares_endpoint_get_all() -> Result<(), ApiError> {
         auth_user: None,
         auth_token: None,
         auth_password: None,
+        cors_allowed: false,
     };
 
     // Start API server
@@ -358,6 +361,7 @@ async fn test_pplns_shares_endpoint_limit() -> Result<(), ApiError> {
         auth_user: None,
         auth_token: None,
         auth_password: None,
+        cors_allowed: false,
     };
 
     // Start API server
@@ -466,6 +470,7 @@ async fn test_pplns_shares_endpoint_time_filter() -> Result<(), ApiError> {
         auth_user: None,
         auth_token: None,
         auth_password: None,
+        cors_allowed: false,
     };
 
     // Start API server

@@ -57,6 +57,7 @@ mod tests {
             auth_user: None,
             auth_token: None,
             auth_password: None,
+            cors_allowed: false,
         }
     }
 

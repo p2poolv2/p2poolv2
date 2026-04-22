@@ -339,6 +339,9 @@ pub struct ApiConfig {
     pub auth_token: Option<String>,
     /// Optional raw password for CLI client authentication (not used by server)
     pub auth_password: Option<String>,
+    /// Enable permissive CORS for the API server
+    #[serde(default)]
+    pub cors_allowed: bool,
 }
 
 /// Custom Debug to redact password
@@ -351,6 +354,7 @@ impl std::fmt::Debug for ApiConfig {
             .field("auth_user", &self.auth_user)
             .field("auth_token", &"[redacted]")
             .field("auth_password", &"[redacted]")
+            .field("cors_allowed", &self.cors_allowed)
             .finish()
     }
 }

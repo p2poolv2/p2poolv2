@@ -38,6 +38,7 @@ use serde::Deserialize;
 use std::path::PathBuf;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::oneshot;
+use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 use tracing::{info, trace};
 
@@ -59,6 +60,7 @@ pub(crate) struct AppState {
 pub struct AppConfig {
     pub pool_signature_length: usize,
     pub network: bitcoin::Network,
+    pub cors_allowed: bool,
 }
 
 /// Get AppConfig from AppState ref
@@ -133,11 +135,15 @@ fn build_router(app_state: Arc<AppState>, app_config: AppConfig) -> Router {
         )
         .nest_service("/static", ServeDir::new(&static_dir));
 
-    authenticated_routes
+    let mut router = authenticated_routes
         .merge(unauthenticated_routes)
-        .layer(middleware::from_fn(log_req))
-        .layer(Extension(app_config))
-        .with_state(app_state)
+        .layer(middleware::from_fn(log_req));
+
+    if app_config.cors_allowed {
+        router = router.layer(CorsLayer::permissive())
+    }
+
+    router.layer(Extension(app_config)).with_state(app_state)
 }
 
 /// Start the API server and return a shutdown channel and the actual bound port.
@@ -154,6 +160,7 @@ pub async fn start_api_server(
     let app_config = AppConfig {
         pool_signature_length: pool_signature.unwrap_or_default().len(),
         network,
+        cors_allowed: config.cors_allowed,
     };
 
     let app_state = Arc::new(AppState {
@@ -338,6 +345,7 @@ mod tests {
             app_config: AppConfig {
                 pool_signature_length: 0,
                 network: bitcoin::Network::Signet,
+                cors_allowed: false,
             },
             chain_store_handle,
             metrics_handle,
@@ -480,6 +488,7 @@ mod tests {
             app_config: AppConfig {
                 pool_signature_length: 8,
                 network: bitcoin::Network::Signet,
+                cors_allowed: false,
             },
             chain_store_handle,
             metrics_handle,
@@ -587,6 +596,7 @@ mod tests {
             app_config: AppConfig {
                 pool_signature_length: 0,
                 network: bitcoin::Network::Signet,
+                cors_allowed: false,
             },
             chain_store_handle,
             metrics_handle,
@@ -729,6 +739,53 @@ mod tests {
             response.status(),
             101,
             "WebSocket upgrade should not succeed with only an Authorization header"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_cors_headers_present_when_enabled() {
+        use tower::ServiceExt;
+
+        let node_handle = NodeHandle::new_for_test();
+        let (chain_store_handle, _temp_dir) =
+            p2poolv2_lib::test_utils::setup_test_chain_store_handle(true).await;
+        let metrics_temp = tempfile::tempdir().unwrap();
+        let metrics_handle =
+            metrics::start_metrics(metrics_temp.path().to_str().unwrap().to_string())
+                .await
+                .unwrap();
+        let tracker_handle = start_tracker_actor();
+
+        let state = Arc::new(AppState {
+            app_config: AppConfig {
+                pool_signature_length: 0,
+                network: bitcoin::Network::Signet,
+                cors_allowed: true,
+            },
+            chain_store_handle,
+            metrics_handle,
+            tracker_handle,
+            node_handle,
+            monitoring_event_sender: create_monitoring_event_channel().0,
+            auth_user: None,
+            auth_token: None,
+        });
+
+        let app = build_router(state.clone(), state.app_config.clone());
+
+        let request = http::Request::builder()
+            .uri("/health")
+            .body(http_body_util::Empty::<bytes::Bytes>::new())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), http::StatusCode::OK);
+
+        let headers = response.headers();
+        assert_eq!(
+            headers.get("access-control-allow-origin"),
+            Some(&"*".parse().unwrap()),
+            "access-control-allow-origin header should be present"
         );
     }
 }
