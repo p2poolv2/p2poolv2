@@ -20,13 +20,32 @@ function difficultyFromBits(bits) {
     var target =
         shift >= 0 ? mantissa << BigInt(shift) : mantissa >> BigInt(-shift);
     if (target === 0n) return "0";
-    var diff1Target = 0xFFFFn << 208n;
+    var diff1Target = 0xffffn << 208n;
     var difficulty = diff1Target / target;
-    return difficulty.toLocaleString();
+    return formatDifficulty(Number(difficulty));
+}
+
+function formatDifficulty(value) {
+    var suffixes = ["", "K", "M", "G", "T", "P", "E"];
+    if (value < 10000) return value.toLocaleString();
+    var tier = 0;
+    var scaled = value;
+    while (scaled >= 1000 && tier < suffixes.length - 1) {
+        scaled = scaled / 1000;
+        tier = tier + 1;
+    }
+    var formatted =
+        scaled >= 100
+            ? scaled.toFixed(0)
+            : scaled >= 10
+              ? scaled.toFixed(1)
+              : scaled.toFixed(2);
+    return formatted + suffixes[tier];
 }
 
 function dashboard() {
     return {
+        menuOpen: false,
         username: "",
         password: "",
         error: "",
@@ -241,10 +260,8 @@ function dashboard() {
 
         formatHash(hash) {
             if (!hash) return "N/A";
-            if (hash.length <= 16) return hash;
-            return (
-                hash.substring(0, 8) + "..." + hash.substring(hash.length - 8)
-            );
+            if (hash.length <= 12) return hash;
+            return hash.substring(0, 10);
         },
 
         formatTimestamp(timestamp) {
