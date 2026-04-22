@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use super::block_tx_metadata::{BlockMetadata, Status};
 use super::{ColumnFamily, Store, writer::StoreError};
 use crate::shares::chain::chain_store_handle::{COMMON_ANCESTOR_DEPTH, ConfirmedHeaderResult};
 use crate::shares::share_block::{ShareBlock, ShareHeader};
@@ -177,7 +178,7 @@ impl Store {
         stop_blockhash: &BlockHash,
         limit: usize,
     ) -> Result<Vec<BlockHash>, StoreError> {
-        let start_blockhash = self.get_first_existing_blockhash(locator);
+        let start_blockhash = self.first_confirmed_for_locator(locator);
         // If no blockhash found, return vector with genesis block
         let start_blockhash = match start_blockhash {
             Some(hash) => hash,
@@ -188,6 +189,26 @@ impl Store {
         };
 
         self.get_descendant_blockhashes(&start_blockhash, stop_blockhash, limit)
+    }
+
+    /// Find the first locator hash that is on our confirmed chain.
+    ///
+    /// Uses a single batch metadata lookup and then walks the locator
+    /// in order to return the first hash with Confirmed status. This
+    /// prevents matching on uncles or stale blocks, which would cause
+    /// get_descendant_blockhashes to walk the confirmed chain from the
+    /// wrong branch.
+    fn first_confirmed_for_locator(&self, locator: &[BlockHash]) -> Option<BlockHash> {
+        let metadata_results: HashMap<BlockHash, BlockMetadata> =
+            self.get_block_metadata_batch(locator).into_iter().collect();
+        for blockhash in locator {
+            if let Some(metadata) = metadata_results.get(blockhash) {
+                if metadata.status == Status::Confirmed {
+                    return Some(*blockhash);
+                }
+            }
+        }
+        None
     }
 
     /// Get headers to satisfy the locator query.
@@ -2606,5 +2627,196 @@ mod tests {
 
         let result = store.query_share_blocks(0, 0).unwrap();
         assert!(result.is_empty());
+    }
+
+    /// Locator containing only a non-confirmed block (uncle) must not
+    /// be matched. The old code used get_first_existing_blockhash which
+    /// matched any block in the store regardless of confirmed status.
+    /// That caused get_descendant_blockhashes to walk the confirmed
+    /// chain from the wrong height, returning headers whose parents
+    /// the requester does not have.
+    ///
+    /// Chain:
+    ///   genesis(h:0) -> share_a(h:1) -> share_b(h:2)
+    ///                \-> uncle(h:1, not confirmed)
+    ///
+    /// Locator: [uncle_hash]
+    /// Expected: falls back to genesis, returns share_a then share_b.
+    #[test]
+    fn test_get_blockhashes_for_locator_skips_non_confirmed_block() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // uncle: child of genesis, stored but not confirmed
+        let uncle = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(100)
+            .build();
+        store.store_with_valid_metadata(&uncle);
+
+        let share_a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .work(2)
+            .nonce(1)
+            .build();
+        store.push_to_confirmed_chain(&share_a).unwrap();
+
+        let share_b = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_a.block_hash().to_string())
+            .work(2)
+            .nonce(2)
+            .build();
+        store.push_to_confirmed_chain(&share_b).unwrap();
+
+        // Locator with only the uncle hash
+        let locator = vec![uncle.block_hash()];
+        let result = store
+            .get_blockhashes_for_locator(&locator, &BlockHash::all_zeros(), 10)
+            .unwrap();
+
+        // Uncle is not confirmed, so no locator match is found.
+        // Falls back to returning just the genesis hash so the
+        // requester can restart sync from the beginning.
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], genesis.block_hash());
+    }
+
+    /// When the locator contains a non-confirmed block at a different
+    /// height than its confirmed counterpart
+    ///
+    /// Chain:
+    ///   genesis(h:0) -> share_a(h:1) -> share_b(h:2) -> share_c(h:3)
+    ///
+    /// Unconfirmed block stored at height 2:
+    ///   uncle(h:2, parent=share_a, not confirmed)
+    ///
+    /// Locator: [uncle_hash, genesis_hash]
+    ///
+    /// Required behavior: skips uncle (not confirmed), matches genesis,
+    ///   returns [share_a, share_b, share_c] -- a complete chain.
+    #[test]
+    fn test_get_blockhashes_for_locator_skips_uncle_at_different_height() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share_a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .work(2)
+            .nonce(1)
+            .build();
+        store.push_to_confirmed_chain(&share_a).unwrap();
+
+        let share_b = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_a.block_hash().to_string())
+            .work(2)
+            .nonce(2)
+            .build();
+        store.push_to_confirmed_chain(&share_b).unwrap();
+
+        let share_c = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_b.block_hash().to_string())
+            .work(2)
+            .nonce(3)
+            .build();
+        store.push_to_confirmed_chain(&share_c).unwrap();
+
+        // Uncle at height 2: stored but not on the confirmed chain.
+        // Its parent is share_a, so it competes with share_b for h:2.
+        let uncle = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_a.block_hash().to_string())
+            .nonce(100)
+            .build();
+        store.store_with_valid_metadata(&uncle);
+
+        // Locator: uncle first (exists at h:2 but not confirmed),
+        // then genesis (confirmed at h:0).
+        let locator = vec![uncle.block_hash(), genesis.block_hash()];
+        let result = store
+            .get_blockhashes_for_locator(&locator, &BlockHash::all_zeros(), 10)
+            .unwrap();
+
+        // Should skip uncle, match genesis, return all confirmed
+        // descendants: share_a, share_b, share_c.
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0], share_a.block_hash());
+        assert_eq!(result[1], share_b.block_hash());
+        assert_eq!(result[2], share_c.block_hash());
+    }
+
+    /// first_confirmed_locator_match returns the first confirmed hash
+    /// from the locator, skipping uncles and unknown hashes.
+    ///
+    /// Chain:
+    ///   genesis(h:0) -> share_a(h:1) -> share_b(h:2)
+    ///                \-> uncle(h:1, not confirmed)
+    #[test]
+    fn test_first_confirmed_locator_match_skips_non_confirmed() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let uncle = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(100)
+            .build();
+        store.store_with_valid_metadata(&uncle);
+
+        let share_a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .work(2)
+            .nonce(1)
+            .build();
+        store.push_to_confirmed_chain(&share_a).unwrap();
+
+        let share_b = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_a.block_hash().to_string())
+            .work(2)
+            .nonce(2)
+            .build();
+        store.push_to_confirmed_chain(&share_b).unwrap();
+
+        let unknown_hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            .parse::<BlockHash>()
+            .unwrap();
+
+        // Locator: [unknown, uncle, share_b, genesis]
+        // Should skip unknown (not in store) and uncle (not confirmed),
+        // then match share_b (confirmed at h:2).
+        let locator = vec![
+            unknown_hash,
+            uncle.block_hash(),
+            share_b.block_hash(),
+            genesis.block_hash(),
+        ];
+        let result = store.first_confirmed_for_locator(&locator);
+        assert_eq!(result, Some(share_b.block_hash()));
+
+        // Locator with only non-confirmed entries returns None
+        let locator = vec![unknown_hash, uncle.block_hash()];
+        let result = store.first_confirmed_for_locator(&locator);
+        assert_eq!(result, None);
+
+        // Empty locator returns None
+        let result = store.first_confirmed_for_locator(&[]);
+        assert_eq!(result, None);
+
+        // Locator with only confirmed entries returns the first one
+        let locator = vec![share_a.block_hash(), genesis.block_hash()];
+        let result = store.first_confirmed_for_locator(&locator);
+        assert_eq!(result, Some(share_a.block_hash()));
     }
 }

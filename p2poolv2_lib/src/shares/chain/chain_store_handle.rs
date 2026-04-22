@@ -451,7 +451,12 @@ impl ChainStoreHandle {
         })
     }
 
-    /// Build a locator for the chain.
+    /// Build a locator for the chain using only confirmed chain blocks.
+    ///
+    /// Returns blockhashes at exponentially spaced heights from the
+    /// confirmed chain tip back to genesis. Only confirmed blocks are
+    /// included so that the peer can match against its own confirmed
+    /// chain and find the true fork point.
     pub fn build_locator(&self) -> Result<Vec<BlockHash>, StoreError> {
         let tip_height = self.get_tip_height()?;
         match tip_height {
@@ -484,10 +489,11 @@ impl ChainStoreHandle {
 
         indexes.push(0);
 
-        let mut locator = Vec::new();
+        let mut locator = Vec::with_capacity(indexes.len());
         for height in indexes {
-            let hashes = self.store_handle.get_blockhashes_for_height(height);
-            locator.extend(hashes);
+            if let Ok(confirmed_hash) = self.store_handle.get_confirmed_at_height(height) {
+                locator.push(confirmed_hash);
+            }
         }
 
         Ok(locator)
@@ -1132,5 +1138,88 @@ mod tests {
         chain_handle.init_or_setup_genesis(genesis).await.unwrap();
 
         assert!(chain_handle.is_current());
+    }
+
+    /// When a non-confirmed block (uncle) exists at the same height as
+    /// a confirmed block, the locator must only contain the confirmed
+    /// block.
+    #[tokio::test]
+    async fn test_build_locator_excludes_non_confirmed_blocks() {
+        let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let genesis = genesis_for_tests();
+
+        chain_handle
+            .init_or_setup_genesis(genesis.clone())
+            .await
+            .unwrap();
+
+        // Build confirmed chain: genesis -> share_a (h:1) -> share_b (h:2)
+        let share_a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .work(2)
+            .build();
+        chain_handle.add_share_block(share_a.clone()).await.unwrap();
+        chain_handle
+            .organise_header(share_a.header.clone())
+            .await
+            .unwrap();
+        chain_handle.organise_block().await.unwrap();
+
+        let share_b = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_a.block_hash().to_string())
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .work(2)
+            .build();
+        chain_handle.add_share_block(share_b.clone()).await.unwrap();
+        chain_handle
+            .organise_header(share_b.header.clone())
+            .await
+            .unwrap();
+        chain_handle.organise_block().await.unwrap();
+
+        // Store an uncle at height 1 (same height as share_a) via the
+        // underlying Store, which puts it in the BlockHeight CF without
+        // confirming it.
+        let uncle = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(999)
+            .build();
+        chain_handle
+            .store_handle()
+            .store()
+            .store_with_valid_metadata(&uncle);
+
+        // Verify the uncle is indeed stored at height 1
+        let blocks_at_height_1 = chain_handle.store_handle().get_blockhashes_for_height(1);
+        assert!(
+            blocks_at_height_1.contains(&uncle.block_hash()),
+            "Uncle should be stored at height 1"
+        );
+        assert!(
+            blocks_at_height_1.len() > 1,
+            "Height 1 should have both confirmed share and uncle"
+        );
+
+        let locator = chain_handle.build_locator().unwrap();
+
+        // Locator should contain only confirmed blocks
+        assert!(
+            !locator.contains(&uncle.block_hash()),
+            "Locator must not contain the non-confirmed uncle"
+        );
+        assert_eq!(
+            locator[0],
+            share_b.block_hash(),
+            "First entry should be tip"
+        );
+        assert_eq!(
+            locator[locator.len() - 1],
+            genesis.block_hash(),
+            "Last entry should be genesis"
+        );
+        // Heights 2, 1, 0 -- all confirmed
+        assert_eq!(locator.len(), 3);
+        assert_eq!(locator[1], share_a.block_hash());
     }
 }
