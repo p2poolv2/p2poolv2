@@ -32,6 +32,8 @@ pub struct GenesisData {
     pub bitcoin_block_hex: &'static str,
     /// Bitcoin header height
     pub bitcoin_height: u64,
+    /// Unix timestamp for the genesis share block
+    pub timestamp: u32,
 }
 
 const SIGNET_GENESIS_DATA: GenesisData = GenesisData {
@@ -40,6 +42,7 @@ const SIGNET_GENESIS_DATA: GenesisData = GenesisData {
     // bitcoin_header_hex: "0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a008f4d5fae77031e8ad22203",
     bitcoin_block_hex: include!("signet.rs"),
     bitcoin_height: 0,
+    timestamp: 1776855600,
 };
 
 const TESTNET4_GENESIS_DATA: GenesisData = GenesisData {
@@ -47,6 +50,7 @@ const TESTNET4_GENESIS_DATA: GenesisData = GenesisData {
     // for bitcoin blockhash 00000000000000013c0a1f4152b458118ed666282e6235d744bf2a5d66ecf022
     bitcoin_block_hex: include!("testnet4.rs"),
     bitcoin_height: 130754,
+    timestamp: 1776855600,
 };
 
 // Using the following JSON data for the genesis block
@@ -56,6 +60,7 @@ const MAINNET_GENESIS_DATA: GenesisData = GenesisData {
     // header in hex "00a06f239cf5fe7a514fd6f9e64d77cd2345cf225ee3fe9b75bf00000000000000000000923435bf0a5f91886f7f94ade677752a526dec905eef07d181893faf15113a75b039fb6821eb01173c0137da"
     bitcoin_block_hex: include!("main.rs"),
     bitcoin_height: 920527,
+    timestamp: 1776855600,
 };
 
 /// Get the genesis data for a given network
