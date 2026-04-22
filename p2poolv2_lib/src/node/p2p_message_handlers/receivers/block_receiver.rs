@@ -264,11 +264,7 @@ impl BlockReceiver {
         let expected_bits = self
             .share_validator
             .pool_difficulty()
-            .calculate_target_clamped(
-                parent_time,
-                parent_height,
-                share_block.header.bitcoin_header.bits,
-            );
+            .calculate_target_clamped(parent_time, parent_height);
         if share_block.header.bits != expected_bits {
             let block_hash = share_block.block_hash();
             return Err(format!(
@@ -785,7 +781,7 @@ mod tests {
         let mut pool_difficulty = PoolDifficulty::default();
         pool_difficulty
             .expect_calculate_target_clamped()
-            .returning(|_, _, _| {
+            .returning(|_, _| {
                 CompactTarget::from_consensus(crate::shares::share_block::MAX_POOL_TARGET)
             });
         mock_validator
@@ -943,7 +939,7 @@ mod tests {
         let mut pool_difficulty = PoolDifficulty::default();
         pool_difficulty
             .expect_calculate_target_clamped()
-            .returning(|_, _, _| {
+            .returning(|_, _| {
                 CompactTarget::from_consensus(crate::shares::share_block::MAX_POOL_TARGET)
             });
         mock_validator
@@ -1009,7 +1005,7 @@ mod tests {
         let mut mock_pool_difficulty = PoolDifficulty::default();
         mock_pool_difficulty
             .expect_calculate_target_clamped()
-            .returning(|_, _, _| CompactTarget::from_consensus(0x1d00ffff));
+            .returning(|_, _| CompactTarget::from_consensus(0x1d00ffff));
         let mut mock_validator = MockDefaultShareValidator::default();
         mock_validator
             .expect_pool_difficulty()
@@ -1117,7 +1113,7 @@ mod tests {
         let mut pool_difficulty = PoolDifficulty::default();
         pool_difficulty
             .expect_calculate_target_clamped()
-            .returning(|_, _, _| {
+            .returning(|_, _| {
                 CompactTarget::from_consensus(crate::shares::share_block::MAX_POOL_TARGET)
             });
         mock_validator

@@ -121,9 +121,9 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
         let pool_target = bitcoin::Target::from_compact(commitment.bits);
         if !pool_target.is_met_by(validation_result.header.block_hash()) {
             debug!(
-                "Share does not meet pool difficulty: hash {} target {}",
+                "Share does not meet pool difficulty: hash {} target {:?}",
                 validation_result.header.block_hash(),
-                pool_target
+                commitment.bits
             );
             return Ok(vec![Message::Response(Response::new_ok(
                 message.id,

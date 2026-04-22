@@ -234,11 +234,7 @@ fn classify_link_and_validate<'a>(
             }
         };
 
-        let expected_bits = pool_difficulty.calculate_target_clamped(
-            parent_time,
-            parent_height,
-            header.bitcoin_header.bits,
-        );
+        let expected_bits = pool_difficulty.calculate_target_clamped(parent_time, parent_height);
         if header.bits != expected_bits {
             let block_hash = header.block_hash();
             return Err(format!(
@@ -467,7 +463,7 @@ mod tests {
         let mut pool_difficulty = PoolDifficulty::default();
         pool_difficulty
             .expect_calculate_target_clamped()
-            .returning(|_, _, _| CompactTarget::from_consensus(MAX_POOL_TARGET));
+            .returning(|_, _| CompactTarget::from_consensus(MAX_POOL_TARGET));
         mock_validator
             .expect_pool_difficulty()
             .return_const(pool_difficulty);
