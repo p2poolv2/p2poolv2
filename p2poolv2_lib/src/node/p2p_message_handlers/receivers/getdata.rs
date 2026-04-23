@@ -29,8 +29,8 @@ use tracing::{debug, info};
 /// Handle a GetData::Block request from a peer.
 ///
 /// Looks up the requested block and responds with the full ShareBlock if
-/// the block is confirmed or is an uncle of a confirmed block. Otherwise
-/// responds with NotFound, following bitcoin protocol 70001 semantics.
+/// found. The block may not yet be confirmed or even on the candidate
+/// chain, but the peer needs it to build its own chain view.
 pub async fn handle_getdata_block<C: Send + Sync>(
     block_hash: BlockHash,
     chain_store_handle: ChainStoreHandle,
@@ -40,16 +40,9 @@ pub async fn handle_getdata_block<C: Send + Sync>(
     debug!("Received GetData::Block request for {}", block_hash);
 
     let response_message = match chain_store_handle.get_share(&block_hash) {
-        Some(share_block) if chain_store_handle.is_confirmed_or_confirmed_uncle(&block_hash) => {
+        Some(share_block) => {
             info!("Serving block {} to peer", block_hash);
             Message::ShareBlock(share_block)
-        }
-        Some(_) => {
-            info!(
-                "Block {} exists but is not confirmed or uncle of confirmed, sending notfound",
-                block_hash
-            );
-            Message::NotFound(())
         }
         None => {
             info!("Block {} not found, sending notfound", block_hash);
@@ -76,7 +69,7 @@ mod tests {
     use tokio::sync::mpsc;
 
     #[tokio::test]
-    async fn test_handle_getdata_block_confirmed() {
+    async fn test_handle_getdata_block_found() {
         let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<u32>>(1);
         let response_channel = 1u32;
         let mut chain_store_handle = ChainStoreHandle::default();
@@ -88,9 +81,6 @@ mod tests {
         chain_store_handle
             .expect_get_share()
             .returning(move |_| Some(block.clone()));
-        chain_store_handle
-            .expect_is_confirmed_or_confirmed_uncle()
-            .returning(|_| true);
 
         let result =
             handle_getdata_block(block_hash, chain_store_handle, response_channel, swarm_tx).await;
@@ -104,34 +94,6 @@ mod tests {
             assert_eq!(share_block, expected_block);
         } else {
             panic!("Expected SwarmSend::Response with ShareBlock message");
-        }
-    }
-
-    #[tokio::test]
-    async fn test_handle_getdata_block_not_confirmed() {
-        let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<u32>>(1);
-        let response_channel = 1u32;
-        let mut chain_store_handle = ChainStoreHandle::default();
-
-        let block = TestShareBlockBuilder::new().build();
-        let block_hash = block.block_hash();
-
-        chain_store_handle
-            .expect_get_share()
-            .returning(move |_| Some(block.clone()));
-        chain_store_handle
-            .expect_is_confirmed_or_confirmed_uncle()
-            .returning(|_| false);
-
-        let result =
-            handle_getdata_block(block_hash, chain_store_handle, response_channel, swarm_tx).await;
-
-        assert!(result.is_ok());
-
-        if let Some(SwarmSend::Response(channel, Message::NotFound(()))) = swarm_rx.recv().await {
-            assert_eq!(channel, response_channel);
-        } else {
-            panic!("Expected SwarmSend::Response with NotFound message");
         }
     }
 
