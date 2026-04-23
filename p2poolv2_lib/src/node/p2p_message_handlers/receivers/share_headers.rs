@@ -114,12 +114,13 @@ fn validate_header_chain(
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let pool_difficulty = share_validator.pool_difficulty();
 
-    let (anchor_hash, anchor_metadata) = find_chain_anchor(share_headers, chain_store_handle)?;
+    let declared_uncles = collect_declared_uncles(share_headers);
+    let (anchor_hash, anchor_metadata) =
+        find_chain_anchor(share_headers, &declared_uncles, chain_store_handle)?;
     debug!(
         "Anchor hash {:?} and anchor height {:?}",
         anchor_hash, anchor_metadata.expected_height
     );
-    let declared_uncles = collect_declared_uncles(share_headers);
 
     let (extended_chain, cumulative_chain_work, uncle_headers_seen) = classify_link_and_validate(
         share_headers,
@@ -266,13 +267,20 @@ fn verify_have_all_uncles(
 
 /// Find the chain anchor: the first parent hash from the batch that exists
 /// in our store. Returns the anchor blockhash and its metadata.
+/// Find the chain anchor by looking at parents of main-chain headers only.
+///
+/// Uncle headers are excluded because their parents can point far back in
+/// the chain, which would select the wrong anchor and cause subsequent
+/// chain-linkage validation to fail.
 fn find_chain_anchor(
     share_headers: &[ShareHeader],
+    declared_uncles: &HashSet<BlockHash>,
     chain_store_handle: &ChainStoreHandle,
 ) -> Result<(BlockHash, crate::store::block_tx_metadata::BlockMetadata), Box<dyn Error + Send + Sync>>
 {
     let parent_candidates: Vec<BlockHash> = share_headers
         .iter()
+        .filter(|header| !declared_uncles.contains(&header.block_hash()))
         .map(|header| header.prev_share_blockhash)
         .collect();
     let anchor_hash = chain_store_handle
