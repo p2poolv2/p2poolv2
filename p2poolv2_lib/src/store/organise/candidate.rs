@@ -28,6 +28,8 @@ use bitcoin::{
 };
 use tracing::debug;
 
+use std::collections::VecDeque;
+
 use super::{Chain, Height, TopResult, height_to_key_with_suffix};
 
 const CANDIDATE_SUFFIX: &str = ":c";
@@ -200,13 +202,19 @@ impl Store {
     }
 
     /// Return blockhashes of all shares between confirmed top and
-    /// candidate top that are missing full block data.
+    /// candidate top that are missing full block data, including any
+    /// uncle blocks referenced by candidate headers.
     ///
     /// Queries every height from confirmed_top+1 to candidate_top
     /// using the BlockHeight index, which stores all blockhashes at
     /// each height including uncle blocks that are not on the
     /// candidate chain. A share is included if its metadata status is
     /// Candidate or HeaderValid, meaning it still needs block data.
+    ///
+    /// Uncle blocks typically sit at heights already covered by the
+    /// confirmed chain, so the height scan alone misses them. A
+    /// second pass reads the header of each candidate block and adds
+    /// any referenced uncle that lacks block data.
     pub fn get_candidate_blocks_missing_data(&self) -> Result<Vec<BlockHash>, StoreError> {
         let confirmed_height = match self.get_top_confirmed_height() {
             Ok(height) => height,
@@ -247,7 +255,30 @@ impl Store {
             height += 1;
         }
 
+        let missing_uncles = self.collect_missing_uncle_blocks(&missing);
+        missing.extend(missing_uncles);
+
         Ok(missing)
+    }
+
+    /// Read the header for each blockhash and return any referenced
+    /// uncle that lacks full block data.
+    fn collect_missing_uncle_blocks(&self, blockhashes: &[BlockHash]) -> Vec<BlockHash> {
+        let mut missing_uncles = Vec::new();
+        for blockhash in blockhashes {
+            let Ok(Some(header)) = self.get_share_header(blockhash) else {
+                continue;
+            };
+            for uncle_hash in &header.uncles {
+                if !self.share_block_exists(uncle_hash)
+                    && !missing_uncles.contains(uncle_hash)
+                    && !blockhashes.contains(uncle_hash)
+                {
+                    missing_uncles.push(*uncle_hash);
+                }
+            }
+        }
+        missing_uncles
     }
 
     /// Check if a blockhash has Candidate status in its metadata.
@@ -307,14 +338,10 @@ impl Store {
 
     /// Reorgs the candidate chain to the branch ending at `blockhash`.
     ///
-    /// Returns the new top candidate height and the new candidate chain
-    /// as `(height, blockhash)` pairs. The caller uses this local chain
-    /// to check confirmed extension without re-reading from the DB.
-    ///
-    /// Directly manipulates candidate index entries and sets the final
-    /// top height in a single pass, avoiding stale reads from the DB
-    /// within the same WriteBatch. Reorged-out shares have their
-    /// metadata status set to Valid so `is_candidate()` stays correct.
+    /// Walks back from `blockhash` to the first ancestor on the
+    /// candidate or confirmed chain. Delegates to
+    /// `reorg_candidate_from_candidate` or
+    /// `reorg_candidate_from_confirmed` depending on the branch point.
     pub(super) fn reorg_candidate(
         &self,
         blockhash: &BlockHash,
@@ -322,7 +349,7 @@ impl Store {
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<(Height, Chain), StoreError> {
         let branch = self
-            .get_branch_to_chain(blockhash, |h| self.is_candidate(h))?
+            .get_branch_to_chain(blockhash, |h| self.is_candidate(h) || self.is_confirmed(h))?
             .ok_or_else(|| {
                 StoreError::NotFound(format!(
                     "Branch point {blockhash} to reorg candidate chain not found."
@@ -331,9 +358,29 @@ impl Store {
         let branch_point = branch.front().ok_or_else(|| {
             StoreError::NotFound("Empty branch returned from get_branch_to_chain.".into())
         })?;
-        let reorged_out_chain = self.get_candidates_chain(branch_point, top_candidate)?;
 
-        // Delete old candidate index entries and set reorged-out shares to Valid
+        if self.is_confirmed(branch_point) {
+            self.reorg_candidate_from_confirmed(&branch, batch)
+        } else {
+            self.reorg_candidate_from_candidate(&branch, top_candidate, batch)
+        }
+    }
+
+    /// Reorg when the branch point is on the candidate chain.
+    ///
+    /// Removes old candidate entries from the branch point to the
+    /// current top, resetting their status to HeaderValid. Then writes
+    /// the new branch as candidates.
+    fn reorg_candidate_from_candidate(
+        &self,
+        branch: &VecDeque<BlockHash>,
+        top_candidate: Option<&TopResult>,
+        batch: &mut rocksdb::WriteBatch,
+    ) -> Result<(Height, Chain), StoreError> {
+        let branch_point = branch.front().ok_or_else(|| {
+            StoreError::NotFound("Empty branch in reorg_candidate_from_candidate.".into())
+        })?;
+        let reorged_out_chain = self.get_candidates_chain(branch_point, top_candidate)?;
         for (height, uncandidate) in &reorged_out_chain {
             self.delete_candidate_entry(*height, batch);
             let mut metadata = self.get_block_metadata(uncandidate)?;
@@ -341,24 +388,46 @@ impl Store {
             self.update_block_metadata(uncandidate, &metadata, batch)?;
         }
 
-        // Write new branch entries, collect the chain, and update metadata
+        self.write_branch_as_candidates(branch, batch)
+    }
+
+    /// Reorg when the branch point is on the confirmed chain.
+    ///
+    /// No old candidate entries need removal. Writes all branch
+    /// members above the confirmed branch point as candidates.
+    fn reorg_candidate_from_confirmed(
+        &self,
+        branch: &VecDeque<BlockHash>,
+        batch: &mut rocksdb::WriteBatch,
+    ) -> Result<(Height, Chain), StoreError> {
+        let mut entries = branch.iter();
+        entries.next(); // skip the confirmed branch point
+        let above_confirmed: VecDeque<BlockHash> = entries.copied().collect();
+        self.write_branch_as_candidates(&above_confirmed, batch)
+    }
+
+    /// Write a sequence of blockhashes as candidate entries, updating
+    /// their metadata to Candidate and setting the top candidate height.
+    ///
+    /// Returns the new top height and the candidate chain.
+    fn write_branch_as_candidates(
+        &self,
+        branch: &VecDeque<BlockHash>,
+        batch: &mut rocksdb::WriteBatch,
+    ) -> Result<(Height, Chain), StoreError> {
         let mut new_top_height = 0u32;
         let mut new_chain = Vec::with_capacity(branch.len());
-        for candidate in &branch {
+        for candidate in branch {
             let mut metadata = self.get_block_metadata(candidate)?;
             let height = metadata.expected_height.ok_or_else(|| {
                 StoreError::NotFound("Block metadata missing expected_height for candidate".into())
             })?;
             self.put_candidate_entry(height, candidate, batch);
-
             metadata.status = Status::Candidate;
             self.update_block_metadata(candidate, &metadata, batch)?;
-
             new_chain.push((height, *candidate));
             new_top_height = height;
         }
-
-        // Set the final top candidate height directly
         self.set_top_candidate_height(new_top_height, batch);
         Ok((new_top_height, new_chain))
     }
@@ -1471,6 +1540,64 @@ mod tests {
         assert!(missing.contains(&share1.block_hash()));
         assert!(missing.contains(&uncle_block.block_hash()));
         assert!(missing.contains(&share2.block_hash()));
+    }
+
+    /// Uncle at a confirmed height is missed by the height scan but
+    /// should be included because a candidate header references it.
+    ///
+    /// Scenario: genesis -> share1(h:1, confirmed) -> share2(h:2, candidate).
+    /// uncle_block is a fork child of genesis at h:1 (same height as
+    /// the confirmed share1). share2 declares uncle_block as an uncle.
+    /// Only the uncle's header exists, not its block data.
+    /// get_candidate_blocks_missing_data should return uncle_block.
+    #[test]
+    fn test_missing_data_includes_uncle_at_confirmed_height() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695790).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // share1: confirmed at h:1
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695791)
+            .build();
+        store.push_to_confirmed_chain(&share1).unwrap();
+
+        // uncle_block: fork child of genesis at h:1, only header stored
+        let uncle_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695799)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_share_header(&uncle_block.header, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // share2: candidate at h:2, references uncle_block
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .uncles(vec![uncle_block.block_hash()])
+            .nonce(0xe9695792)
+            .build();
+        store.push_to_candidate_chain(&share2).unwrap();
+
+        let missing = store.get_candidate_blocks_missing_data().unwrap();
+
+        // share2 is missing block data (candidate above confirmed),
+        // uncle_block is missing block data (referenced by share2's header)
+        assert!(
+            missing.contains(&share2.block_hash()),
+            "share2 should be in missing list"
+        );
+        assert!(
+            missing.contains(&uncle_block.block_hash()),
+            "uncle_block at confirmed height should be in missing list"
+        );
     }
 
     #[test]
