@@ -1,5 +1,11 @@
 // Convert Bitcoin compact target (bits) to work.
 // Work = 2^256 / (target + 1) where target is decoded from the compact format.
+function updateTitleWithHeight(height) {
+    if (height != null) {
+        document.title = "(" + height + ") P2Poolv2 Dashboard";
+    }
+}
+
 function workFromBits(bits) {
     var exponent = bits >> 24;
     var mantissa = BigInt(bits & 0x7fffff);
@@ -69,6 +75,7 @@ function dashboard() {
                 var response = await fetch("/chain_info");
                 if (response.ok) {
                     this.chainInfo = await response.json();
+                    updateTitleWithHeight(this.chainInfo.chain_tip_height);
                     this.authenticated = true;
                     this.checking = false;
                     this.fetchShares();
@@ -103,6 +110,7 @@ function dashboard() {
                 }
 
                 this.chainInfo = await response.json();
+                updateTitleWithHeight(this.chainInfo.chain_tip_height);
                 this.authenticated = true;
                 this.password = "";
                 this.fetchShares();
@@ -155,6 +163,7 @@ function dashboard() {
                 }
                 if (this.chainInfo) {
                     this.chainInfo.chain_tip_height = share.height;
+                    updateTitleWithHeight(share.height);
                     this.chainInfo.chain_tip_blockhash = share.blockhash;
                     var work = workFromBits(share.bits);
                     var currentWork = BigInt(this.chainInfo.total_work);
@@ -232,6 +241,7 @@ function dashboard() {
                 }
 
                 this.chainInfo = await response.json();
+                updateTitleWithHeight(this.chainInfo.chain_tip_height);
             } catch (err) {
                 this.chainError = "Connection failed: " + err.message;
             }
