@@ -483,4 +483,131 @@ mod tests {
             "uncle_block should be excluded after being included by share2"
         );
     }
+
+    /// Reorg candidate when the branch point is on the confirmed chain
+    /// and no candidates exist above confirmed.
+    ///
+    /// Scenario: genesis -> share1(h:1) -> share2(h:2), all confirmed.
+    /// top_candidate == top_confirmed == share2 at h:2.
+    /// Then fork_share1 (child of genesis, h:1) is organised -- it has
+    /// less work than top, so it becomes HeaderValid only.
+    /// Then fork_share2 (child of fork_share1, h:2, higher work) is
+    /// organised -- it should reorg the candidate chain. The walk back
+    /// must pass through fork_share1 (HeaderValid) and reach genesis
+    /// (Confirmed) as the branch point.
+    #[test]
+    fn test_organise_header_reorgs_when_branch_point_is_confirmed() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Build confirmed chain: genesis -> share1(h:1) -> share2(h:2)
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        store.push_to_confirmed_chain(&share1).unwrap();
+
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(0xe9695793)
+            .build();
+        store.push_to_confirmed_chain(&share2).unwrap();
+
+        // Verify top_candidate == top_confirmed == share2 at h:2
+        let top_confirmed = store.get_top_confirmed().unwrap();
+        assert_eq!(top_confirmed.hash, share2.block_hash());
+        assert_eq!(top_confirmed.height, 2);
+
+        // fork_share1: child of genesis, h:1. Less cumulative work than
+        // top, so organise_header leaves it as HeaderValid.
+        let fork_share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695794)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&fork_share1, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = Store::get_write_batch();
+        let result = store
+            .organise_header(&fork_share1.header, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+        assert!(
+            result.is_none(),
+            "fork_share1 should not extend or reorg (less work)"
+        );
+
+        // fork_share2: child of fork_share1, h:2, with extra work so
+        // its cumulative chain_work exceeds the top candidate.
+        // Pre-store block and metadata so reorg_candidate can read
+        // from committed DB state (the WriteBatch inside
+        // organise_header is not yet committed when reorg runs).
+        let fork_share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(fork_share1.block_hash().to_string())
+            .work(2)
+            .nonce(0xe9695795)
+            .build();
+        {
+            let blockhash = fork_share2.block_hash();
+            let share_work = fork_share2.header.get_work();
+            let parent_metadata = store
+                .get_block_metadata(&fork_share2.header.prev_share_blockhash)
+                .unwrap();
+            let parent_height = parent_metadata.expected_height.unwrap_or_default();
+            let height = parent_height + 1;
+            let chain_work = parent_metadata.chain_work + share_work;
+            let mut batch = Store::get_write_batch();
+            store.add_share_block(&fork_share2, &mut batch).unwrap();
+            store
+                .set_height_to_blockhash(&blockhash, height, &mut batch)
+                .unwrap();
+            let metadata = BlockMetadata {
+                expected_height: Some(height),
+                chain_work,
+                status: Status::HeaderValid,
+            };
+            store
+                .update_block_metadata(&blockhash, &metadata, &mut batch)
+                .unwrap();
+            store.commit_batch(batch).unwrap();
+        }
+
+        // This should reorg candidates, walking back through
+        // fork_share1 (HeaderValid) to genesis (Confirmed).
+        let mut batch = Store::get_write_batch();
+        let result = store
+            .organise_header(&fork_share2.header, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert!(
+            result.is_some(),
+            "fork_share2 should trigger candidate reorg"
+        );
+        let (height, candidates) = result.unwrap();
+        assert_eq!(height, 2);
+        assert!(
+            candidates
+                .iter()
+                .any(|(_, hash)| *hash == fork_share1.block_hash())
+        );
+        assert!(
+            candidates
+                .iter()
+                .any(|(_, hash)| *hash == fork_share2.block_hash())
+        );
+
+        // Top candidate should be fork_share2
+        let top = store.get_top_candidate().unwrap();
+        assert_eq!(top.hash, fork_share2.block_hash());
+
+        // Genesis should still be confirmed, not demoted
+        assert!(store.is_confirmed(&genesis.block_hash()));
+    }
 }
