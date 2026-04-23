@@ -32,9 +32,10 @@ use crate::shares::share_block::{
 };
 use crate::shares::validation::ShareValidator;
 use crate::store::dag_store::MAX_UNCLES_DEPTH;
+use crate::store::writer::StoreError;
 use bitcoin::hashes::Hash;
 use bitcoin::{BlockHash, CompactTarget, Target, Work};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
@@ -96,16 +97,16 @@ pub async fn handle_share_headers<C: Send + Sync>(
 
 /// Validate the received header batch.
 ///
-/// The batch may contain both confirmed chain headers and uncle headers
+/// The batch may contain both main chain headers and uncle headers
 /// (interleaved by get_descendant_blockhashes). All headers must pass
-/// minimum difficulty. Confirmed chain headers (those that link via
+/// minimum difficulty. Main chain headers (those that link via
 /// prev_share_blockhash) are additionally ASERT-validated.
 ///
 /// Checks performed:
 /// 1. Every header passes validate_header_minimum_difficulty
 /// 2. Every header's prev_share_blockhash references the anchor or another header in the batch
-/// 3. Confirmed chain headers have bits matching ASERT-computed target
-/// 4. Cumulative work of confirmed chain exceeds MIN_CUMULATIVE_CHAIN_WORK
+/// 3. Main chain headers have bits matching ASERT-computed target
+/// 4. Cumulative work of extended main chain exceeds MIN_CUMULATIVE_CHAIN_WORK
 fn validate_header_chain(
     share_headers: &[ShareHeader],
     chain_store_handle: &ChainStoreHandle,
@@ -118,30 +119,23 @@ fn validate_header_chain(
         "Anchor hash {:?} and anchor height {:?}",
         anchor_hash, anchor_metadata.expected_height
     );
-    let anchor_header = chain_store_handle.get_share_header(&anchor_hash)?;
-
     let declared_uncles = collect_declared_uncles(share_headers);
-    let (recent_confirmed, parent_info) = seed_from_store(
-        anchor_hash,
-        &anchor_header,
-        &anchor_metadata,
-        chain_store_handle,
-    )?;
-    let (confirmed_chain, cumulative_chain_work, uncle_headers_seen) = classify_link_and_validate(
+
+    let (extended_chain, cumulative_chain_work, uncle_headers_seen) = classify_link_and_validate(
         share_headers,
-        recent_confirmed,
-        parent_info,
         &declared_uncles,
         share_validator,
         pool_difficulty,
+        anchor_hash,
+        chain_store_handle,
     )?;
-    verify_have_all_uncles(&confirmed_chain, &uncle_headers_seen, chain_store_handle)?;
+    verify_have_all_uncles(&extended_chain, &uncle_headers_seen, chain_store_handle)?;
     validate_cumulative_work(anchor_metadata.chain_work, cumulative_chain_work)?;
 
     debug!(
-        "Validated {} headers ({} confirmed chain), cumulative chain work: {cumulative_chain_work}",
+        "Validated {} headers ({} extended chain), cumulative chain work: {cumulative_chain_work}",
         share_headers.len(),
-        confirmed_chain.len()
+        extended_chain.len()
     );
     Ok(())
 }
@@ -157,82 +151,59 @@ fn collect_declared_uncles(share_headers: &[ShareHeader]) -> HashSet<BlockHash> 
     declared
 }
 
-/// Seed the recent confirmed window and parent_info map from the store.
-///
-/// Walks up to MAX_UNCLES_DEPTH ancestors from the anchor via
-/// prev_share_blockhash, stopping early at genesis. The returned
-/// VecDeque contains older ancestors first with the anchor at the
-/// back. parent_info maps each seeded hash to its (time, height) so
-/// ASERT can be evaluated against any header whose parent is one of
-/// the seeded ancestors.
-fn seed_from_store(
-    anchor_hash: BlockHash,
-    anchor_header: &ShareHeader,
-    anchor_metadata: &crate::store::block_tx_metadata::BlockMetadata,
+/// Get the blockhash's timestamp and height, checking the batch-local
+/// cache first and falling back to the store. Store results are cached
+/// for subsequent lookups within the same batch.
+fn get_share_time_and_height(
+    blockhash: &BlockHash,
+    cache: &mut HashMap<BlockHash, (u32, u32)>,
     chain_store_handle: &ChainStoreHandle,
-) -> Result<(VecDeque<BlockHash>, HashMap<BlockHash, (u32, u32)>), Box<dyn Error + Send + Sync>> {
-    let capacity = MAX_UNCLES_DEPTH as usize + 1;
-    let mut recent_confirmed: VecDeque<BlockHash> = VecDeque::with_capacity(capacity);
-    let mut parent_info: HashMap<BlockHash, (u32, u32)> = HashMap::with_capacity(capacity);
-
-    let anchor_height = anchor_metadata
-        .expected_height
-        .ok_or_else(|| format!("Anchor {anchor_hash} metadata has no expected_height"))?;
-    recent_confirmed.push_back(anchor_hash);
-    parent_info.insert(anchor_hash, (anchor_header.time, anchor_height));
-
-    let mut current_hash = anchor_header.prev_share_blockhash;
-    let mut current_height = anchor_height;
-    let mut iterations: u8 = 0;
-    while current_height > 0 && iterations < MAX_UNCLES_DEPTH {
-        let header = chain_store_handle
-            .get_share_header(&current_hash)
-            .map_err(|store_error| {
-                format!("Failed to load ancestor {current_hash} from store: {store_error}")
-            })?;
-        current_height -= 1;
-        recent_confirmed.push_front(current_hash);
-        parent_info.insert(current_hash, (header.time, current_height));
-        current_hash = header.prev_share_blockhash;
-        iterations += 1;
+) -> Result<(u32, u32), Box<dyn Error + Send + Sync>> {
+    if let Some(&cached) = cache.get(blockhash) {
+        return Ok(cached);
     }
-
-    Ok((recent_confirmed, parent_info))
+    let metadata = chain_store_handle.get_block_metadata(blockhash)?;
+    let header = chain_store_handle.get_share_header(blockhash)?;
+    let height = metadata
+        .expected_height
+        .ok_or_else(|| StoreError::Database("No height found for {blockhash}".into()))?;
+    let result = (header.time, height);
+    cache.insert(*blockhash, result);
+    Ok(result)
 }
 
-/// Walk the batch in order, classifying each header as uncle or confirmed,
+/// Result of classify_link_and_validate: extended chain headers, cumulative
+/// work from the batch, and the set of uncle blockhashes seen in the batch.
+type ClassifiedBatch<'a> = (Vec<&'a ShareHeader>, Work, HashSet<BlockHash>);
+
+/// Walk the batch in order, classifying each header as uncle or on main chain,
 /// validating min PoW and ASERT for every header, and enforcing chain linkage.
 ///
-/// Returns the confirmed chain and the cumulative work contributed by it.
+/// Returns the extended chain and the cumulative work contributed by it.
 fn classify_link_and_validate<'a>(
     share_headers: &'a [ShareHeader],
-    mut recent_confirmed: VecDeque<BlockHash>,
-    mut parent_info: HashMap<BlockHash, (u32, u32)>,
     declared_uncles: &HashSet<BlockHash>,
     share_validator: &(dyn ShareValidator + Send + Sync),
     pool_difficulty: &PoolDifficulty,
-) -> Result<(Vec<&'a ShareHeader>, Work, HashSet<BlockHash>), Box<dyn Error + Send + Sync>> {
-    let window_capacity = MAX_UNCLES_DEPTH as usize + 1;
-    let mut confirmed_chain: Vec<&ShareHeader> = Vec::with_capacity(share_headers.len());
-    let mut confirmed_tip: BlockHash = *recent_confirmed.back().unwrap();
-    let mut cumulative_chain_work = Work::from_hex("0x00").unwrap();
+    anchor_hash: BlockHash,
+    chain_store_handle: &ChainStoreHandle,
+) -> Result<ClassifiedBatch<'a>, Box<dyn Error + Send + Sync>> {
+    let mut extended_chain: Vec<&ShareHeader> = Vec::with_capacity(share_headers.len());
+    let mut extended_tip = anchor_hash;
+    let mut cumulative_work = Work::from_hex("0x00").unwrap();
     let mut uncle_headers_seen: HashSet<BlockHash> = HashSet::with_capacity(share_headers.len());
+
+    let mut time_height_cache: HashMap<BlockHash, (u32, u32)> =
+        HashMap::with_capacity(share_headers.len() + 1);
 
     for (index, header) in share_headers.iter().enumerate() {
         share_validator.validate_header_minimum_difficulty(header)?;
 
-        let (parent_time, parent_height) = match parent_info.get(&header.prev_share_blockhash) {
-            Some(value) => *value,
-            None => {
-                return Err(format!(
-                    "Header {} at position {} has parent {} which is not in the recent confirmed window",
-                    header.block_hash(),
-                    index,
-                    header.prev_share_blockhash
-                )
-                .into());
-            }
-        };
+        let (parent_time, parent_height) = get_share_time_and_height(
+            &header.prev_share_blockhash,
+            &mut time_height_cache,
+            chain_store_handle,
+        )?;
 
         let expected_bits = pool_difficulty.calculate_target_clamped(parent_time, parent_height);
         if header.bits != expected_bits {
@@ -246,45 +217,40 @@ fn classify_link_and_validate<'a>(
         }
 
         let header_hash = header.block_hash();
-        if declared_uncles.contains(&header_hash) {
-            // Uncle: ASERT validated above; do not extend the confirmed chain.
-            uncle_headers_seen.insert(header_hash);
-            continue;
-        }
+        time_height_cache.insert(header_hash, (header.time, parent_height + 1));
 
-        // Confirmed: must extend the current tip.
-        if header.prev_share_blockhash != confirmed_tip {
+        if declared_uncles.contains(&header_hash) {
+            // Uncle: ASERT validated above; do not add to extended chain.
+            uncle_headers_seen.insert(header_hash);
+        } else if header.prev_share_blockhash != extended_tip {
+            // header must extend the current tip.
             return Err(format!(
-                "Header {} at position {} has parent {} which is not the chain tip {}",
-                header_hash, index, header.prev_share_blockhash, confirmed_tip
+                "Header {} at position {} has parent {} which is not the tip {}",
+                header_hash, index, header.prev_share_blockhash, extended_tip
             )
             .into());
+        } else {
+            extended_chain.push(header);
+            cumulative_work = cumulative_work + header.get_work();
+            extended_tip = header_hash;
         }
-
-        confirmed_chain.push(header);
-        cumulative_chain_work = cumulative_chain_work + header.get_work();
-        confirmed_tip = header_hash;
-        recent_confirmed.push_back(header_hash);
-        if recent_confirmed.len() > window_capacity {
-            recent_confirmed.pop_front();
-        }
-        parent_info.insert(header_hash, (header.time, parent_height + 1));
     }
 
-    Ok((confirmed_chain, cumulative_chain_work, uncle_headers_seen))
+    Ok((extended_chain, cumulative_work, uncle_headers_seen))
 }
 
-/// Verify every uncle hash declared by a confirmed header was either delivered
-/// in this batch (and thus already validated in classify_link_and_validate) or
-/// is already organised in the store from an earlier batch. Catches phantom
-/// uncle references that no peer ever sent.
+/// Verify every uncle hash declared by a header was either delivered
+/// in this batch (and thus already validated in
+/// classify_link_and_validate) or is already organised in the store
+/// from an earlier batch. Catches phantom uncle references that no
+/// peer ever sent.
 fn verify_have_all_uncles(
-    confirmed_chain: &[&ShareHeader],
+    extended_chain: &[&ShareHeader],
     uncle_headers_seen: &HashSet<BlockHash>,
     chain_store_handle: &ChainStoreHandle,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    for confirmed in confirmed_chain {
-        for uncle_hash in &confirmed.uncles {
+    for header in extended_chain {
+        for uncle_hash in &header.uncles {
             if !uncle_headers_seen.contains(uncle_hash)
                 && !chain_store_handle.share_block_exists(uncle_hash)
             {
@@ -810,12 +776,7 @@ mod tests {
         let headers = vec![share_a, share_c];
         let result = validate_header_chain(&headers, &chain_store_handle, &mock_validator);
         assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("not in the recent confirmed window"),
-        );
+        assert!(result.unwrap_err().to_string().contains("not the tip"),);
     }
 
     #[test]
@@ -857,12 +818,7 @@ mod tests {
         let headers = vec![share_a, share_b, share_c, share_d];
         let result = validate_header_chain(&headers, &chain_store_handle, &mock_validator);
         assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("not the chain tip"),
-        );
+        assert!(result.unwrap_err().to_string().contains("not the tip"),);
     }
 
     #[test]
@@ -1012,11 +968,6 @@ mod tests {
         // With the uncles[]-driven classifier, an "uncle" that no header
         // references is indistinguishable from a confirmed header that does
         // not extend the tip, so it is rejected via the chain-tip check.
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("not the chain tip"),
-        );
+        assert!(result.unwrap_err().to_string().contains("not the tip"),);
     }
 }
