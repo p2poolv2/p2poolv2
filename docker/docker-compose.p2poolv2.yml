@@ -3,6 +3,7 @@
 
 services:
   p2poolv2:
+    image: p2poolv2:latest
     build:
       context: ..
       dockerfile: docker/p2poolv2/Dockerfile
