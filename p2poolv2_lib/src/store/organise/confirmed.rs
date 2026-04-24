@@ -188,7 +188,7 @@ impl Store {
     }
 
     /// Get top confirmed height from confirmed index
-    pub(crate) fn get_top_confirmed_height(&self) -> Result<Height, StoreError> {
+    pub fn get_top_confirmed_height(&self) -> Result<Height, StoreError> {
         let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
         match self
             .db

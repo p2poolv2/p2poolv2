@@ -321,10 +321,7 @@ impl Store {
     }
 
     /// Get the block metadata for a blockhash
-    pub(crate) fn get_block_metadata(
-        &self,
-        blockhash: &BlockHash,
-    ) -> Result<BlockMetadata, StoreError> {
+    pub fn get_block_metadata(&self, blockhash: &BlockHash) -> Result<BlockMetadata, StoreError> {
         let block_metadata_cf = self.db.cf_handle(&ColumnFamily::BlockMetadata).unwrap();
         let metadata_key = consensus::serialize(blockhash);
 
