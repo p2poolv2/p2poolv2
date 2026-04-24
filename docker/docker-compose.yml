@@ -2,6 +2,7 @@ name: p2poolv2
 
 services:
   bitcoind:
+    image: p2poolv2/bitcoind:latest
     build:
       context: bitcoind
     volumes:
