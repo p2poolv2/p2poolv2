@@ -68,55 +68,90 @@ impl Store {
         if let Some(extended_height) =
             self.should_extend_candidates(header, &metadata, top_candidate.as_ref())?
         {
-            debug!("Extending candidate");
-            self.append_to_candidates(&blockhash, extended_height, &mut metadata, batch)?;
-
-            // Committed candidates above confirmed are unaffected by the
-            // append; read them, then add the newly written entry.
-            let old_top = top_candidate
-                .map(|top| top.height)
-                .unwrap_or(top_confirmed.height);
-            let mut candidates = self.get_candidates(top_confirmed.height + 1, old_top)?;
-            candidates.push((extended_height, blockhash));
-
-            let final_height = self.extend_candidates_with_children(
-                extended_height,
+            return self.extend_candidate_chain(
                 &blockhash,
-                &mut candidates,
+                extended_height,
+                &mut metadata,
+                top_candidate.as_ref(),
+                &top_confirmed,
                 batch,
-            )?;
-            debug!("new candidate height after extending candidates {final_height}");
-            return Ok(Some((final_height, candidates)));
+            );
         }
 
         if self.should_reorg_candidate(&blockhash, &metadata, top_candidate.as_ref()) {
-            let (new_height, reorg_chain) =
-                self.reorg_candidate(&blockhash, top_candidate.as_ref(), batch)?;
-            debug!("new candidate height after reorging candidates {new_height}");
-
-            // Include committed candidates below the reorg branch point
-            let branch_start = reorg_chain.first().map(|(height, _)| *height).unwrap_or(0);
-            let mut full_chain = if branch_start > top_confirmed.height + 1 {
-                self.get_candidates(top_confirmed.height + 1, branch_start - 1)?
-            } else {
-                Vec::new()
-            };
-            full_chain.extend(reorg_chain);
-
-            // reorg_candidate always returns a non-empty chain
-            let reorg_tip_hash = full_chain.last().expect("reorg chain is non-empty").1;
-            let final_height = self.extend_candidates_with_children(
-                new_height,
-                &reorg_tip_hash,
-                &mut full_chain,
+            return self.reorg_candidate_chain(
+                &blockhash,
+                top_candidate.as_ref(),
+                &top_confirmed,
                 batch,
-            )?;
-            debug!("new candidate height after reorg + forward walk {final_height}");
-            return Ok(Some((final_height, full_chain)));
+            );
         }
 
         Ok(None)
     }
+
+    /// Extend the candidate chain with a new block and walk forward
+    /// to include any children that were waiting for this block.
+    fn extend_candidate_chain(
+        &self,
+        blockhash: &BlockHash,
+        extended_height: Height,
+        metadata: &mut BlockMetadata,
+        top_candidate: Option<&TopResult>,
+        top_confirmed: &TopResult,
+        batch: &mut rocksdb::WriteBatch,
+    ) -> Result<Option<(Height, Chain)>, StoreError> {
+        debug!("Extending candidate");
+        self.append_to_candidates(blockhash, extended_height, metadata, batch)?;
+
+        let old_top = top_candidate
+            .map(|top| top.height)
+            .unwrap_or(top_confirmed.height);
+        let mut candidates = self.get_candidates(top_confirmed.height + 1, old_top)?;
+        candidates.push((extended_height, *blockhash));
+
+        let final_height = self.extend_candidates_with_children(
+            extended_height,
+            blockhash,
+            &mut candidates,
+            batch,
+        )?;
+        debug!("new candidate height after extending candidates {final_height}");
+        Ok(Some((final_height, candidates)))
+    }
+
+    /// Reorg the candidate chain to a fork with more work, then walk
+    /// forward to include any children beyond the new tip.
+    fn reorg_candidate_chain(
+        &self,
+        blockhash: &BlockHash,
+        top_candidate: Option<&TopResult>,
+        top_confirmed: &TopResult,
+        batch: &mut rocksdb::WriteBatch,
+    ) -> Result<Option<(Height, Chain)>, StoreError> {
+        let (new_height, reorg_chain) =
+            self.reorg_candidate(blockhash, top_candidate, batch)?;
+        debug!("new candidate height after reorging candidates {new_height}");
+
+        let branch_start = reorg_chain.first().map(|(height, _)| *height).unwrap_or(0);
+        let mut full_chain = if branch_start > top_confirmed.height + 1 {
+            self.get_candidates(top_confirmed.height + 1, branch_start - 1)?
+        } else {
+            Vec::new()
+        };
+        full_chain.extend(reorg_chain);
+
+        let reorg_tip_hash = full_chain.last().expect("reorg chain is non-empty").1;
+        let final_height = self.extend_candidates_with_children(
+            new_height,
+            &reorg_tip_hash,
+            &mut full_chain,
+            batch,
+        )?;
+        debug!("new candidate height after reorg + forward walk {final_height}");
+        Ok(Some((final_height, full_chain)))
+    }
+
     /// Persist a new header and initialise its metadata.
     ///
     /// Stores the header, computes height and chain work from the
