@@ -76,6 +76,9 @@ pub enum Commands {
         /// Include template merkle branches in the output
         #[arg(short = 'm', long, default_value = "false")]
         template_merkle_branches: bool,
+        /// Output as Graphviz DOT format DAG (requires --db-path)
+        #[arg(short, long, default_value = "false")]
+        dot: bool,
     },
     /// Display candidate shares and their uncles for a height range
     Candidates {
@@ -85,6 +88,9 @@ pub enum Commands {
         /// Number of candidates to display going back from --to. Default 10.
         #[arg(short, long, default_value = "10")]
         num: u32,
+        /// Output as Graphviz DOT format DAG (requires --db-path)
+        #[arg(short, long, default_value = "false")]
+        dot: bool,
     },
     /// Look up a share by its blockhash or height
     #[command(group(ArgGroup::new("query").required(true).args(["hash", "height"])))]
@@ -150,19 +156,21 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
                     Some(Commands::Shares {
                         to,
                         num,
-                        share_block_transactions,
-                        template_merkle_branches,
+                        dot,
+                        ..
                     }) => {
-                        commands::db_query::share_headers(
-                            &store,
-                            *to,
-                            *num,
-                            *share_block_transactions,
-                            *template_merkle_branches,
-                        )?;
+                        if *dot {
+                            commands::db_query::shares_dot(&store, *to, *num)?;
+                        } else {
+                            commands::db_query::shares(&store, *to, *num)?;
+                        }
                     }
-                    Some(Commands::Candidates { to, num }) => {
-                        commands::db_query::candidates(&store, *to, *num)?;
+                    Some(Commands::Candidates { to, num, dot }) => {
+                        if *dot {
+                            commands::db_query::candidates_dot(&store, *to, *num)?;
+                        } else {
+                            commands::db_query::candidates(&store, *to, *num)?;
+                        }
                     }
                     Some(Commands::Share { hash, height, full }) => {
                         commands::db_query::share_lookup(&store, hash.clone(), *height, *full)?;
@@ -202,6 +210,7 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
                         num,
                         share_block_transactions,
                         template_merkle_branches,
+                        dot: _,
                     }) => {
                         commands::shares::execute(
                             &config.api,
@@ -212,7 +221,7 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
                         )
                         .await?;
                     }
-                    Some(Commands::Candidates { to, num }) => {
+                    Some(Commands::Candidates { to, num, dot: _ }) => {
                         commands::candidates::execute(&config.api, *to, *num).await?;
                     }
                     Some(Commands::Share { hash, height, full }) => {

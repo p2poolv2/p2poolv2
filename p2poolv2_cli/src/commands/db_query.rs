@@ -108,14 +108,8 @@ pub fn shares(store: &Store, to: Option<u32>, num: u32) -> Result<(), Box<dyn Er
     Ok(())
 }
 
-/// Query share headers directly from the store (matches /share_headers endpoint).
-pub fn share_headers(
-    store: &Store,
-    to: Option<u32>,
-    num: u32,
-    include_txs: bool,
-    include_merkle_branches: bool,
-) -> Result<(), Box<dyn Error>> {
+/// Output confirmed shares as a Graphviz DOT DAG.
+pub fn shares_dot(store: &Store, to: Option<u32>, num: u32) -> Result<(), Box<dyn Error>> {
     let tip_height = store
         .get_top_confirmed_height()
         .map_err(|error| format!("Failed to get tip height: {error}"))?;
@@ -128,45 +122,33 @@ pub fn share_headers(
 
     let from_height = to_height.saturating_sub(num.saturating_sub(1));
 
-    let need_full_blocks = include_txs || include_merkle_branches;
+    let shares = store
+        .query_shares(from_height, to_height)
+        .map_err(|error| format!("Failed to query shares: {error}"))?;
 
-    let headers: Vec<serde_json::Value> = if need_full_blocks {
-        let share_blocks = store
-            .query_share_blocks(from_height, to_height)
-            .map_err(|error| format!("Failed to query share blocks: {error}"))?;
+    print_shares_dot(&shares, "confirmed_shares");
+    Ok(())
+}
 
-        share_blocks
-            .into_iter()
-            .map(|sb| {
-                let mut entry = serde_json::to_value(&sb.header).unwrap_or_default();
-                if include_txs {
-                    entry["transactions"] =
-                        serde_json::to_value(&sb.transactions).unwrap_or_default();
-                }
-                if include_merkle_branches {
-                    entry["template_merkle_branches"] =
-                        serde_json::to_value(&sb.template_merkle_branches).unwrap_or_default();
-                }
-                entry
-            })
-            .collect()
-    } else {
-        let raw_headers = store
-            .query_share_headers(from_height, to_height)
-            .map_err(|error| format!("Failed to query share headers: {error}"))?;
+/// Output candidate shares as a Graphviz DOT DAG.
+pub fn candidates_dot(store: &Store, to: Option<u32>, num: u32) -> Result<(), Box<dyn Error>> {
+    let candidate_height = store
+        .get_top_candidate_height()
+        .map_err(|error| format!("Failed to get candidate tip height: {error}"))?;
 
-        raw_headers
-            .into_iter()
-            .map(|h| serde_json::to_value(&h).unwrap_or_default())
-            .collect()
+    let to_height = match to {
+        Some(height) if height > candidate_height => candidate_height,
+        Some(height) => height,
+        None => candidate_height,
     };
 
-    let response = serde_json::json!({
-        "from_height": from_height,
-        "to_height": to_height,
-        "headers": headers,
-    });
-    println!("{}", serde_json::to_string_pretty(&response)?);
+    let from_height = to_height.saturating_sub(num.saturating_sub(1));
+
+    let candidates = store
+        .query_candidates(from_height, to_height)
+        .map_err(|error| format!("Failed to query candidates: {error}"))?;
+
+    print_shares_dot(&candidates, "candidate_shares");
     Ok(())
 }
 
@@ -233,6 +215,100 @@ pub fn pplns_shares(
     let response = serde_json::to_string_pretty(&shares)?;
     println!("{response}");
     Ok(())
+}
+
+// --- DOT output helpers ---
+
+use p2poolv2_lib::store::dag_store::ShareInfo;
+
+/// Truncate a string to the first `n` characters.
+fn short(s: &str, n: usize) -> &str {
+    &s[..s.len().min(n)]
+}
+
+/// Format a unix timestamp as millisecond-precision UTC string.
+fn format_ts_ms(timestamp: u32) -> String {
+    format!("{}.000", format_timestamp(timestamp as u64))
+}
+
+/// Format compact target bits as an integer difficulty value.
+fn format_difficulty(bits: bitcoin::CompactTarget) -> String {
+    let target = bitcoin::Target::from(bits);
+    let diff = target.difficulty_float() as u64;
+    diff.to_string()
+}
+
+/// Render a list of ShareInfo as a Graphviz DOT digraph.
+fn print_shares_dot(shares: &[ShareInfo], graph_name: &str) {
+    println!("digraph {graph_name} {{");
+    println!("    node [shape=record, style=filled];");
+    println!();
+
+    // Collect uncle blockhashes so we can colour them differently
+    let mut uncle_hashes = std::collections::HashSet::new();
+    for share in shares {
+        for uncle in &share.uncles {
+            uncle_hashes.insert(uncle.blockhash.to_string());
+        }
+    }
+
+    // Emit confirmed share nodes
+    for share in shares {
+        let hash = share.blockhash.to_string();
+        let id = short(&hash, 5);
+        let miner = short(&share.miner_address, 5);
+        let diff = format_difficulty(share.bits);
+        let ts = format_ts_ms(share.timestamp);
+        let label = format!("{id}|h:{height}|{miner}|{diff}|{ts}", height = share.height);
+        println!("    \"{hash}\" [label=\"{label}\", fillcolor=\"#a8d5ba\"];");
+    }
+
+    // Emit uncle nodes
+    for share in shares {
+        for uncle in &share.uncles {
+            let hash = uncle.blockhash.to_string();
+            let id = short(&hash, 5);
+            let miner = short(&uncle.miner_address, 5);
+            let ts = format_ts_ms(uncle.timestamp);
+            let height_str = uncle
+                .height
+                .map(|h| format!("h:{h}"))
+                .unwrap_or_else(|| "h:?".to_string());
+            let label = format!("{id}|{height_str}|{miner}|{ts}");
+            println!("    \"{hash}\" [label=\"{label}\", fillcolor=\"#f4a582\"];");
+        }
+    }
+
+    println!();
+
+    // Edges: confirmed -> prev_blockhash
+    for share in shares {
+        let hash = share.blockhash.to_string();
+        let prev = share.prev_blockhash.to_string();
+        println!("    \"{hash}\" -> \"{prev}\" [color=\"#333333\"];");
+    }
+
+    // Edges: confirmed -> uncles (dashed)
+    for share in shares {
+        let hash = share.blockhash.to_string();
+        for uncle in &share.uncles {
+            let uncle_hash = uncle.blockhash.to_string();
+            println!("    \"{hash}\" -> \"{uncle_hash}\" [style=dashed, color=\"#cc6633\"];");
+        }
+    }
+
+    // Edges: uncle -> prev_blockhash
+    for share in shares {
+        for uncle in &share.uncles {
+            let uncle_hash = uncle.blockhash.to_string();
+            let uncle_prev = uncle.prev_blockhash.to_string();
+            println!("    \"{uncle_hash}\" -> \"{uncle_prev}\" [color=\"#999999\"];");
+        }
+    }
+
+    println!("}}");
+    use std::io::Write;
+    std::io::stdout().flush().ok();
 }
 
 // --- Helper types and functions for share lookup ---
@@ -464,37 +540,6 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    // --- share_headers tests ---
-
-    #[tokio::test]
-    async fn test_share_headers_errors_on_empty_store() {
-        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
-        let store = chain_store_handle.store_handle().store();
-        let result = share_headers(store, None, 10, false, false);
-        assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_share_headers_calls_store_with_genesis() {
-        let (store, _temp_dir) = setup_store_with_genesis().await;
-        let result = share_headers(&store, Some(0), 1, false, false);
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_share_headers_with_transactions() {
-        let (store, _temp_dir) = setup_store_with_genesis().await;
-        let result = share_headers(&store, Some(0), 1, true, false);
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_share_headers_with_merkle_branches() {
-        let (store, _temp_dir) = setup_store_with_genesis().await;
-        let result = share_headers(&store, Some(0), 1, false, true);
-        assert!(result.is_ok());
-    }
-
     // --- candidates tests ---
 
     #[tokio::test]
@@ -580,6 +625,67 @@ mod tests {
         let (store, _temp_dir) = setup_store_with_genesis().await;
         let result = pplns_shares(&store, 10, Some(1_700_000_000), Some(1_700_100_000));
         assert!(result.is_ok());
+    }
+
+    // --- dot output tests ---
+
+    #[tokio::test]
+    async fn test_shares_dot_calls_store_with_genesis() {
+        let (store, _temp_dir) = setup_store_with_genesis().await;
+        let result = shares_dot(&store, Some(0), 1);
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_shares_dot_errors_on_empty_store() {
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let store = chain_store_handle.store_handle().store();
+        let result = shares_dot(store, None, 10);
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_candidates_dot_errors_on_empty_store() {
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let store = chain_store_handle.store_handle().store();
+        let result = candidates_dot(store, None, 10);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_print_shares_dot_output_structure() {
+        use bitcoin::CompactTarget;
+
+        let shares = vec![ShareInfo {
+            blockhash: BlockHash::from_str(
+                "000000000000000000000000000000000000000000000000000000000000abcd",
+            )
+            .unwrap(),
+            prev_blockhash: BlockHash::from_str(
+                "0000000000000000000000000000000000000000000000000000000000001234",
+            )
+            .unwrap(),
+            height: 1,
+            miner_address: "bc1qmineraddress".to_string(),
+            timestamp: 1700000000,
+            bits: CompactTarget::from_consensus(0x1d00ffff),
+            uncles: vec![p2poolv2_lib::store::dag_store::UncleInfo {
+                blockhash: BlockHash::from_str(
+                    "00000000000000000000000000000000000000000000000000000000000000ff",
+                )
+                .unwrap(),
+                prev_blockhash: BlockHash::from_str(
+                    "0000000000000000000000000000000000000000000000000000000000001234",
+                )
+                .unwrap(),
+                miner_address: "bc1quncleaddr".to_string(),
+                timestamp: 1699999990,
+                height: Some(1),
+            }],
+        }];
+
+        // Just verify it doesn't panic — output goes to stdout
+        print_shares_dot(&shares, "test_graph");
     }
 
     // --- format_status tests ---
