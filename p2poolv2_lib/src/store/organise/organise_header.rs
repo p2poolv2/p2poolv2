@@ -19,9 +19,10 @@ use crate::{
     shares::share_block::ShareHeader,
     store::{block_tx_metadata::BlockMetadata, writer::StoreError},
 };
+use bitcoin::BlockHash;
 use tracing::debug;
 
-use super::{Chain, Height, Store};
+use super::{Chain, Height, Store, TopResult};
 
 impl Store {
     /// Organise a share header into the candidate chain.
@@ -44,35 +45,15 @@ impl Store {
             header.prev_share_blockhash
         );
 
-        // Persist the header so it can be looked up by later shares
-        self.add_share_header(header, batch)?;
-
-        let share_work = header.get_work();
-
-        // Calculate height and chain work
-        let (new_height, new_chain_work) =
-            match self.get_block_metadata(&header.prev_share_blockhash) {
-                Ok(prev_metadata) => {
-                    let prev_height = prev_metadata.expected_height.unwrap_or_default();
-                    let new_chain_work = prev_metadata.chain_work + share_work;
-                    (prev_height + 1, new_chain_work)
-                }
-                Err(_) => (1, share_work),
-            };
-
-        // Update block index and uncles index for uncles
-        for uncle_blockhash in &header.uncles {
-            self.update_block_index(uncle_blockhash, &blockhash, batch)?;
-            self.add_to_uncles_index(uncle_blockhash, &blockhash, batch)?;
-        }
-
-        self.set_height_to_blockhash(&blockhash, new_height, batch)?;
-        let mut metadata = BlockMetadata {
-            expected_height: Some(new_height),
-            chain_work: new_chain_work,
-            status: Status::HeaderValid,
+        let mut metadata = match self.get_block_metadata(&blockhash) {
+            Ok(existing) => {
+                debug!("Block {blockhash} already has metadata, skipping header setup");
+                existing
+            }
+            Err(_) => {
+                self.initialise_new_header(header, &blockhash, batch)?
+            }
         };
-        self.update_block_metadata(&blockhash, &metadata, batch)?;
 
         let top_candidate = self.get_top_candidate().ok();
         let Some(top_confirmed) = self.get_top_confirmed().ok() else {
@@ -135,6 +116,46 @@ impl Store {
         }
 
         Ok(None)
+    }
+    /// Persist a new header and initialise its metadata.
+    ///
+    /// Stores the header, computes height and chain work from the
+    /// parent, records uncle references in the block and uncles
+    /// indexes, and writes initial metadata with HeaderValid status.
+    fn initialise_new_header(
+        &self,
+        header: &ShareHeader,
+        blockhash: &BlockHash,
+        batch: &mut rocksdb::WriteBatch,
+    ) -> Result<BlockMetadata, StoreError> {
+        self.add_share_header(header, batch)?;
+
+        let share_work = header.get_work();
+
+        let (new_height, new_chain_work) =
+            match self.get_block_metadata(&header.prev_share_blockhash) {
+                Ok(prev_metadata) => {
+                    let prev_height = prev_metadata.expected_height.unwrap_or_default();
+                    let new_chain_work = prev_metadata.chain_work + share_work;
+                    (prev_height + 1, new_chain_work)
+                }
+                Err(_) => (1, share_work),
+            };
+
+        for uncle_blockhash in &header.uncles {
+            self.update_block_index(uncle_blockhash, blockhash, batch)?;
+            self.add_to_uncles_index(uncle_blockhash, blockhash, batch)?;
+        }
+
+        self.set_height_to_blockhash(blockhash, new_height, batch)?;
+        let metadata = BlockMetadata {
+            expected_height: Some(new_height),
+            chain_work: new_chain_work,
+            status: Status::HeaderValid,
+        };
+        self.update_block_metadata(blockhash, &metadata, batch)?;
+
+        Ok(metadata)
     }
 }
 
@@ -609,5 +630,101 @@ mod tests {
 
         // Genesis should still be confirmed, not demoted
         assert!(store.is_confirmed(&genesis.block_hash()));
+    }
+
+    /// Re-organising a header that is already confirmed must not
+    /// overwrite its Confirmed status.
+    ///
+    /// Scenario: genesis -> share1(h:1, confirmed). Then call
+    /// organise_header for share1 again (as happens when synced
+    /// headers from a peer include a block we already confirmed).
+    /// share1 must remain Confirmed.
+    #[test]
+    fn test_organise_header_preserves_confirmed_status() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        store.push_to_confirmed_chain(&share1).unwrap();
+
+        assert!(store.is_confirmed(&share1.block_hash()));
+        let metadata_before = store.get_block_metadata(&share1.block_hash()).unwrap();
+        assert_eq!(metadata_before.status, Status::Confirmed);
+
+        // Re-organise the already-confirmed header, simulating what
+        // happens when synced headers from a peer include share1.
+        let mut batch = Store::get_write_batch();
+        let result = store.organise_header(&share1.header, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Candidate chain must not change
+        assert!(result.is_none());
+
+        // share1 must still be Confirmed, not downgraded
+        let metadata_after = store.get_block_metadata(&share1.block_hash()).unwrap();
+        assert_eq!(
+            metadata_after.status,
+            Status::Confirmed,
+            "organise_header must not overwrite Confirmed status"
+        );
+        assert!(store.is_confirmed(&share1.block_hash()));
+    }
+
+    /// Re-organising a confirmed block must not make it selectable
+    /// as an uncle by find_uncles.
+    ///
+    /// Scenario: genesis -> share1(h:1) -> share2(h:2), both confirmed.
+    /// Re-organise share1 (simulating sync). Then find_uncles must not
+    /// return share1.
+    #[test]
+    fn test_organise_header_confirmed_block_not_selected_as_uncle() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        store.push_to_confirmed_chain(&share1).unwrap();
+
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(0xe9695793)
+            .build();
+        store.push_to_confirmed_chain(&share2).unwrap();
+
+        assert!(store.is_confirmed(&share1.block_hash()));
+        assert!(store.is_confirmed(&share2.block_hash()));
+
+        // Re-organise share1 as if received during sync
+        let mut batch = Store::get_write_batch();
+        store.organise_header(&share1.header, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // share1 must still be confirmed
+        assert!(
+            store.is_confirmed(&share1.block_hash()),
+            "share1 must remain confirmed after re-organise"
+        );
+
+        // find_uncles must not return share1
+        let uncles = store.find_uncles().unwrap();
+        assert!(
+            !uncles.contains(&share1.block_hash()),
+            "confirmed share1 must not appear as uncle after re-organise"
+        );
     }
 }
