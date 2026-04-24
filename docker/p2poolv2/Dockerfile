@@ -73,6 +73,10 @@ COPY --from=builder /usr/local/cargo/bin/p2poolv2 /usr/local/bin/p2poolv2
 COPY --from=builder /usr/local/cargo/bin/p2poolv2_cli /usr/local/bin/p2poolv2_cli
 COPY config-docker.sample.toml /etc/p2poolv2/config.toml
 
+# Set up dashboard
+COPY p2poolv2_api/static /var/www/dashboard
+ENV P2POOL_STATIC_DIR=/var/www/dashboard
+
 # TODO: add non-root user
 
 HEALTHCHECK --interval=5s --timeout=1s --start-period=1s --retries=3 \
