@@ -22,7 +22,7 @@ services:
       - "${P2POOL_P2P_PORT:-6884}:${P2POOL_P2P_PORT:-6884}"
     volumes:
       - p2poolv2_data:/p2poolv2
-      - ../config.toml:/etc/p2poolv2/config.toml:ro
+      - ../${P2POOL_CONFIG:-config.toml}:/etc/p2poolv2/config.toml:ro
     restart: unless-stopped
     logging:
       driver: "json-file"
