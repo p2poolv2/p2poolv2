@@ -51,7 +51,16 @@ impl Store {
                 existing
             }
             Err(_) => {
-                self.initialise_new_header(header, &blockhash, batch)?
+                let metadata = self.initialise_new_header(header, &blockhash, batch)?;
+                // Commit the header and metadata now so that subsequent
+                // reads in reorg_candidate -> get_branch_to_chain can
+                // find this header in the database. Without this commit
+                // the header only exists in the uncommitted WriteBatch
+                // and the reorg walk fails with "branch point not found".
+                self.commit_batch(std::mem::take(batch))
+                    .map_err(|error| StoreError::Database(error.to_string()))?;
+                *batch = Store::get_write_batch();
+                metadata
             }
         };
 
@@ -129,8 +138,7 @@ impl Store {
         top_confirmed: &TopResult,
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<Option<(Height, Chain)>, StoreError> {
-        let (new_height, reorg_chain) =
-            self.reorg_candidate(blockhash, top_candidate, batch)?;
+        let (new_height, reorg_chain) = self.reorg_candidate(blockhash, top_candidate, batch)?;
         debug!("new candidate height after reorging candidates {new_height}");
 
         let branch_start = reorg_chain.first().map(|(height, _)| *height).unwrap_or(0);
