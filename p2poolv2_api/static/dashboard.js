@@ -1,8 +1,10 @@
 // Convert Bitcoin compact target (bits) to work.
 // Work = 2^256 / (target + 1) where target is decoded from the compact format.
-function updateTitleWithHeight(height) {
+function updateTitleWithHeight(height, tipHash) {
     if (height != null) {
-        document.title = "(" + height + ") P2Poolv2 Dashboard";
+        var tip = tipHash ? tipHash.substring(0, 3) : "";
+        var label = tip ? height + " \u00b7 " + tip : "" + height;
+        document.title = label + "\u00b7 P2Poolv2 Dashboard";
     }
 }
 
@@ -75,7 +77,10 @@ function dashboard() {
                 var response = await fetch("/chain_info");
                 if (response.ok) {
                     this.chainInfo = await response.json();
-                    updateTitleWithHeight(this.chainInfo.chain_tip_height);
+                    updateTitleWithHeight(
+                        this.chainInfo.chain_tip_height,
+                        this.chainInfo.chain_tip_blockhash,
+                    );
                     this.authenticated = true;
                     this.checking = false;
                     this.fetchShares();
@@ -110,7 +115,10 @@ function dashboard() {
                 }
 
                 this.chainInfo = await response.json();
-                updateTitleWithHeight(this.chainInfo.chain_tip_height);
+                updateTitleWithHeight(
+                    this.chainInfo.chain_tip_height,
+                    this.chainInfo.chain_tip_blockhash,
+                );
                 this.authenticated = true;
                 this.password = "";
                 this.fetchShares();
@@ -163,8 +171,8 @@ function dashboard() {
                 }
                 if (this.chainInfo) {
                     this.chainInfo.chain_tip_height = share.height;
-                    updateTitleWithHeight(share.height);
                     this.chainInfo.chain_tip_blockhash = share.blockhash;
+                    updateTitleWithHeight(share.height, share.blockhash);
                     var work = workFromBits(share.bits);
                     var currentWork = BigInt(this.chainInfo.total_work);
                     this.chainInfo.total_work =
@@ -241,7 +249,10 @@ function dashboard() {
                 }
 
                 this.chainInfo = await response.json();
-                updateTitleWithHeight(this.chainInfo.chain_tip_height);
+                updateTitleWithHeight(
+                    this.chainInfo.chain_tip_height,
+                    this.chainInfo.chain_tip_blockhash,
+                );
             } catch (err) {
                 this.chainError = "Connection failed: " + err.message;
             }
