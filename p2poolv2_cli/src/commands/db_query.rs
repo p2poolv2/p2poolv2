@@ -226,9 +226,10 @@ fn short(s: &str, n: usize) -> &str {
     &s[..s.len().min(n)]
 }
 
-/// Format a unix timestamp as millisecond-precision UTC string.
-fn format_ts_ms(timestamp: u32) -> String {
-    format!("{}.000", format_timestamp(timestamp as u64))
+/// Format a unix timestamp as HH:MM:SS UTC.
+fn format_ts_hms(timestamp: u32) -> String {
+    let dt = chrono::DateTime::from_timestamp(timestamp as i64, 0).unwrap_or_default();
+    dt.format("%H:%M:%S").to_string()
 }
 
 /// Format compact target bits as an integer difficulty value.
@@ -258,7 +259,7 @@ fn print_shares_dot(shares: &[ShareInfo], graph_name: &str) {
         let id = short(&hash, 5);
         let miner = short(&share.miner_address, 5);
         let diff = format_difficulty(share.bits);
-        let ts = format_ts_ms(share.timestamp);
+        let ts = format_ts_hms(share.timestamp);
         let label = format!("{id}|h:{height}|{miner}|{diff}|{ts}", height = share.height);
         println!("    \"{hash}\" [label=\"{label}\", fillcolor=\"#a8d5ba\"];");
     }
@@ -269,7 +270,7 @@ fn print_shares_dot(shares: &[ShareInfo], graph_name: &str) {
             let hash = uncle.blockhash.to_string();
             let id = short(&hash, 5);
             let miner = short(&uncle.miner_address, 5);
-            let ts = format_ts_ms(uncle.timestamp);
+            let ts = format_ts_hms(uncle.timestamp);
             let height_str = uncle
                 .height
                 .map(|h| format!("h:{h}"))
