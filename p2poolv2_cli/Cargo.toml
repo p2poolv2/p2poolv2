@@ -19,6 +19,7 @@ path = "src/lib.rs"
 
 [dependencies]
 p2poolv2_lib = { workspace = true }
+bitcoin = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -38,4 +39,5 @@ chrono = { workspace = true }
 [dev-dependencies]
 wiremock = "0.6.2"
 tokio = { version = "1.0", features = ["full", "test-util"] }
+tempfile = { workspace = true }
 

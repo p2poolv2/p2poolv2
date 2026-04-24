@@ -17,6 +17,7 @@
 pub mod api_client;
 pub mod candidates;
 pub mod chain_info;
+pub mod db_query;
 pub mod gen_auth;
 pub mod peers_info;
 pub mod pplns_shares;
@@ -32,9 +33,13 @@ use std::error::Error;
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 pub struct Cli {
-    /// Path to p2poolv2 config file (not required for gen-auth command)
+    /// Path to p2poolv2 config file (not required for gen-auth or --db-path commands)
     #[arg(short, long, env("P2POOL_CONFIG"), global = true)]
     pub config: Option<String>,
+
+    /// Path to RocksDB database directory for direct offline queries
+    #[arg(long, global = true)]
+    pub db_path: Option<String>,
 
     /// Command to execute
     #[command(subcommand)]
@@ -122,49 +127,99 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
             | Commands::Candidates { .. }
             | Commands::Share { .. },
         ) => {
-            let config_path = cli
-                .config
-                .as_ref()
-                .ok_or("Config file required for this command. Use --config")?;
-            let config = Config::load(config_path)?;
+            if let Some(db_path) = &cli.db_path {
+                // Direct database query mode (offline, no running node required)
+                let store = commands::db_query::open_store(db_path)?;
 
-            match &cli.command {
-                Some(Commands::PeersInfo) => {
-                    commands::peers_info::execute(&config.api).await?;
+                match &cli.command {
+                    Some(Commands::PeersInfo) => {
+                        return Err(
+                            "peers-info requires a running node; cannot use with --db-path".into(),
+                        );
+                    }
+                    Some(Commands::Info) => {
+                        commands::db_query::info(&store)?;
+                    }
+                    Some(Commands::PplnsShares {
+                        limit,
+                        start_time,
+                        end_time,
+                    }) => {
+                        commands::db_query::pplns_shares(&store, *limit, *start_time, *end_time)?;
+                    }
+                    Some(Commands::Shares {
+                        to,
+                        num,
+                        share_block_transactions,
+                        template_merkle_branches,
+                    }) => {
+                        commands::db_query::share_headers(
+                            &store,
+                            *to,
+                            *num,
+                            *share_block_transactions,
+                            *template_merkle_branches,
+                        )?;
+                    }
+                    Some(Commands::Candidates { to, num }) => {
+                        commands::db_query::candidates(&store, *to, *num)?;
+                    }
+                    Some(Commands::Share { hash, height, full }) => {
+                        commands::db_query::share_lookup(&store, hash.clone(), *height, *full)?;
+                    }
+                    _ => unreachable!(),
                 }
-                Some(Commands::Info) => {
-                    commands::chain_info::execute(&config.api).await?;
-                }
-                Some(Commands::PplnsShares {
-                    limit,
-                    start_time,
-                    end_time,
-                }) => {
-                    commands::pplns_shares::execute(&config.api, *limit, *start_time, *end_time)
+            } else {
+                // API query mode (requires running node)
+                let config_path = cli
+                    .config
+                    .as_ref()
+                    .ok_or("Config file required for this command. Use --config or --db-path")?;
+                let config = Config::load(config_path)?;
+
+                match &cli.command {
+                    Some(Commands::PeersInfo) => {
+                        commands::peers_info::execute(&config.api).await?;
+                    }
+                    Some(Commands::Info) => {
+                        commands::chain_info::execute(&config.api).await?;
+                    }
+                    Some(Commands::PplnsShares {
+                        limit,
+                        start_time,
+                        end_time,
+                    }) => {
+                        commands::pplns_shares::execute(
+                            &config.api,
+                            *limit,
+                            *start_time,
+                            *end_time,
+                        )
                         .await?;
+                    }
+                    Some(Commands::Shares {
+                        to,
+                        num,
+                        share_block_transactions,
+                        template_merkle_branches,
+                    }) => {
+                        commands::shares::execute(
+                            &config.api,
+                            *to,
+                            *num,
+                            *share_block_transactions,
+                            *template_merkle_branches,
+                        )
+                        .await?;
+                    }
+                    Some(Commands::Candidates { to, num }) => {
+                        commands::candidates::execute(&config.api, *to, *num).await?;
+                    }
+                    Some(Commands::Share { hash, height, full }) => {
+                        commands::share::execute(&config.api, hash.clone(), *height, *full).await?;
+                    }
+                    _ => unreachable!(),
                 }
-                Some(Commands::Shares {
-                    to,
-                    num,
-                    share_block_transactions,
-                    template_merkle_branches,
-                }) => {
-                    commands::shares::execute(
-                        &config.api,
-                        *to,
-                        *num,
-                        *share_block_transactions,
-                        *template_merkle_branches,
-                    )
-                    .await?;
-                }
-                Some(Commands::Candidates { to, num }) => {
-                    commands::candidates::execute(&config.api, *to, *num).await?;
-                }
-                Some(Commands::Share { hash, height, full }) => {
-                    commands::share::execute(&config.api, hash.clone(), *height, *full).await?;
-                }
-                _ => unreachable!(),
             }
         }
         None => {
