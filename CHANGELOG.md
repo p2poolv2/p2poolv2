@@ -7,10 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [v0.10.6] - 2026-04-21
+## [v0.10.6] - 2026-04-24
+
+### Fixed
+
+- Fix uncle sync errors by skipping uncles when looking for anchor
+  and committing new headers so new branch lookups can see them.
+
+- Respond to getdata block for all known blocks, not just confirmed
+  ones.
+
+- Update locator handling to use confirmed chain only and remove
+  pre-seeding headers when handling headers messages.
+
+- Initialise new header only if it doesn't exist, avoiding
+  overwrites during sync.
+
+### Changed
 
 - Change the testnet4 genesis to today. This is our testnet4 daa
-  anchor.
+  anchor. Genesis timestamps are now in genesis data.
+
+- Stop clamping asert daa to bitcoin difficulty.
+
+- Refactor extend and reorg candidate functions for clarity.
+
+- Dashboard: show chain tip and height in page title, show
+  difficulty, and fix layout for mobile.
 
 ## [v0.10.5] - 2026-04-20
 
