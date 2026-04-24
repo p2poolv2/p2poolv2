@@ -1,4 +1,4 @@
-set unstable := true
+set unstable
 
 dev_config := "." / "config-dev.toml"
 default_config := "." / "config.toml"
@@ -130,7 +130,7 @@ container-explore: (docker-run "--entrypoint bash")
 [group("docker")]
 [working-directory("docker")]
 compose *services="all":
-    docker compose --env-file .env up -d --build --force-recreate {{ if services == "all" { "" } else { services } }}
+    P2POOL_CONFIG={{ target_config }} docker compose --env-file .env up -d --build --force-recreate {{ if services == "all" { "" } else { services } }}
 
 # Start a shell in a docker compose service
 [group("docker")]
