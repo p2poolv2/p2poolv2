@@ -1,0 +1,134 @@
+---
+---
+- name: Build and Deploy P2Poolv2
+  hosts: all
+  become: true
+  vars:
+    repo_url: "https://github.com/p2poolv2/p2poolv2.git"
+    deploy_dir: "/opt/p2poolv2"
+    user_name: "p2poolv2"
+    config_dir: "/etc/p2poolv2"
+    data_dir: "/var/lib/p2poolv2"
+    log_dir: "/var/log/p2poolv2"
+    bin_dir: "/usr/local/bin"
+
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install system dependencies
+      apt:
+        name:
+          - build-essential
+          - curl
+          - git
+          - pkg-config
+          - libssl-dev
+          - libzmq3-dev
+          - librocksdb-dev
+          - clang
+        state: present
+
+    - name: Check if Rust is installed
+      command: rustc --version
+      register: rust_check
+      ignore_errors: true
+      changed_when: false
+
+    - name: Install Rust via rustup
+      shell: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+      when: rust_check.rc != 0
+      environment:
+        HOME: "/root"
+
+    - name: Ensure cargo is in PATH
+      shell: source $HOME/.cargo/env && cargo --version
+      environment:
+        HOME: "/root"
+      register: cargo_path_check
+      changed_when: false
+
+    - name: Install 'just' command runner
+      shell: cargo install just
+      environment:
+        HOME: "/root"
+      register: just_install
+      changed_when: "'Installed package' in just_install.stdout"
+
+    - name: Clone P2Poolv2 repository
+      git:
+        repo: "{{ repo_url }}"
+        dest: "{{ deploy_dir }}"
+        version: main
+
+    - name: Build P2Poolv2 in release mode
+      shell:
+        cmd: "{{ deploy_dir }}/just build-release"
+        executable: /bin/bash
+      environment:
+        PATH: "/root/.cargo/bin:{{ ansible_env.PATH }}"
+        HOME: "/root"
+
+    - name: Create p2poolv2 system user
+      user:
+        name: "{{ user_name }}"
+        system: true
+        shell: /sbin/nologin
+        create_home: false
+
+    - name: Create application directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ user_name }}"
+        group: "{{ user_name }}"
+        mode: "0755"
+      loop:
+        - "{{ data_dir }}"
+        - "{{ log_dir }}"
+        - "{{ config_dir }}"
+
+    - name: Install binaries
+      copy:
+        src: "{{ deploy_dir }}/target/release/p2poolv2_node"
+        dest: "{{ bin_dir }}/p2poolv2_node"
+        mode: "0755"
+        owner: "{{ user_name }}"
+        group: "{{ user_name }}"
+        remote_src: yes
+
+    - name: Install CLI binary
+      copy:
+        src: "{{ deploy_dir }}/target/release/p2poolv2_cli"
+        dest: "{{ bin_dir }}/p2poolv2_cli"
+        mode: "0755"
+        owner: "{{ user_name }}"
+        group: "{{ user_name }}"
+        remote_src: yes
+
+    - name: Copy sample configuration
+      copy:
+        src: "{{ deploy_dir }}/config.sample.toml"
+        dest: "{{ config_dir }}/config.toml"
+        mode: "0640"
+        owner: "{{ user_name }}"
+        group: "{{ user_name }}"
+        remote_src: yes
+
+    - name: Deploy systemd service template
+      template:
+        src: templates/p2poolv2@.service.j2
+        dest: "/etc/systemd/system/p2poolv2@.service"
+        mode: "0644"
+
+    - name: Reload systemd
+      systemd:
+        daemon_reload: yes
+
+    - name: Enable and start P2Poolv2 service (mainnet example)
+      systemd:
+        name: "p2poolv2@mainnet"
+        enabled: yes
+        state: started
