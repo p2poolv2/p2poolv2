@@ -64,7 +64,7 @@ pub mod network_magic {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Message {
     Inventory(InventoryMessage),
-    NotFound(()),
+    NotFound(GetData),
     GetShareHeaders(Vec<BlockHash>, BlockHash),
     GetShareBlocks(Vec<BlockHash>, BlockHash),
     ShareHeaders(Vec<ShareHeader>),
@@ -210,7 +210,11 @@ impl Encodable for Message {
                 len += inv.consensus_encode(w)?;
                 Ok(len)
             }
-            Message::NotFound(_) => NOT_FOUND.consensus_encode(w),
+            Message::NotFound(get_data) => {
+                let mut len = NOT_FOUND.consensus_encode(w)?;
+                len += get_data.consensus_encode(w)?;
+                Ok(len)
+            }
             Message::GetShareHeaders(hashes, stop) => {
                 let mut len = GET_SHARE_HEADERS.consensus_encode(w)?;
                 len += hashes.consensus_encode(w)?;
@@ -253,7 +257,7 @@ impl Decodable for Message {
         let disc = u8::consensus_decode(r)?;
         match disc {
             INVENTORY => Ok(Message::Inventory(InventoryMessage::consensus_decode(r)?)),
-            NOT_FOUND => Ok(Message::NotFound(())),
+            NOT_FOUND => Ok(Message::NotFound(GetData::consensus_decode(r)?)),
             GET_SHARE_HEADERS => Ok(Message::GetShareHeaders(
                 Vec::<BlockHash>::consensus_decode(r)?,
                 BlockHash::consensus_decode(r)?,
@@ -426,7 +430,7 @@ mod tests {
 
     #[test]
     fn test_raw_message_checksum_verification() {
-        let msg = Message::NotFound(());
+        let msg = Message::NotFound(GetData::Block(BlockHash::all_zeros()));
         let raw = RawMessage::new(network_magic::MAINNET, msg);
 
         let mut encoded = Vec::new();
@@ -442,7 +446,7 @@ mod tests {
 
     #[test]
     fn test_raw_message_different_networks() {
-        let msg = Message::NotFound(());
+        let msg = Message::NotFound(GetData::Block(BlockHash::all_zeros()));
 
         let raw_mainnet = RawMessage::new(network_magic::MAINNET, msg.clone());
         let raw_testnet = RawMessage::new(network_magic::TESTNET, msg.clone());
@@ -457,7 +461,7 @@ mod tests {
 
     #[test]
     fn test_message_not_found_roundtrip() {
-        let msg = Message::NotFound(());
+        let msg = Message::NotFound(GetData::Block(BlockHash::all_zeros()));
         let mut encoded = Vec::new();
         msg.consensus_encode(&mut encoded).unwrap();
 

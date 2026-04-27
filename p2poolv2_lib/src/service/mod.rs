@@ -173,7 +173,7 @@ async fn run_peer_service<C, T>(
 mod tests {
     use super::*;
     use crate::node::SwarmSend;
-    use crate::node::messages::Message;
+    use crate::node::messages::{GetData, Message};
     use crate::node::p2p_message_handlers::receivers::block_receiver::create_block_receiver_channel;
     use crate::node::request_response_handler::block_fetcher;
     use crate::node::validation_worker;
@@ -181,6 +181,8 @@ mod tests {
     use crate::shares::chain::chain_store_handle::ChainStoreHandle;
     use crate::shares::validation::MockDefaultShareValidator;
     use crate::utils::time_provider::TestTimeProvider;
+    use bitcoin::BlockHash;
+    use bitcoin::hashes::Hash as _;
     use libp2p::PeerId;
     use std::sync::Arc;
     use std::time::SystemTime;
@@ -204,7 +206,7 @@ mod tests {
 
         RequestContext {
             peer: peer_id,
-            request: Message::NotFound(()),
+            request: Message::NotFound(GetData::Block(BlockHash::all_zeros())),
             chain_store_handle,
             response_channel,
             swarm_tx,

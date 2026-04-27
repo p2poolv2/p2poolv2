@@ -59,7 +59,7 @@ pub async fn handle_share_block(
     // whether the block is new, duplicate, or invalid -- otherwise
     // the fetcher times out and retries forever.
     let _ = block_fetcher_handle
-        .send(BlockFetcherEvent::BlockReceived(block_hash))
+        .send(BlockFetcherEvent::BlockRequestCompleted(block_hash))
         .await;
 
     // Block already stored: skip the add but re-trigger validation if
@@ -190,10 +190,10 @@ mod tests {
 
         let fetcher_event = block_fetcher_rx
             .try_recv()
-            .expect("Expected BlockReceived event for new block");
+            .expect("Expected BlockRequestCompleted event for new block");
         match fetcher_event {
-            BlockFetcherEvent::BlockReceived(hash) => assert_eq!(hash, block_hash),
-            other => panic!("Expected BlockReceived, got: {other}"),
+            BlockFetcherEvent::BlockRequestCompleted(hash) => assert_eq!(hash, block_hash),
+            other => panic!("Expected BlockRequestCompleted, got: {other}"),
         }
     }
 
@@ -344,10 +344,10 @@ mod tests {
 
         let fetcher_event = block_fetcher_rx
             .try_recv()
-            .expect("Expected BlockReceived event even for invalid block");
+            .expect("Expected BlockRequestCompleted event even for invalid block");
         match fetcher_event {
-            BlockFetcherEvent::BlockReceived(hash) => assert_eq!(hash, block_hash),
-            other => panic!("Expected BlockReceived, got: {other}"),
+            BlockFetcherEvent::BlockRequestCompleted(hash) => assert_eq!(hash, block_hash),
+            other => panic!("Expected BlockRequestCompleted, got: {other}"),
         }
     }
 
@@ -391,10 +391,10 @@ mod tests {
 
         let fetcher_event = block_fetcher_rx
             .try_recv()
-            .expect("Expected BlockReceived event for confirmed duplicate");
+            .expect("Expected BlockRequestCompleted event for confirmed duplicate");
         match fetcher_event {
-            BlockFetcherEvent::BlockReceived(hash) => assert_eq!(hash, block_hash),
-            other => panic!("Expected BlockReceived, got: {other}"),
+            BlockFetcherEvent::BlockRequestCompleted(hash) => assert_eq!(hash, block_hash),
+            other => panic!("Expected BlockRequestCompleted, got: {other}"),
         }
     }
 }

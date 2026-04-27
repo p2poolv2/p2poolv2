@@ -16,6 +16,7 @@
 
 use crate::node::Message;
 use crate::node::SwarmSend;
+use crate::node::messages::GetData;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -46,7 +47,7 @@ pub async fn handle_getdata_block<C: Send + Sync>(
         }
         None => {
             info!("Block {} not found, sending notfound", block_hash);
-            Message::NotFound(())
+            Message::NotFound(GetData::Block(block_hash))
         }
     };
 
@@ -114,8 +115,11 @@ mod tests {
 
         assert!(result.is_ok());
 
-        if let Some(SwarmSend::Response(channel, Message::NotFound(()))) = swarm_rx.recv().await {
+        if let Some(SwarmSend::Response(channel, Message::NotFound(GetData::Block(hash)))) =
+            swarm_rx.recv().await
+        {
             assert_eq!(channel, response_channel);
+            assert_eq!(hash, block_hash);
         } else {
             panic!("Expected SwarmSend::Response with NotFound message");
         }

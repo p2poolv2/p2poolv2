@@ -354,7 +354,7 @@ impl BlockReceiver {
         // clear any in-flight request.
         let _ = self
             .block_fetcher_handle
-            .send(BlockFetcherEvent::BlockReceived(block_hash))
+            .send(BlockFetcherEvent::BlockRequestCompleted(block_hash))
             .await;
 
         let ancestors_not_ready = self.collect_ancestors_not_ready(&share_block);
@@ -815,8 +815,8 @@ mod tests {
 
         let fetcher_event = block_fetcher_rx.try_recv().unwrap();
         match fetcher_event {
-            BlockFetcherEvent::BlockReceived(hash) => assert_eq!(hash, child_hash),
-            other => panic!("Expected BlockReceived, got: {other}"),
+            BlockFetcherEvent::BlockRequestCompleted(hash) => assert_eq!(hash, child_hash),
+            other => panic!("Expected BlockRequestCompleted, got: {other}"),
         }
 
         let validation_event = validation_rx.try_recv().unwrap();
@@ -860,8 +860,8 @@ mod tests {
 
         let fetcher_event = block_fetcher_rx.try_recv().unwrap();
         match fetcher_event {
-            BlockFetcherEvent::BlockReceived(hash) => assert_eq!(hash, child_hash),
-            other => panic!("Expected BlockReceived, got: {other}"),
+            BlockFetcherEvent::BlockRequestCompleted(hash) => assert_eq!(hash, child_hash),
+            other => panic!("Expected BlockRequestCompleted, got: {other}"),
         }
 
         assert!(
