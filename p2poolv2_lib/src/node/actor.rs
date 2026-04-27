@@ -27,6 +27,7 @@ use crate::monitoring_events::MonitoringEventSender;
 use crate::node::Node;
 use crate::node::SwarmSend;
 use crate::node::emission_worker::EmissionWorker;
+#[cfg(test)]
 use crate::node::messages::Message;
 use crate::node::organise_worker::{OrganiseError, OrganiseSender};
 use crate::node::organise_worker::{OrganiseWorker, create_organise_channel};

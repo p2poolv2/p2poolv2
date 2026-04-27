@@ -304,7 +304,7 @@ impl<C: Send + Sync + 'static> RequestResponseHandler<C> {
 mod tests {
     use super::*;
     use crate::node::SwarmSend;
-    use crate::node::messages::{InventoryMessage, Message};
+    use crate::node::messages::{GetData, InventoryMessage, Message};
     use crate::node::p2p_message_handlers::receivers::block_receiver::create_block_receiver_channel;
     #[mockall_double::double]
     use crate::pool_difficulty::PoolDifficulty;
@@ -421,7 +421,10 @@ mod tests {
         let peer_id = libp2p::PeerId::random();
 
         let result = handler
-            .dispatch_response(peer_id, Message::NotFound(()))
+            .dispatch_response(
+                peer_id,
+                Message::NotFound(GetData::Block(BlockHash::all_zeros())),
+            )
             .await;
 
         assert!(result.is_ok());
@@ -574,7 +577,11 @@ mod tests {
 
         let (channel_tx, _channel_rx) = oneshot::channel::<Message>();
         let result = handler
-            .dispatch_request(peer_id, Message::NotFound(()), channel_tx)
+            .dispatch_request(
+                peer_id,
+                Message::NotFound(GetData::Block(BlockHash::all_zeros())),
+                channel_tx,
+            )
             .await;
         assert!(result.is_ok());
 

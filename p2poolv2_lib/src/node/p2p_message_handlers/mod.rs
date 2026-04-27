@@ -20,7 +20,7 @@ pub mod senders;
 use crate::node::SwarmSend;
 use crate::node::messages::{GetData, Message};
 use crate::node::p2p_message_handlers::receivers::block_receiver::BlockReceiverHandle;
-use crate::node::request_response_handler::block_fetcher::BlockFetcherHandle;
+use crate::node::request_response_handler::block_fetcher::{BlockFetcherEvent, BlockFetcherHandle};
 use crate::node::validation_worker::ValidationSender;
 use crate::service::p2p_service::RequestContext;
 #[cfg(test)]
@@ -160,8 +160,16 @@ pub async fn handle_response<C: Send + Sync>(
             error!("Failed to add share from response: {}", e);
             format!("Failed to add share from response: {e}").into()
         }),
-        Message::NotFound(_) => {
+        Message::NotFound(get_data) => {
             info!("Received not found response from peer: {}", peer);
+            match get_data {
+                GetData::Block(block_hash) => {
+                    let _ = block_fetcher_handle
+                        .send(BlockFetcherEvent::BlockRequestCompleted(block_hash))
+                        .await;
+                }
+                GetData::Txid(_) => {}
+            }
             Ok(())
         }
         other => {
@@ -417,7 +425,7 @@ mod tests {
 
         let ctx = RequestContext {
             peer: peer_id,
-            request: Message::NotFound(()),
+            request: Message::NotFound(GetData::Block(BlockHash::all_zeros())),
             chain_store_handle,
             response_channel: response_channel_tx,
             swarm_tx,
@@ -514,8 +522,11 @@ mod tests {
         let result = handle_request(ctx).await;
         assert!(result.is_ok());
 
-        if let Some(SwarmSend::Response(channel, Message::NotFound(()))) = swarm_rx.recv().await {
+        if let Some(SwarmSend::Response(channel, Message::NotFound(GetData::Block(hash)))) =
+            swarm_rx.recv().await
+        {
             assert_eq!(channel, response_channel);
+            assert_eq!(hash, block_hash);
         } else {
             panic!("Expected SwarmSend::Response with NotFound message");
         }
@@ -709,15 +720,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_response_not_found() {
+    async fn test_handle_response_not_found_notifies_block_fetcher() {
         let peer_id = libp2p::PeerId::random();
         let chain_store_handle = ChainStoreHandle::default();
         let (swarm_tx, _swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
 
-        let (block_fetcher_handle, validation_tx, block_receiver_handle) = test_handles();
+        let (block_fetcher_handle, mut block_fetcher_rx) = create_block_fetcher_channel();
+        let (validation_tx, _) = create_validation_channel();
+        let (block_receiver_handle, _) = create_block_receiver_channel();
+
+        let block_hash = BlockHash::all_zeros();
         let result = handle_response(
             peer_id,
-            Message::NotFound(()),
+            Message::NotFound(GetData::Block(block_hash)),
             chain_store_handle,
             swarm_tx,
             block_fetcher_handle,
@@ -728,6 +743,16 @@ mod tests {
         .await;
 
         assert!(result.is_ok());
+
+        let event = block_fetcher_rx
+            .try_recv()
+            .expect("Expected BlockRequestCompleted event from NotFound handler");
+        match event {
+            BlockFetcherEvent::BlockRequestCompleted(hash) => {
+                assert_eq!(hash, block_hash);
+            }
+            other => panic!("Expected BlockRequestCompleted, got: {other}"),
+        }
     }
 
     #[tokio::test]

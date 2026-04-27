@@ -60,8 +60,8 @@ pub enum BlockFetcherEvent {
         /// block fetcher knows about.
         peer_id: PeerId,
     },
-    /// A block was received from a peer, and can now be remove from in-flight.
-    BlockReceived(BlockHash),
+    /// A block request completed (received or not found) and can be removed from in-flight.
+    BlockRequestCompleted(BlockHash),
     /// Peers list updated -- used for round-robin distribution.
     PeersUpdated(Vec<PeerId>),
 }
@@ -78,8 +78,8 @@ impl fmt::Display for BlockFetcherEvent {
                 blockhashes.len(),
                 peer_id
             ),
-            BlockFetcherEvent::BlockReceived(hash) => {
-                write!(formatter, "BlockReceived({hash})")
+            BlockFetcherEvent::BlockRequestCompleted(hash) => {
+                write!(formatter, "BlockRequestCompleted({hash})")
             }
             BlockFetcherEvent::PeersUpdated(peers) => {
                 write!(formatter, "PeersUpdated({} peers)", peers.len())
@@ -162,8 +162,8 @@ impl BlockFetcher {
                         Some(BlockFetcherEvent::FetchBlocks { blockhashes, peer_id }) => {
                             self.handle_fetch_blocks(blockhashes, peer_id).await;
                         }
-                        Some(BlockFetcherEvent::BlockReceived(blockhash)) => {
-                            self.handle_block_received(blockhash);
+                        Some(BlockFetcherEvent::BlockRequestCompleted(blockhash)) => {
+                            self.handle_block_request_completed(blockhash);
                             self.dispatch_pending_requests().await;
                         }
                         Some(BlockFetcherEvent::PeersUpdated(peers)) => {
@@ -205,12 +205,13 @@ impl BlockFetcher {
         self.dispatch_pending_requests().await;
     }
 
-    /// Remove a blockhash from in-flight tracking when the block is received.
+    /// Remove a blockhash from in-flight tracking when a block request completes.
+    /// Called both when the block is received and when the peer responds NotFound.
     /// The caller should dispatch pending requests afterwards since capacity
     /// may have been freed.
-    fn handle_block_received(&mut self, blockhash: BlockHash) {
+    fn handle_block_request_completed(&mut self, blockhash: BlockHash) {
         if let Some(request) = self.in_flight.remove(&blockhash) {
-            debug!("Block received, removed from in-flight: {blockhash}");
+            debug!("Block request completed, removed from in-flight: {blockhash}");
             self.peer_selector.record_completion(request.peer_id);
         }
         // Also remove from pending in case it was queued but not yet sent
@@ -236,6 +237,7 @@ impl BlockFetcher {
             };
 
             let message = Message::GetData(GetData::Block(blockhash));
+            debug!("Sending {message} for {blockhash}");
             if let Err(send_error) = self
                 .swarm_tx
                 .send(SwarmSend::Request(peer_id, message))
@@ -376,7 +378,7 @@ mod tests {
             .unwrap();
 
         block_fetcher_tx
-            .send(BlockFetcherEvent::BlockReceived(blockhash))
+            .send(BlockFetcherEvent::BlockRequestCompleted(blockhash))
             .await
             .unwrap();
         drop(block_fetcher_tx);
