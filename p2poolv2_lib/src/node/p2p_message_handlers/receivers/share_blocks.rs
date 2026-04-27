@@ -17,6 +17,7 @@
 use crate::node::p2p_message_handlers::receivers::block_receiver::{
     BlockReceiverEvent, BlockReceiverHandle,
 };
+use crate::node::request_response_handler::block_fetcher::{BlockFetcherEvent, BlockFetcherHandle};
 use crate::node::validation_worker::{ValidationEvent, ValidationSender};
 #[cfg(test)]
 #[mockall_double::double]
@@ -46,11 +47,20 @@ pub async fn handle_share_block(
     chain_store_handle: &ChainStoreHandle,
     validation_tx: ValidationSender,
     block_receiver_handle: &BlockReceiverHandle,
+    block_fetcher_handle: &BlockFetcherHandle,
     share_validator: &(dyn ShareValidator + Send + Sync),
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     debug!("Received ShareBlock: {:?}", share_block);
 
     let block_hash = share_block.block_hash();
+
+    // Notify the block fetcher unconditionally so it clears any
+    // in-flight request for this hash. This must happen regardless of
+    // whether the block is new, duplicate, or invalid -- otherwise
+    // the fetcher times out and retries forever.
+    let _ = block_fetcher_handle
+        .send(BlockFetcherEvent::BlockReceived(block_hash))
+        .await;
 
     // Block already stored: skip the add but re-trigger validation if
     // the block has not been confirmed yet. This handles the case where
@@ -104,6 +114,9 @@ pub async fn handle_share_block(
 mod tests {
     use super::*;
     use crate::node::p2p_message_handlers::receivers::block_receiver::create_block_receiver_channel;
+    use crate::node::request_response_handler::block_fetcher::{
+        BlockFetcherReceiver, create_block_fetcher_channel,
+    };
     use crate::node::validation_worker;
     use crate::node::validation_worker::ValidationReceiver;
     use crate::shares::share_block::ShareHeader;
@@ -111,11 +124,24 @@ mod tests {
     use crate::test_utils::{empty_share_block_from_header, load_share_headers_test_data};
     use mockall::predicate::*;
 
-    /// Create test validation and block receiver handles.
-    fn test_handles() -> (ValidationSender, ValidationReceiver, BlockReceiverHandle) {
+    /// Create test validation, block receiver, and block fetcher handles.
+    fn test_handles() -> (
+        ValidationSender,
+        ValidationReceiver,
+        BlockReceiverHandle,
+        BlockFetcherHandle,
+        BlockFetcherReceiver,
+    ) {
         let (validation_tx, validation_rx) = validation_worker::create_validation_channel();
         let (block_receiver_handle, _block_receiver_rx) = create_block_receiver_channel();
-        (validation_tx, validation_rx, block_receiver_handle)
+        let (block_fetcher_handle, block_fetcher_rx) = create_block_fetcher_channel();
+        (
+            validation_tx,
+            validation_rx,
+            block_receiver_handle,
+            block_fetcher_handle,
+            block_fetcher_rx,
+        )
     }
 
     #[tokio::test]
@@ -140,6 +166,7 @@ mod tests {
 
         let (validation_tx, _validation_rx) = validation_worker::create_validation_channel();
         let (block_receiver_handle, mut block_receiver_rx) = create_block_receiver_channel();
+        let (block_fetcher_handle, mut block_fetcher_rx) = create_block_fetcher_channel();
 
         // Spawn a task to respond Ok on the oneshot
         tokio::spawn(async move {
@@ -155,10 +182,19 @@ mod tests {
             &chain_store_handle,
             validation_tx,
             &block_receiver_handle,
+            &block_fetcher_handle,
             &mock_validator,
         )
         .await;
         assert!(result.is_ok());
+
+        let fetcher_event = block_fetcher_rx
+            .try_recv()
+            .expect("Expected BlockReceived event for new block");
+        match fetcher_event {
+            BlockFetcherEvent::BlockReceived(hash) => assert_eq!(hash, block_hash),
+            other => panic!("Expected BlockReceived, got: {other}"),
+        }
     }
 
     #[tokio::test]
@@ -181,12 +217,19 @@ mod tests {
 
         let mock_validator = MockDefaultShareValidator::default();
 
-        let (validation_tx, mut validation_rx, block_receiver_handle) = test_handles();
+        let (
+            validation_tx,
+            mut validation_rx,
+            block_receiver_handle,
+            block_fetcher_handle,
+            _block_fetcher_rx,
+        ) = test_handles();
         let result = handle_share_block(
             share_block,
             &chain_store_handle,
             validation_tx,
             &block_receiver_handle,
+            &block_fetcher_handle,
             &mock_validator,
         )
         .await;
@@ -218,12 +261,19 @@ mod tests {
 
         let mock_validator = MockDefaultShareValidator::default();
 
-        let (validation_tx, mut validation_rx, block_receiver_handle) = test_handles();
+        let (
+            validation_tx,
+            mut validation_rx,
+            block_receiver_handle,
+            block_fetcher_handle,
+            _block_fetcher_rx,
+        ) = test_handles();
         let result = handle_share_block(
             share_block,
             &chain_store_handle,
             validation_tx,
             &block_receiver_handle,
+            &block_fetcher_handle,
             &mock_validator,
         )
         .await;
@@ -261,12 +311,19 @@ mod tests {
                 ))
             });
 
-        let (validation_tx, mut validation_rx, block_receiver_handle) = test_handles();
+        let (
+            validation_tx,
+            mut validation_rx,
+            block_receiver_handle,
+            block_fetcher_handle,
+            mut block_fetcher_rx,
+        ) = test_handles();
         let result = handle_share_block(
             share_block,
             &chain_store_handle,
             validation_tx,
             &block_receiver_handle,
+            &block_fetcher_handle,
             &mock_validator,
         )
         .await;
@@ -284,5 +341,60 @@ mod tests {
             validation_rx.try_recv().is_err(),
             "No validation event expected for invalid header"
         );
+
+        let fetcher_event = block_fetcher_rx
+            .try_recv()
+            .expect("Expected BlockReceived event even for invalid block");
+        match fetcher_event {
+            BlockFetcherEvent::BlockReceived(hash) => assert_eq!(hash, block_hash),
+            other => panic!("Expected BlockReceived, got: {other}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_share_block_confirmed_duplicate_notifies_block_fetcher() {
+        let mut chain_store_handle = ChainStoreHandle::default();
+        let test_data = load_share_headers_test_data();
+        let header: ShareHeader =
+            serde_json::from_value(test_data["valid_header"].clone()).unwrap();
+        let share_block = empty_share_block_from_header(header);
+        let block_hash = share_block.block_hash();
+
+        chain_store_handle
+            .expect_share_block_exists()
+            .with(eq(block_hash))
+            .returning(|_| true);
+        chain_store_handle
+            .expect_has_status()
+            .with(eq(block_hash), eq(Status::Confirmed))
+            .returning(|_, _| true);
+
+        let mock_validator = MockDefaultShareValidator::default();
+
+        let (
+            validation_tx,
+            _validation_rx,
+            block_receiver_handle,
+            block_fetcher_handle,
+            mut block_fetcher_rx,
+        ) = test_handles();
+        let result = handle_share_block(
+            share_block,
+            &chain_store_handle,
+            validation_tx,
+            &block_receiver_handle,
+            &block_fetcher_handle,
+            &mock_validator,
+        )
+        .await;
+        assert!(result.is_ok());
+
+        let fetcher_event = block_fetcher_rx
+            .try_recv()
+            .expect("Expected BlockReceived event for confirmed duplicate");
+        match fetcher_event {
+            BlockFetcherEvent::BlockReceived(hash) => assert_eq!(hash, block_hash),
+            other => panic!("Expected BlockReceived, got: {other}"),
+        }
     }
 }

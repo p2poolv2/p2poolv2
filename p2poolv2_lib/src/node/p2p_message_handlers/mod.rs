@@ -152,6 +152,7 @@ pub async fn handle_response<C: Send + Sync>(
             &chain_store_handle,
             validation_tx,
             &block_receiver_handle,
+            &block_fetcher_handle,
             share_validator.as_ref(),
         )
         .await
