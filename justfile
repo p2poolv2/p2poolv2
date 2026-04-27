@@ -1,4 +1,4 @@
-set unstable := true
+set unstable
 
 dev_config := "." / "config-dev.toml"
 default_config := "." / "config.toml"
@@ -19,7 +19,7 @@ _default:
     set -euo pipefail
 
     [ -f docker/.env ] || cp -v docker/.env.sample docker/.env
-    [ -f config-dev.toml ] || cp -v config.toml config-dev.toml
+    [ -f config-dev.toml ] || cp -v config.sample.toml config-dev.toml
 
     echo 'Edit the ./config-dev.toml file for your specific needs'
     echo 'You can easily run a local cluster with `just compose`'
