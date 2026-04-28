@@ -42,9 +42,6 @@ pub struct ConfirmedHeaderResult {
 /// For now it is the same as PPLNS window
 pub(crate) const COMMON_ANCESTOR_DEPTH: usize = 2160; // 6 shares per minute * 60 * 6 hours.
 
-/// PPLNS window in shares
-const PPLNS_WINDOW: usize = 2160; // 6 shares per minute * 60 * 6 hours.
-
 /// Maximum age in seconds for the confirmed chain tip to be considered
 /// current. Used to suppress block fetching during initial header sync.
 const MAX_TIP_AGE_SECS: u64 = 300;
@@ -651,22 +648,6 @@ impl ChainStoreHandle {
         self.store_handle
             .add_share_block_and_organise_header(share)
             .await
-    }
-
-    /// Calculate work over PPLNS window.
-    fn work_over_pplns_window(&self, start_blockhash: &BlockHash) -> Result<Work, StoreError> {
-        let chain_blockhashes = self
-            .store_handle
-            .store()
-            .get_dag_for_depth(start_blockhash, PPLNS_WINDOW)?;
-
-        let chain = self.store_handle.get_shares(&chain_blockhashes)?;
-
-        let zero_work = Work::from_hex("0x00").unwrap();
-        let sum = chain
-            .iter()
-            .fold(zero_work, |acc, (_, share)| acc + share.header.get_work());
-        Ok(sum)
     }
 
     /// Organise a header into the candidate chain.
