@@ -129,8 +129,8 @@ container-explore: (docker-run "--entrypoint bash")
 # Starts a service specified in docker container
 [group("docker")]
 [working-directory("docker")]
-compose *services="all":
-    P2POOL_CONFIG={{ target_config }} docker compose --env-file .env up -d --build --force-recreate {{ if services == "all" { "" } else { services } }}
+compose *services="":
+    P2POOL_CONFIG={{ target_config }} docker compose --env-file .env --profile developer up -d --build --force-recreate {{ services }}
 
 # Start a shell in a docker compose service
 [group("docker")]
