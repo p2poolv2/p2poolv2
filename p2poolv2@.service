@@ -10,17 +10,29 @@ Type=simple
 User=p2poolv2
 Group=p2poolv2
 
+# /var/lib/p2poolv2/<instance>
 StateDirectory=p2poolv2/%i
+
+# /var/log/p2poolv2/<instance>
 LogsDirectory=p2poolv2/%i
+
+# /run/p2poolv2/<instance> - PID, sockets etc
 RuntimeDirectory=p2poolv2/%i
+
 StateDirectoryMode=0750
 LogsDirectoryMode=0750
 RuntimeDirectoryMode=0750
 
+# StateDirectory/p2p2oolv2/<instance>
 WorkingDirectory=%S/p2poolv2/%i
+
+# We installed bin in /opt/p2poolv2/bin, and static dashboard files here
+Environment=P2POOL_STATIC_DIR=/opt/p2poolv2/share/static
+
+# The ConfigDirectory is left at default /etc
 ExecStart=/opt/p2poolv2/bin/p2poolv2 --config /etc/p2poolv2/config-%i.toml
 
-Restart=always
+Restart=on-failure
 RestartSec=5
 StandardOutput=journal
 StandardError=journal
