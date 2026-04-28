@@ -230,9 +230,12 @@ impl BlockReceiver {
         Ok((header.time, expected_height))
     }
 
-    /// Return parent and uncle hashes that are not yet HeaderValid in
-    /// the store. The returned list is what needs to be fetched before
-    /// this block can be processed.
+    /// Return parent and uncle hashes whose data is not yet available.
+    ///
+    /// The parent must have its header at HeaderValid or above. Uncles
+    /// must have their block body stored (checked via share_block_exists)
+    /// because validation calls share_block_exists for each uncle and the
+    /// node must be able to serve uncle bodies to syncing peers.
     fn collect_ancestors_not_ready(&self, share_block: &ShareBlock) -> Vec<BlockHash> {
         let header = &share_block.header;
         let mut not_ready: Vec<BlockHash> = Vec::with_capacity(1 + header.uncles.len());
@@ -241,7 +244,7 @@ impl BlockReceiver {
             not_ready.push(parent_hash);
         }
         for uncle_hash in &header.uncles {
-            if !self.ancestor_ready(uncle_hash) {
+            if !self.chain_store_handle.share_block_exists(uncle_hash) {
                 not_ready.push(*uncle_hash);
             }
         }
@@ -701,7 +704,7 @@ mod tests {
     }
 
     #[test]
-    fn test_collect_not_ready_ancestors_includes_not_ready_uncle() {
+    fn test_collect_not_ready_ancestors_includes_uncle_without_block_body() {
         let parent_hash = BlockHash::from_byte_array([0x77; 32]);
         let uncle_hash = BlockHash::from_byte_array([0x78; 32]);
 
@@ -717,9 +720,9 @@ mod tests {
                 })
             });
         mock_store
-            .expect_get_block_metadata()
+            .expect_share_block_exists()
             .with(mockall::predicate::eq(uncle_hash))
-            .returning(|_| Err(StoreError::NotFound("not found".to_string())));
+            .returning(|_| false);
 
         let (_, event_rx) = create_block_receiver_channel();
         let (block_fetcher_handle, _) = block_fetcher::create_block_fetcher_channel();
@@ -741,6 +744,51 @@ mod tests {
         assert_eq!(
             receiver.collect_ancestors_not_ready(&child_block),
             vec![uncle_hash]
+        );
+    }
+
+    #[test]
+    fn test_collect_ancestors_ready_when_uncle_block_body_exists() {
+        let parent_hash = BlockHash::from_byte_array([0x79; 32]);
+        let uncle_hash = BlockHash::from_byte_array([0x7a; 32]);
+
+        let mut mock_store = ChainStoreHandle::default();
+        mock_store
+            .expect_get_block_metadata()
+            .with(mockall::predicate::eq(parent_hash))
+            .returning(|_| {
+                Ok(BlockMetadata {
+                    expected_height: Some(0),
+                    chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
+                    status: Status::Confirmed,
+                })
+            });
+        mock_store
+            .expect_share_block_exists()
+            .with(mockall::predicate::eq(uncle_hash))
+            .returning(|_| true);
+
+        let (_, event_rx) = create_block_receiver_channel();
+        let (block_fetcher_handle, _) = block_fetcher::create_block_fetcher_channel();
+        let (validation_tx, _) = validation_worker::create_validation_channel();
+        let receiver = BlockReceiver::new(
+            event_rx,
+            Arc::new(MockDefaultShareValidator::default()),
+            mock_store,
+            block_fetcher_handle,
+            validation_tx,
+        );
+
+        let child_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(parent_hash.to_string())
+            .uncles(vec![uncle_hash])
+            .nonce(0xe9695791)
+            .build();
+
+        assert!(
+            receiver
+                .collect_ancestors_not_ready(&child_block)
+                .is_empty()
         );
     }
 
