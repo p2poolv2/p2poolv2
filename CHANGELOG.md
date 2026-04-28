@@ -23,7 +23,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Initialise new header only if it doesn't exist, avoiding
   overwrites during sync.
 
+- Include uncles when building block fetch list during sync.
+
+- Clear block fetcher for any received block to avoid stale
+  in-flight requests.
+
+- Include details in Message::NotFound response.
+
 ### Changed
+
+- Follow candidate chain for payout distribution.
 
 - Change the testnet4 genesis to today. This is our testnet4 daa
   anchor. Genesis timestamps are now in genesis data.
@@ -34,6 +43,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Dashboard: show chain tip and height in page title, show
   difficulty, and fix layout for mobile.
+
+### Added
+
+- Add `debug_tools/share_latency.py` for computing share propagation and
+  confirmation latencies across nodes from log files. Supports glob
+  patterns, per-pair and aggregate statistics, and --include-uncles flag
+  to separately track uncle vs confirmed chain latencies.
 
 ## [v0.10.5] - 2026-04-20
 
