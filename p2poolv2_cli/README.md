@@ -138,7 +138,9 @@ p2poolv2_cli --db-path /path/to/store.db shares --num 20 --dot | dot -Tsvg -o sh
 
 ## Formatting output with jq
 
-All commands output JSON. Use `jq` to extract fields or build tables.
+Commands output JSON by default. When `--dot` is used, output is
+Graphviz DOT instead. Use `jq` to extract fields or build tables from
+JSON output.
 
 ### Shares as a tab-separated table
 
