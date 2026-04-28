@@ -47,7 +47,7 @@ const PPLNS_WINDOW: usize = 2160; // 6 shares per minute * 60 * 6 hours.
 
 /// Maximum age in seconds for the confirmed chain tip to be considered
 /// current. Used to suppress block fetching during initial header sync.
-const MAX_TIP_AGE_SECS: u64 = 60;
+const MAX_TIP_AGE_SECS: u64 = 300;
 
 /// Handle for chain-level store operations.
 ///
@@ -1112,8 +1112,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs() as u32;
-        // Set the tip timestamp 120 seconds in the past, well beyond the 60s threshold
-        let stale_time = now_secs.saturating_sub(120);
+        // Set the tip timestamp 600 seconds in the past, well beyond the 300s threshold
+        let stale_time = now_secs.saturating_sub(600);
 
         let genesis = TestShareBlockBuilder::new().time(stale_time).build();
 
