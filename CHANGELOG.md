@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Increase `MAX_TIP_AGE_SECS` from 60s to 300s to prevent chain stall
+  where inventory messages were ignored after sync. The chance of a
+  60s gap is about 1 in 400. At 5min we have a 1 in trillion chance
+  now.
+
 ## [v0.10.6] - 2026-04-24
 
 ### Fixed
