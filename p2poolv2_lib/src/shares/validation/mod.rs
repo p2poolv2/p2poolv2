@@ -588,9 +588,10 @@ impl DefaultShareValidator {
     fn validate_bitcoin_coinbase(
         &self,
         share: &ShareBlock,
+        chain_store_handle: &ChainStoreHandle,
         pplns_window: Arc<RwLock<PplnsWindow>>,
     ) -> Result<(), ValidationError> {
-        self.validate_bitcoin_payout(share, pplns_window)?;
+        self.validate_bitcoin_payout(share, chain_store_handle, pplns_window)?;
         Ok(())
     }
 
@@ -601,20 +602,30 @@ impl DefaultShareValidator {
     /// the expected coinbase transaction, and verifies that the merkle
     /// root computed from the reconstructed coinbase and the template
     /// merkle branches matches the bitcoin header's merkle root.
+    ///
+    /// When prev_share_blockhash is not on the confirmed chain (e.g.
+    /// during a candidate chain reorg), walks backward through the
+    /// store to find the confirmed ancestor and includes the
+    /// intermediate candidate entries in the distribution.
     fn validate_bitcoin_payout(
         &self,
         share: &ShareBlock,
+        chain_store_handle: &ChainStoreHandle,
         pplns_window: Arc<RwLock<PplnsWindow>>,
     ) -> Result<(), ValidationError> {
-        let window = pplns_window
-            .read()
-            .expect("PPLNS window lock poisoned on read");
+        let mut window = pplns_window
+            .write()
+            .expect("PPLNS window lock poisoned on write");
 
         let bitcoin_difficulty = share.header.bitcoin_header.difficulty(window.network());
         let total_difficulty = bitcoin_difficulty.saturating_mul(self.difficulty_multiplier);
 
         let address_difficulty_map = window
-            .get_distribution_from_start_hash(total_difficulty, share.header.prev_share_blockhash)
+            .get_distribution_from_start_hash(
+                total_difficulty,
+                share.header.prev_share_blockhash,
+                chain_store_handle,
+            )
             .ok_or_else(|| {
                 ValidationError::new("prev_share_blockhash not found in PPLNS window")
             })?;
@@ -807,7 +818,7 @@ impl ShareValidator for DefaultShareValidator {
         self.validate_uncles(share, chain_store_handle)?;
         self.validate_block_size(share)?;
         self.validate_share_coinbase(share)?;
-        self.validate_bitcoin_coinbase(share, pplns_window)?;
+        self.validate_bitcoin_coinbase(share, chain_store_handle, pplns_window)?;
         self.validate_merkle_root(share)?;
         self.validate_share_witness_commitment(share)?;
         self.validate_transaction_count(share)?;
@@ -1453,7 +1464,7 @@ mod tests {
                 .return_const(bitcoin::Network::Regtest);
             mock_window
                 .expect_get_distribution_from_start_hash()
-                .returning(|_, _| Some(HashMap::from([(make_test_address(1), 100)])));
+                .returning(|_, _, _| Some(HashMap::from([(make_test_address(1), 100)])));
             Arc::new(RwLock::new(mock_window))
         };
         let validator =
@@ -1482,7 +1493,7 @@ mod tests {
                 .return_const(bitcoin::Network::Regtest);
             mock_window
                 .expect_get_distribution_from_start_hash()
-                .returning(|_, _| Some(HashMap::new()));
+                .returning(|_, _, _| Some(HashMap::new()));
             Arc::new(RwLock::new(mock_window))
         };
         let result =
@@ -2637,7 +2648,7 @@ mod tests {
         let addr_b_clone = address_b.clone();
         mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(move |_, _| {
+            .returning(move |_, _, _| {
                 let mut distribution = HashMap::with_capacity(2);
                 distribution.insert(addr_a_clone.clone(), 600u128);
                 distribution.insert(addr_b_clone.clone(), 400u128);
@@ -2647,7 +2658,11 @@ mod tests {
 
         let validator =
             DefaultShareValidator::new(PoolDifficulty::default(), 1, b"P2Poolv2".to_vec());
-        let result = validator.validate_bitcoin_payout(&share_block, pplns_window);
+        let result = validator.validate_bitcoin_payout(
+            &share_block,
+            &ChainStoreHandle::default(),
+            pplns_window,
+        );
         assert!(
             result.is_ok(),
             "Expected valid payout, got: {}",
@@ -2707,7 +2722,7 @@ mod tests {
         let addr_b_clone = address_b.clone();
         mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(move |_, _| {
+            .returning(move |_, _, _| {
                 let mut distribution = HashMap::with_capacity(2);
                 distribution.insert(addr_a_clone.clone(), 600u128);
                 distribution.insert(addr_b_clone.clone(), 400u128);
@@ -2720,7 +2735,7 @@ mod tests {
         let validator =
             DefaultShareValidator::new(PoolDifficulty::default(), 1, b"P2Poolv2".to_vec());
         let error = validator
-            .validate_bitcoin_payout(&share_block, pplns_window)
+            .validate_bitcoin_payout(&share_block, &ChainStoreHandle::default(), pplns_window)
             .unwrap_err();
         assert!(
             error.to_string().contains("merkle root"),
@@ -2743,11 +2758,11 @@ mod tests {
             .return_const(bitcoin::Network::Signet);
         mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(|_, _| Some(HashMap::new()));
+            .returning(|_, _, _| Some(HashMap::new()));
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
         let error = validator()
-            .validate_bitcoin_payout(&share_block, pplns_window)
+            .validate_bitcoin_payout(&share_block, &ChainStoreHandle::default(), pplns_window)
             .unwrap_err();
         assert!(
             error.to_string().contains("empty distribution"),
@@ -2787,11 +2802,11 @@ mod tests {
             .return_const(bitcoin::Network::Signet);
         mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(|_, _| None);
+            .returning(|_, _, _| None);
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
         let error = validator()
-            .validate_bitcoin_payout(&share_block, pplns_window)
+            .validate_bitcoin_payout(&share_block, &ChainStoreHandle::default(), pplns_window)
             .unwrap_err();
         assert!(
             error
@@ -2842,14 +2857,18 @@ mod tests {
         let addr_a_clone = address_a.clone();
         mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(move |_, _| Some(HashMap::from([(addr_a_clone.clone(), 100u128)])));
+            .returning(move |_, _, _| Some(HashMap::from([(addr_a_clone.clone(), 100u128)])));
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
         // The reconstructed coinbase will also have 1 sat to address_a,
         // so merkle roots should match and validation should pass
         let validator =
             DefaultShareValidator::new(PoolDifficulty::default(), 1, b"P2Poolv2".to_vec());
-        let result = validator.validate_bitcoin_payout(&share_block, pplns_window);
+        let result = validator.validate_bitcoin_payout(
+            &share_block,
+            &ChainStoreHandle::default(),
+            pplns_window,
+        );
         assert!(
             result.is_ok(),
             "Expected valid payout, got: {}",
@@ -2958,7 +2977,7 @@ mod tests {
         let miner_c_clone = miner_c.clone();
         mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(move |_, _| {
+            .returning(move |_, _, _| {
                 let mut distribution = HashMap::with_capacity(3);
                 distribution.insert(miner_a_clone.clone(), 500u128);
                 distribution.insert(miner_b_clone.clone(), 300u128);
@@ -2969,7 +2988,11 @@ mod tests {
 
         let validator =
             DefaultShareValidator::new(PoolDifficulty::default(), 1, b"P2Poolv2".to_vec());
-        let result = validator.validate_bitcoin_payout(&share_block, pplns_window);
+        let result = validator.validate_bitcoin_payout(
+            &share_block,
+            &ChainStoreHandle::default(),
+            pplns_window,
+        );
         assert!(
             result.is_ok(),
             "Expected valid payout with 3 miners, donation, fee, got: {}",
@@ -3065,12 +3088,16 @@ mod tests {
         let addr_a_clone = address_a.clone();
         mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(move |_, _| Some(HashMap::from([(addr_a_clone.clone(), 1000u128)])));
+            .returning(move |_, _, _| Some(HashMap::from([(addr_a_clone.clone(), 1000u128)])));
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
         let validator =
             DefaultShareValidator::new(PoolDifficulty::default(), 1, b"P2Poolv2".to_vec());
-        let result = validator.validate_bitcoin_payout(&share_block, pplns_window);
+        let result = validator.validate_bitcoin_payout(
+            &share_block,
+            &ChainStoreHandle::default(),
+            pplns_window,
+        );
         assert!(
             result.is_ok(),
             "Expected valid payout with 4 template transactions, got: {}",

@@ -135,22 +135,129 @@ impl PplnsWindow {
 
     /// Read-only payout distribution starting from a given blockhash.
     ///
-    /// Iteration begins at the entry whose blockhash matches
-    /// start_hash, skipping newer entries. Does not remove stale
-    /// address keys, so it only requires `&self`. Suitable for
-    /// callers that hold a read lock on a shared PplnsWindow, like
-    /// the validation worker.
+    /// Walks backward from start_hash through parent pointers until
+    /// finding a confirmed entry in the window. Candidate entries
+    /// along the walk contribute to the distribution first, then
+    /// confirmed entries from the anchor point onward.
     ///
-    /// Returns `None` when start_hash is not found in the window.
+    /// When start_hash is already in the confirmed entries, no store
+    /// reads are needed and the walk produces zero candidate entries.
+    ///
+    /// Returns `None` when start_hash cannot be resolved to a
+    /// confirmed ancestor.
     pub fn get_distribution_from_start_hash(
-        &self,
+        &mut self,
         total_difficulty: u128,
         start_hash: BlockHash,
+        chain_store_handle: &ChainStoreHandle,
     ) -> Option<HashMap<Address, u128>> {
-        let start_index = self.find_start_index(start_hash)?;
-        let (difficulty_by_key, _threshold_index) =
-            self.walk_entries(total_difficulty, start_index);
+        let (candidate_entries, confirmed_start_index) =
+            self.resolve_start_hash(start_hash, chain_store_handle)?;
+
+        let scaled_threshold = total_difficulty.saturating_mul(DIFFICULTY_SCALE);
+        let mut difficulty_by_key = vec![0u128; self.address_keys.len()];
+        let mut accumulated_difficulty: u128 = 0;
+
+        let threshold_met = Self::accumulate_candidate_difficulty(
+            &candidate_entries,
+            &mut difficulty_by_key,
+            &mut accumulated_difficulty,
+            scaled_threshold,
+        );
+
+        if threshold_met {
+            return Some(self.collect_distribution(&difficulty_by_key));
+        }
+
+        // Continue into confirmed entries from the anchor point
+        self.accumulate_confirmed_difficulty(
+            &mut difficulty_by_key,
+            &mut accumulated_difficulty,
+            scaled_threshold,
+            confirmed_start_index,
+        );
+
         Some(self.collect_distribution(&difficulty_by_key))
+    }
+
+    /// Resolve start_hash to candidate entries and a confirmed anchor index.
+    ///
+    /// If start_hash is in confirmed_entries, returns empty candidate
+    /// entries and the confirmed index. Otherwise walks backward through
+    /// parent pointers in the store, building candidate entries until a
+    /// confirmed ancestor is found.
+    fn resolve_start_hash(
+        &mut self,
+        start_hash: BlockHash,
+        chain_store_handle: &ChainStoreHandle,
+    ) -> Option<(Vec<ConfirmedEntry>, usize)> {
+        if let Some(confirmed_index) = self.find_start_index(start_hash) {
+            return Some((Vec::new(), confirmed_index));
+        }
+
+        let (candidate_headers, confirmed_index) =
+            self.collect_candidate_headers(start_hash, chain_store_handle)?;
+        let candidate_entries =
+            self.build_entries_from_headers(&candidate_headers, chain_store_handle)?;
+        Some((candidate_entries, confirmed_index))
+    }
+
+    /// Walk backward from start_hash through parent pointers until
+    /// finding a block whose parent is in the confirmed entries.
+    /// Returns the collected headers (newest-to-oldest) and the
+    /// confirmed index of the anchor parent.
+    fn collect_candidate_headers(
+        &self,
+        start_hash: BlockHash,
+        chain_store_handle: &ChainStoreHandle,
+    ) -> Option<(Vec<(BlockHash, ShareHeader)>, usize)> {
+        const INITIAL_CAPACITY: usize = 8;
+        let mut candidate_headers = Vec::with_capacity(INITIAL_CAPACITY);
+        let mut current_hash = start_hash;
+        let mut confirmed_index = self.find_start_index(current_hash);
+
+        while confirmed_index.is_none() {
+            let header = chain_store_handle.get_share_header(&current_hash).ok()?;
+            let parent_hash = header.prev_share_blockhash;
+            candidate_headers.push((current_hash, header));
+            current_hash = parent_hash;
+            confirmed_index = self.find_start_index(current_hash);
+        }
+
+        Some((candidate_headers, confirmed_index?))
+    }
+
+    /// Convert collected candidate headers into ConfirmedEntry values
+    /// by resolving their difficulty and uncle data from the store.
+    fn build_entries_from_headers(
+        &mut self,
+        candidate_headers: &[(BlockHash, ShareHeader)],
+        chain_store_handle: &ChainStoreHandle,
+    ) -> Option<Vec<ConfirmedEntry>> {
+        let all_uncle_hashes: Vec<BlockHash> = candidate_headers
+            .iter()
+            .flat_map(|(_, header)| header.uncles.iter().copied())
+            .collect();
+        let uncle_lookup_table = self
+            .build_uncle_entry_lookup_table(chain_store_handle, &all_uncle_hashes)
+            .ok()?;
+
+        let entries = candidate_headers
+            .iter()
+            .map(|(blockhash, header)| {
+                let difficulty = header.get_difficulty(self.network);
+                let uncle_entries = resolve_uncle_entries(&header.uncles, &uncle_lookup_table);
+                self.build_confirmed_entry(
+                    *blockhash,
+                    0,
+                    header.miner_bitcoin_address.clone(),
+                    difficulty,
+                    uncle_entries,
+                )
+            })
+            .collect();
+
+        Some(entries)
     }
 
     /// Get payout distribution from the tip and clean up stale
@@ -180,7 +287,7 @@ impl PplnsWindow {
         let mut difficulty_by_key = vec![0u128; self.address_keys.len()];
         let mut accumulated_difficulty: u128 = 0;
 
-        let threshold_index = self.accumulate_difficulty(
+        let threshold_index = self.accumulate_confirmed_difficulty(
             &mut difficulty_by_key,
             &mut accumulated_difficulty,
             scaled_threshold,
@@ -198,11 +305,47 @@ impl PplnsWindow {
             .position(|entry| entry.blockhash == start_hash)
     }
 
-    /// Walk entries starting at start_index, accumulating difficulty
+    /// Walk candidate entries, accumulating difficulty per address
+    /// until accumulated difficulty meets the threshold.
+    /// Returns true if the threshold was met.
+    fn accumulate_candidate_difficulty(
+        candidate_entries: &[ConfirmedEntry],
+        difficulty_by_key: &mut [u128],
+        accumulated_difficulty: &mut u128,
+        scaled_threshold: u128,
+    ) -> bool {
+        for entry in candidate_entries {
+            let mut nephew_bonus: u128 = 0;
+            for uncle_entry in &entry.uncle_entries {
+                difficulty_by_key[uncle_entry.internal_key] = difficulty_by_key
+                    [uncle_entry.internal_key]
+                    .saturating_add(uncle_entry.difficulty.saturating_mul(UNCLE_SCALED_WEIGHT));
+                nephew_bonus = nephew_bonus
+                    .saturating_add(uncle_entry.difficulty.saturating_mul(NEPHEW_SCALED_BONUS));
+            }
+
+            difficulty_by_key[entry.internal_key] = difficulty_by_key[entry.internal_key]
+                .saturating_add(
+                    entry
+                        .difficulty
+                        .saturating_mul(DIFFICULTY_SCALE)
+                        .saturating_add(nephew_bonus),
+                );
+            *accumulated_difficulty =
+                accumulated_difficulty.saturating_add(entry.total_weighted_difficulty);
+
+            if *accumulated_difficulty >= scaled_threshold {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Walk confirmed entries starting at start_index, accumulating difficulty
     /// per address until accumulated difficulty meets the threshold.
     /// Returns the index of the first entry past the threshold, or
     /// the total entry count if the threshold was never reached.
-    fn accumulate_difficulty(
+    fn accumulate_confirmed_difficulty(
         &self,
         difficulty_by_key: &mut [u128],
         accumulated_difficulty: &mut u128,
@@ -433,7 +576,8 @@ impl PplnsWindow {
         }
 
         let all_uncle_hashes = collect_unique_uncle_hashes(&confirmed_headers);
-        let uncle_lookup = self.fetch_uncle_lookup(chain_store_handle, &all_uncle_hashes)?;
+        let uncle_lookup_table =
+            self.build_uncle_entry_lookup_table(chain_store_handle, &all_uncle_hashes)?;
 
         // Headers arrive newest-to-oldest. Reverse to oldest-first so
         // the newest entry ends up at position 0 in the deque after push_front.
@@ -444,7 +588,7 @@ impl PplnsWindow {
         } in confirmed_headers.into_iter().rev()
         {
             let difficulty = header.get_difficulty(self.network);
-            let uncle_entries = resolve_uncle_entries(&header.uncles, &uncle_lookup);
+            let uncle_entries = resolve_uncle_entries(&header.uncles, &uncle_lookup_table);
             let entry = self.build_confirmed_entry(
                 blockhash,
                 height,
@@ -529,8 +673,10 @@ impl PplnsWindow {
         }
     }
 
-    /// Fetch uncle headers from the chain store and build a lookup table.
-    fn fetch_uncle_lookup(
+    /// Build uncle entries and return a hashmap of uncle block hash
+    /// -> uncle entry.
+    /// The uncle headers are queried in a batch header query.
+    fn build_uncle_entry_lookup_table(
         &mut self,
         chain_store_handle: &ChainStoreHandle,
         uncle_hashes: &[BlockHash],
@@ -650,9 +796,10 @@ mockall::mock! {
             chain_store_handle: &ChainStoreHandle,
         ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>>;
         pub fn get_distribution_from_start_hash(
-            &self,
+            &mut self,
             total_difficulty: u128,
             start_hash: BlockHash,
+            chain_store_handle: &ChainStoreHandle,
         ) -> Option<HashMap<Address, u128>>;
     }
 }
@@ -1170,7 +1317,11 @@ mod tests {
 
         // Starting from header2 should skip header3, include header2 and header1
         let result = window
-            .get_distribution_from_start_hash(u128::MAX, header2.block_hash())
+            .get_distribution_from_start_hash(
+                u128::MAX,
+                header2.block_hash(),
+                &MockChainStoreHandle::default(),
+            )
             .expect("header2 should be in window");
         assert_eq!(result.len(), 2);
         assert_eq!(
@@ -1185,7 +1336,11 @@ mod tests {
 
         // Starting from the oldest entry should only include that entry
         let result = window
-            .get_distribution_from_start_hash(u128::MAX, header1.block_hash())
+            .get_distribution_from_start_hash(
+                u128::MAX,
+                header1.block_hash(),
+                &MockChainStoreHandle::default(),
+            )
             .expect("header1 should be in window");
         assert_eq!(result.len(), 1);
         assert_eq!(
@@ -1208,9 +1363,15 @@ mod tests {
         window.add_to_running_total(&entry1);
         window.confirmed_entries.push_back(entry1);
 
-        // A hash not in the window should return None
+        // A hash not in the window and not in the store should return None
         let unknown_hash = build_test_header(&genesis_hash.to_string(), PUBKEY_3G, 3).block_hash();
-        let result = window.get_distribution_from_start_hash(u128::MAX, unknown_hash);
+        let mut mock_store = MockChainStoreHandle::default();
+        mock_store.expect_get_share_header().returning(|_| {
+            Err(crate::store::writer::StoreError::NotFound(
+                "not found".into(),
+            ))
+        });
+        let result = window.get_distribution_from_start_hash(u128::MAX, unknown_hash, &mock_store);
         assert!(result.is_none());
     }
 
@@ -1847,6 +2008,92 @@ mod tests {
         assert_eq!(
             window.confirmed_entries[0].blockhash,
             headers_b[0].blockhash
+        );
+    }
+
+    /// When the confirmed chain has share_a at height 3 but the
+    /// candidate chain has a competing share_b at height 3 (same
+    /// parent), a child of share_b should be able to look up its
+    /// parent in the PPLNS window.
+    ///
+    /// share_b's children can validate as their parent is now in
+    /// PPLNS window - thanks to candidate chain being followed to
+    /// confirmed entries in pplns window.
+    #[test]
+    fn test_competing_block_not_in_pplns_window_confirmed_entries_but_is_building_on_candidate_chain()
+     {
+        let genesis_hash = BlockHash::all_zeros();
+
+        // Build confirmed chain: genesis -> share1(h:0) -> share2(h:1) -> share_a(h:2)
+        let share1 = build_test_header(&genesis_hash.to_string(), PUBKEY_G, 2);
+        let share2 = build_test_header(&share1.block_hash().to_string(), PUBKEY_2G, 3);
+        let share_a = build_test_header(&share2.block_hash().to_string(), PUBKEY_G, 4);
+
+        // share_b is a competing block at same height as share_a
+        // (same parent share2, different miner)
+        let share_b = build_test_header(&share2.block_hash().to_string(), PUBKEY_3G, 5);
+
+        // share_c is a child of share_b -- this is the block that
+        // needs to validate during sync
+        let share_c = build_test_header(&share_b.block_hash().to_string(), PUBKEY_2G, 6);
+
+        // Populate PPLNS window with confirmed entries only (share_a branch)
+        let mut window = PplnsWindow::new(TEST_NETWORK);
+        let entry_a = entry_from_header(&mut window, &share_a, 2);
+        let entry_2 = entry_from_header(&mut window, &share2, 1);
+        let entry_1 = entry_from_header(&mut window, &share1, 0);
+        window.add_to_running_total(&entry_a);
+        window.confirmed_entries.push_back(entry_a);
+        window.add_to_running_total(&entry_2);
+        window.confirmed_entries.push_back(entry_2);
+        window.add_to_running_total(&entry_1);
+        window.confirmed_entries.push_back(entry_1);
+
+        // share_a (confirmed) is findable in the window
+        let result = window.get_distribution_from_start_hash(
+            u128::MAX,
+            share_a.block_hash(),
+            &MockChainStoreHandle::default(),
+        );
+        assert!(
+            result.is_some(),
+            "share_a should be in the PPLNS window (it is confirmed)"
+        );
+
+        // share_b is a competing block at the same height as share_a.
+        // Both share the same parent (share2), so share_b's PPLNS
+        // distribution should be computable from the confirmed
+        // entries below it (share2, share1). A child of share_b
+        // must be able to validate by looking up share_b in the
+        // PPLNS window through the candiadtes chain.
+        //
+        // Set up a mock chain store so resolve_start_hash can walk
+        // from share_c's prev (share_b) back to share2 (confirmed).
+        let mut mock_store = MockChainStoreHandle::default();
+        let share_b_clone = share_b.clone();
+        let share_b_hash = share_b.block_hash();
+        mock_store
+            .expect_get_share_header()
+            .withf(move |hash| *hash == share_b_hash)
+            .returning(move |_| Ok(share_b_clone.clone()));
+        // No uncle headers needed for this test
+        mock_store
+            .expect_get_share_headers()
+            .returning(|_| Ok(Vec::new()));
+
+        assert_eq!(
+            share_c.prev_share_blockhash,
+            share_b.block_hash(),
+            "share_c's parent is share_b"
+        );
+        let result = window.get_distribution_from_start_hash(
+            u128::MAX,
+            share_c.prev_share_blockhash,
+            &mock_store,
+        );
+        assert!(
+            result.is_some(),
+            "share_c must be able to find its parent share_b in the PPLNS window during sync"
         );
     }
 }
