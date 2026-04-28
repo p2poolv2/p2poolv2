@@ -20,7 +20,7 @@ use crate::stratum::work::notify::{NotifyCmd, NotifySender};
 use bitcoin::hashes::{Hash, sha256d};
 use bitcoindrpc::{BitcoinRpcConfig, BitcoindRpcClient};
 use std::sync::Arc;
-use tracing::{debug, info};
+use tracing::{debug, info, instrument};
 
 #[cfg(test)]
 const GBT_NO_TRANSACTIONS_FIXTURE: &str =
@@ -84,7 +84,7 @@ fn compute_merkle_branches(input_txids: Vec<sha256d::Hash>) -> Vec<sha256d::Hash
 
 /// Get a new blocktemplate from the bitcoind server
 /// Parse the received JSON into a BlockTemplate struct and return it.
-#[allow(dead_code)]
+#[instrument(level = "debug", skip(bitcoind))]
 async fn get_block_template(
     bitcoind: &BitcoindRpcClient,
     network: bitcoin::Network,
@@ -135,29 +135,11 @@ pub async fn start_gbt(
         info!("Bitcoin network difficulty: {}", difficulty);
     }
 
-    let template = match get_block_template(&bitcoind, network).await {
-        Ok(template) => template,
-        Err(e) => {
-            info!("Error getting block template: {}", e);
-            return Err(Box::new(WorkError {
-                message: format!("Error getting initial block template: {e}"),
-            }));
-        }
-    };
-
-    // Initial template sent to start gbt task.
-    if result_tx
-        .send(NotifyCmd::SendToAll {
-            template: Arc::new(template),
-        })
-        .await
-        .is_err()
-    {
-        info!("Failed to send block template to channel");
-    }
-
     tokio::spawn(async move {
+        // first tick will happen instantly
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(poll_interval));
+        // avoid spamming if it is taking longer than [poll_internal]
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
         loop {
             tokio::select! {
