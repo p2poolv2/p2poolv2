@@ -99,8 +99,8 @@ pub async fn handle_share_headers<C: Send + Sync>(
 ///
 /// The batch may contain both main chain headers and uncle headers
 /// (interleaved by get_descendant_blockhashes). All headers must pass
-/// minimum difficulty. Main chain headers (those that link via
-/// prev_share_blockhash) are additionally ASERT-validated.
+/// minimum difficulty. All headers (those that link via
+/// prev_share_blockhash) are ASERT-validated.
 ///
 /// Checks performed:
 /// 1. Every header passes validate_header_minimum_difficulty
@@ -167,7 +167,7 @@ fn get_share_time_and_height(
     let header = chain_store_handle.get_share_header(blockhash)?;
     let height = metadata
         .expected_height
-        .ok_or_else(|| StoreError::Database("No height found for {blockhash}".into()))?;
+        .ok_or_else(|| StoreError::Database(format!("No height found for {blockhash}")))?;
     let result = (header.time, height);
     cache.insert(*blockhash, result);
     Ok(result)
