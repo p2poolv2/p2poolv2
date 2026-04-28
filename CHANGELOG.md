@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.10.7] - 2026-04-28
+
 ### Fixed
 
 - Increase `MAX_TIP_AGE_SECS` from 60s to 300s to prevent chain stall
