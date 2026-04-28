@@ -153,12 +153,7 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
                     }) => {
                         commands::db_query::pplns_shares(&store, *limit, *start_time, *end_time)?;
                     }
-                    Some(Commands::Shares {
-                        to,
-                        num,
-                        dot,
-                        ..
-                    }) => {
+                    Some(Commands::Shares { to, num, dot, .. }) => {
                         if *dot {
                             commands::db_query::shares_dot(&store, *to, *num)?;
                         } else {

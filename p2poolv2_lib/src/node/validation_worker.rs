@@ -267,7 +267,7 @@ mod tests {
                     .return_const(bitcoin::Network::Signet);
                 mock_window
                     .expect_get_distribution_from_start_hash()
-                    .returning(|_, _| Some(HashMap::new()));
+                    .returning(|_, _, _| Some(HashMap::new()));
                 Arc::new(RwLock::new(mock_window))
             },
             1,
@@ -325,7 +325,7 @@ mod tests {
                     .return_const(bitcoin::Network::Signet);
                 mock_window
                     .expect_get_distribution_from_start_hash()
-                    .returning(|_, _| Some(HashMap::new()));
+                    .returning(|_, _, _| Some(HashMap::new()));
                 Arc::new(RwLock::new(mock_window))
             },
             1,
@@ -357,7 +357,7 @@ mod tests {
             let mut mock = PplnsWindow::default();
             mock.expect_network().return_const(bitcoin::Network::Signet);
             mock.expect_get_distribution_from_start_hash()
-                .returning(|_, _| Some(HashMap::new()));
+                .returning(|_, _, _| Some(HashMap::new()));
             mock
         });
 
@@ -387,7 +387,7 @@ mod tests {
                     .return_const(bitcoin::Network::Signet);
                 mock_window
                     .expect_get_distribution_from_start_hash()
-                    .returning(|_, _| Some(HashMap::new()));
+                    .returning(|_, _, _| Some(HashMap::new()));
                 Arc::new(RwLock::new(mock_window))
             },
             1,
@@ -426,7 +426,7 @@ mod tests {
             let mut mock = PplnsWindow::default();
             mock.expect_network().return_const(bitcoin::Network::Signet);
             mock.expect_get_distribution_from_start_hash()
-                .returning(|_, _| Some(HashMap::new()));
+                .returning(|_, _, _| Some(HashMap::new()));
             mock
         });
 
@@ -473,7 +473,7 @@ mod tests {
                     .return_const(bitcoin::Network::Signet);
                 mock_window
                     .expect_get_distribution_from_start_hash()
-                    .returning(|_, _| Some(HashMap::new()));
+                    .returning(|_, _, _| Some(HashMap::new()));
                 Arc::new(RwLock::new(mock_window))
             },
             1,
