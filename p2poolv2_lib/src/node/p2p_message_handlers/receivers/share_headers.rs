@@ -73,6 +73,7 @@ pub async fn handle_share_headers<C: Send + Sync>(
             &chain_store_handle,
             &swarm_tx,
             &block_fetcher_handle,
+            None,
         )
         .await;
     }
@@ -85,12 +86,23 @@ pub async fn handle_share_headers<C: Send + Sync>(
         chain_store_handle.organise_header(header.clone()).await?;
     }
 
+    // The batch is sorted by increasing height, so the first header
+    // is the lowest. Use its height as min_scan_height so
+    // trigger_block_fetch can find fork blocks at or below the
+    // confirmed tip.
+    let first_blockhash = share_headers[0].block_hash();
+    let min_organised_height = chain_store_handle
+        .get_block_metadata(&first_blockhash)
+        .ok()
+        .and_then(|metadata| metadata.expected_height);
+
     trigger_or_request(
         peer_id,
         &share_headers,
         &chain_store_handle,
         &swarm_tx,
         &block_fetcher_handle,
+        min_organised_height,
     )
     .await
 }
@@ -320,9 +332,16 @@ async fn trigger_or_request<C: Send + Sync>(
     chain_store_handle: &ChainStoreHandle,
     swarm_tx: &mpsc::Sender<SwarmSend<C>>,
     block_fetcher_handle: &BlockFetcherHandle,
+    min_organised_height: Option<u32>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     if share_headers.len() < MAX_HEADERS_IN_RESPONSE {
-        trigger_block_fetch(peer_id, chain_store_handle, block_fetcher_handle).await
+        trigger_block_fetch(
+            peer_id,
+            chain_store_handle,
+            block_fetcher_handle,
+            min_organised_height,
+        )
+        .await
     } else {
         request_next_headers(peer_id, share_headers, swarm_tx).await
     }
@@ -330,13 +349,19 @@ async fn trigger_or_request<C: Send + Sync>(
 
 /// Header sync is complete -- query for candidate blocks missing full
 /// block data and send them to the block fetcher for download.
+///
+/// When `min_organised_height` is provided, the scan extends down to
+/// that height so fork blocks at or below the confirmed tip are
+/// included in the fetch request.
 async fn trigger_block_fetch(
     peer_id: libp2p::PeerId,
     chain_store_handle: &ChainStoreHandle,
     block_fetcher_handle: &BlockFetcherHandle,
+    min_organised_height: Option<u32>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     debug!("Header sync complete, triggering block fetch for missing data");
-    let missing_blockhashes = chain_store_handle.get_candidate_blocks_missing_data(None)?;
+    let missing_blockhashes =
+        chain_store_handle.get_candidate_blocks_missing_data(min_organised_height)?;
     if !missing_blockhashes.is_empty() {
         info!(
             "Requesting {} blocks from block fetcher",
