@@ -34,6 +34,14 @@ path = "src/main.rs"
 name = "p2poolv2_cli"
 path = "src/cli_main.rs"
 
+[[bin]]
+name = "verify_chain"
+path = "src/verify_chain.rs"
+required-features = ["debug-tools"]
+
+[features]
+debug-tools = []
+
 [dev-dependencies]
 p2poolv2_lib = { workspace = true, features = ["test-utils"] }
 mockall.workspace = true
