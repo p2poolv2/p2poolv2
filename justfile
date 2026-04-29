@@ -95,6 +95,10 @@ bench-profile package="p2poolv2_lib" name="pplns_window":
 bench-flamegraph package="p2poolv2_lib" name="pplns_window" function="get_address_difficulty_map_full_window":
     CARGO_PROFILE_BENCH_STRIP=none cargo flamegraph -o flamegraph_{{ function }}.svg --bench {{ name }} --features test-utils -p {{ package }} -- --bench "{{ function }}" --profile-time 5
 
+# Verify chain integrity in a store.db
+verify_chain db_path:
+    cargo run --bin verify_chain --features debug-tools -- {{ db_path }}
+
 # fix common warnings
 fix:
     cargo fix
