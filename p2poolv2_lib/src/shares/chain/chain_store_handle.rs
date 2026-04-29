@@ -520,10 +520,17 @@ impl ChainStoreHandle {
 
     /// Returns blockhashes on the candidate chain that do not yet have
     /// full block data (status is not BlockValid or Confirmed).
-    pub fn get_candidate_blocks_missing_data(&self) -> Result<Vec<BlockHash>, StoreError> {
+    ///
+    /// When `min_scan_height` is provided, the scan extends down to
+    /// that height so fork blocks at or below the confirmed tip are
+    /// included.
+    pub fn get_candidate_blocks_missing_data(
+        &self,
+        min_scan_height: Option<u32>,
+    ) -> Result<Vec<BlockHash>, StoreError> {
         self.store_handle
             .store()
-            .get_candidate_blocks_missing_data()
+            .get_candidate_blocks_missing_data(min_scan_height)
     }
 
     /// Check if a blockhash has Candidate status in its metadata.
@@ -764,7 +771,7 @@ mockall::mock! {
         pub fn get_confirmed_headers_in_range(&self, from_height: u32, to_height: u32) -> Result<Vec<ConfirmedHeaderResult>, StoreError>;
         pub fn get_share_dag(&self, from_height: u32, to_height: u32) -> Result<ShareDag, StoreError>;
         pub fn get_missing_blockhashes(&self, blockhashes: &[BlockHash]) -> Vec<BlockHash>;
-        pub fn get_candidate_blocks_missing_data(&self) -> Result<Vec<BlockHash>, StoreError>;
+        pub fn get_candidate_blocks_missing_data(&self, min_scan_height: Option<u32>) -> Result<Vec<BlockHash>, StoreError>;
         pub fn get_depth(&self, blockhash: &BlockHash) -> Option<usize>;
         pub fn get_pplns_shares_filtered(&self, limit: Option<usize>, start_time: Option<u64>, end_time: Option<u64>) -> Vec<SimplePplnsShare>;
         pub fn get_confirmed_at_height(&self, height: u32) -> Result<BlockHash, StoreError>;

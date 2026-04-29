@@ -365,7 +365,7 @@ mod tests {
             cloned.expect_organise_header().returning(|_| Ok(None));
             cloned
                 .expect_get_candidate_blocks_missing_data()
-                .returning(|| Ok(Vec::new()));
+                .returning(|_| Ok(Vec::new()));
             crate::test_utils::setup_header_chain_validation_mocks(&mut cloned);
             cloned
         });

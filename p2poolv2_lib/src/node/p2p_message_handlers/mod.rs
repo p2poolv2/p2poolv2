@@ -688,7 +688,7 @@ mod tests {
             .returning(|_| Ok(None));
         chain_store_handle
             .expect_get_candidate_blocks_missing_data()
-            .returning(|| Ok(Vec::new()));
+            .returning(|_| Ok(Vec::new()));
         setup_header_chain_validation_mocks(&mut chain_store_handle);
 
         let (swarm_tx, _swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
