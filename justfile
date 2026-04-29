@@ -1,4 +1,4 @@
-set unstable
+set unstable := true
 
 dev_config := "." / "config-dev.toml"
 default_config := "." / "config.toml"
