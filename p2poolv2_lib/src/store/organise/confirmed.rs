@@ -104,6 +104,15 @@ impl Store {
         let fork_point = fork_branch.front().ok_or_else(|| {
             StoreError::NotFound("Empty branch returned from get_branch_to_chain.".into())
         })?;
+
+        // Do not reorg if any block in the fork branch lacks block data
+        for to_confirm in &fork_branch {
+            if !self.share_block_exists(to_confirm) {
+                debug!("Reorg skipped: block {} missing block data", to_confirm);
+                return Ok(None);
+            }
+        }
+
         let reorged_out_chain = self.get_confirmed_chain(fork_point, Some(top_confirmed))?;
 
         // Delete old confirmed index entries, remove their spends from
@@ -1822,5 +1831,59 @@ mod tests {
             fork_2.block_hash()
         );
         assert!(store.is_any_prevout_spent(&[prevout]).unwrap());
+    }
+
+    /// When a block in the fork branch lacks block data, the reorg
+    /// should not happen.
+    ///
+    /// Setup: genesis(confirmed h:0) -> share1(confirmed h:1)
+    ///        fork(h:1, more work, parent=genesis) -- header only, no block data
+    /// Action: call reorg_confirmed with fork as the candidate tip
+    /// After:  reorg does not happen, confirmed chain unchanged
+    #[test]
+    fn test_reorg_confirmed_skipped_when_fork_branch_missing_block_data() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // share1: confirmed at h:1 (has block data)
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        store.push_to_confirmed_chain(&share1).unwrap();
+        assert_eq!(store.get_top_confirmed_height().unwrap(), 1);
+
+        // fork: child of genesis at h:1 with more work, header only (no block data)
+        let fork = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .work(2)
+            .nonce(0xe9695793)
+            .build();
+        // Only store header and metadata, not block data
+        store.create_valid_metadata_only(&fork);
+
+        assert!(!store.share_block_exists(&fork.block_hash()));
+
+        let top_confirmed = store.get_top_confirmed().unwrap();
+        let candidates = vec![(1u32, fork.block_hash())];
+
+        let mut batch = Store::get_write_batch();
+        let result = store
+            .reorg_confirmed(&top_confirmed, &candidates, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Reorg should not have happened
+        assert_eq!(result, None);
+        assert_eq!(store.get_top_confirmed_height().unwrap(), 1);
+        assert_eq!(
+            store.get_confirmed_at_height(1).unwrap(),
+            share1.block_hash()
+        );
     }
 }
