@@ -297,11 +297,7 @@ fn main() {
             // 10d. Uncle is ancestor-type (its parent is an ancestor of the nephew)
             if let Some(uncle_hdr) = &uncle_header {
                 let uncle_parent = uncle_hdr.prev_share_blockhash;
-                if !is_uncle_ancestor_type(
-                    &uncle_parent,
-                    height,
-                    &confirmed_hashes,
-                ) {
+                if !is_uncle_ancestor_type(&uncle_parent, height, &confirmed_hashes) {
                     summary.error(format!(
                         "h:{height} {blockhash} - uncle {uncle_hash} parent {uncle_parent} is not an ancestor on confirmed chain (uncle should be an ancestor, not a sibling)"
                     ));
