@@ -205,7 +205,13 @@ impl Store {
     /// candidate top that are missing full block data, including any
     /// uncle blocks referenced by candidate headers.
     ///
-    /// Queries every height from confirmed_top+1 to candidate_top
+    /// When `min_scan_height` is provided, the scan starts from
+    /// `min(min_scan_height, confirmed_top + 1)` instead of
+    /// `confirmed_top + 1`. This allows detection of fork blocks at
+    /// or below the confirmed height that need fetching for a
+    /// potential reorg.
+    ///
+    /// Queries every height from the scan start to candidate_top
     /// using the BlockHeight index, which stores all blockhashes at
     /// each height including uncle blocks that are not on the
     /// candidate chain. A share is included if its metadata status is
@@ -215,7 +221,10 @@ impl Store {
     /// confirmed chain, so the height scan alone misses them. A
     /// second pass reads the header of each candidate block and adds
     /// any referenced uncle that lacks block data.
-    pub fn get_candidate_blocks_missing_data(&self) -> Result<Vec<BlockHash>, StoreError> {
+    pub fn get_candidate_blocks_missing_data(
+        &self,
+        min_scan_height: Option<u32>,
+    ) -> Result<Vec<BlockHash>, StoreError> {
         let confirmed_height = match self.get_top_confirmed_height() {
             Ok(height) => height,
             Err(StoreError::NotFound(_)) => 0,
@@ -228,14 +237,20 @@ impl Store {
             Err(error) => return Err(error),
         };
 
-        if candidate_height <= confirmed_height {
+        let default_start = confirmed_height + 1;
+        let scan_start = match min_scan_height {
+            Some(hint) => std::cmp::min(hint, default_start),
+            None => default_start,
+        };
+
+        if candidate_height < scan_start {
             return Ok(Vec::new());
         }
 
-        let height_range = (candidate_height - confirmed_height) as usize;
+        let height_range = (candidate_height - scan_start + 1) as usize;
         let mut missing = Vec::with_capacity(height_range);
 
-        let mut height = confirmed_height + 1;
+        let mut height = scan_start;
         while height <= candidate_height {
             let blockhashes = self.get_blockhashes_for_height(height);
             for blockhash in blockhashes {
@@ -1337,7 +1352,7 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
-        let result = store.get_candidate_blocks_missing_data().unwrap();
+        let result = store.get_candidate_blocks_missing_data(None).unwrap();
         assert!(result.is_empty());
     }
 
@@ -1364,7 +1379,7 @@ mod tests {
         store.push_to_candidate_chain(&share2).unwrap();
 
         // Both candidates have Candidate status (not BlockValid), so both are missing data
-        let missing = store.get_candidate_blocks_missing_data().unwrap();
+        let missing = store.get_candidate_blocks_missing_data(None).unwrap();
         assert_eq!(missing.len(), 2);
         assert_eq!(missing[0], share1.block_hash());
         assert_eq!(missing[1], share2.block_hash());
@@ -1401,7 +1416,7 @@ mod tests {
             .unwrap();
         store.commit_batch(batch).unwrap();
 
-        let missing = store.get_candidate_blocks_missing_data().unwrap();
+        let missing = store.get_candidate_blocks_missing_data(None).unwrap();
         assert_eq!(missing.len(), 1);
         assert_eq!(missing[0], share2.block_hash());
     }
@@ -1431,7 +1446,7 @@ mod tests {
             .unwrap();
         store.commit_batch(batch).unwrap();
 
-        let missing = store.get_candidate_blocks_missing_data().unwrap();
+        let missing = store.get_candidate_blocks_missing_data(None).unwrap();
         assert!(missing.is_empty());
     }
 
@@ -1456,7 +1471,7 @@ mod tests {
         store.set_top_confirmed_height(1, &mut batch);
         store.commit_batch(batch).unwrap();
 
-        let missing = store.get_candidate_blocks_missing_data().unwrap();
+        let missing = store.get_candidate_blocks_missing_data(None).unwrap();
         assert!(missing.is_empty());
     }
 
@@ -1492,7 +1507,7 @@ mod tests {
         store.set_top_confirmed_height(1, &mut batch);
         store.commit_batch(batch).unwrap();
 
-        let missing = store.get_candidate_blocks_missing_data().unwrap();
+        let missing = store.get_candidate_blocks_missing_data(None).unwrap();
         assert_eq!(missing.len(), 2);
         assert_eq!(missing[0], share2.block_hash());
         assert_eq!(missing[1], share3.block_hash());
@@ -1533,7 +1548,7 @@ mod tests {
             .build();
         store.push_to_candidate_chain(&share2).unwrap();
 
-        let missing = store.get_candidate_blocks_missing_data().unwrap();
+        let missing = store.get_candidate_blocks_missing_data(None).unwrap();
 
         // All three should be missing: share1 and uncle_block at h:1, share2 at h:2
         assert_eq!(missing.len(), 3);
@@ -1586,7 +1601,7 @@ mod tests {
             .build();
         store.push_to_candidate_chain(&share2).unwrap();
 
-        let missing = store.get_candidate_blocks_missing_data().unwrap();
+        let missing = store.get_candidate_blocks_missing_data(None).unwrap();
 
         // share2 is missing block data (candidate above confirmed),
         // uncle_block is missing block data (referenced by share2's header)
@@ -1598,6 +1613,61 @@ mod tests {
             missing.contains(&uncle_block.block_hash()),
             "uncle_block at confirmed height should be in missing list"
         );
+    }
+
+    /// When min_scan_height is below the confirmed height, blocks at
+    /// that height should be included in the missing data result.
+    ///
+    /// Scenario: genesis -> share1(h:1, confirmed) -> share2(h:2, candidate).
+    /// fork_block is a competing block at h:1 with Candidate status.
+    /// Without min_scan_height, the scan starts at h:2 and misses
+    /// fork_block. With min_scan_height=1, fork_block is found.
+    #[test]
+    fn test_missing_data_scans_from_min_height_when_below_confirmed() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695790).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // share1: confirmed at h:1
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695791)
+            .build();
+        store.push_to_confirmed_chain(&share1).unwrap();
+
+        // fork_block: competing block at h:1, only header stored with Candidate status
+        let fork_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695799)
+            .build();
+        store.create_valid_metadata_only(&fork_block);
+
+        // share2: candidate at h:2, extends share1
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        store.push_to_candidate_chain(&share2).unwrap();
+
+        // Without min_scan_height: fork_block at h:1 is skipped
+        let missing = store.get_candidate_blocks_missing_data(None).unwrap();
+        assert!(
+            !missing.contains(&fork_block.block_hash()),
+            "fork_block should NOT be returned without min_scan_height"
+        );
+        assert!(missing.contains(&share2.block_hash()));
+
+        // With min_scan_height=1: fork_block at h:1 is found
+        let missing = store.get_candidate_blocks_missing_data(Some(1)).unwrap();
+        assert!(
+            missing.contains(&fork_block.block_hash()),
+            "fork_block should be returned with min_scan_height=1"
+        );
+        assert!(missing.contains(&share2.block_hash()));
     }
 
     #[test]

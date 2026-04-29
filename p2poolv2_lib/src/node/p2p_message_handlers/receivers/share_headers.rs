@@ -336,7 +336,7 @@ async fn trigger_block_fetch(
     block_fetcher_handle: &BlockFetcherHandle,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     debug!("Header sync complete, triggering block fetch for missing data");
-    let missing_blockhashes = chain_store_handle.get_candidate_blocks_missing_data()?;
+    let missing_blockhashes = chain_store_handle.get_candidate_blocks_missing_data(None)?;
     if !missing_blockhashes.is_empty() {
         info!(
             "Requesting {} blocks from block fetcher",
@@ -452,7 +452,7 @@ mod tests {
             .returning(|_| Ok(None));
         chain_store_handle
             .expect_get_candidate_blocks_missing_data()
-            .returning(|| Ok(Vec::new()));
+            .returning(|_| Ok(Vec::new()));
         setup_chain_validation_mocks(&mut chain_store_handle);
 
         let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
@@ -484,7 +484,7 @@ mod tests {
         let mut chain_store_handle = ChainStoreHandle::default();
         chain_store_handle
             .expect_get_candidate_blocks_missing_data()
-            .returning(|| Ok(Vec::new()));
+            .returning(|_| Ok(Vec::new()));
         let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
         let (block_fetcher_handle, _block_fetcher_rx) =
             block_fetcher::create_block_fetcher_channel();
@@ -575,7 +575,7 @@ mod tests {
         let returned_hashes = expected_hashes.clone();
         chain_store_handle
             .expect_get_candidate_blocks_missing_data()
-            .returning(move || Ok(returned_hashes.clone()));
+            .returning(move |_| Ok(returned_hashes.clone()));
         setup_chain_validation_mocks(&mut chain_store_handle);
 
         let (swarm_tx, _swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
