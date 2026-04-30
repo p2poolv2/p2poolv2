@@ -33,6 +33,7 @@ use crate::utils::time_provider::TimeProvider;
 use receivers::getblocks::handle_getblocks;
 use receivers::getdata::handle_getdata_block;
 use receivers::getheaders::handle_getheaders;
+use receivers::handshake::handle_handshake;
 use receivers::inventory::handle_inventory;
 use receivers::share_blocks::handle_share_block;
 use receivers::share_headers::handle_share_headers;
@@ -97,6 +98,15 @@ pub async fn handle_request<C: Send + Sync, T: TimeProvider + Send + Sync>(
         Message::Transaction(transaction) => {
             info!("Received transaction: {:?}", transaction);
             Ok(())
+        }
+        Message::Handshake(handshake_data) => {
+            handle_handshake(
+                handshake_data,
+                ctx.peer,
+                ctx.chain_store_handle,
+                ctx.swarm_tx,
+            )
+            .await
         }
         Message::ShareBlock(_) => {
             warn!(

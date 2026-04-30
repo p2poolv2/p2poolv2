@@ -14,8 +14,8 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::node::messages::{HandshakeData, Message};
 use crate::node::SwarmSend;
+use crate::node::messages::{HandshakeData, Message};
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -52,9 +52,7 @@ pub async fn send_handshake<C>(
         tip_hash,
     });
 
-    debug!(
-        "Sending Handshake to peer {peer_id}: height={tip_height}, hash={tip_hash}"
-    );
+    debug!("Sending Handshake to peer {peer_id}: height={tip_height}, hash={tip_hash}");
 
     if let Err(send_error) = swarm_tx
         .send(SwarmSend::Request(peer_id, handshake_message))
@@ -168,6 +166,11 @@ mod tests {
 
         let result = send_handshake(peer_id, chain_store_handle, swarm_tx).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Failed to send handshake"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Failed to send handshake")
+        );
     }
 }
