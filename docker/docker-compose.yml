@@ -1,5 +1,8 @@
 name: p2poolv2
 
+# p2poolv2 uses host networking (Linux only) for P2P connectivity.
+# See docker-compose.p2poolv2.yml for details.
+
 services:
   bitcoind:
     image: p2poolv2/bitcoind:latest
@@ -51,8 +54,6 @@ services:
     depends_on:
       bitcoind:
         condition: service_healthy
-    networks:
-      - p2poolv2_network
 
   mujina_minerd:
     extends:
@@ -67,4 +68,3 @@ volumes:
 
 networks:
   p2poolv2_network:
-    driver: bridge
