@@ -99,6 +99,10 @@ bench-flamegraph package="p2poolv2_lib" name="pplns_window" function="get_addres
 verify_chain db_path:
     cargo run --bin verify_chain --features debug-tools -- {{ db_path }}
 
+# lint files with clippy
+lint:
+    cargo clippy --all -- -D warnings
+
 # fix common warnings
 fix:
     cargo fix

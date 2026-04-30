@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::node::compact_block_relay::{ShareBlockTransactionsRequest, ShareHeaderAndShortIds};
 use crate::shares::share_block::{ShareBlock, ShareHeader, Txids};
 use bitcoin::consensus::{Decodable, Encodable, encode};
 use bitcoin::hashes::{Hash, sha256d};
@@ -35,12 +36,18 @@ mod message_discriminants {
     pub const TRANSACTION: u8 = 7;
     pub const HANDSHAKE: u8 = 8;
     pub const ACK: u8 = 9;
+
+    pub const SEND_COMPACT: u8 = 10;
+    pub const COMPACT_BLOCK: u8 = 11;
+    pub const GET_BLOCK_TXN: u8 = 12;
+    pub const BLOCK_TXN: u8 = 13;
 }
 
 /// InventoryMessage discriminants to determine the type of inventory message
 mod inventory_discriminants {
     pub const BLOCK_HASHES: u8 = 0;
     pub const TRANSACTION_HASHES: u8 = 1;
+    pub const COMPACT_BLOCK: u8 = 2;
 }
 
 /// GetData discriminants to determine the type of get data message
@@ -64,8 +71,9 @@ pub mod network_magic {
 
 /// P2P network messages, encoded using bitcoin consensus_encode
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[repr(u32)]
 pub enum Message {
-    Inventory(InventoryMessage),
+    Inventory(InventoryMessage) = 0,
     NotFound(GetData),
     GetShareHeaders(Vec<BlockHash>, BlockHash),
     GetShareBlocks(Vec<BlockHash>, BlockHash),
@@ -74,6 +82,7 @@ pub enum Message {
     GetData(GetData),
     Transaction(bitcoin::Transaction),
     Handshake(HandshakeData),
+
     /// Acknowledgment response for request-response messages that
     /// sometimes do not need to send a meaningful return payload
     /// (e.g. Handshake, Inventory). This is a stop gap solution to
@@ -81,6 +90,18 @@ pub enum Message {
     /// queues. Ideally we need to build our own stream protocol for
     /// libp2p. Something, we don't want to take on now.
     Ack,
+
+    /// Delivers block header, per-peer short txIDs, and prefilled txs for reconstruction
+    CompactBlock(ShareHeaderAndShortIds),
+
+    /// Negotiates compact block version and high-bandwidth mode (bool + version)
+    SendCompact(bool, u64),
+
+    /// Requests missing txs from a prior [Message::CompactBlock] by block hash and indexes.
+    GetBlockTxn(ShareBlockTransactionsRequest),
+
+    /// Responds with the exact requested txs from the block
+    BlockTxn(bitcoin::bip152::BlockTransactions),
 }
 
 /// Handshake data exchanged when a connection is established.
@@ -167,6 +188,12 @@ impl Message {
             Message::Transaction(_) => "Transaction",
             Message::Handshake(_) => "Handshake",
             Message::Ack => "Ack",
+
+            // compact block relay
+            Message::CompactBlock(_) => "CompactBlock",
+            Message::SendCompact(_, _) => "SendCompact",
+            Message::GetBlockTxn(_) => "GetBlockTxn",
+            Message::BlockTxn(_) => "BlockTxn",
         }
     }
 }
@@ -278,6 +305,29 @@ impl Encodable for Message {
                 let len = ACK.consensus_encode(w)?;
                 Ok(len)
             }
+
+            // compact block relay
+            Message::CompactBlock(cb) => {
+                let mut len = COMPACT_BLOCK.consensus_encode(w)?;
+                len += cb.consensus_encode(w)?;
+                Ok(len)
+            }
+            Message::SendCompact(flag, version) => {
+                let mut len = SEND_COMPACT.consensus_encode(w)?;
+                len += flag.consensus_encode(w)?;
+                len += version.consensus_encode(w)?;
+                Ok(len)
+            }
+            Message::GetBlockTxn(req) => {
+                let mut len = GET_BLOCK_TXN.consensus_encode(w)?;
+                len += req.consensus_encode(w)?;
+                Ok(len)
+            }
+            Message::BlockTxn(txn) => {
+                let mut len = BLOCK_TXN.consensus_encode(w)?;
+                len += txn.consensus_encode(w)?;
+                Ok(len)
+            }
         }
     }
 }
@@ -310,6 +360,20 @@ impl Decodable for Message {
                 tip_hash: BlockHash::consensus_decode(r)?,
             })),
             ACK => Ok(Message::Ack),
+            COMPACT_BLOCK => Ok(Message::CompactBlock(
+                ShareHeaderAndShortIds::consensus_decode(r)?,
+            )),
+            SEND_COMPACT => {
+                let announce = bool::consensus_decode(r)?;
+                let version = u64::consensus_decode(r)?;
+                Ok(Message::SendCompact(announce, version))
+            }
+            GET_BLOCK_TXN => Ok(Message::GetBlockTxn(
+                ShareBlockTransactionsRequest::consensus_decode(r)?,
+            )),
+            BLOCK_TXN => Ok(Message::BlockTxn(
+                bitcoin::bip152::BlockTransactions::consensus_decode(r)?,
+            )),
             _ => Err(encode::Error::ParseFailed("Invalid Message discriminant")),
         }
     }
@@ -358,9 +422,12 @@ impl Decodable for RawMessage {
 /// The inventory message used to tell a peer what we have in our inventory.
 /// The message can be used to tell the peer about share headers, blocks, or transactions that this peer has.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[repr(u32)]
 pub enum InventoryMessage {
     BlockHashes(Vec<BlockHash>),
     TransactionHashes(Txids),
+    // TODO
+    CompactBlock = 4,
 }
 
 impl Encodable for InventoryMessage {
@@ -377,6 +444,7 @@ impl Encodable for InventoryMessage {
                 len += txids.consensus_encode(w)?;
                 Ok(len)
             }
+            InventoryMessage::CompactBlock => todo!(),
         }
     }
 }
@@ -392,6 +460,10 @@ impl Decodable for InventoryMessage {
             TRANSACTION_HASHES => Ok(InventoryMessage::TransactionHashes(
                 Txids::consensus_decode(r)?,
             )),
+            COMPACT_BLOCK => {
+                // TODO: Implement low bandwidth block relay
+                Ok(InventoryMessage::CompactBlock)
+            }
             _ => Err(encode::Error::ParseFailed(
                 "Invalid InventoryMessage discriminant",
             )),

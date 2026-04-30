@@ -21,13 +21,15 @@ use self::block_fetcher::BlockFetcherHandle;
 use self::peer_block_knowledge::PeerBlockKnowledge;
 use crate::config::NetworkConfig;
 use crate::node::SwarmSend;
+use crate::node::actor::NodeHandle;
 use crate::node::behaviour::request_response::RequestResponseEvent;
 use crate::node::messages::{InventoryMessage, Message};
 use crate::node::p2p_message_handlers::handle_response;
 use crate::node::p2p_message_handlers::receivers::block_receiver::BlockReceiverHandle;
 use crate::node::validation_worker::ValidationSender;
 use crate::service::PeerHandle;
-use crate::service::p2p_service::RequestContext;
+use crate::service::p2p_service::{RequestContext, ResponseContext};
+use crate::service::peer_state::{PeerState, PeerStates};
 use crate::service::spawn_peer_service;
 #[cfg(test)]
 #[mockall_double::double]
@@ -69,6 +71,7 @@ pub struct RequestResponseHandler<C: Send + Sync> {
     block_receiver_handle: BlockReceiverHandle,
     peer_block_knowledge: PeerBlockKnowledge,
     share_validator: Arc<dyn ShareValidator + Send + Sync>,
+    peer_states: Arc<PeerStates>,
 }
 
 /// Implementation of ResponseChannel<Message>, used in production.
@@ -84,6 +87,8 @@ impl RequestResponseHandler<ResponseChannel<Message>> {
         validation_tx: ValidationSender,
         block_receiver_handle: BlockReceiverHandle,
         share_validator: Arc<dyn ShareValidator + Send + Sync>,
+        peer_states: Arc<PeerStates>,
+        node_handle: NodeHandle,
     ) -> Self {
         Self {
             peer_handles: HashMap::new(),
@@ -95,6 +100,7 @@ impl RequestResponseHandler<ResponseChannel<Message>> {
             block_receiver_handle,
             peer_block_knowledge: PeerBlockKnowledge::default(),
             share_validator,
+            peer_states,
         }
     }
 
@@ -119,7 +125,13 @@ impl RequestResponseHandler<ResponseChannel<Message>> {
                         request,
                         channel,
                     },
-            } => self.dispatch_request(peer, request, channel).await,
+            } => {
+                let state = self
+                    .peer_states
+                    .get(&peer)
+                    .ok_or_else(|| format!("Unknown peer: {}", peer))?;
+                self.dispatch_request(state, request, channel).await
+            }
             RequestResponseEvent::Message {
                 peer,
                 message:
@@ -132,7 +144,11 @@ impl RequestResponseHandler<ResponseChannel<Message>> {
                     "Received response {} for request {} from peer {}",
                     response, request_id, peer
                 );
-                self.dispatch_response(peer, response).await
+                let state = self
+                    .peer_states
+                    .get(&peer)
+                    .ok_or_else(|| format!("Unknown peer: {}", peer))?;
+                self.dispatch_response(state, response).await
             }
             RequestResponseEvent::OutboundFailure {
                 peer,
@@ -198,6 +214,7 @@ impl<C: Send + Sync + 'static> RequestResponseHandler<C> {
     /// Called before dispatching both requests and responses so that
     /// subsequent inv sends can avoid redundant announcements.
     fn record_peer_knowledge(&mut self, peer: &PeerId, message: &Message) {
+        // TODO: move this to [PeerState]
         match message {
             Message::Inventory(InventoryMessage::BlockHashes(hashes)) => {
                 for hash in hashes {
@@ -223,14 +240,14 @@ impl<C: Send + Sync + 'static> RequestResponseHandler<C> {
     /// - No handle: create one on the fly (defensive fallback).
     async fn dispatch_request(
         &mut self,
-        peer: PeerId,
+        peer: Arc<PeerState>,
         request: Message,
         channel: C,
     ) -> Result<(), Box<dyn Error>> {
-        self.record_peer_knowledge(&peer, &request);
+        self.record_peer_knowledge(&peer.id, &request);
 
         let ctx = RequestContext::<C, _> {
-            peer,
+            peer: peer.clone(),
             request,
             chain_store_handle: self.chain_store_handle.clone(),
             response_channel: channel,
@@ -240,17 +257,18 @@ impl<C: Send + Sync + 'static> RequestResponseHandler<C> {
             validation_tx: self.validation_tx.clone(),
             block_receiver_handle: self.block_receiver_handle.clone(),
             share_validator: self.share_validator.clone(),
+            peer_states: self.peer_states.clone(),
         };
 
-        let peer_handle = match self.peer_handles.get(&peer) {
+        let peer_handle = match self.peer_handles.get(&peer.id) {
             Some(handle) => handle,
             None => {
                 warn!(
                     "No service handle for peer {}, creating one on the fly",
                     peer
                 );
-                self.add_peer(peer);
-                self.peer_handles.get(&peer).unwrap()
+                self.add_peer(peer.id);
+                self.peer_handles.get(&peer.id).unwrap()
             }
         };
 
@@ -258,7 +276,7 @@ impl<C: Send + Sync + 'static> RequestResponseHandler<C> {
             Ok(()) => {}
             Err(mpsc::error::TrySendError::Full(_)) => {
                 error!("Peer {} service channel full, disconnecting", peer);
-                let _ = self.swarm_tx.send(SwarmSend::Disconnect(peer)).await;
+                let _ = self.swarm_tx.send(SwarmSend::Disconnect(peer.id)).await;
             }
             Err(mpsc::error::TrySendError::Closed(_)) => {
                 warn!("Peer {} service task exited, removing stale handle", peer);
@@ -277,24 +295,24 @@ impl<C: Send + Sync + 'static> RequestResponseHandler<C> {
     /// for matching outstanding requests.
     async fn dispatch_response(
         &mut self,
-        peer: PeerId,
+        peer: Arc<PeerState>,
         response: Message,
     ) -> Result<(), Box<dyn Error>> {
-        self.record_peer_knowledge(&peer, &response);
-
-        if let Err(err) = handle_response(
+        let peer_id = peer.id;
+        self.record_peer_knowledge(&peer_id, &response);
+        let ctx = ResponseContext {
             peer,
             response,
-            self.chain_store_handle.clone(),
-            self.swarm_tx.clone(),
-            self.block_fetcher_handle.clone(),
-            self.validation_tx.clone(),
-            self.block_receiver_handle.clone(),
-            self.share_validator.clone(),
-        )
-        .await
-        {
-            error!("Error handling response from peer {}: {}", peer, err);
+            chain_store_handle: self.chain_store_handle.clone(),
+            swarm_tx: self.swarm_tx.clone(),
+            block_fetcher_handle: self.block_fetcher_handle.clone(),
+            validation_tx: self.validation_tx.clone(),
+            block_receiver_handle: self.block_receiver_handle.clone(),
+            share_validator: self.share_validator.clone(),
+            peer_states: self.peer_states.clone(),
+        };
+        if let Err(err) = handle_response(ctx).await {
+            error!("Error handling response from peer {}: {}", peer_id, err);
         }
         Ok(())
     }
@@ -352,6 +370,7 @@ mod tests {
             block_receiver_handle,
             peer_block_knowledge: PeerBlockKnowledge::default(),
             share_validator,
+            peer_states: Default::default(),
         }
     }
 
@@ -390,7 +409,7 @@ mod tests {
             Arc::new(mock_validator),
         );
 
-        let peer_id = libp2p::PeerId::random();
+        let peer_state: Arc<_> = PeerState::random().into();
         let mut header1 = TestShareBlockBuilder::new().build().header;
         header1.bits = CompactTarget::from_consensus(crate::shares::share_block::MAX_POOL_TARGET);
         let mut header2 = TestShareBlockBuilder::new()
@@ -402,7 +421,7 @@ mod tests {
         let share_headers = vec![header1, header2];
 
         let result = handler
-            .dispatch_response(peer_id, Message::ShareHeaders(share_headers))
+            .dispatch_response(peer_state, Message::ShareHeaders(share_headers))
             .await;
 
         assert!(result.is_ok());
@@ -418,11 +437,11 @@ mod tests {
 
         let mut handler = build_test_handler(chain_store_handle, swarm_tx);
 
-        let peer_id = libp2p::PeerId::random();
+        let peer_state: Arc<_> = PeerState::random().into();
 
         let result = handler
             .dispatch_response(
-                peer_id,
+                peer_state,
                 Message::NotFound(GetData::Block(BlockHash::all_zeros())),
             )
             .await;
@@ -440,7 +459,7 @@ mod tests {
 
         let mut handler = build_test_handler(chain_store_handle, swarm_tx);
 
-        let peer_id = libp2p::PeerId::random();
+        let peer_state: Arc<_> = PeerState::random().into();
         let block_hashes = vec![
             "0000000000000000000000000000000000000000000000000000000000000001"
                 .parse::<BlockHash>()
@@ -449,7 +468,7 @@ mod tests {
         let inventory = InventoryMessage::BlockHashes(block_hashes);
 
         let result = handler
-            .dispatch_response(peer_id, Message::Inventory(inventory))
+            .dispatch_response(peer_state, Message::Inventory(inventory))
             .await;
 
         assert!(result.is_ok());
@@ -465,10 +484,10 @@ mod tests {
 
         let mut handler = build_test_handler(chain_store_handle, swarm_tx);
 
-        let peer_id = libp2p::PeerId::random();
+        let peer_state: Arc<_> = PeerState::random().into();
         let result = handler
             .dispatch_response(
-                peer_id,
+                peer_state,
                 Message::GetData(crate::node::messages::GetData::Block(BlockHash::all_zeros())),
             )
             .await;
@@ -500,13 +519,13 @@ mod tests {
 
         let mut handler = build_test_handler(chain_store_handle, swarm_tx);
 
-        let peer_id = PeerId::random();
-        handler.add_peer(peer_id);
+        let peer_state = PeerState::random();
+        handler.add_peer(peer_state.id);
         let (response_tx, _response_rx) = oneshot::channel::<Message>();
 
         let result = handler
             .dispatch_request(
-                peer_id,
+                peer_state.into(),
                 Message::GetShareHeaders(block_hashes, stop_block_hash),
                 response_tx,
             )
@@ -539,12 +558,12 @@ mod tests {
         let mut handler = build_test_handler(chain_store_handle, swarm_tx);
 
         // Do NOT call add_peer -- dispatch_request should create the handle
-        let peer_id = PeerId::random();
+        let peer: Arc<_> = PeerState::random().into();
         let (channel_tx, _channel_rx) = oneshot::channel::<Message>();
 
         let result = handler
             .dispatch_request(
-                peer_id,
+                peer.clone(),
                 Message::Inventory(InventoryMessage::BlockHashes(vec![BlockHash::all_zeros()])),
                 channel_tx,
             )
@@ -552,7 +571,7 @@ mod tests {
         assert!(result.is_ok());
 
         // Verify the handle was created
-        assert!(handler.peer_handles.contains_key(&peer_id));
+        assert!(handler.peer_handles.contains_key(&peer.id));
     }
 
     #[tokio::test]
@@ -565,7 +584,7 @@ mod tests {
 
         let mut handler = build_test_handler(chain_store_handle, swarm_tx);
 
-        let peer_id = PeerId::random();
+        let peer: Arc<_> = PeerState::random().into();
 
         // Create a channel where the receiver is immediately dropped,
         // simulating a task that has exited.
@@ -573,12 +592,13 @@ mod tests {
         drop(receiver);
         handler
             .peer_handles
-            .insert(peer_id, PeerHandle::new_for_test(sender));
+            .insert(peer.id, PeerHandle::new_for_test(sender));
 
+        let peer_state: Arc<_> = PeerState::random().into();
         let (channel_tx, _channel_rx) = oneshot::channel::<Message>();
         let result = handler
             .dispatch_request(
-                peer_id,
+                peer.clone(),
                 Message::NotFound(GetData::Block(BlockHash::all_zeros())),
                 channel_tx,
             )
@@ -587,7 +607,7 @@ mod tests {
 
         // Stale handle should have been removed on Closed
         assert!(
-            !handler.peer_handles.contains_key(&peer_id),
+            !handler.peer_handles.contains_key(&peer.id),
             "Stale handle should be removed after Closed error"
         );
     }
@@ -606,21 +626,25 @@ mod tests {
         });
         let mut handler = build_test_handler(chain_store_handle, swarm_tx);
 
-        let peer_id = PeerId::random();
-        handler.add_peer(peer_id);
+        let peer_state: Arc<_> = PeerState::random().into();
+        handler.add_peer(peer_state.id);
         let block_hash = BlockHash::all_zeros();
         let inventory = InventoryMessage::BlockHashes(vec![block_hash]);
         let (channel_tx, _channel_rx) = oneshot::channel::<Message>();
 
         let result = handler
-            .dispatch_request(peer_id, Message::Inventory(inventory), channel_tx)
+            .dispatch_request(
+                peer_state.clone(),
+                Message::Inventory(inventory),
+                channel_tx,
+            )
             .await;
         assert!(result.is_ok());
 
         assert!(
             handler
                 .peer_block_knowledge()
-                .peer_knows_block(&peer_id, &block_hash)
+                .peer_knows_block(&peer_state, &block_hash)
         );
     }
 
@@ -653,12 +677,13 @@ mod tests {
             Arc::new(mock_validator),
         );
 
-        let peer_id = libp2p::PeerId::random();
+        let peer_state: Arc<_> = PeerState::random().into();
+        let peer_id = peer_state.id;
         let block = valid_share_block_from_fixture();
         let block_hash = block.block_hash();
 
         let result = handler
-            .dispatch_response(peer_id, Message::ShareBlock(block))
+            .dispatch_response(peer_state, Message::ShareBlock(block))
             .await;
         assert!(result.is_ok());
 
@@ -680,12 +705,13 @@ mod tests {
 
         let mut handler = build_test_handler(chain_store_handle, swarm_tx);
 
-        let peer_id = libp2p::PeerId::random();
+        let peer_state: Arc<_> = PeerState::random().into();
+        let peer_id = peer_state.id;
         let block_hash = BlockHash::all_zeros();
         let inventory = InventoryMessage::BlockHashes(vec![block_hash]);
 
         let result = handler
-            .dispatch_response(peer_id, Message::Inventory(inventory))
+            .dispatch_response(peer_state, Message::Inventory(inventory))
             .await;
         assert!(result.is_ok());
 
@@ -710,28 +736,32 @@ mod tests {
         });
         let mut handler = build_test_handler(chain_store_handle, swarm_tx);
 
-        let peer_id = PeerId::random();
-        handler.add_peer(peer_id);
+        let peer_state: Arc<_> = PeerState::random().into();
+        handler.add_peer(peer_state.id);
         let block_hash = BlockHash::all_zeros();
         let inventory = InventoryMessage::BlockHashes(vec![block_hash]);
         let (channel_tx, _channel_rx) = oneshot::channel::<Message>();
 
         let _ = handler
-            .dispatch_request(peer_id, Message::Inventory(inventory), channel_tx)
+            .dispatch_request(
+                peer_state.clone(),
+                Message::Inventory(inventory),
+                channel_tx,
+            )
             .await;
         assert!(
             handler
                 .peer_block_knowledge()
-                .peer_knows_block(&peer_id, &block_hash)
+                .peer_knows_block(&peer_state, &block_hash)
         );
-        assert!(handler.peer_handles.contains_key(&peer_id));
+        assert!(handler.peer_handles.contains_key(&peer_state.id));
 
-        handler.remove_peer(&peer_id);
+        handler.remove_peer(&peer_state.id);
         assert!(
             !handler
                 .peer_block_knowledge()
-                .peer_knows_block(&peer_id, &block_hash)
+                .peer_knows_block(&peer_state.id, &block_hash)
         );
-        assert!(!handler.peer_handles.contains_key(&peer_id));
+        assert!(!handler.peer_handles.contains_key(&peer_state.id));
     }
 }

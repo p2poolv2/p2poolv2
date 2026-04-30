@@ -80,6 +80,7 @@ pub async fn handle_inventory<C: Send + Sync>(
                 transaction_hashes
             );
         }
+        InventoryMessage::CompactBlock => todo!(),
     }
 
     Ok(())
