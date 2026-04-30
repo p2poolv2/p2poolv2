@@ -15,7 +15,9 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 pub mod getheaders;
+pub mod handshake;
 pub mod inventory;
 
 pub use getheaders::send_getheaders;
+pub use handshake::send_handshake;
 pub use inventory::send_block_inventory;
