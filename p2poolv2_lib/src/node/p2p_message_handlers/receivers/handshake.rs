@@ -28,9 +28,10 @@ use tracing::{debug, error, info};
 
 /// Handle a Handshake message received from a peer.
 ///
-/// Compares the peer's confirmed tip height with our own. If our
-/// local chain is behind the peer, sends a getheaders request to
-/// begin syncing. Otherwise does nothing.
+/// Compares the peer's confirmed tip height and hash with our own.
+/// Sends a getheaders request if our local chain is behind the peer,
+/// or if both are at the same height but on different tips (fork).
+/// Does nothing when the local chain is ahead or already agrees.
 pub async fn handle_handshake<C: Send + Sync>(
     handshake_data: HandshakeData,
     peer: libp2p::PeerId,
@@ -45,22 +46,40 @@ pub async fn handle_handshake<C: Send + Sync>(
         })?
         .unwrap_or(0);
 
+    let local_tip_hash = chain_store_handle.get_chain_tip().map_err(|error| {
+        error!("Failed to read chain tip from store: {error}");
+        error
+    })?;
+
     info!(
-        "Received Handshake from peer {peer}: peer_height={}, local_height={local_tip_height}",
-        handshake_data.tip_height
+        "Received Handshake from peer {peer}: peer_height={}, peer_hash={}, local_height={local_tip_height}, local_hash={local_tip_hash}",
+        handshake_data.tip_height, handshake_data.tip_hash
     );
 
-    if local_tip_height < handshake_data.tip_height {
+    let needs_sync = if local_tip_height < handshake_data.tip_height {
         debug!(
             "Local chain behind peer {peer} ({local_tip_height} < {}), sending getheaders",
             handshake_data.tip_height
         );
-        send_getheaders(peer, chain_store_handle, swarm_tx).await?;
+        true
+    } else if local_tip_height == handshake_data.tip_height
+        && local_tip_hash != handshake_data.tip_hash
+    {
+        debug!(
+            "Same height but different tip hash with peer {peer} (local={local_tip_hash}, peer={}), sending getheaders to resolve fork",
+            handshake_data.tip_hash
+        );
+        true
     } else {
         debug!(
             "Local chain at or ahead of peer {peer} ({local_tip_height} >= {}), no sync needed",
             handshake_data.tip_height
         );
+        false
+    };
+
+    if needs_sync {
+        send_getheaders(peer, chain_store_handle, swarm_tx).await?;
     }
 
     Ok(())
@@ -82,10 +101,19 @@ mod tests {
         let peer_id = libp2p::PeerId::random();
         let mut chain_store_handle = ChainStoreHandle::default();
 
+        let local_tip_hash =
+            BlockHash::from_str("00000000a3bbe4fd1da16a29dbdaba01cc35d6fc74ee17f794cf3aab94f7aaa0")
+                .unwrap();
+
         chain_store_handle
             .expect_get_tip_height()
             .times(1)
             .return_once(|| Ok(Some(5)));
+
+        chain_store_handle
+            .expect_get_chain_tip()
+            .times(1)
+            .return_once(move || Ok(local_tip_hash));
 
         let locator_hash =
             BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
@@ -121,10 +149,19 @@ mod tests {
         let peer_id = libp2p::PeerId::random();
         let mut chain_store_handle = ChainStoreHandle::default();
 
+        let local_tip_hash =
+            BlockHash::from_str("00000000a3bbe4fd1da16a29dbdaba01cc35d6fc74ee17f794cf3aab94f7aaa0")
+                .unwrap();
+
         chain_store_handle
             .expect_get_tip_height()
             .times(1)
             .return_once(|| Ok(Some(10)));
+
+        chain_store_handle
+            .expect_get_chain_tip()
+            .times(1)
+            .return_once(move || Ok(local_tip_hash));
 
         let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<u32>>(10);
 
@@ -142,28 +179,86 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_handshake_equal_height_no_message() {
+    async fn test_handle_handshake_equal_height_same_hash_no_message() {
         let peer_id = libp2p::PeerId::random();
         let mut chain_store_handle = ChainStoreHandle::default();
+
+        let shared_tip_hash =
+            BlockHash::from_str("00000000a3bbe4fd1da16a29dbdaba01cc35d6fc74ee17f794cf3aab94f7aaa0")
+                .unwrap();
 
         chain_store_handle
             .expect_get_tip_height()
             .times(1)
             .return_once(|| Ok(Some(10)));
 
+        chain_store_handle
+            .expect_get_chain_tip()
+            .times(1)
+            .return_once(move || Ok(shared_tip_hash));
+
         let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<u32>>(10);
 
         let handshake_data = HandshakeData {
             tip_height: 10,
-            tip_hash: BlockHash::all_zeros(),
+            tip_hash: shared_tip_hash,
         };
 
         let result = handle_handshake(handshake_data, peer_id, chain_store_handle, swarm_tx).await;
         assert!(result.is_ok());
         assert!(
             swarm_rx.try_recv().is_err(),
-            "No messages should be sent when heights are equal"
+            "No messages should be sent when heights and hashes are equal"
         );
+    }
+
+    #[tokio::test]
+    async fn test_handle_handshake_equal_height_different_hash_sends_getheaders() {
+        let peer_id = libp2p::PeerId::random();
+        let mut chain_store_handle = ChainStoreHandle::default();
+
+        let local_tip_hash =
+            BlockHash::from_str("00000000a3bbe4fd1da16a29dbdaba01cc35d6fc74ee17f794cf3aab94f7aaa0")
+                .unwrap();
+        let peer_tip_hash =
+            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+                .unwrap();
+
+        chain_store_handle
+            .expect_get_tip_height()
+            .times(1)
+            .return_once(|| Ok(Some(10)));
+
+        chain_store_handle
+            .expect_get_chain_tip()
+            .times(1)
+            .return_once(move || Ok(local_tip_hash));
+
+        let locator_hash = local_tip_hash;
+        chain_store_handle
+            .expect_build_locator()
+            .times(1)
+            .return_once(move || Ok(vec![locator_hash]));
+
+        let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<u32>>(10);
+
+        let handshake_data = HandshakeData {
+            tip_height: 10,
+            tip_hash: peer_tip_hash,
+        };
+
+        let result = handle_handshake(handshake_data, peer_id, chain_store_handle, swarm_tx).await;
+        assert!(result.is_ok());
+
+        let message = swarm_rx.recv().await.unwrap();
+        match message {
+            SwarmSend::Request(sent_peer, Message::GetShareHeaders(locator, stop_hash)) => {
+                assert_eq!(sent_peer, peer_id);
+                assert_eq!(locator, vec![locator_hash]);
+                assert_eq!(stop_hash, BlockHash::all_zeros());
+            }
+            _ => panic!("Expected SwarmSend::Request with GetShareHeaders"),
+        }
     }
 
     #[tokio::test]
@@ -179,6 +274,11 @@ mod tests {
             .expect_get_tip_height()
             .times(1)
             .return_once(|| Ok(Some(0)));
+
+        chain_store_handle
+            .expect_get_chain_tip()
+            .times(1)
+            .return_once(move || Ok(genesis_hash));
 
         chain_store_handle
             .expect_build_locator()
@@ -230,5 +330,32 @@ mod tests {
                 .to_string()
                 .contains("store unavailable")
         );
+    }
+
+    #[tokio::test]
+    async fn test_handle_handshake_chain_tip_error_propagates() {
+        let peer_id = libp2p::PeerId::random();
+        let mut chain_store_handle = ChainStoreHandle::default();
+
+        chain_store_handle
+            .expect_get_tip_height()
+            .times(1)
+            .return_once(|| Ok(Some(10)));
+
+        chain_store_handle
+            .expect_get_chain_tip()
+            .times(1)
+            .return_once(|| Err(StoreError::Database("corrupt tip".into())));
+
+        let (swarm_tx, _swarm_rx) = mpsc::channel::<SwarmSend<u32>>(10);
+
+        let handshake_data = HandshakeData {
+            tip_height: 10,
+            tip_hash: BlockHash::all_zeros(),
+        };
+
+        let result = handle_handshake(handshake_data, peer_id, chain_store_handle, swarm_tx).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("corrupt tip"));
     }
 }
