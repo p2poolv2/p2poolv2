@@ -24,7 +24,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use std::error::Error;
 use tokio::sync::mpsc;
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 
 /// Handle a Handshake message received from a peer.
 ///
@@ -37,11 +37,13 @@ pub async fn handle_handshake<C: Send + Sync>(
     chain_store_handle: ChainStoreHandle,
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let local_tip_height = match chain_store_handle.get_tip_height() {
-        Ok(Some(height)) => height,
-        Ok(None) => 0,
-        Err(_) => 0,
-    };
+    let local_tip_height = chain_store_handle
+        .get_tip_height()
+        .map_err(|error| {
+            error!("Failed to read tip height from store: {error}");
+            error
+        })?
+        .unwrap_or(0);
 
     info!(
         "Received Handshake from peer {peer}: peer_height={}, local_height={local_tip_height}",
@@ -69,6 +71,7 @@ mod tests {
     use super::*;
     use crate::node::SwarmSend;
     use crate::node::messages::Message;
+    use crate::store::writer::StoreError;
     use bitcoin::BlockHash;
     use bitcoin::hashes::Hash;
     use std::str::FromStr;
@@ -200,5 +203,32 @@ mod tests {
             }
             _ => panic!("Expected SwarmSend::Request with GetShareHeaders"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_handle_handshake_tip_height_error_propagates() {
+        let peer_id = libp2p::PeerId::random();
+        let mut chain_store_handle = ChainStoreHandle::default();
+
+        chain_store_handle
+            .expect_get_tip_height()
+            .times(1)
+            .return_once(|| Err(StoreError::Database("store unavailable".into())));
+
+        let (swarm_tx, _swarm_rx) = mpsc::channel::<SwarmSend<u32>>(10);
+
+        let handshake_data = HandshakeData {
+            tip_height: 10,
+            tip_hash: BlockHash::all_zeros(),
+        };
+
+        let result = handle_handshake(handshake_data, peer_id, chain_store_handle, swarm_tx).await;
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("store unavailable")
+        );
     }
 }
