@@ -99,8 +99,7 @@ mod tests {
             tip_hash: BlockHash::all_zeros(),
         };
 
-        let result =
-            handle_handshake(handshake_data, peer_id, chain_store_handle, swarm_tx).await;
+        let result = handle_handshake(handshake_data, peer_id, chain_store_handle, swarm_tx).await;
         assert!(result.is_ok());
 
         let message = swarm_rx.recv().await.unwrap();
@@ -131,8 +130,7 @@ mod tests {
             tip_hash: BlockHash::all_zeros(),
         };
 
-        let result =
-            handle_handshake(handshake_data, peer_id, chain_store_handle, swarm_tx).await;
+        let result = handle_handshake(handshake_data, peer_id, chain_store_handle, swarm_tx).await;
         assert!(result.is_ok());
         assert!(
             swarm_rx.try_recv().is_err(),
@@ -157,8 +155,7 @@ mod tests {
             tip_hash: BlockHash::all_zeros(),
         };
 
-        let result =
-            handle_handshake(handshake_data, peer_id, chain_store_handle, swarm_tx).await;
+        let result = handle_handshake(handshake_data, peer_id, chain_store_handle, swarm_tx).await;
         assert!(result.is_ok());
         assert!(
             swarm_rx.try_recv().is_err(),
@@ -192,8 +189,7 @@ mod tests {
             tip_hash: BlockHash::all_zeros(),
         };
 
-        let result =
-            handle_handshake(handshake_data, peer_id, chain_store_handle, swarm_tx).await;
+        let result = handle_handshake(handshake_data, peer_id, chain_store_handle, swarm_tx).await;
         assert!(result.is_ok());
 
         let message = swarm_rx.recv().await.unwrap();

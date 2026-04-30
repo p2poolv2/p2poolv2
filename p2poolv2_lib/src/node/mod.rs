@@ -29,7 +29,7 @@ use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::monitoring_events::{MonitoringEvent, MonitoringEventSender, PeerResponse, PeerStatus};
 use crate::node::messages::Message;
 use crate::node::p2p_message_handlers::receivers::block_receiver::BlockReceiverHandle;
-use crate::node::p2p_message_handlers::senders::send_getheaders;
+use crate::node::p2p_message_handlers::senders::send_handshake;
 use crate::node::request_response_handler::RequestResponseHandler;
 use crate::node::request_response_handler::block_fetcher::BlockFetcherHandle;
 use crate::node::validation_worker::ValidationSender;
@@ -310,7 +310,7 @@ impl Node {
                         if !self.connected_dial_addresses.contains(address) {
                             self.connected_dial_addresses.push(address.clone());
                         }
-                        if let Err(e) = send_getheaders(
+                        if let Err(error) = send_handshake(
                             peer_id,
                             self.chain_store_handle.clone(),
                             self.swarm_tx.clone(),
@@ -318,15 +318,34 @@ impl Node {
                         .await
                         {
                             error!(
-                                "Failed to handle outbound connection to peer {}: {}",
-                                peer_id, e
+                                "Failed to send handshake to outbound peer {}: {}",
+                                peer_id, error
                             );
                         } else {
-                            info!("Outbound connection established to peer: {}", peer_id);
+                            info!(
+                                "Outbound connection established, handshake sent to peer: {}",
+                                peer_id
+                            );
                         }
                     }
                     libp2p::core::ConnectedPoint::Listener { .. } => {
-                        info!("Inbound connection established from peer: {peer_id}");
+                        if let Err(error) = send_handshake(
+                            peer_id,
+                            self.chain_store_handle.clone(),
+                            self.swarm_tx.clone(),
+                        )
+                        .await
+                        {
+                            error!(
+                                "Failed to send handshake to inbound peer {}: {}",
+                                peer_id, error
+                            );
+                        } else {
+                            info!(
+                                "Inbound connection established, handshake sent to peer: {}",
+                                peer_id
+                            );
+                        }
                     }
                 }
                 self.request_response_handler.add_peer(peer_id);
