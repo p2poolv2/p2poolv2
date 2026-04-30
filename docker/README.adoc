@@ -4,7 +4,9 @@ All docker commands are run from the `docker` directory.
 
 [,shell]
 ----
-cp .env.sample .env
+just setup-dev
+# Edit the .env to your preferences
+$EDITOR .env
 ----
 
 Edit the .env file for your choice of p2poolv2 ports etc.
@@ -50,4 +52,32 @@ To stop an additional node:
 [,shell]
 ----
 docker compose -f docker-compose.node.yml -p node2 down
+----
+
+== Building with Podman
+
+If you are using Podman instead of Docker, an extra step is required to build
+the P2Poolv2 container image. This is due to a limitation with Dockerfile
+syntax support in Podman. See the related issue: [https://github.com/containers/podman/issues/26458[containers/podman#26458].
+
+First, start a BuildKit daemon:
+
+[,shell]
+----
+podman run -d --name buildkitd --privileged docker.io/moby/buildkit:latest
+----
+
+Then build the image from the project root:
+
+[,shell]
+----
+buildctl \
+  --addr=podman-container://buildkitd \
+  build \
+  --frontend=gateway.v0 \
+  --opt source=docker/dockerfile:1.20 \
+  --local context=. \
+  --local dockerfile=./docker/p2poolv2/ \
+  --output "type=docker,name=p2poolv2:latest" \
+  | podman load
 ----
