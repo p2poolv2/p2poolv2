@@ -48,6 +48,7 @@ impl Store {
         let mut metadata = match self.get_block_metadata(&blockhash) {
             Ok(existing) => {
                 debug!("Block {blockhash} already has metadata, skipping header setup");
+                self.repair_height_index_if_needed(header, &blockhash, &existing, batch)?;
                 existing
             }
             Err(_) => {
@@ -158,6 +159,38 @@ impl Store {
         )?;
         debug!("new candidate height after reorg + forward walk {final_height}");
         Ok(Some((final_height, full_chain)))
+    }
+
+    /// Ensure the height-to-blockhash index contains this block.
+    ///
+    /// When a block's metadata already exists (e.g. from a previous
+    /// gossip or partial sync), `initialise_new_header` is skipped.
+    /// This means `set_height_to_blockhash` was never called for this
+    /// height, leaving the block invisible to height-based scans such
+    /// as `get_candidate_blocks_missing_data`. This function checks
+    /// whether the block appears in the height index at its expected
+    /// height and adds it if missing.
+    fn repair_height_index_if_needed(
+        &self,
+        header: &ShareHeader,
+        blockhash: &BlockHash,
+        metadata: &BlockMetadata,
+        batch: &mut rocksdb::WriteBatch,
+    ) -> Result<(), StoreError> {
+        let expected_height = match metadata.expected_height {
+            Some(height) => height,
+            None => return Ok(()),
+        };
+
+        let existing_hashes = self.get_blockhashes_for_height(expected_height);
+        if existing_hashes.contains(blockhash) {
+            return Ok(());
+        }
+
+        debug!("Repairing missing height index entry for {blockhash} at height {expected_height}");
+        self.add_share_header(header, batch)?;
+        self.set_height_to_blockhash(blockhash, expected_height, batch)?;
+        Ok(())
     }
 
     /// Persist a new header and initialise its metadata.
@@ -769,5 +802,143 @@ mod tests {
             !uncles.contains(&share1.block_hash()),
             "confirmed share1 must not appear as uncle after re-organise"
         );
+    }
+
+    /// When a block has metadata but no height index entry,
+    /// organise_header should repair the height index so that
+    /// get_candidate_blocks_missing_data can find it.
+    #[test]
+    fn test_organise_header_repairs_missing_height_index() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+
+        // Simulate a previous partial sync: create metadata and header
+        // but do NOT call set_height_to_blockhash, so the height index
+        // is missing.
+        let share_work = share.header.get_work();
+        let genesis_metadata = store.get_block_metadata(&genesis.block_hash()).unwrap();
+        let chain_work = genesis_metadata.chain_work + share_work;
+        let metadata = BlockMetadata {
+            expected_height: Some(1),
+            chain_work,
+            status: Status::HeaderValid,
+        };
+        let mut batch = Store::get_write_batch();
+        store.add_share_header(&share.header, &mut batch).unwrap();
+        store
+            .update_block_metadata(&share.block_hash(), &metadata, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Height index should be empty at height 1 for this block
+        let hashes_before = store.get_blockhashes_for_height(1);
+        assert!(
+            !hashes_before.contains(&share.block_hash()),
+            "height index should not contain the share before repair"
+        );
+
+        // organise_header should repair the missing height index entry
+        let mut batch = Store::get_write_batch();
+        store.organise_header(&share.header, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Height index should now contain the share at height 1
+        let hashes_after = store.get_blockhashes_for_height(1);
+        assert!(
+            hashes_after.contains(&share.block_hash()),
+            "height index should contain the share after repair"
+        );
+    }
+
+    /// When a block already has metadata AND a height index entry,
+    /// organise_header should not duplicate the entry.
+    #[test]
+    fn test_organise_header_does_not_duplicate_height_index() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+
+        // First organise creates metadata and height index
+        let mut batch = Store::get_write_batch();
+        store.organise_header(&share.header, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let hashes_after_first = store.get_blockhashes_for_height(1);
+        let count_before = hashes_after_first
+            .iter()
+            .filter(|h| **h == share.block_hash())
+            .count();
+        assert_eq!(count_before, 1);
+
+        // Second organise should not add a duplicate height entry
+        let mut batch = Store::get_write_batch();
+        store.organise_header(&share.header, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let hashes_after_second = store.get_blockhashes_for_height(1);
+        let count_after = hashes_after_second
+            .iter()
+            .filter(|h| **h == share.block_hash())
+            .count();
+        assert_eq!(
+            count_after, 1,
+            "height index should contain exactly one entry, not duplicated"
+        );
+    }
+
+    /// When a block has metadata with expected_height=None,
+    /// repair_height_index_if_needed should be a no-op.
+    #[test]
+    fn test_organise_header_skips_repair_when_height_is_none() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+
+        // Create metadata with expected_height=None
+        let metadata = BlockMetadata {
+            expected_height: None,
+            chain_work: share.header.get_work(),
+            status: Status::HeaderValid,
+        };
+        let mut batch = Store::get_write_batch();
+        store.add_share_header(&share.header, &mut batch).unwrap();
+        store
+            .update_block_metadata(&share.block_hash(), &metadata, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // organise_header should not panic or error
+        let mut batch = Store::get_write_batch();
+        let result = store.organise_header(&share.header, &mut batch);
+        store.commit_batch(batch).unwrap();
+        assert!(result.is_ok());
     }
 }
