@@ -15,7 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::node::SwarmSend;
-use crate::node::messages::HandshakeData;
+use crate::node::messages::{HandshakeData, Message};
 use crate::node::p2p_message_handlers::senders::send_getheaders;
 #[cfg(test)]
 #[mockall_double::double]
@@ -28,7 +28,8 @@ use tracing::{debug, error, info};
 
 /// Handle a Handshake message received from a peer.
 ///
-/// Compares the peer's confirmed tip height and hash with our own.
+/// Sends an Ack response on the request-response channel, then
+/// compares the peer's confirmed tip height and hash with our own.
 /// Sends a getheaders request if our local chain is behind the peer,
 /// or if both are at the same height but on different tips (fork).
 /// Does nothing when the local chain is ahead or already agrees.
@@ -36,8 +37,17 @@ pub async fn handle_handshake<C: Send + Sync>(
     handshake_data: HandshakeData,
     peer: libp2p::PeerId,
     chain_store_handle: ChainStoreHandle,
+    response_channel: C,
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    if let Err(err) = swarm_tx
+        .send(SwarmSend::Response(response_channel, Message::Ack))
+        .await
+    {
+        error!("Failed to send handshake ack: {}", err);
+        return Err(format!("Failed to send handshake ack: {err}").into());
+    }
+
     let local_tip_height = chain_store_handle
         .get_tip_height()
         .map_err(|error| {
@@ -97,7 +107,7 @@ mod tests {
     use tokio::sync::mpsc;
 
     #[tokio::test]
-    async fn test_handle_handshake_local_behind_sends_getheaders() {
+    async fn test_handle_handshake_local_behind_sends_ack_and_getheaders() {
         let peer_id = libp2p::PeerId::random();
         let mut chain_store_handle = ChainStoreHandle::default();
 
@@ -124,14 +134,30 @@ mod tests {
             .return_once(move || Ok(vec![locator_hash]));
 
         let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<u32>>(10);
+        let response_channel = 1u32;
 
         let handshake_data = HandshakeData {
             tip_height: 10,
             tip_hash: BlockHash::all_zeros(),
         };
 
-        let result = handle_handshake(handshake_data, peer_id, chain_store_handle, swarm_tx).await;
+        let result = handle_handshake(
+            handshake_data,
+            peer_id,
+            chain_store_handle,
+            response_channel,
+            swarm_tx,
+        )
+        .await;
         assert!(result.is_ok());
+
+        let ack_message = swarm_rx.recv().await.unwrap();
+        match ack_message {
+            SwarmSend::Response(channel, Message::Ack) => {
+                assert_eq!(channel, 1u32);
+            }
+            _ => panic!("Expected SwarmSend::Response with Ack"),
+        }
 
         let message = swarm_rx.recv().await.unwrap();
         match message {
@@ -145,7 +171,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_handshake_local_ahead_no_message() {
+    async fn test_handle_handshake_local_ahead_sends_only_ack() {
         let peer_id = libp2p::PeerId::random();
         let mut chain_store_handle = ChainStoreHandle::default();
 
@@ -164,22 +190,39 @@ mod tests {
             .return_once(move || Ok(local_tip_hash));
 
         let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<u32>>(10);
+        let response_channel = 2u32;
 
         let handshake_data = HandshakeData {
             tip_height: 5,
             tip_hash: BlockHash::all_zeros(),
         };
 
-        let result = handle_handshake(handshake_data, peer_id, chain_store_handle, swarm_tx).await;
+        let result = handle_handshake(
+            handshake_data,
+            peer_id,
+            chain_store_handle,
+            response_channel,
+            swarm_tx,
+        )
+        .await;
         assert!(result.is_ok());
+
+        let ack_message = swarm_rx.recv().await.unwrap();
+        match ack_message {
+            SwarmSend::Response(channel, Message::Ack) => {
+                assert_eq!(channel, 2u32);
+            }
+            _ => panic!("Expected SwarmSend::Response with Ack"),
+        }
+
         assert!(
             swarm_rx.try_recv().is_err(),
-            "No messages should be sent when local is ahead"
+            "No additional messages should be sent when local is ahead"
         );
     }
 
     #[tokio::test]
-    async fn test_handle_handshake_equal_height_same_hash_no_message() {
+    async fn test_handle_handshake_equal_height_same_hash_sends_only_ack() {
         let peer_id = libp2p::PeerId::random();
         let mut chain_store_handle = ChainStoreHandle::default();
 
@@ -198,14 +241,29 @@ mod tests {
             .return_once(move || Ok(shared_tip_hash));
 
         let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<u32>>(10);
+        let response_channel = 3u32;
 
         let handshake_data = HandshakeData {
             tip_height: 10,
             tip_hash: shared_tip_hash,
         };
 
-        let result = handle_handshake(handshake_data, peer_id, chain_store_handle, swarm_tx).await;
+        let result = handle_handshake(
+            handshake_data,
+            peer_id,
+            chain_store_handle,
+            response_channel,
+            swarm_tx,
+        )
+        .await;
         assert!(result.is_ok());
+
+        let ack_message = swarm_rx.recv().await.unwrap();
+        match ack_message {
+            SwarmSend::Response(_, Message::Ack) => {}
+            _ => panic!("Expected SwarmSend::Response with Ack"),
+        }
+
         assert!(
             swarm_rx.try_recv().is_err(),
             "No messages should be sent when heights and hashes are equal"
@@ -213,7 +271,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_handshake_equal_height_different_hash_sends_getheaders() {
+    async fn test_handle_handshake_equal_height_different_hash_sends_ack_and_getheaders() {
         let peer_id = libp2p::PeerId::random();
         let mut chain_store_handle = ChainStoreHandle::default();
 
@@ -241,14 +299,28 @@ mod tests {
             .return_once(move || Ok(vec![locator_hash]));
 
         let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<u32>>(10);
+        let response_channel = 5u32;
 
         let handshake_data = HandshakeData {
             tip_height: 10,
             tip_hash: peer_tip_hash,
         };
 
-        let result = handle_handshake(handshake_data, peer_id, chain_store_handle, swarm_tx).await;
+        let result = handle_handshake(
+            handshake_data,
+            peer_id,
+            chain_store_handle,
+            response_channel,
+            swarm_tx,
+        )
+        .await;
         assert!(result.is_ok());
+
+        let ack_message = swarm_rx.recv().await.unwrap();
+        match ack_message {
+            SwarmSend::Response(_, Message::Ack) => {}
+            _ => panic!("Expected SwarmSend::Response with Ack"),
+        }
 
         let message = swarm_rx.recv().await.unwrap();
         match message {
@@ -262,7 +334,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_handshake_fresh_node_sends_getheaders() {
+    async fn test_handle_handshake_fresh_node_sends_ack_and_getheaders() {
         let peer_id = libp2p::PeerId::random();
         let mut chain_store_handle = ChainStoreHandle::default();
 
@@ -286,14 +358,28 @@ mod tests {
             .return_once(move || Ok(vec![genesis_hash]));
 
         let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<u32>>(10);
+        let response_channel = 4u32;
 
         let handshake_data = HandshakeData {
             tip_height: 5,
             tip_hash: BlockHash::all_zeros(),
         };
 
-        let result = handle_handshake(handshake_data, peer_id, chain_store_handle, swarm_tx).await;
+        let result = handle_handshake(
+            handshake_data,
+            peer_id,
+            chain_store_handle,
+            response_channel,
+            swarm_tx,
+        )
+        .await;
         assert!(result.is_ok());
+
+        let ack_message = swarm_rx.recv().await.unwrap();
+        match ack_message {
+            SwarmSend::Response(_, Message::Ack) => {}
+            _ => panic!("Expected SwarmSend::Response with Ack"),
+        }
 
         let message = swarm_rx.recv().await.unwrap();
         match message {
@@ -315,14 +401,22 @@ mod tests {
             .times(1)
             .return_once(|| Err(StoreError::Database("store unavailable".into())));
 
-        let (swarm_tx, _swarm_rx) = mpsc::channel::<SwarmSend<u32>>(10);
+        let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<u32>>(10);
+        let response_channel = 6u32;
 
         let handshake_data = HandshakeData {
             tip_height: 10,
             tip_hash: BlockHash::all_zeros(),
         };
 
-        let result = handle_handshake(handshake_data, peer_id, chain_store_handle, swarm_tx).await;
+        let result = handle_handshake(
+            handshake_data,
+            peer_id,
+            chain_store_handle,
+            response_channel,
+            swarm_tx,
+        )
+        .await;
         assert!(result.is_err());
         assert!(
             result
@@ -330,6 +424,12 @@ mod tests {
                 .to_string()
                 .contains("store unavailable")
         );
+
+        let ack_message = swarm_rx.recv().await.unwrap();
+        match ack_message {
+            SwarmSend::Response(_, Message::Ack) => {}
+            _ => panic!("Expected SwarmSend::Response with Ack"),
+        }
     }
 
     #[tokio::test]
@@ -347,15 +447,29 @@ mod tests {
             .times(1)
             .return_once(|| Err(StoreError::Database("corrupt tip".into())));
 
-        let (swarm_tx, _swarm_rx) = mpsc::channel::<SwarmSend<u32>>(10);
+        let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<u32>>(10);
+        let response_channel = 7u32;
 
         let handshake_data = HandshakeData {
             tip_height: 10,
             tip_hash: BlockHash::all_zeros(),
         };
 
-        let result = handle_handshake(handshake_data, peer_id, chain_store_handle, swarm_tx).await;
+        let result = handle_handshake(
+            handshake_data,
+            peer_id,
+            chain_store_handle,
+            response_channel,
+            swarm_tx,
+        )
+        .await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("corrupt tip"));
+
+        let ack_message = swarm_rx.recv().await.unwrap();
+        match ack_message {
+            SwarmSend::Response(_, Message::Ack) => {}
+            _ => panic!("Expected SwarmSend::Response with Ack"),
+        }
     }
 }

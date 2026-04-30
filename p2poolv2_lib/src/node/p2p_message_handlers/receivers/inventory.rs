@@ -15,7 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::node::SwarmSend;
-use crate::node::messages::InventoryMessage;
+use crate::node::messages::{InventoryMessage, Message};
 use crate::node::p2p_message_handlers::senders::send_getheaders;
 #[cfg(test)]
 #[mockall_double::double]
@@ -24,11 +24,12 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use std::error::Error;
 use tokio::sync::mpsc;
-use tracing::debug;
+use tracing::{debug, error};
 
 /// Handle an Inventory message received from a peer.
 ///
-/// When the candidate chain is current, responds to block
+/// Sends an Ack response on the request-response channel, then
+/// when the candidate chain is current, responds to block
 /// announcements by sending a getheaders request to sync any missing
 /// headers from the announcing peer. The headers-first pipeline then
 /// fetches the actual block data.
@@ -40,8 +41,17 @@ pub async fn handle_inventory<C: Send + Sync>(
     inventory: InventoryMessage,
     peer: libp2p::PeerId,
     chain_store_handle: ChainStoreHandle,
+    response_channel: C,
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    if let Err(err) = swarm_tx
+        .send(SwarmSend::Response(response_channel, Message::Ack))
+        .await
+    {
+        error!("Failed to send inventory ack: {}", err);
+        return Err(format!("Failed to send inventory ack: {err}").into());
+    }
+
     debug!("Received Inv: {:?}", inventory);
 
     match inventory {
@@ -88,7 +98,7 @@ mod tests {
     use tokio::sync::mpsc;
 
     #[tokio::test]
-    async fn test_handle_inventory_sends_getheaders_when_current() {
+    async fn test_handle_inventory_sends_ack_and_getheaders_when_current() {
         let mut chain_store_handle = ChainStoreHandle::default();
         let peer_id = libp2p::PeerId::random();
 
@@ -108,11 +118,27 @@ mod tests {
             .return_once(|| Ok(vec![BlockHash::all_zeros()]));
 
         let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<u32>>(10);
+        let response_channel = 1u32;
 
         let inventory = InventoryMessage::BlockHashes(blockhashes);
-        let result = handle_inventory(inventory, peer_id, chain_store_handle, swarm_tx).await;
+        let result = handle_inventory(
+            inventory,
+            peer_id,
+            chain_store_handle,
+            response_channel,
+            swarm_tx,
+        )
+        .await;
 
         assert!(result.is_ok(), "handle_inventory should return Ok");
+
+        let ack_message = swarm_rx.recv().await.unwrap();
+        match ack_message {
+            SwarmSend::Response(channel, Message::Ack) => {
+                assert_eq!(channel, 1u32);
+            }
+            _ => panic!("Expected SwarmSend::Response with Ack"),
+        }
 
         let message = swarm_rx.recv().await.unwrap();
         match message {
@@ -131,7 +157,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_inventory_ignored_when_not_current() {
+    async fn test_handle_inventory_sends_ack_when_not_current() {
         let mut chain_store_handle = ChainStoreHandle::default();
         let peer_id = libp2p::PeerId::random();
 
@@ -141,19 +167,34 @@ mod tests {
         chain_store_handle.expect_is_current().returning(|| false);
 
         let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<u32>>(10);
+        let response_channel = 2u32;
 
         let inventory = InventoryMessage::BlockHashes(vec![block_hash1]);
-        let result = handle_inventory(inventory, peer_id, chain_store_handle, swarm_tx).await;
+        let result = handle_inventory(
+            inventory,
+            peer_id,
+            chain_store_handle,
+            response_channel,
+            swarm_tx,
+        )
+        .await;
 
         assert!(result.is_ok());
+
+        let ack_message = swarm_rx.recv().await.unwrap();
+        match ack_message {
+            SwarmSend::Response(_, Message::Ack) => {}
+            _ => panic!("Expected SwarmSend::Response with Ack"),
+        }
+
         assert!(
             swarm_rx.try_recv().is_err(),
-            "No messages should be sent when chain is not current"
+            "No additional messages should be sent when chain is not current"
         );
     }
 
     #[tokio::test]
-    async fn test_handle_inventory_no_missing_blocks() {
+    async fn test_handle_inventory_sends_ack_when_no_missing_blocks() {
         let mut chain_store_handle = ChainStoreHandle::default();
         let peer_id = libp2p::PeerId::random();
 
@@ -166,23 +207,39 @@ mod tests {
             .returning(|_| Vec::with_capacity(0));
 
         let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<u32>>(10);
+        let response_channel = 3u32;
 
         let inventory = InventoryMessage::BlockHashes(vec![block_hash1]);
-        let result = handle_inventory(inventory, peer_id, chain_store_handle, swarm_tx).await;
+        let result = handle_inventory(
+            inventory,
+            peer_id,
+            chain_store_handle,
+            response_channel,
+            swarm_tx,
+        )
+        .await;
 
         assert!(result.is_ok());
+
+        let ack_message = swarm_rx.recv().await.unwrap();
+        match ack_message {
+            SwarmSend::Response(_, Message::Ack) => {}
+            _ => panic!("Expected SwarmSend::Response with Ack"),
+        }
+
         assert!(
             swarm_rx.try_recv().is_err(),
-            "No messages should be sent when no blocks are missing"
+            "No additional messages should be sent when no blocks are missing"
         );
     }
 
     #[tokio::test]
-    async fn test_handle_inventory_transaction_hashes() {
+    async fn test_handle_inventory_transaction_hashes_sends_ack() {
         let chain_store_handle = ChainStoreHandle::default();
         let peer_id = libp2p::PeerId::random();
 
         let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<u32>>(10);
+        let response_channel = 4u32;
 
         let tx_hashes = vec![
             "0000000000000000000000000000000000000000000000000000000000000001"
@@ -191,12 +248,26 @@ mod tests {
         ];
         let inventory =
             InventoryMessage::TransactionHashes(crate::shares::share_block::Txids(tx_hashes));
-        let result = handle_inventory(inventory, peer_id, chain_store_handle, swarm_tx).await;
+        let result = handle_inventory(
+            inventory,
+            peer_id,
+            chain_store_handle,
+            response_channel,
+            swarm_tx,
+        )
+        .await;
 
         assert!(result.is_ok());
+
+        let ack_message = swarm_rx.recv().await.unwrap();
+        match ack_message {
+            SwarmSend::Response(_, Message::Ack) => {}
+            _ => panic!("Expected SwarmSend::Response with Ack"),
+        }
+
         assert!(
             swarm_rx.try_recv().is_err(),
-            "No messages should be sent for transaction inventory"
+            "No additional messages should be sent for transaction inventory"
         );
     }
 }

@@ -40,7 +40,7 @@ use receivers::share_headers::handle_share_headers;
 use std::error::Error;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 const MAX_HEADERS_IN_RESPONSE: usize = 2000;
 
@@ -71,7 +71,14 @@ pub async fn handle_request<C: Send + Sync, T: TimeProvider + Send + Sync>(
             .await
         }
         Message::Inventory(inventory) => {
-            handle_inventory(inventory, ctx.peer, ctx.chain_store_handle, ctx.swarm_tx).await
+            handle_inventory(
+                inventory,
+                ctx.peer,
+                ctx.chain_store_handle,
+                ctx.response_channel,
+                ctx.swarm_tx,
+            )
+            .await
         }
         Message::NotFound(_) => {
             info!("Received not found message");
@@ -104,6 +111,7 @@ pub async fn handle_request<C: Send + Sync, T: TimeProvider + Send + Sync>(
                 handshake_data,
                 ctx.peer,
                 ctx.chain_store_handle,
+                ctx.response_channel,
                 ctx.swarm_tx,
             )
             .await
@@ -180,6 +188,10 @@ pub async fn handle_response<C: Send + Sync>(
                 }
                 GetData::Txid(_) => {}
             }
+            Ok(())
+        }
+        Message::Ack => {
+            debug!("Received Ack response from peer: {}", peer);
             Ok(())
         }
         other => {
@@ -369,6 +381,11 @@ mod tests {
         let result = handle_request(ctx).await;
         assert!(result.is_ok());
 
+        if let Some(SwarmSend::Response(_, Message::Ack)) = swarm_rx.recv().await {
+        } else {
+            panic!("Expected SwarmSend::Response with Ack message");
+        }
+
         if let Some(SwarmSend::Request(sent_peer, Message::GetShareHeaders(_, _))) =
             swarm_rx.recv().await
         {
@@ -418,9 +435,14 @@ mod tests {
         let result = handle_request(ctx).await;
         assert!(result.is_ok());
 
+        if let Some(SwarmSend::Response(_, Message::Ack)) = swarm_rx.recv().await {
+        } else {
+            panic!("Expected SwarmSend::Response with Ack message");
+        }
+
         assert!(
             swarm_rx.try_recv().is_err(),
-            "No messages expected for TransactionHashes inventory"
+            "No additional messages expected for TransactionHashes inventory"
         );
     }
 

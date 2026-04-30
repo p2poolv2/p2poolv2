@@ -34,6 +34,7 @@ mod message_discriminants {
     pub const GET_DATA: u8 = 6;
     pub const TRANSACTION: u8 = 7;
     pub const HANDSHAKE: u8 = 8;
+    pub const ACK: u8 = 9;
 }
 
 /// InventoryMessage discriminants to determine the type of inventory message
@@ -73,6 +74,13 @@ pub enum Message {
     GetData(GetData),
     Transaction(bitcoin::Transaction),
     Handshake(HandshakeData),
+    /// Acknowledgment response for request-response messages that
+    /// sometimes do not need to send a meaningful return payload
+    /// (e.g. Handshake, Inventory). This is a stop gap solution to
+    /// avoiding timeout errors from libp2p and timeouts filling up
+    /// queues. Ideally we need to build our own stream protocol for
+    /// libp2p. Something, we don't want to take on now.
+    Ack,
 }
 
 /// Handshake data exchanged when a connection is established.
@@ -158,6 +166,7 @@ impl Message {
             Message::GetData(_) => "GetData",
             Message::Transaction(_) => "Transaction",
             Message::Handshake(_) => "Handshake",
+            Message::Ack => "Ack",
         }
     }
 }
@@ -265,6 +274,10 @@ impl Encodable for Message {
                 len += handshake_data.tip_hash.consensus_encode(w)?;
                 Ok(len)
             }
+            Message::Ack => {
+                let len = ACK.consensus_encode(w)?;
+                Ok(len)
+            }
         }
     }
 }
@@ -296,6 +309,7 @@ impl Decodable for Message {
                 tip_height: u32::consensus_decode(r)?,
                 tip_hash: BlockHash::consensus_decode(r)?,
             })),
+            ACK => Ok(Message::Ack),
             _ => Err(encode::Error::ParseFailed("Invalid Message discriminant")),
         }
     }
@@ -602,6 +616,7 @@ mod tests {
             GET_DATA,
             TRANSACTION,
             HANDSHAKE,
+            ACK,
         ];
 
         // Check all discriminants are unique
@@ -741,5 +756,15 @@ mod tests {
             }
             _ => panic!("Expected Handshake variant"),
         }
+    }
+
+    #[test]
+    fn test_ack_message_roundtrip() {
+        let msg = Message::Ack;
+        let mut encoded = Vec::new();
+        msg.consensus_encode(&mut encoded).unwrap();
+
+        let decoded = Message::consensus_decode(&mut &encoded[..]).unwrap();
+        assert_eq!(decoded, Message::Ack);
     }
 }
