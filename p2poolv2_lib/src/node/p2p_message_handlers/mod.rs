@@ -48,7 +48,7 @@ const MAX_HEADERS_IN_RESPONSE: usize = 2000;
 pub async fn handle_request<C: Send + Sync, T: TimeProvider + Send + Sync>(
     ctx: RequestContext<C, T>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    info!("Received request {} from peer: {}", ctx.request, ctx.peer);
+    debug!("Received request {} from peer: {}", ctx.request, ctx.peer);
     match ctx.request {
         Message::GetShareHeaders(block_hashes, stop_block_hash) => {
             handle_getheaders(
@@ -150,7 +150,7 @@ pub async fn handle_response<C: Send + Sync>(
     block_receiver_handle: BlockReceiverHandle,
     share_validator: Arc<dyn ShareValidator + Send + Sync>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    info!("Received response {} from peer: {}", response, peer);
+    debug!("Received response {} from peer: {}", response, peer);
     match response {
         Message::ShareHeaders(share_headers) => handle_share_headers(
             peer,
