@@ -27,6 +27,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ConfirmedHeaderResult;
+use crate::shares::share_block::ShareHeader;
 use bitcoin::Address;
 use bitcoin::BlockHash;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -731,9 +732,6 @@ fn resolve_uncle_entries(
     }
     entries
 }
-
-#[cfg(any(test, feature = "test-utils"))]
-use crate::shares::share_block::ShareHeader;
 
 #[cfg(any(test, feature = "test-utils"))]
 impl PplnsWindow {

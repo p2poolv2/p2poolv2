@@ -21,8 +21,6 @@ use crate::node::messages::{HandshakeData, Message};
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
-use bitcoin::BlockHash;
-use bitcoin::hashes::Hash;
 use std::error::Error;
 use tokio::sync::mpsc;
 use tracing::{debug, error};
@@ -36,16 +34,18 @@ pub async fn send_handshake<C>(
     chain_store_handle: ChainStoreHandle,
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let tip_height = match chain_store_handle.get_tip_height() {
-        Ok(Some(height)) => height,
-        Ok(None) => 0,
-        Err(_) => 0,
-    };
+    let tip_height = chain_store_handle
+        .get_tip_height()
+        .map_err(|error| {
+            error!("Failed to read tip height from store: {error}");
+            error
+        })?
+        .unwrap_or(0);
 
-    let tip_hash = match chain_store_handle.get_chain_tip() {
-        Ok(hash) => hash,
-        Err(_) => BlockHash::all_zeros(),
-    };
+    let tip_hash = chain_store_handle.get_chain_tip().map_err(|error| {
+        error!("Failed to read chain tip from store: {error}");
+        error
+    })?;
 
     let handshake_message = Message::Handshake(HandshakeData {
         tip_height,
@@ -68,6 +68,9 @@ pub async fn send_handshake<C>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::writer::StoreError;
+    use bitcoin::BlockHash;
+    use bitcoin::hashes::Hash;
     use std::str::FromStr;
     use tokio::sync::mpsc::channel;
 
@@ -172,5 +175,42 @@ mod tests {
                 .to_string()
                 .contains("Failed to send handshake")
         );
+    }
+
+    #[tokio::test]
+    async fn test_send_handshake_tip_height_error_propagates() {
+        let (swarm_tx, _swarm_rx) = channel::<SwarmSend<Message>>(1);
+        let peer_id = libp2p::PeerId::random();
+        let mut chain_store_handle = ChainStoreHandle::default();
+
+        chain_store_handle
+            .expect_get_tip_height()
+            .times(1)
+            .return_once(|| Err(StoreError::Database("disk failure".into())));
+
+        let result = send_handshake(peer_id, chain_store_handle, swarm_tx).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("disk failure"));
+    }
+
+    #[tokio::test]
+    async fn test_send_handshake_chain_tip_error_propagates() {
+        let (swarm_tx, _swarm_rx) = channel::<SwarmSend<Message>>(1);
+        let peer_id = libp2p::PeerId::random();
+        let mut chain_store_handle = ChainStoreHandle::default();
+
+        chain_store_handle
+            .expect_get_tip_height()
+            .times(1)
+            .return_once(|| Ok(Some(5)));
+
+        chain_store_handle
+            .expect_get_chain_tip()
+            .times(1)
+            .return_once(|| Err(StoreError::Database("corrupt store".into())));
+
+        let result = send_handshake(peer_id, chain_store_handle, swarm_tx).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("corrupt store"));
     }
 }
