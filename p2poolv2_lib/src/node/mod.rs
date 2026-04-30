@@ -151,6 +151,8 @@ impl Node {
             })
             .build();
 
+        info!("Local peer id: {}", swarm.local_peer_id());
+
         if !config.network.listen_address.is_empty() {
             match config.network.listen_address.parse() {
                 Ok(addr) => match swarm.listen_on(addr) {
