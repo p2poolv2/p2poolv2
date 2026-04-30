@@ -33,6 +33,7 @@ mod message_discriminants {
     pub const SHARE_BLOCK: u8 = 5;
     pub const GET_DATA: u8 = 6;
     pub const TRANSACTION: u8 = 7;
+    pub const HANDSHAKE: u8 = 8;
 }
 
 /// InventoryMessage discriminants to determine the type of inventory message
@@ -71,6 +72,16 @@ pub enum Message {
     ShareBlock(ShareBlock),
     GetData(GetData),
     Transaction(bitcoin::Transaction),
+    Handshake(HandshakeData),
+}
+
+/// Handshake data exchanged when a connection is established.
+/// Both peers send their confirmed tip height and hash so each
+/// side can determine whether it needs to fetch headers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HandshakeData {
+    pub tip_height: u32,
+    pub tip_hash: BlockHash,
 }
 
 /// A complete P2P network message with protocol framing
@@ -146,6 +157,7 @@ impl Message {
             Message::ShareBlock(_) => "ShareBlock",
             Message::GetData(_) => "GetData",
             Message::Transaction(_) => "Transaction",
+            Message::Handshake(_) => "Handshake",
         }
     }
 }
@@ -247,6 +259,12 @@ impl Encodable for Message {
                 len += tx.consensus_encode(w)?;
                 Ok(len)
             }
+            Message::Handshake(handshake_data) => {
+                let mut len = HANDSHAKE.consensus_encode(w)?;
+                len += handshake_data.tip_height.consensus_encode(w)?;
+                len += handshake_data.tip_hash.consensus_encode(w)?;
+                Ok(len)
+            }
         }
     }
 }
@@ -274,6 +292,10 @@ impl Decodable for Message {
             TRANSACTION => Ok(Message::Transaction(
                 bitcoin::Transaction::consensus_decode(r)?,
             )),
+            HANDSHAKE => Ok(Message::Handshake(HandshakeData {
+                tip_height: u32::consensus_decode(r)?,
+                tip_hash: BlockHash::consensus_decode(r)?,
+            })),
             _ => Err(encode::Error::ParseFailed("Invalid Message discriminant")),
         }
     }
@@ -579,6 +601,7 @@ mod tests {
             SHARE_BLOCK,
             GET_DATA,
             TRANSACTION,
+            HANDSHAKE,
         ];
 
         // Check all discriminants are unique
@@ -672,6 +695,51 @@ mod tests {
                 )
             }
             _ => panic!("Expected Txid variant"),
+        }
+    }
+
+    #[test]
+    fn test_handshake_message_roundtrip() {
+        let tip_hash =
+            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+                .unwrap();
+        let handshake_data = HandshakeData {
+            tip_height: 42,
+            tip_hash,
+        };
+
+        let msg = Message::Handshake(handshake_data.clone());
+        let mut encoded = Vec::new();
+        msg.consensus_encode(&mut encoded).unwrap();
+
+        let decoded = Message::consensus_decode(&mut &encoded[..]).unwrap();
+        match decoded {
+            Message::Handshake(decoded_data) => {
+                assert_eq!(decoded_data.tip_height, 42);
+                assert_eq!(decoded_data.tip_hash, tip_hash);
+            }
+            _ => panic!("Expected Handshake variant"),
+        }
+    }
+
+    #[test]
+    fn test_handshake_message_fresh_node_roundtrip() {
+        let handshake_data = HandshakeData {
+            tip_height: 0,
+            tip_hash: BlockHash::all_zeros(),
+        };
+
+        let msg = Message::Handshake(handshake_data);
+        let mut encoded = Vec::new();
+        msg.consensus_encode(&mut encoded).unwrap();
+
+        let decoded = Message::consensus_decode(&mut &encoded[..]).unwrap();
+        match decoded {
+            Message::Handshake(decoded_data) => {
+                assert_eq!(decoded_data.tip_height, 0);
+                assert_eq!(decoded_data.tip_hash, BlockHash::all_zeros());
+            }
+            _ => panic!("Expected Handshake variant"),
         }
     }
 }
