@@ -296,7 +296,6 @@ impl NodeActor {
             monitoring_event_sender,
             notify_tx,
             pplns_window.clone(),
-            validation_tx_for_worker.clone(),
             share_validator.clone(),
         );
         let organise_handle = tokio::spawn(organise_worker.run());

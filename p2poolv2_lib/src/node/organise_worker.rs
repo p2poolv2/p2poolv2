@@ -31,7 +31,6 @@ use crate::accounting::payout::sharechain_pplns::PplnsWindow;
 #[cfg(not(test))]
 use crate::accounting::payout::sharechain_pplns::PplnsWindow;
 use crate::monitoring_events::{MonitoringEvent, MonitoringEventSender};
-use crate::node::validation_worker::{ValidationEvent, ValidationSender};
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -42,7 +41,6 @@ use crate::shares::validation::ShareValidator;
 use crate::store::dag_store::ShareInfo;
 use crate::store::writer::StoreError;
 use crate::stratum::work::notify::{NotifyCmd, NotifySender};
-use bitcoin::BlockHash;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::{Arc, RwLock};
@@ -104,7 +102,6 @@ pub struct OrganiseWorker {
     monitoring_event_sender: MonitoringEventSender,
     notify_tx: NotifySender,
     pplns_window: Arc<RwLock<PplnsWindow>>,
-    validation_tx: ValidationSender,
     share_validator: Arc<dyn ShareValidator + Send + Sync>,
     /// Blocks whose parent height exceeds the confirmed tip, keyed by the
     /// parent's expected height. One block per height since the confirmed
@@ -120,7 +117,6 @@ impl OrganiseWorker {
         monitoring_event_sender: MonitoringEventSender,
         notify_tx: NotifySender,
         pplns_window: Arc<RwLock<PplnsWindow>>,
-        validation_tx: ValidationSender,
         share_validator: Arc<dyn ShareValidator + Send + Sync>,
     ) -> Self {
         Self {
@@ -129,7 +125,6 @@ impl OrganiseWorker {
             monitoring_event_sender,
             notify_tx,
             pplns_window,
-            validation_tx,
             share_validator,
             pending_blocks: BTreeMap::new(),
         }
@@ -237,12 +232,10 @@ impl OrganiseWorker {
         }
     }
 
-    /// Run post-promotion actions: update PPLNS, schedule dependents,
-    /// optionally send new notify, and emit a monitoring event.
+    /// Run post-promotion actions: update PPLNS, optionally send new
+    /// notify, and emit a monitoring event.
     async fn post_promote(&self, share_block: &ShareBlock, height: u32) {
-        let blockhash = share_block.block_hash();
         self.update_pplns_window();
-        self.schedule_dependents(&blockhash);
 
         match self.chain_store_handle.get_candidate_tip_height() {
             Ok(Some(candidate_tip_height)) if height >= candidate_tip_height => {
@@ -360,48 +353,6 @@ impl OrganiseWorker {
         }
     }
 
-    /// Schedule stored children and nephews for validation.
-    ///
-    /// Called after promote_block and PPLNS update so that dependents
-    /// validate against the freshly updated window.
-    fn schedule_dependents(&self, block_hash: &BlockHash) {
-        let mut dependent_hashes = Vec::with_capacity(4);
-
-        if let Ok(Some(children)) = self.chain_store_handle.get_children_blockhashes(block_hash) {
-            for child_hash in children {
-                if self.chain_store_handle.share_block_exists(&child_hash) {
-                    dependent_hashes.push(child_hash);
-                }
-            }
-        }
-
-        if let Some(nephews) = self.chain_store_handle.get_nephews(block_hash) {
-            for nephew_hash in nephews {
-                if self.chain_store_handle.share_block_exists(&nephew_hash) {
-                    dependent_hashes.push(nephew_hash);
-                }
-            }
-        }
-
-        for dependent_hash in dependent_hashes {
-            info!("Scheduling dependent {dependent_hash} for validation after {block_hash}");
-            match self
-                .validation_tx
-                .try_send(ValidationEvent::ValidateBlock(dependent_hash))
-            {
-                Ok(()) => {}
-                Err(mpsc::error::TrySendError::Full(_)) => {
-                    error!(
-                        "Validation channel full, dropping schedule for dependent {dependent_hash}"
-                    );
-                }
-                Err(mpsc::error::TrySendError::Closed(_)) => {
-                    error!("Validation channel closed, cannot schedule dependent {dependent_hash}");
-                }
-            }
-        }
-    }
-
     /// Send new notify message to workers after share chain is
     /// extended. This is important to keep uncles from being generated.
     ///
@@ -445,7 +396,6 @@ impl OrganiseWorker {
 mod tests {
     use super::*;
     use crate::monitoring_events::create_monitoring_event_channel;
-    use crate::node::validation_worker::create_validation_channel;
     use crate::shares::chain::chain_store_handle::MockChainStoreHandle;
     use crate::shares::validation::MockDefaultShareValidator;
     use crate::store::block_tx_metadata::BlockMetadata;
@@ -473,13 +423,6 @@ mod tests {
         Arc::new(mock_validator)
     }
 
-    /// Add mock expectations for schedule_dependents: no children, no nephews.
-    fn setup_no_dependents(mock: &mut MockChainStoreHandle) {
-        mock.expect_get_children_blockhashes()
-            .returning(|_| Ok(None));
-        mock.expect_get_nephews().returning(|_| None);
-    }
-
     #[tokio::test]
     async fn test_organise_worker_stops_on_channel_close() {
         let (_organise_tx, organise_rx) = create_organise_channel();
@@ -489,14 +432,12 @@ mod tests {
             .return_once(MockChainStoreHandle::new);
         let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
-        let (validation_tx, _validation_rx) = create_validation_channel();
         let worker = OrganiseWorker::new(
             organise_rx,
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
             create_test_pplns_window(),
-            validation_tx,
             stub_share_validator_with_success(),
         );
 
@@ -520,14 +461,12 @@ mod tests {
 
         let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
-        let (validation_tx, _validation_rx) = create_validation_channel();
         let worker = OrganiseWorker::new(
             organise_rx,
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
             create_test_pplns_window(),
-            validation_tx,
             stub_share_validator_with_success(),
         );
 
@@ -560,14 +499,12 @@ mod tests {
 
         let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
-        let (validation_tx, _validation_rx) = create_validation_channel();
         let worker = OrganiseWorker::new(
             organise_rx,
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
             create_test_pplns_window(),
-            validation_tx,
             stub_share_validator_with_success(),
         );
 
@@ -604,14 +541,12 @@ mod tests {
 
         let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
-        let (validation_tx, _validation_rx) = create_validation_channel();
         let worker = OrganiseWorker::new(
             organise_rx,
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
             create_test_pplns_window(),
-            validation_tx,
             share_validator,
         );
 
@@ -641,14 +576,12 @@ mod tests {
 
         let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
-        let (validation_tx, _validation_rx) = create_validation_channel();
         let worker = OrganiseWorker::new(
             organise_rx,
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
             create_test_pplns_window(),
-            validation_tx,
             stub_share_validator_with_success(),
         );
 
@@ -678,14 +611,12 @@ mod tests {
 
         let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
-        let (validation_tx, _validation_rx) = create_validation_channel();
         let worker = OrganiseWorker::new(
             rx,
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
             create_test_pplns_window(),
-            validation_tx,
             stub_share_validator_with_success(),
         );
 
@@ -722,18 +653,15 @@ mod tests {
         mock_chain_handle
             .expect_get_uncle_infos()
             .returning(|_| Vec::new());
-        setup_no_dependents(&mut mock_chain_handle);
 
         let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
         let (notify_tx, mut notify_rx) = create_test_notify_channel();
-        let (validation_tx, _validation_rx) = create_validation_channel();
         let worker = OrganiseWorker::new(
             organise_rx,
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
             create_test_pplns_window(),
-            validation_tx,
             stub_share_validator_with_success(),
         );
 
@@ -775,18 +703,15 @@ mod tests {
         mock_chain_handle
             .expect_get_uncle_infos()
             .returning(|_| Vec::new());
-        setup_no_dependents(&mut mock_chain_handle);
 
         let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
         let (notify_tx, mut notify_rx) = create_test_notify_channel();
-        let (validation_tx, _validation_rx) = create_validation_channel();
         let worker = OrganiseWorker::new(
             organise_rx,
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
             create_test_pplns_window(),
-            validation_tx,
             stub_share_validator_with_success(),
         );
 
@@ -801,73 +726,6 @@ mod tests {
 
         // No NewNotify should have been sent
         assert!(notify_rx.try_recv().is_err());
-    }
-
-    #[tokio::test]
-    async fn test_organise_worker_updates_pplns_and_schedules_dependents() {
-        let (organise_tx, organise_rx) = create_organise_channel();
-        let mut mock_chain_handle = MockChainStoreHandle::new();
-        mock_chain_handle
-            .expect_clone()
-            .return_once(MockChainStoreHandle::new);
-        mock_chain_handle
-            .expect_get_block_metadata()
-            .returning(|_| Err(StoreError::NotFound("not found".into())));
-        mock_chain_handle
-            .expect_get_tip_height()
-            .returning(|| Ok(None));
-        mock_chain_handle
-            .expect_promote_block()
-            .returning(|_| Ok(Some(5)));
-        mock_chain_handle
-            .expect_get_candidate_tip_height()
-            .returning(|| Ok(Some(5)));
-        mock_chain_handle
-            .expect_get_uncle_infos()
-            .returning(|_| Vec::new());
-
-        let child_hash = "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7"
-            .parse::<BlockHash>()
-            .unwrap();
-        mock_chain_handle
-            .expect_get_children_blockhashes()
-            .returning(move |_| Ok(Some(vec![child_hash])));
-        mock_chain_handle
-            .expect_share_block_exists()
-            .returning(|_| true);
-        mock_chain_handle.expect_get_nephews().returning(|_| None);
-
-        let mut mock_window = PplnsWindow::default();
-        mock_window.expect_update().returning(|_| Ok(true));
-        let pplns_window = Arc::new(RwLock::new(mock_window));
-
-        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
-        let (notify_tx, _notify_rx) = create_test_notify_channel();
-        let (validation_tx, mut validation_rx) = create_validation_channel();
-        let worker = OrganiseWorker::new(
-            organise_rx,
-            mock_chain_handle,
-            monitoring_tx,
-            notify_tx,
-            pplns_window,
-            validation_tx,
-            stub_share_validator_with_success(),
-        );
-
-        let share = crate::test_utils::TestShareBlockBuilder::new()
-            .nonce(0xe9695791)
-            .build();
-        organise_tx.send(OrganiseEvent::Block(share)).await.unwrap();
-        drop(organise_tx);
-
-        let result = worker.run().await;
-        assert!(result.is_ok());
-
-        // Verify the child was scheduled for validation
-        let event = validation_rx.try_recv();
-        assert!(event.is_ok());
-        let ValidationEvent::ValidateBlock(hash) = event.unwrap();
-        assert_eq!(hash, child_hash);
     }
 
     #[tokio::test]
@@ -893,14 +751,12 @@ mod tests {
 
         let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
-        let (validation_tx, _validation_rx) = create_validation_channel();
         let worker = OrganiseWorker::new(
             organise_rx,
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
             create_test_pplns_window(),
-            validation_tx,
             stub_share_validator_with_success(),
         );
 
@@ -942,18 +798,15 @@ mod tests {
         mock_chain_handle
             .expect_get_uncle_infos()
             .returning(|_| Vec::new());
-        setup_no_dependents(&mut mock_chain_handle);
 
         let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
-        let (validation_tx, _validation_rx) = create_validation_channel();
         let worker = OrganiseWorker::new(
             organise_rx,
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
             create_test_pplns_window(),
-            validation_tx,
             stub_share_validator_with_success(),
         );
 
@@ -1015,18 +868,15 @@ mod tests {
         mock_chain_handle
             .expect_get_uncle_infos()
             .returning(|_| Vec::new());
-        setup_no_dependents(&mut mock_chain_handle);
 
         let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
-        let (validation_tx, _validation_rx) = create_validation_channel();
         let worker = OrganiseWorker::new(
             organise_rx,
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
             create_test_pplns_window(),
-            validation_tx,
             stub_share_validator_with_success(),
         );
 
