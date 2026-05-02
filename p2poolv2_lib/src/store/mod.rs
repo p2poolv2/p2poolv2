@@ -330,7 +330,7 @@ impl Store {
     ///
     /// Computes height and chain_work from parent metadata, creates
     /// BlockMetadata, and updates the candidate chain.
-    /// Returns the new candidate height and chain if changed, or None.
+    /// Returns the new candidate height, or None.
     pub fn push_to_candidate_chain(&self, share: &ShareBlock) -> Result<Option<u32>, StoreError> {
         let mut batch = Store::get_write_batch();
         let result = self.organise_header(&share.header, &mut batch)?;

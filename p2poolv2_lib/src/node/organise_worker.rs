@@ -21,9 +21,7 @@
 //! tokio task, decoupled from share producers (emission worker, peer
 //! handler, future validation worker).
 //!
-//! After promoting a block to confirmed, updates the PplnsWindow cache
-//! and schedules stored children and nephews for validation so the
-//! chain advances with a fresh PPLNS state.
+//! After promoting a block to confirmed, updates the PplnsWindow cache.
 
 #[cfg(test)]
 #[mockall_double::double]
@@ -104,9 +102,9 @@ pub struct OrganiseWorker {
     pplns_window: Arc<RwLock<PplnsWindow>>,
     share_validator: Arc<dyn ShareValidator + Send + Sync>,
     /// Blocks whose parent height exceeds the confirmed tip, keyed by the
-    /// parent's expected height. One block per height since the confirmed
-    /// chain has exactly one block per height.
-    pending_blocks: BTreeMap<u32, ShareBlock>,
+    /// parent's expected height. Multiple blocks may share the same parent
+    /// height during forks or rapid sync.
+    pending_blocks: BTreeMap<u32, Vec<ShareBlock>>,
 }
 
 impl OrganiseWorker {
@@ -275,8 +273,10 @@ impl OrganiseWorker {
     /// Insert a block into the pending buffer, keyed by its parent height.
     ///
     /// Drops the block with an error log if the buffer is at capacity.
+    /// The capacity check counts total blocks across all heights.
     fn buffer_block(&mut self, parent_height: u32, share_block: ShareBlock) {
-        if self.pending_blocks.len() >= PENDING_BLOCKS_CAPACITY {
+        let total_blocks: usize = self.pending_blocks.values().map(|v| v.len()).sum();
+        if total_blocks >= PENDING_BLOCKS_CAPACITY {
             error!(
                 "Pending block buffer full ({PENDING_BLOCKS_CAPACITY}), dropping block {}",
                 share_block.block_hash()
@@ -287,7 +287,10 @@ impl OrganiseWorker {
             "Buffering block {} at parent height {parent_height} (confirmed tip not yet reached)",
             share_block.block_hash()
         );
-        self.pending_blocks.insert(parent_height, share_block);
+        self.pending_blocks
+            .entry(parent_height)
+            .or_insert_with(|| Vec::with_capacity(2))
+            .push(share_block);
     }
 
     /// Process buffered blocks whose parent height is now at or below the
@@ -318,17 +321,19 @@ impl OrganiseWorker {
                 return Ok(());
             }
 
+            let total_processable: usize = processable.values().map(|v| v.len()).sum();
             info!(
-                "Draining {} buffered blocks with parent height <= confirmed tip {confirmed_tip}",
-                processable.len()
+                "Draining {total_processable} buffered blocks with parent height <= confirmed tip {confirmed_tip}",
             );
 
             let mut promoted_any = false;
-            for (_parent_height, share_block) in processable {
-                let promoted_height = self.validate_and_promote_block(&share_block).await?;
-                if let Some(height) = promoted_height {
-                    self.post_promote(&share_block, height).await;
-                    promoted_any = true;
+            for (_parent_height, blocks) in processable {
+                for share_block in blocks {
+                    let promoted_height = self.validate_and_promote_block(&share_block).await?;
+                    if let Some(height) = promoted_height {
+                        self.post_promote(&share_block, height).await;
+                        promoted_any = true;
+                    }
                 }
             }
 
@@ -904,5 +909,116 @@ mod tests {
 
         // promote_block was called at least twice: once for B, once for
         // drained A. The mock allows unlimited calls.
+    }
+
+    #[tokio::test]
+    async fn test_buffer_block_overwrites_when_two_blocks_share_parent_height() {
+        let (organise_tx, organise_rx) = create_organise_channel();
+        let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_clone()
+            .return_once(MockChainStoreHandle::new);
+
+        // Blocks A and B both have parents at height 10; block C has no
+        // metadata so it skips buffering and goes straight to promote.
+        let metadata_call_count = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let metadata_counter = metadata_call_count.clone();
+        mock_chain_handle
+            .expect_get_block_metadata()
+            .returning(move |_| {
+                let count = metadata_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if count < 2 {
+                    Ok(BlockMetadata {
+                        expected_height: Some(10),
+                        chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
+                        status: crate::store::block_tx_metadata::Status::Candidate,
+                    })
+                } else {
+                    Err(StoreError::NotFound("not found".into()))
+                }
+            });
+
+        // First two calls (should_buffer for A and B): tip is 5 -> buffer.
+        // Remaining calls (drain after C promotes): tip is 10 -> drain.
+        let tip_call_count = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let tip_counter = tip_call_count.clone();
+        mock_chain_handle
+            .expect_get_tip_height()
+            .returning(move || {
+                let count = tip_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let tip = if count < 2 { 5 } else { 10 };
+                Ok(Some(tip))
+            });
+
+        // Count how many times promote_block is called.
+        let promote_count = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let promote_counter = promote_count.clone();
+        mock_chain_handle
+            .expect_promote_block()
+            .returning(move |_| {
+                promote_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(Some(10))
+            });
+        mock_chain_handle
+            .expect_get_candidate_tip_height()
+            .returning(|| Ok(Some(10)));
+        mock_chain_handle
+            .expect_get_uncle_infos()
+            .returning(|_| Vec::new());
+
+        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let (notify_tx, _notify_rx) = create_test_notify_channel();
+        let worker = OrganiseWorker::new(
+            organise_rx,
+            mock_chain_handle,
+            monitoring_tx,
+            notify_tx,
+            create_test_pplns_window(),
+            stub_share_validator_with_success(),
+        );
+
+        // Block A: parent height 10, tip is 5 -> buffered at key 10
+        let share_a = crate::test_utils::TestShareBlockBuilder::new()
+            .nonce(0xe9695791)
+            .build();
+        organise_tx
+            .send(OrganiseEvent::Block(share_a))
+            .await
+            .unwrap();
+
+        // Block B: different nonce (different hash), same parent height 10
+        // -> should also be buffered, but currently overwrites A
+        let share_b = crate::test_utils::TestShareBlockBuilder::new()
+            .nonce(0xe9695792)
+            .build();
+        organise_tx
+            .send(OrganiseEvent::Block(share_b))
+            .await
+            .unwrap();
+
+        // Block C: metadata returns Err -> skips buffer, goes to promote,
+        // which triggers drain of the buffered blocks
+        let share_c = crate::test_utils::TestShareBlockBuilder::new()
+            .nonce(0xe9695793)
+            .build();
+        organise_tx
+            .send(OrganiseEvent::Block(share_c))
+            .await
+            .unwrap();
+        drop(organise_tx);
+
+        let result = worker.run().await;
+        assert!(result.is_ok());
+
+        // promote_block should be called 3 times: once for C (direct),
+        // once for A (drained), once for B (drained).
+        // With the current BTreeMap<u32, ShareBlock>, block A is silently
+        // overwritten by B, so promote is only called twice.
+        let total_promotes = promote_count.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            total_promotes, 3,
+            "Expected 3 promotions (C + drained A + drained B), got {total_promotes}. \
+             Second block buffered at same parent height likely overwrote the first."
+        );
     }
 }
