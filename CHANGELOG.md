@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.10.9] - 2026-05-02
+
+### Fixed
+
+- Ignore verify_chain binary from cargo dist release binaries
+
 ## [v0.10.8] - 2026-05-02
 
 ### Changed

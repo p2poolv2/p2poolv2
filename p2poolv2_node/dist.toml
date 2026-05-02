@@ -1,0 +1,5 @@
+[dist.binaries]
+aarch64-apple-darwin = ["p2poolv2", "p2poolv2_cli"]
+aarch64-unknown-linux-gnu = ["p2poolv2", "p2poolv2_cli"]
+x86_64-apple-darwin = ["p2poolv2", "p2poolv2_cli"]
+x86_64-unknown-linux-gnu = ["p2poolv2", "p2poolv2_cli"]
