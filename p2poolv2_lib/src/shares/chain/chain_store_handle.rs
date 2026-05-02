@@ -649,7 +649,7 @@ impl ChainStoreHandle {
     pub async fn add_share_block_and_organise_header(
         &self,
         share: ShareBlock,
-    ) -> Result<Option<(u32, Vec<(u32, BlockHash)>)>, StoreError> {
+    ) -> Result<Option<u32>, StoreError> {
         let blockhash = share.block_hash();
         debug!("Adding share and organising header atomically: {blockhash:?}");
         self.store_handle
@@ -658,11 +658,11 @@ impl ChainStoreHandle {
     }
 
     /// Organise a header into the candidate chain.
-    /// Returns the new candidate height and chain if the candidate chain changed.
+    /// Returns the new candidate height if the candidate chain changed.
     pub async fn organise_header(
         &self,
         header: ShareHeader,
-    ) -> Result<Option<(u32, Vec<(u32, BlockHash)>)>, StoreError> {
+    ) -> Result<Option<u32>, StoreError> {
         let blockhash = header.block_hash();
         let result = self.store_handle.organise_header(header).await?;
         info!("Organised header {blockhash} into candidate chain");
@@ -781,11 +781,11 @@ mockall::mock! {
         pub fn is_confirmed_or_confirmed_uncle(&self, blockhash: &BlockHash) -> bool;
         pub fn get_btcaddresses_for_user_ids(&self, user_ids: &[u64]) -> Result<Vec<(u64, String)>, StoreError>;
         pub async fn init_or_setup_genesis(&self, genesis_block: ShareBlock) -> Result<(), StoreError>;
-        pub async fn organise_header(&self, header: ShareHeader) -> Result<Option<(u32, Vec<(u32, BlockHash)>)>, StoreError>;
+        pub async fn organise_header(&self, header: ShareHeader) -> Result<Option<u32>, StoreError>;
         pub async fn organise_block(&self) -> Result<Option<u32>, StoreError>;
         pub async fn promote_block(&self, header: ShareHeader) -> Result<Option<u32>, StoreError>;
         pub async fn add_share_block(&self, share: ShareBlock) -> Result<(), StoreError>;
-        pub async fn add_share_block_and_organise_header(&self, share: ShareBlock) -> Result<Option<(u32, Vec<(u32, BlockHash)>)>, StoreError>;
+        pub async fn add_share_block_and_organise_header(&self, share: ShareBlock) -> Result<Option<u32>, StoreError>;
         pub async fn add_pplns_share(&self, pplns_share: SimplePplnsShare) -> Result<(), StoreError>;
         pub async fn add_user(&self, btcaddress: String) -> Result<u64, StoreError>;
     }

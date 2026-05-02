@@ -100,7 +100,7 @@ pub enum WriteCommand {
     /// not organised.
     AddShareBlockAndOrganiseHeader {
         share: ShareBlock,
-        reply: oneshot::Sender<Result<Option<(u32, Vec<(u32, BlockHash)>)>, StoreError>>,
+        reply: oneshot::Sender<Result<Option<u32>, StoreError>>,
     },
 
     /// Setup genesis block
@@ -134,7 +134,7 @@ pub enum WriteCommand {
     /// Returns the new candidate height and chain if changed.
     OrganiseHeader {
         header: ShareHeader,
-        reply: oneshot::Sender<Result<Option<(u32, Vec<(u32, BlockHash)>)>, StoreError>>,
+        reply: oneshot::Sender<Result<Option<u32>, StoreError>>,
     },
 
     /// Promote candidates to confirmed.

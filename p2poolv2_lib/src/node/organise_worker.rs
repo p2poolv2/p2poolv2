@@ -141,7 +141,7 @@ impl OrganiseWorker {
                     let blockhash = header.block_hash();
                     debug!("Organising header: {blockhash:?}");
                     match self.chain_store_handle.organise_header(header).await {
-                        Ok(Some((_height, _valid_blocks))) => {}
+                        Ok(Some(_height)) => {}
                         Ok(None) => {}
                         Err(StoreError::ChannelClosed) => {
                             error!("Store writer channel closed during organise header");
