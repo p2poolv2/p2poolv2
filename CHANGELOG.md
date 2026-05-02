@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.10.8] - 2026-05-02
+
+### Changed
+
+- Streamline header organisation by simplifying the candidate chain
+  extension path and removing redundant lookups during header sync.
+
+- Block fetcher now fetches missing blocks in batches instead of
+  one at a time, reducing round-trips during sync.
+
+- Buffer out-of-order blocks in the BlockReceiver actor until their
+  parent and uncle dependencies are ready, then validate ASERT
+  difficulty and commit atomically. Cascading descendants are driven
+  iteratively when ancestors arrive.
+
+- Remove `schedule_dependents` from the organise worker.
+  `drain_pending_blocks` and the normal block pipeline already handle
+  chain advancement, so scheduling dependents caused 40% redundant
+  validation work during sync.
+
+- Refactor `get_candidate_blocks_missing_data` into smaller functions
+  for readability: `missing_data_scan_start` and
+  `scan_heights_for_missing_blocks`.
+
 ### Fixed
 
 - Use confirmed tip (not candidate) in `is_current()` to fix slow
@@ -15,6 +39,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   suppression. Using the confirmed tip correctly identifies the node
   as not-current during initial sync, allowing bulk header-first sync
   to run in batches of 2000 instead of one block per inv message.
+
+- BlockReceiver now checks uncle block bodies via `share_block_exists`
+  and fetches missing uncles, preventing confirmation stalls when uncle
+  bodies were never retrieved.
 
 ## [v0.10.7] - 2026-04-28
 
