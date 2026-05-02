@@ -137,10 +137,8 @@ impl BlockReceiver {
                 .push(block_hash);
         }
 
-        self.pending.insert(
-            block_hash,
-            PendingBlock { share_block },
-        );
+        self.pending
+            .insert(block_hash, PendingBlock { share_block });
     }
 
     /// Remove a block from the pending set and clean up its entries

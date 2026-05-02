@@ -310,10 +310,7 @@ impl StoreHandle {
 
     /// Organise a header into the candidate chain.
     /// Returns the new candidate height if changed.
-    pub async fn organise_header(
-        &self,
-        header: ShareHeader,
-    ) -> Result<Option<u32>, StoreError> {
+    pub async fn organise_header(&self, header: ShareHeader) -> Result<Option<u32>, StoreError> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.write_tx
             .send(WriteCommand::OrganiseHeader {

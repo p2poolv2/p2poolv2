@@ -663,10 +663,7 @@ impl ChainStoreHandle {
 
     /// Organise a header into the candidate chain.
     /// Returns the new candidate height if the candidate chain changed.
-    pub async fn organise_header(
-        &self,
-        header: ShareHeader,
-    ) -> Result<Option<u32>, StoreError> {
+    pub async fn organise_header(&self, header: ShareHeader) -> Result<Option<u32>, StoreError> {
         let blockhash = header.block_hash();
         let result = self.store_handle.organise_header(header).await?;
         info!("Organised header {blockhash} into candidate chain");

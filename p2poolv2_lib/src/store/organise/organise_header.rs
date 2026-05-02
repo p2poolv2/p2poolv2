@@ -78,20 +78,11 @@ impl Store {
         if let Some(extended_height) =
             self.should_extend_candidates(header, &metadata, top_candidate.as_ref())?
         {
-            return self.extend_candidate_chain(
-                &blockhash,
-                extended_height,
-                &mut metadata,
-                batch,
-            );
+            return self.extend_candidate_chain(&blockhash, extended_height, &mut metadata, batch);
         }
 
         if self.should_reorg_candidate(&blockhash, &metadata, top_candidate.as_ref()) {
-            return self.reorg_candidate_chain(
-                &blockhash,
-                top_candidate.as_ref(),
-                batch,
-            );
+            return self.reorg_candidate_chain(&blockhash, top_candidate.as_ref(), batch);
         }
 
         Ok(None)
