@@ -22,7 +22,7 @@ use crate::{
 use bitcoin::BlockHash;
 use tracing::debug;
 
-use super::{Chain, Height, Store, TopResult};
+use super::{Height, Store, TopResult};
 
 impl Store {
     /// Organise a share header into the candidate chain.
@@ -38,7 +38,7 @@ impl Store {
         &self,
         header: &ShareHeader,
         batch: &mut rocksdb::WriteBatch,
-    ) -> Result<Option<(Height, Chain)>, StoreError> {
+    ) -> Result<Option<Height>, StoreError> {
         let blockhash = header.block_hash();
         debug!(
             "organise_header called for {blockhash} with prev blockhash {}",
@@ -82,8 +82,6 @@ impl Store {
                 &blockhash,
                 extended_height,
                 &mut metadata,
-                top_candidate.as_ref(),
-                &top_confirmed,
                 batch,
             );
         }
@@ -92,7 +90,6 @@ impl Store {
             return self.reorg_candidate_chain(
                 &blockhash,
                 top_candidate.as_ref(),
-                &top_confirmed,
                 batch,
             );
         }
@@ -107,27 +104,20 @@ impl Store {
         blockhash: &BlockHash,
         extended_height: Height,
         metadata: &mut BlockMetadata,
-        top_candidate: Option<&TopResult>,
-        top_confirmed: &TopResult,
         batch: &mut rocksdb::WriteBatch,
-    ) -> Result<Option<(Height, Chain)>, StoreError> {
+    ) -> Result<Option<Height>, StoreError> {
         debug!("Extending candidate");
         self.append_to_candidates(blockhash, extended_height, metadata, batch)?;
 
-        let old_top = top_candidate
-            .map(|top| top.height)
-            .unwrap_or(top_confirmed.height);
-        let mut candidates = self.get_candidates(top_confirmed.height + 1, old_top)?;
-        candidates.push((extended_height, *blockhash));
-
+        let mut new_entries = vec![(extended_height, *blockhash)];
         let final_height = self.extend_candidates_with_children(
             extended_height,
             blockhash,
-            &mut candidates,
+            &mut new_entries,
             batch,
         )?;
         debug!("new candidate height after extending candidates {final_height}");
-        Ok(Some((final_height, candidates)))
+        Ok(Some(final_height))
     }
 
     /// Reorg the candidate chain to a fork with more work, then walk
@@ -136,29 +126,21 @@ impl Store {
         &self,
         blockhash: &BlockHash,
         top_candidate: Option<&TopResult>,
-        top_confirmed: &TopResult,
         batch: &mut rocksdb::WriteBatch,
-    ) -> Result<Option<(Height, Chain)>, StoreError> {
+    ) -> Result<Option<Height>, StoreError> {
         let (new_height, reorg_chain) = self.reorg_candidate(blockhash, top_candidate, batch)?;
         debug!("new candidate height after reorging candidates {new_height}");
 
-        let branch_start = reorg_chain.first().map(|(height, _)| *height).unwrap_or(0);
-        let mut full_chain = if branch_start > top_confirmed.height + 1 {
-            self.get_candidates(top_confirmed.height + 1, branch_start - 1)?
-        } else {
-            Vec::new()
-        };
-        full_chain.extend(reorg_chain);
-
-        let reorg_tip_hash = full_chain.last().expect("reorg chain is non-empty").1;
+        let reorg_tip_hash = reorg_chain.last().expect("reorg chain is non-empty").1;
+        let mut new_entries = Vec::new();
         let final_height = self.extend_candidates_with_children(
             new_height,
             &reorg_tip_hash,
-            &mut full_chain,
+            &mut new_entries,
             batch,
         )?;
         debug!("new candidate height after reorg + forward walk {final_height}");
-        Ok(Some((final_height, full_chain)))
+        Ok(Some(final_height))
     }
 
     /// Ensure the height-to-blockhash index contains this block.
@@ -270,10 +252,8 @@ mod tests {
 
         // Candidate chain should be updated
         assert!(result.is_some());
-        let (height, candidates) = result.unwrap();
+        let height = result.unwrap();
         assert_eq!(height, 1);
-        assert_eq!(candidates.len(), 1);
-        assert_eq!(candidates[0], (1, share.block_hash()));
 
         // Top candidate work is cumulative: genesis_work + share_work
         let cumulative_work = genesis.header.get_work() + share.header.get_work();
@@ -408,13 +388,6 @@ mod tests {
 
         // Candidate chain should be reorged
         assert!(result.is_some());
-        let (_height, candidates) = result.unwrap();
-        // Chain should contain share1 and fork_share
-        assert!(
-            candidates
-                .iter()
-                .any(|(_, hash)| *hash == fork_share.block_hash())
-        );
 
         // Top candidate should be fork_share
         let top = store.get_top_candidate().unwrap();
@@ -687,18 +660,8 @@ mod tests {
             result.is_some(),
             "fork_share2 should trigger candidate reorg"
         );
-        let (height, candidates) = result.unwrap();
+        let height = result.unwrap();
         assert_eq!(height, 2);
-        assert!(
-            candidates
-                .iter()
-                .any(|(_, hash)| *hash == fork_share1.block_hash())
-        );
-        assert!(
-            candidates
-                .iter()
-                .any(|(_, hash)| *hash == fork_share2.block_hash())
-        );
 
         // Top candidate should be fork_share2
         let top = store.get_top_candidate().unwrap();

@@ -258,7 +258,7 @@ impl StoreHandle {
     pub async fn add_share_block_and_organise_header(
         &self,
         share: ShareBlock,
-    ) -> Result<Option<(u32, Vec<(u32, BlockHash)>)>, StoreError> {
+    ) -> Result<Option<u32>, StoreError> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.write_tx
             .send(WriteCommand::AddShareBlockAndOrganiseHeader {
@@ -309,11 +309,11 @@ impl StoreHandle {
     }
 
     /// Organise a header into the candidate chain.
-    /// Returns the new candidate height and chain if changed.
+    /// Returns the new candidate height if changed.
     pub async fn organise_header(
         &self,
         header: ShareHeader,
-    ) -> Result<Option<(u32, Vec<(u32, BlockHash)>)>, StoreError> {
+    ) -> Result<Option<u32>, StoreError> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.write_tx
             .send(WriteCommand::OrganiseHeader {
@@ -386,10 +386,10 @@ mockall::mock! {
         pub fn get_children_blockhashes(&self, blockhash: &BlockHash) -> Result<Option<Vec<BlockHash>>, StoreError>;
 
         // Serialized writes (async)
-        pub async fn organise_header(&self, header: ShareHeader) -> Result<Option<(u32, Vec<(u32, BlockHash)>)>, StoreError>;
+        pub async fn organise_header(&self, header: ShareHeader) -> Result<Option<u32>, StoreError>;
         pub async fn organise_block(&self) -> Result<Option<u32>, StoreError>;
         pub async fn add_share_block(&self, share: ShareBlock) -> Result<(), StoreError>;
-        pub async fn add_share_block_and_organise_header(&self, share: ShareBlock) -> Result<Option<(u32, Vec<(u32, BlockHash)>)>, StoreError>;
+        pub async fn add_share_block_and_organise_header(&self, share: ShareBlock) -> Result<Option<u32>, StoreError>;
         pub async fn setup_genesis(&self, genesis: ShareBlock) -> Result<(), StoreError>;
         pub async fn init_chain_state_from_store(&self, genesis_hash: BlockHash) -> Result<(), StoreError>;
         pub async fn add_user(&self, btcaddress: String) -> Result<u64, StoreError>;

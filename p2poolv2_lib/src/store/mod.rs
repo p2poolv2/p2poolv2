@@ -334,7 +334,7 @@ impl Store {
     pub fn push_to_candidate_chain(
         &self,
         share: &ShareBlock,
-    ) -> Result<Option<(u32, Vec<(u32, BlockHash)>)>, StoreError> {
+    ) -> Result<Option<u32>, StoreError> {
         let mut batch = Store::get_write_batch();
         let result = self.organise_header(&share.header, &mut batch)?;
         self.commit_batch(batch)?;
