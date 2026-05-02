@@ -191,10 +191,19 @@ impl BlockReceiver {
         let mut not_ready: Vec<BlockHash> = Vec::with_capacity(1 + header.uncles.len());
         let parent_hash = header.prev_share_blockhash;
         if parent_hash != BlockHash::all_zeros() && !self.ancestor_ready(&parent_hash) {
+            debug!(
+                "Parent {parent_hash} not ready for block {}. Metadata: {:?}",
+                share_block.block_hash(),
+                self.chain_store_handle.get_block_metadata(&parent_hash)
+            );
             not_ready.push(parent_hash);
         }
         for uncle_hash in &header.uncles {
             if !self.chain_store_handle.share_block_exists(uncle_hash) {
+                debug!(
+                    "Uncle {uncle_hash} block body missing for block {}",
+                    share_block.block_hash()
+                );
                 not_ready.push(*uncle_hash);
             }
         }
@@ -522,8 +531,6 @@ mod tests {
         assert!(!receiver.descendants.contains_key(&parent_hash));
         assert_eq!(receiver.pending_count(), 0);
     }
-
-
 
     #[test]
     fn test_genesis_parent_not_tracked_in_descendants_key() {
