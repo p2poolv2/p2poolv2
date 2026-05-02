@@ -131,7 +131,7 @@ pub enum WriteCommand {
     SetGenesisBlockHash { hash: BlockHash },
 
     /// Organise a header into the candidate chain.
-    /// Returns the new candidate height and chain if changed.
+    /// Returns the new candidate height.
     OrganiseHeader {
         header: ShareHeader,
         reply: oneshot::Sender<Result<Option<u32>, StoreError>>,

@@ -389,8 +389,8 @@ impl BlockReceiver {
 
     /// Run the BlockReceiver event loop.
     ///
-    /// Processes incoming share blocks and periodically evicts stale
-    /// pending blocks. Runs until the event channel is closed.
+    /// Processes incoming share blocks. Runs until the event channel
+    /// is closed.
     pub async fn run(mut self) {
         loop {
             match self.event_rx.recv().await {
