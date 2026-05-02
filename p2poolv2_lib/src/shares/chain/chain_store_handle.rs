@@ -285,15 +285,19 @@ impl ChainStoreHandle {
         }
     }
 
-    /// Check whether the candidate chain tip is current.
+    /// Check whether the confirmed chain tip is current.
     ///
-    /// Returns true when the candidate chain tip timestamp is within
+    /// Returns true when the confirmed chain tip timestamp is within
     /// MAX_TIP_AGE_SECS seconds of the current system time. Returns
     /// false when the tip is stale or when any store lookup fails
-    /// (e.g. no chain yet). Falls back to the confirmed tip if no
-    /// candidate exists.
+    /// (e.g. no chain yet).
+    ///
+    /// Uses the confirmed tip (not candidate) so that during initial
+    /// sync the chain is correctly identified as not-current, which
+    /// suppresses per-inv getheaders and lets the bulk header-first
+    /// pipeline run in batches.
     pub fn is_current(&self) -> bool {
-        let tip_header = match self.get_candidate_tip_header() {
+        let tip_header = match self.get_chain_tip_header() {
             Ok(header) => header,
             Err(_) => return false,
         };

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Use confirmed tip (not candidate) in `is_current()` to fix slow
+  initial sync. The candidate tip is always recent during sync (each
+  newly-received header has a fresh timestamp), which prevented inv
+  suppression. Using the confirmed tip correctly identifies the node
+  as not-current during initial sync, allowing bulk header-first sync
+  to run in batches of 2000 instead of one block per inv message.
+
 ## [v0.10.7] - 2026-04-28
 
 ### Fixed
