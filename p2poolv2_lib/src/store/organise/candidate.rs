@@ -225,61 +225,91 @@ impl Store {
         &self,
         min_scan_height: Option<u32>,
     ) -> Result<Vec<BlockHash>, StoreError> {
-        let confirmed_height = match self.get_top_confirmed_height() {
-            Ok(height) => height,
-            Err(StoreError::NotFound(_)) => 0,
-            Err(error) => return Err(error),
-        };
-
+        let scan_start = self.missing_data_scan_start(min_scan_height)?;
         let candidate_height = match self.get_top_candidate_height() {
             Ok(height) => height,
             Err(StoreError::NotFound(_)) => return Ok(Vec::new()),
             Err(error) => return Err(error),
         };
 
-        let default_start = confirmed_height + 1;
-        let scan_start = match min_scan_height {
-            Some(hint) => std::cmp::min(hint, default_start),
-            None => default_start,
-        };
-
         if candidate_height < scan_start {
             return Ok(Vec::new());
         }
 
+        let (all_blockhashes, missing) =
+            self.scan_heights_for_missing_blocks(scan_start, candidate_height);
+
+        let missing_uncles = self.collect_missing_uncle_blocks(&all_blockhashes);
+        debug!(
+            "get_candidate_blocks_missing_data: scan_start={scan_start}, candidate_height={candidate_height}, all_blocks={}, missing_blocks={}, missing_uncles={}",
+            all_blockhashes.len(),
+            missing.len(),
+            missing_uncles.len()
+        );
+
+        let mut result = Vec::with_capacity(missing_uncles.len() + missing.len());
+        result.extend(missing_uncles);
+        result.extend(missing);
+        Ok(result)
+    }
+
+    /// Compute the starting height for the missing-data scan.
+    ///
+    /// Defaults to `confirmed_top + 1`. When `min_scan_height` is
+    /// provided, uses the lower of the two so that fork blocks below
+    /// the confirmed tip are included.
+    fn missing_data_scan_start(&self, min_scan_height: Option<u32>) -> Result<u32, StoreError> {
+        let confirmed_height = match self.get_top_confirmed_height() {
+            Ok(height) => height,
+            Err(StoreError::NotFound(_)) => 0,
+            Err(error) => return Err(error),
+        };
+        let default_start = confirmed_height + 1;
+        Ok(match min_scan_height {
+            Some(hint) => std::cmp::min(hint, default_start),
+            None => default_start,
+        })
+    }
+
+    /// Walk heights from `scan_start` to `candidate_height`, collecting
+    /// all blockhashes and identifying those that need block data.
+    ///
+    /// Returns `(all_blockhashes, missing)` where `missing` contains
+    /// hashes whose block body is not stored and whose status is not
+    /// yet BlockValid or Confirmed.
+    fn scan_heights_for_missing_blocks(
+        &self,
+        scan_start: u32,
+        candidate_height: u32,
+    ) -> (Vec<BlockHash>, Vec<BlockHash>) {
         let height_range = (candidate_height - scan_start + 1) as usize;
+        let mut all_blockhashes = Vec::with_capacity(height_range);
         let mut missing = Vec::with_capacity(height_range);
 
         let mut height = scan_start;
         while height <= candidate_height {
             let blockhashes = self.get_blockhashes_for_height(height);
             for blockhash in blockhashes {
-                match self.get_block_metadata(&blockhash) {
-                    Ok(metadata) => {
-                        if metadata.status == Status::Candidate
-                            || metadata.status == Status::HeaderValid
-                        {
-                            missing.push(blockhash);
-                        }
-                    }
-                    Err(_) => {
-                        missing.push(blockhash);
-                    }
+                all_blockhashes.push(blockhash);
+                if !self.share_block_exists(&blockhash)
+                    && !self.is_block_valid_or_confirmed(&blockhash)
+                {
+                    missing.push(blockhash);
                 }
             }
             height += 1;
         }
 
-        let missing_uncles = self.collect_missing_uncle_blocks(&missing);
-        missing.extend(missing_uncles);
-
-        Ok(missing)
+        (all_blockhashes, missing)
     }
 
-    /// Read the header for each blockhash and return any referenced
-    /// uncle that lacks full block data.
+    /// Collect uncle blocks whose bodies are missing, recursively
+    /// following each uncle's own uncles until no new missing bodies
+    /// are found.
     fn collect_missing_uncle_blocks(&self, blockhashes: &[BlockHash]) -> Vec<BlockHash> {
-        let mut missing_uncles = Vec::new();
+        let mut missing_uncles: Vec<BlockHash> = Vec::new();
+
+        // First pass: scan uncles of all provided blockhashes
         for blockhash in blockhashes {
             let Ok(Some(header)) = self.get_share_header(blockhash) else {
                 continue;
@@ -289,11 +319,52 @@ impl Store {
                     && !missing_uncles.contains(uncle_hash)
                     && !blockhashes.contains(uncle_hash)
                 {
+                    debug!(
+                        "collect_missing_uncle_blocks: uncle {uncle_hash} missing body (referenced by {blockhash})"
+                    );
                     missing_uncles.push(*uncle_hash);
                 }
             }
         }
-        missing_uncles
+
+        // Recursive passes: each newly discovered missing uncle may
+        // itself reference further uncles whose bodies are also missing.
+        let mut scan_start = 0;
+        loop {
+            let scan_end = missing_uncles.len();
+            if scan_start >= scan_end {
+                return missing_uncles;
+            }
+
+            let mut new_uncles: Vec<BlockHash> = Vec::new();
+            for index in scan_start..scan_end {
+                let uncle_hash = missing_uncles[index];
+                let Ok(Some(header)) = self.get_share_header(&uncle_hash) else {
+                    continue;
+                };
+                for nested_uncle in &header.uncles {
+                    if !self.share_block_exists(nested_uncle)
+                        && !missing_uncles.contains(nested_uncle)
+                        && !blockhashes.contains(nested_uncle)
+                        && !new_uncles.contains(nested_uncle)
+                    {
+                        debug!(
+                            "collect_missing_uncle_blocks: nested uncle {nested_uncle} missing body (referenced by {uncle_hash})"
+                        );
+                        new_uncles.push(*nested_uncle);
+                    }
+                }
+            }
+            scan_start = scan_end;
+            missing_uncles.extend(new_uncles);
+        }
+    }
+
+    /// Check if a blockhash has BlockValid or Confirmed status.
+    fn is_block_valid_or_confirmed(&self, blockhash: &BlockHash) -> bool {
+        self.get_block_metadata(blockhash)
+            .map(|m| m.status == Status::BlockValid || m.status == Status::Confirmed)
+            .unwrap_or(false)
     }
 
     /// Check if a blockhash has Candidate status in its metadata.
