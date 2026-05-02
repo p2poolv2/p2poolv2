@@ -51,6 +51,12 @@ const TICK_INTERVAL: Duration = Duration::from_secs(5);
 /// Channel capacity for block fetcher events.
 const BLOCK_FETCHER_CHANNEL_CAPACITY: usize = 8192;
 
+/// Number of blockhashes moved from the backlog into the pending
+/// queue at a time. The next batch is loaded only after the current
+/// batch is fully dispatched and all responses have been received,
+/// bounding memory in the downstream block receiver.
+const FETCH_BATCH_SIZE: usize = 1000;
+
 /// Events sent to the block fetcher from p2p message handlers.
 pub enum BlockFetcherEvent {
     /// Blocks identified by handle_share_headers
@@ -130,7 +136,12 @@ pub struct BlockFetcher {
     /// Blockhashes that have been requested -- inflight
     in_flight: HashMap<BlockHash, InFlightRequest>,
     /// Blockhashes waiting to be requested (not yet in-flight).
+    /// Holds at most one batch of FETCH_BATCH_SIZE entries.
     pending: VecDeque<BlockHash>,
+    /// Blockhashes that have not yet been moved into `pending`.
+    /// Batches of FETCH_BATCH_SIZE are promoted when the current
+    /// batch is fully processed (pending and in_flight both empty).
+    backlog: VecDeque<BlockHash>,
     /// Peer selection with round-robin distribution and capacity tracking.
     peer_selector: PeerSelector,
 }
@@ -146,6 +157,7 @@ impl BlockFetcher {
             swarm_tx,
             in_flight: HashMap::with_capacity(INITIAL_IN_FLIGHT_CAPACITY),
             pending: VecDeque::new(),
+            backlog: VecDeque::new(),
             peer_selector: PeerSelector::new(),
         }
     }
@@ -165,6 +177,7 @@ impl BlockFetcher {
                         Some(BlockFetcherEvent::BlockRequestCompleted(blockhash)) => {
                             self.handle_block_request_completed(blockhash);
                             self.dispatch_pending_requests().await;
+                            self.refill_pending_from_backlog().await;
                         }
                         Some(BlockFetcherEvent::PeersUpdated(peers)) => {
                             debug!("Peers list updated in block fetcher");
@@ -179,13 +192,21 @@ impl BlockFetcher {
                 _ = tick_interval.tick() => {
                     self.retry_timed_out_requests().await;
                     self.dispatch_pending_requests().await;
+                    self.refill_pending_from_backlog().await;
                 }
             }
         }
     }
 
-    /// Handle a FetchBlocks event by adding blockhashes to the pending queue
-    /// and immediately dispatching requests to peers to trigget getblock.
+    /// Check whether a blockhash is already tracked in any queue.
+    fn is_known(&self, blockhash: &BlockHash) -> bool {
+        self.in_flight.contains_key(blockhash)
+            || self.pending.contains(blockhash)
+            || self.backlog.contains(blockhash)
+    }
+
+    /// Handle a FetchBlocks event by adding new blockhashes to the
+    /// backlog and refilling pending if the current batch is done.
     async fn handle_fetch_blocks(&mut self, blockhashes: Vec<BlockHash>, peer_id: PeerId) {
         info!(
             "Block fetcher received {} blockhashes to fetch from peer {}",
@@ -195,27 +216,46 @@ impl BlockFetcher {
 
         self.peer_selector.add_peer(peer_id);
 
-        // Add blockhashes that are not already in-flight or pending
         for blockhash in blockhashes {
-            if !self.in_flight.contains_key(&blockhash) && !self.pending.contains(&blockhash) {
-                self.pending.push_back(blockhash);
+            if !self.is_known(&blockhash) {
+                self.backlog.push_back(blockhash);
             }
         }
 
-        self.dispatch_pending_requests().await;
+        self.refill_pending_from_backlog().await;
     }
 
     /// Remove a blockhash from in-flight tracking when a block request completes.
-    /// Called both when the block is received and when the peer responds NotFound.
-    /// The caller should dispatch pending requests afterwards since capacity
-    /// may have been freed.
+    /// Also removes from pending and backlog so the block is not re-requested.
     fn handle_block_request_completed(&mut self, blockhash: BlockHash) {
         if let Some(request) = self.in_flight.remove(&blockhash) {
             debug!("Block request completed, removed from in-flight: {blockhash}");
             self.peer_selector.record_completion(request.peer_id);
         }
-        // Also remove from pending in case it was queued but not yet sent
         self.pending.retain(|hash| *hash != blockhash);
+        self.backlog.retain(|hash| *hash != blockhash);
+    }
+
+    /// Move the next batch of blockhashes from the backlog into
+    /// pending when the current batch is fully processed.
+    async fn refill_pending_from_backlog(&mut self) {
+        if !self.pending.is_empty() || !self.in_flight.is_empty() {
+            return;
+        }
+        if self.backlog.is_empty() {
+            return;
+        }
+
+        let batch_size = FETCH_BATCH_SIZE.min(self.backlog.len());
+        self.pending.extend(self.backlog.drain(..batch_size));
+
+        info!(
+            "Loaded batch of {} blocks from backlog ({} remaining)",
+            self.pending.len(),
+            self.backlog.len()
+        );
+
+        self.dispatch_pending_requests().await;
     }
 
     /// Send GetData::Block requests for pending blockhashes, respecting
@@ -292,9 +332,9 @@ impl BlockFetcher {
                 old_request.peer_id
             );
             self.peer_selector.record_completion(old_request.peer_id);
-            // Re-add to pending for retry from a different peer
+            // Re-add to front of pending for retry ahead of other pending
             if !self.pending.contains(&blockhash) {
-                self.pending.push_back(blockhash);
+                self.pending.push_front(blockhash);
             }
         }
     }
@@ -514,6 +554,76 @@ mod tests {
             other => panic!("Expected GetData::Block, got: {other:?}"),
         }
 
+        let result = fetcher_handle.await.unwrap();
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_block_fetcher_batches_from_backlog() {
+        let (block_fetcher_tx, block_fetcher_rx) = create_block_fetcher_channel();
+        let (swarm_tx, mut swarm_rx) = mpsc::channel(2048);
+        let fetcher = BlockFetcher::new(block_fetcher_rx, swarm_tx);
+
+        let peer_id = PeerId::random();
+        let total_blocks = FETCH_BATCH_SIZE + 500;
+        let blockhashes: Vec<BlockHash> = (0..total_blocks).map(|_| random_blockhash()).collect();
+
+        block_fetcher_tx
+            .send(BlockFetcherEvent::FetchBlocks {
+                blockhashes: blockhashes.clone(),
+                peer_id,
+            })
+            .await
+            .unwrap();
+
+        let fetcher_handle = tokio::spawn(fetcher.run());
+
+        // Yield to let the fetcher process the FetchBlocks event
+        tokio::task::yield_now().await;
+
+        // With 1 peer and MAX_IN_FLIGHT_PER_PEER=16, only 16 blocks
+        // are dispatched at a time. Drain and complete them all,
+        // counting the total dispatched across all batches.
+        let mut total_dispatched = 0usize;
+        loop {
+            match swarm_rx.try_recv() {
+                Ok(SwarmSend::Request(_, Message::GetData(GetData::Block(hash)))) => {
+                    total_dispatched += 1;
+                    block_fetcher_tx
+                        .send(BlockFetcherEvent::BlockRequestCompleted(hash))
+                        .await
+                        .unwrap();
+                    // Yield so the fetcher processes the completion
+                    tokio::task::yield_now().await;
+                }
+                _ => {
+                    // Yield and try once more in case the fetcher
+                    // needs a cycle to refill from backlog
+                    tokio::task::yield_now().await;
+                    match swarm_rx.try_recv() {
+                        Ok(SwarmSend::Request(_, Message::GetData(GetData::Block(hash)))) => {
+                            total_dispatched += 1;
+                            block_fetcher_tx
+                                .send(BlockFetcherEvent::BlockRequestCompleted(hash))
+                                .await
+                                .unwrap();
+                            tokio::task::yield_now().await;
+                        }
+                        _ => {
+                            // Truly done
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        assert_eq!(
+            total_dispatched, total_blocks,
+            "All blocks should be dispatched across batches"
+        );
+
+        drop(block_fetcher_tx);
         let result = fetcher_handle.await.unwrap();
         assert!(result.is_ok());
     }

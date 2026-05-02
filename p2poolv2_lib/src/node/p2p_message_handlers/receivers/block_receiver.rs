@@ -29,21 +29,11 @@ use bitcoin::hashes::Hash;
 use std::collections::{HashMap, VecDeque};
 use std::error::Error;
 use std::sync::Arc;
-use std::time::Instant;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info, warn};
 
-/// Maximum number of blocks held in the pending set.
-const PENDING_CAPACITY: usize = 2000;
-
 /// Channel capacity for block receiver events.
 const BLOCK_RECEIVER_CHANNEL_CAPACITY: usize = 8192;
-
-/// Interval for evicting stale pending blocks.
-const EVICTION_TICK_SECONDS: u64 = 60;
-
-/// Maximum age of a pending block before eviction.
-const STALE_THRESHOLD_SECONDS: u64 = 300;
 
 /// Events sent to the BlockReceiver actor.
 pub enum BlockReceiverEvent {
@@ -67,7 +57,6 @@ pub fn create_block_receiver_channel() -> (BlockReceiverHandle, BlockReceiverRec
 /// HeaderValid in the store.
 struct PendingBlock {
     share_block: ShareBlock,
-    received_at: Instant,
 }
 
 /// Buffers incoming ShareBlocks until their direct parent and uncles are
@@ -113,8 +102,8 @@ impl BlockReceiver {
     ) -> Self {
         Self {
             event_rx,
-            pending: HashMap::with_capacity(PENDING_CAPACITY),
-            descendants: HashMap::with_capacity(PENDING_CAPACITY),
+            pending: HashMap::new(),
+            descendants: HashMap::new(),
             share_validator,
             chain_store_handle,
             block_fetcher_handle,
@@ -127,14 +116,11 @@ impl BlockReceiver {
         self.pending.len()
     }
 
-    /// Add a block to the pending set. Evicts the oldest entry if at
-    /// capacity. Updates the descendants index for parent and uncles.
+    /// Add a block to the pending set.
+    /// Updates the descendants index for parent and uncles.
     fn add_to_pending(&mut self, block_hash: BlockHash, share_block: ShareBlock) {
         if self.pending.contains_key(&block_hash) {
             return;
-        }
-        if self.pending.len() >= PENDING_CAPACITY {
-            self.evict_oldest();
         }
 
         let parent_hash = share_block.header.prev_share_blockhash;
@@ -153,10 +139,7 @@ impl BlockReceiver {
 
         self.pending.insert(
             block_hash,
-            PendingBlock {
-                share_block,
-                received_at: Instant::now(),
-            },
+            PendingBlock { share_block },
         );
     }
 
@@ -184,37 +167,6 @@ impl BlockReceiver {
         }
 
         Some(pending_block.share_block)
-    }
-
-    /// Evict the oldest pending block by received_at timestamp.
-    fn evict_oldest(&mut self) {
-        let oldest_hash = self
-            .pending
-            .iter()
-            .min_by_key(|(_, pending_block)| pending_block.received_at)
-            .map(|(hash, _)| *hash);
-
-        if let Some(hash) = oldest_hash {
-            debug!("Evicting oldest pending block {hash} to maintain capacity");
-            self.remove_from_pending(&hash);
-        }
-    }
-
-    /// Evict pending blocks older than the stale threshold.
-    fn evict_stale_pending(&mut self) {
-        let threshold = Instant::now() - std::time::Duration::from_secs(STALE_THRESHOLD_SECONDS);
-
-        let stale_hashes: Vec<BlockHash> = self
-            .pending
-            .iter()
-            .filter(|(_, pending_block)| pending_block.received_at < threshold)
-            .map(|(hash, _)| *hash)
-            .collect();
-
-        for hash in stale_hashes {
-            info!("Evicting stale pending block {hash}");
-            self.remove_from_pending(&hash);
-        }
     }
 
     /// Look up parent (time, expected_height) for ASERT.
@@ -433,28 +385,18 @@ impl BlockReceiver {
     /// Processes incoming share blocks and periodically evicts stale
     /// pending blocks. Runs until the event channel is closed.
     pub async fn run(mut self) {
-        let mut eviction_interval =
-            tokio::time::interval(std::time::Duration::from_secs(EVICTION_TICK_SECONDS));
-
         loop {
-            tokio::select! {
-                event = self.event_rx.recv() => {
-                    match event {
-                        Some(BlockReceiverEvent::ShareBlockReceived {
-                            share_block,
-                            result_tx,
-                        }) => {
-                            let result = self.process_share_block(share_block).await;
-                            let _ = result_tx.send(result);
-                        }
-                        None => {
-                            info!("BlockReceiver channel closed, shutting down");
-                            return;
-                        }
-                    }
+            match self.event_rx.recv().await {
+                Some(BlockReceiverEvent::ShareBlockReceived {
+                    share_block,
+                    result_tx,
+                }) => {
+                    let result = self.process_share_block(share_block).await;
+                    let _ = result_tx.send(result);
                 }
-                _ = eviction_interval.tick() => {
-                    self.evict_stale_pending();
+                None => {
+                    info!("BlockReceiver channel closed, shutting down");
+                    return;
                 }
             }
         }
@@ -583,35 +525,7 @@ mod tests {
         assert_eq!(receiver.pending_count(), 0);
     }
 
-    #[test]
-    fn test_evict_oldest_at_capacity() {
-        let (_, event_rx) = create_block_receiver_channel();
-        let (block_fetcher_handle, _) = block_fetcher::create_block_fetcher_channel();
-        let (validation_tx, _) = validation_worker::create_validation_channel();
-        let mut receiver = BlockReceiver::new(
-            event_rx,
-            Arc::new(MockDefaultShareValidator::default()),
-            ChainStoreHandle::default(),
-            block_fetcher_handle,
-            validation_tx,
-        );
 
-        for nonce in 0..PENDING_CAPACITY {
-            let share_block = TestShareBlockBuilder::new().nonce(nonce as u32).build();
-            let block_hash = share_block.block_hash();
-            receiver.add_to_pending(block_hash, share_block);
-        }
-        assert_eq!(receiver.pending_count(), PENDING_CAPACITY);
-
-        let extra_block = TestShareBlockBuilder::new()
-            .nonce(PENDING_CAPACITY as u32)
-            .build();
-        let extra_hash = extra_block.block_hash();
-        receiver.add_to_pending(extra_hash, extra_block);
-
-        assert_eq!(receiver.pending_count(), PENDING_CAPACITY);
-        assert!(receiver.pending.contains_key(&extra_hash));
-    }
 
     #[test]
     fn test_genesis_parent_not_tracked_in_descendants_key() {
