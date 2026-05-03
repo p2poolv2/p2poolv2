@@ -367,7 +367,7 @@ impl Node {
                     self.connected_dial_addresses.retain(|addr| addr != address);
                 }
                 self.swarm.behaviour_mut().remove_peer(&peer_id);
-                self.request_response_handler.remove_peer(&peer_id);
+                self.request_response_handler.remove_peer(&peer_id).await;
                 let _ = self
                     .monitoring_event_sender
                     .send(MonitoringEvent::Peer(PeerResponse {

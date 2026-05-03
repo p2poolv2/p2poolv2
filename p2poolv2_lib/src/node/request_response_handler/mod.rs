@@ -189,12 +189,16 @@ impl<C: Send + Sync + 'static> RequestResponseHandler<C> {
     /// the peer's service task to exit. Also removes peer block
     /// knowledge and notifies the block fetcher so it stops sending
     /// requests to this peer.
-    pub fn remove_peer(&mut self, peer_id: &PeerId) {
+    pub async fn remove_peer(&mut self, peer_id: &PeerId) {
         self.peer_handles.remove(peer_id);
         self.peer_block_knowledge.remove_peer(peer_id);
-        let _ = self
+        if let Err(send_error) = self
             .block_fetcher_handle
-            .try_send(BlockFetcherEvent::PeerRemoved(*peer_id));
+            .send(BlockFetcherEvent::PeerRemoved(*peer_id))
+            .await
+        {
+            error!("Failed to notify block fetcher of peer removal for {peer_id}: {send_error}");
+        }
     }
 
     /// Records which blocks a peer knows about based on a message.
@@ -730,7 +734,7 @@ mod tests {
         );
         assert!(handler.peer_handles.contains_key(&peer_id));
 
-        handler.remove_peer(&peer_id);
+        handler.remove_peer(&peer_id).await;
         assert!(
             !handler
                 .peer_block_knowledge()
