@@ -17,7 +17,7 @@
 pub mod block_fetcher;
 pub mod peer_block_knowledge;
 
-use self::block_fetcher::BlockFetcherHandle;
+use self::block_fetcher::{BlockFetcherEvent, BlockFetcherHandle};
 use self::peer_block_knowledge::PeerBlockKnowledge;
 use crate::config::NetworkConfig;
 use crate::node::SwarmSend;
@@ -187,10 +187,14 @@ impl<C: Send + Sync + 'static> RequestResponseHandler<C> {
     ///
     /// Drops the peer handle, which closes the channel and causes
     /// the peer's service task to exit. Also removes peer block
-    /// knowledge.
+    /// knowledge and notifies the block fetcher so it stops sending
+    /// requests to this peer.
     pub fn remove_peer(&mut self, peer_id: &PeerId) {
         self.peer_handles.remove(peer_id);
         self.peer_block_knowledge.remove_peer(peer_id);
+        let _ = self
+            .block_fetcher_handle
+            .try_send(BlockFetcherEvent::PeerRemoved(*peer_id));
     }
 
     /// Records which blocks a peer knows about based on a message.
