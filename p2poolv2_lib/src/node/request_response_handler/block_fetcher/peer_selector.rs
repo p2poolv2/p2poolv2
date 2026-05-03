@@ -19,6 +19,9 @@
 use super::MAX_IN_FLIGHT_PER_PEER;
 use libp2p::PeerId;
 use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::time::Instant;
 
 /// Manages peer selection for block fetching using round-robin distribution.
 ///
@@ -56,6 +59,22 @@ impl PeerSelector {
     /// Add a single peer if not already known (starts with count zero).
     pub(super) fn add_peer(&mut self, peer_id: PeerId) {
         self.peers.entry(peer_id).or_insert(0);
+    }
+
+    /// Remove a disconnected peer from the selector.
+    ///
+    /// Sets the round-robin index to a hash-derived position to avoid
+    /// bias toward the first peer in the map.
+    pub(super) fn remove_peer(&mut self, peer_id: &PeerId) {
+        self.peers.remove(peer_id);
+        let peer_count = self.peers.len();
+        if peer_count == 0 {
+            self.next_peer_index = 0;
+            return;
+        }
+        let mut hasher = DefaultHasher::new();
+        Instant::now().hash(&mut hasher);
+        self.next_peer_index = hasher.finish() as usize % peer_count;
     }
 
     /// Select a peer using round-robin, skipping peers at capacity.
@@ -222,6 +241,50 @@ mod tests {
         let expected_set: std::collections::HashSet<PeerId> =
             [peer_b, peer_c].into_iter().collect();
         assert_eq!(selected_set, expected_set);
+    }
+
+    #[test]
+    fn test_peer_selector_remove_peer() {
+        let mut selector = PeerSelector::new();
+        let peer_a = PeerId::random();
+        let peer_b = PeerId::random();
+        let peer_c = PeerId::random();
+        selector.update_peers(vec![peer_a, peer_b, peer_c]);
+
+        selector.remove_peer(&peer_b);
+
+        // Only peer_a and peer_c remain
+        let mut selected = std::collections::HashSet::new();
+        selected.insert(selector.select_peer().unwrap());
+        selected.insert(selector.select_peer().unwrap());
+        assert!(selected.contains(&peer_a));
+        assert!(selected.contains(&peer_c));
+        assert!(!selected.contains(&peer_b));
+    }
+
+    #[test]
+    fn test_peer_selector_remove_last_peer() {
+        let mut selector = PeerSelector::new();
+        let peer_a = PeerId::random();
+        selector.add_peer(peer_a);
+
+        selector.remove_peer(&peer_a);
+
+        assert!(!selector.has_peers());
+        assert!(selector.select_peer().is_none());
+    }
+
+    #[test]
+    fn test_peer_selector_remove_unknown_peer_is_noop() {
+        let mut selector = PeerSelector::new();
+        let peer_a = PeerId::random();
+        let peer_b = PeerId::random();
+        selector.add_peer(peer_a);
+
+        selector.remove_peer(&peer_b);
+
+        assert!(selector.has_peers());
+        assert_eq!(selector.select_peer().unwrap(), peer_a);
     }
 
     #[test]

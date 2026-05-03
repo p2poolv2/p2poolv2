@@ -70,6 +70,8 @@ pub enum BlockFetcherEvent {
     BlockRequestCompleted(BlockHash),
     /// Peers list updated -- used for round-robin distribution.
     PeersUpdated(Vec<PeerId>),
+    /// A peer disconnected and should be removed from the selector.
+    PeerRemoved(PeerId),
 }
 
 impl fmt::Display for BlockFetcherEvent {
@@ -89,6 +91,9 @@ impl fmt::Display for BlockFetcherEvent {
             }
             BlockFetcherEvent::PeersUpdated(peers) => {
                 write!(formatter, "PeersUpdated({} peers)", peers.len())
+            }
+            BlockFetcherEvent::PeerRemoved(peer_id) => {
+                write!(formatter, "PeerRemoved({peer_id})")
             }
         }
     }
@@ -183,6 +188,9 @@ impl BlockFetcher {
                             debug!("Peers list updated in block fetcher");
                             self.peer_selector.update_peers(peers);
                         }
+                        Some(BlockFetcherEvent::PeerRemoved(peer_id)) => {
+                            self.handle_peer_removed(peer_id);
+                        }
                         None => {
                             info!("Block fetcher stopped -- channel closed");
                             return Ok(());
@@ -234,6 +242,36 @@ impl BlockFetcher {
         }
         self.pending.retain(|hash| *hash != blockhash);
         self.backlog.retain(|hash| *hash != blockhash);
+    }
+
+    /// Remove a disconnected peer from the selector and drop any
+    /// in-flight requests that were assigned to it.
+    ///
+    /// In-flight requests are intentionally not re-queued to other
+    /// peers. A peer may have sent cheap headers and then disconnected,
+    /// and propagating those requests to other peers who do not have
+    /// the blocks would waste their bandwidth.
+    fn handle_peer_removed(&mut self, peer_id: PeerId) {
+        info!("Removing peer {peer_id} from block fetcher");
+        self.peer_selector.remove_peer(&peer_id);
+
+        let dropped: Vec<BlockHash> = self
+            .in_flight
+            .iter()
+            .filter(|(_, request)| request.peer_id == peer_id)
+            .map(|(blockhash, _)| *blockhash)
+            .collect();
+
+        for blockhash in &dropped {
+            self.in_flight.remove(blockhash);
+        }
+
+        if !dropped.is_empty() {
+            info!(
+                "Dropped {} in-flight requests from removed peer {peer_id}",
+                dropped.len()
+            );
+        }
     }
 
     /// Move the next batch of blockhashes from the backlog into
@@ -624,6 +662,99 @@ mod tests {
         );
 
         drop(block_fetcher_tx);
+        let result = fetcher_handle.await.unwrap();
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_block_fetcher_peer_removed_drops_in_flight() {
+        let (block_fetcher_tx, block_fetcher_rx) = create_block_fetcher_channel();
+        let (swarm_tx, mut swarm_rx) = mpsc::channel(64);
+        let fetcher = BlockFetcher::new(block_fetcher_rx, swarm_tx);
+
+        let peer_a = PeerId::random();
+        let peer_b = PeerId::random();
+
+        // Register both peers
+        block_fetcher_tx
+            .send(BlockFetcherEvent::PeersUpdated(vec![peer_a, peer_b]))
+            .await
+            .unwrap();
+
+        let blockhash = random_blockhash();
+
+        block_fetcher_tx
+            .send(BlockFetcherEvent::FetchBlocks {
+                blockhashes: vec![blockhash],
+                peer_id: peer_a,
+            })
+            .await
+            .unwrap();
+
+        let fetcher_handle = tokio::spawn(fetcher.run());
+
+        // Drain the initial request
+        let initial_request = swarm_rx.recv().await.unwrap();
+        let initial_peer = match initial_request {
+            SwarmSend::Request(peer, Message::GetData(GetData::Block(hash))) => {
+                assert_eq!(hash, blockhash);
+                peer
+            }
+            other => panic!("Expected GetData::Block, got: {other:?}"),
+        };
+
+        // Remove the peer that got the request -- in-flight should be
+        // dropped, not re-queued to other peers
+        block_fetcher_tx
+            .send(BlockFetcherEvent::PeerRemoved(initial_peer))
+            .await
+            .unwrap();
+
+        // Give the fetcher time to process the event
+        tokio::task::yield_now().await;
+
+        drop(block_fetcher_tx);
+
+        // No retry request should be sent
+        assert!(
+            swarm_rx.try_recv().is_err(),
+            "in-flight requests from removed peer should be dropped, not retried"
+        );
+
+        let result = fetcher_handle.await.unwrap();
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_block_fetcher_peer_removed_no_in_flight_is_noop() {
+        let (block_fetcher_tx, block_fetcher_rx) = create_block_fetcher_channel();
+        let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
+        let fetcher = BlockFetcher::new(block_fetcher_rx, swarm_tx);
+
+        let peer_a = PeerId::random();
+        let peer_b = PeerId::random();
+
+        block_fetcher_tx
+            .send(BlockFetcherEvent::PeersUpdated(vec![peer_a, peer_b]))
+            .await
+            .unwrap();
+
+        // Remove a peer with nothing in-flight
+        block_fetcher_tx
+            .send(BlockFetcherEvent::PeerRemoved(peer_a))
+            .await
+            .unwrap();
+
+        drop(block_fetcher_tx);
+
+        let fetcher_handle = tokio::spawn(fetcher.run());
+
+        // No requests should be sent
+        assert!(
+            swarm_rx.try_recv().is_err(),
+            "no requests should be sent when removed peer has no in-flight"
+        );
+
         let result = fetcher_handle.await.unwrap();
         assert!(result.is_ok());
     }
