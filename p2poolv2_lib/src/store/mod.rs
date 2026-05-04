@@ -72,12 +72,13 @@ fn blockhash_list_merge(
     existing_val: Option<&[u8]>,
     operands: &rocksdb::MergeOperands,
 ) -> Option<Vec<u8>> {
-    let mut blockhashes: Vec<BlockHash> = existing_val
-        .map(|bytes| parse_blockhash_bytes(bytes))
-        .unwrap_or_default();
+    let mut blockhashes: Vec<BlockHash> = match existing_val {
+        Some(bytes) => parse_blockhash_bytes(bytes)?,
+        None => Vec::new(),
+    };
 
     for op in operands {
-        for hash in parse_blockhash_bytes(op) {
+        for hash in parse_blockhash_bytes(op)? {
             if !blockhashes.contains(&hash) {
                 blockhashes.push(hash);
             }
@@ -91,14 +92,17 @@ fn blockhash_list_merge(
 
 /// Parse bytes as either a serialized `Vec<BlockHash>` (with compact_size
 /// length prefix) or a single raw 32-byte `BlockHash`.
-fn parse_blockhash_bytes(bytes: &[u8]) -> Vec<BlockHash> {
+///
+/// Returns `None` on unrecognised input so the merge operator can
+/// propagate the failure to RocksDB instead of silently discarding data.
+fn parse_blockhash_bytes(bytes: &[u8]) -> Option<Vec<BlockHash>> {
     if let Ok(hashes) = encode::deserialize::<Vec<BlockHash>>(bytes) {
-        return hashes;
+        return Some(hashes);
     }
     if let Ok(hash) = encode::deserialize::<BlockHash>(bytes) {
-        return vec![hash];
+        return Some(vec![hash]);
     }
-    Vec::new()
+    None
 }
 
 /// A rocksdb based store for share blocks.
@@ -609,21 +613,23 @@ mod tests {
         // Raw 32-byte operand (as seen in partial merge)
         let raw_operand = consensus::serialize(&hash1);
         assert_eq!(raw_operand.len(), 32);
-        let parsed = parse_blockhash_bytes(&raw_operand);
+        let parsed = parse_blockhash_bytes(&raw_operand).expect("raw 32-byte operand should parse");
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0], hash1);
 
         // Serialized Vec<BlockHash> (as seen in full merge existing_val)
         let vec_value = consensus::serialize(&vec![hash1, hash2]);
         assert_eq!(vec_value.len(), 65); // compact_size(2) + 32 + 32
-        let parsed = parse_blockhash_bytes(&vec_value);
+        let parsed = parse_blockhash_bytes(&vec_value).expect("serialized Vec should parse");
         assert_eq!(parsed.len(), 2);
         assert!(parsed.contains(&hash1));
         assert!(parsed.contains(&hash2));
 
-        // Empty input
-        let parsed = parse_blockhash_bytes(&[]);
-        assert!(parsed.is_empty());
+        // Empty input returns None (unrecognised format)
+        assert!(parse_blockhash_bytes(&[]).is_none());
+
+        // Garbage input returns None
+        assert!(parse_blockhash_bytes(&[0xFF, 0xFF, 0xFF]).is_none());
     }
 
     /// Tests the merge operator with compaction forcing SST-level merges.
@@ -694,7 +700,8 @@ mod tests {
         assert_eq!(partial_merge_result.len(), 65);
 
         // parse_blockhash_bytes must extract both hashes
-        let parsed = parse_blockhash_bytes(&partial_merge_result);
+        let parsed = parse_blockhash_bytes(&partial_merge_result)
+            .expect("partial merge result should parse");
         assert_eq!(parsed.len(), 2);
         assert!(parsed.contains(&hash1));
         assert!(parsed.contains(&hash2));
