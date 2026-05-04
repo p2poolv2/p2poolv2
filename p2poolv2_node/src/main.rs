@@ -124,12 +124,12 @@ async fn main() -> ExitCode {
     let store_handle = StoreHandle::new(store.clone(), write_tx);
     let chain_store_handle = ChainStoreHandle::new(store_handle, config.stratum.network);
 
-    // Initialize chain with genesis (async)
+    // Initialise chain with genesis (async)
     if let Err(e) = chain_store_handle
         .init_or_setup_genesis(genesis.clone())
         .await
     {
-        error!("Failed to initialize chain: {e}");
+        error!("Failed to initialise chain: {e}");
         return ExitCode::FAILURE;
     }
 

@@ -182,7 +182,7 @@ pub trait ShareValidator {
 
 /// Production implementation of ShareValidator.
 ///
-/// Stores a `PoolDifficulty` instance initialized at construction time,
+/// Stores a `PoolDifficulty` instance initialised at construction time,
 /// avoiding repeated builds on each validation call.
 pub struct DefaultShareValidator {
     pool_difficulty: PoolDifficulty,

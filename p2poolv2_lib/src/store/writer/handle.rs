@@ -281,7 +281,7 @@ impl StoreHandle {
         reply_rx.await.map_err(|_| StoreError::ChannelClosed)?
     }
 
-    /// Initialize chain state from store.
+    /// Initialise chain state from store.
     pub async fn init_chain_state_from_store(
         &self,
         genesis_hash: BlockHash,
