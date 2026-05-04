@@ -68,9 +68,9 @@ impl ChainStoreHandle {
         }
     }
 
-    /// Initialize the chain from an existing store or set up genesis.
+    /// Initialise the chain from an existing store or set up genesis.
     ///
-    /// If genesis is already in store, initializes chain state from existing data.
+    /// If genesis is already in store, initialises chain state from existing data.
     /// Otherwise, adds genesis block to create a new chain.
     pub async fn init_or_setup_genesis(&self, genesis_block: ShareBlock) -> Result<(), StoreError> {
         let genesis_block_hash = genesis_block.header.block_hash();
@@ -80,7 +80,7 @@ impl ChainStoreHandle {
             // Set up new chain with genesis
             self.add_share_block(genesis_block).await?;
         } else {
-            // Initialize chain state from existing store data
+            // Initialise chain state from existing store data
             self.store_handle
                 .init_chain_state_from_store(genesis_block_hash)
                 .await?;

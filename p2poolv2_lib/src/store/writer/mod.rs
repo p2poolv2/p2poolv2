@@ -109,7 +109,7 @@ pub enum WriteCommand {
         reply: oneshot::Sender<Result<(), StoreError>>,
     },
 
-    /// Initialize chain state from store
+    /// Initialise chain state from store
     InitChainStateFromStore {
         genesis_hash: BlockHash,
         reply: oneshot::Sender<Result<(), StoreError>>,

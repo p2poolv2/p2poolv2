@@ -194,7 +194,7 @@ impl DifficultyAdjusterTrait for DifficultyAdjuster {
     ) -> (Option<u64>, bool) {
         let mut first_share = false;
 
-        // If this is the first share, initialize timestamps
+        // If this is the first share, initialise timestamps
         if self.first_share_timestamp.is_none() {
             debug!("First share submission received, initializing timestamps.");
             self.first_share_timestamp = Some(current_timestamp);
@@ -492,7 +492,7 @@ mod tests {
         let mut adjuster = DifficultyAdjuster::new(start_difficulty, min_diff, Some(100000));
         let current_timestamp = SystemTime::now();
 
-        // Submit first share to initialize
+        // Submit first share to initialise
         let _ = adjuster.record_share_submission(min_diff as u128, 1, None, current_timestamp);
 
         // Submit several shares but less than MIN_SHARES_BEFORE_ADJUST
@@ -521,7 +521,7 @@ mod tests {
         let mut adjuster = DifficultyAdjuster::new(start_difficulty, min_diff, Some(100000));
         let current_timestamp = SystemTime::now();
 
-        // Submit first share to initialize
+        // Submit first share to initialise
         let _ = adjuster.record_share_submission(min_diff as u128, 1, None, current_timestamp);
 
         // Force the timestamps to be old enough to trigger adjustment
@@ -658,7 +658,7 @@ mod tests {
         let mut adjuster = DifficultyAdjuster::new(1000, min_diff, Some(100000));
         let current_timestamp = SystemTime::now();
 
-        // Submit first share to initialize
+        // Submit first share to initialise
         let _ = adjuster.record_share_submission(min_diff as u128, 1, None, current_timestamp);
 
         // Simulate a miner with low performance
@@ -716,7 +716,7 @@ mod tests {
         let mut adjuster = DifficultyAdjuster::new(100, min_diff, Some(100_000));
         let current_timestamp = SystemTime::now();
 
-        // Submit first share to initialize
+        // Submit first share to initialise
         let _ = adjuster.record_share_submission(min_diff as u128, 1, None, current_timestamp);
 
         // Set a 30-minute-old first share time to get bias close to 1.0
@@ -743,7 +743,7 @@ mod tests {
         let mut adjuster = DifficultyAdjuster::new(100, min_diff, Some(100000));
         let current_timestamp = SystemTime::now();
 
-        // Submit first share to initialize
+        // Submit first share to initialise
         let _ = adjuster.record_share_submission(min_diff as u128, 1, None, current_timestamp);
 
         // Set bias close to 1.0 with an old first share time
@@ -767,7 +767,7 @@ mod tests {
         let mut adjuster = DifficultyAdjuster::new(100, min_diff, Some(100000));
         let current_timestamp = SystemTime::now();
 
-        // Submit first share to initialize
+        // Submit first share to initialise
         let _ = adjuster.record_share_submission(min_diff as u128, 1, None, current_timestamp);
 
         // Set a first share time that's recent (1 minute ago)

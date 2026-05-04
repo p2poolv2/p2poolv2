@@ -166,7 +166,7 @@ tokio::task::spawn_blocking(move || store_writer.run());
 let store_handle = StoreHandle::new(store, write_tx);
 let chain_store_handle = ChainStoreHandle::new(store_handle, network);
 
-// 5. Initialize genesis
+// 5. Initialise genesis
 let genesis = ShareBlock::build_genesis_for_network(network);
 chain_store_handle.init_or_setup_genesis(genesis).await?;
 ```

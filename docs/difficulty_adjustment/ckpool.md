@@ -98,7 +98,7 @@ The final difficulty is bounded by:
    - Difficulty is not adjusted until 72 shares have been collected or 240 seconds have passed since the last adjustment.
    - Instead of aiming for a precise 0.3 drr, ckpool doesn't change difficulty until drr falls out of [0.15, 0.4] range.
 
-1. There's special handling for first shares in a session. We just need to initialize the ldc timestamp and return.
+1. There's special handling for first shares in a session. We just need to initialise the ldc timestamp and return.
 
 1. Retain difficulty change information for debugging purposes.
    - Old difficulty preserved in client->old_diff

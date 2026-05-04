@@ -24,7 +24,7 @@ NC='\033[0m' # No Color
 PREVIOUS_PORT_CONNECTIONS=0
 MONITOR_START_TIME=$(date +%s)
 
-# Initialize all metrics to 0
+# Initialise all metrics to 0
 PORT_TOTAL=0
 PORT_ESTABLISHED=0
 PORT_TIME_WAIT=0

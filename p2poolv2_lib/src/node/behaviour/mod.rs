@@ -59,7 +59,7 @@ pub enum P2PoolBehaviourEvent {
 #[allow(dead_code)]
 impl P2PoolBehaviour {
     pub fn new(local_key: &Keypair, config: &Config) -> Result<Self, Box<dyn Error>> {
-        // Initialize Kademlia
+        // Initialise Kademlia
         let store = MemoryStore::new(local_key.public().to_peer_id());
         let mut kad_config = kad::Config::default();
         kad_config.set_query_timeout(tokio::time::Duration::from_secs(60));

@@ -180,7 +180,7 @@ impl Store {
         let store = Self {
             path,
             db,
-            // Initialize chain state fields
+            // Initialise chain state fields
             genesis_blockhash: Arc::new(RwLock::new(None)),
         };
         Ok(store)
@@ -310,12 +310,12 @@ impl Store {
         Ok(())
     }
 
-    /// Initialize chain state from existing data in the store.
+    /// Initialise chain state from existing data in the store.
     /// Sets the genesis blockhash so chain tip and total work can be read from the confirmed chain index.
     pub fn init_chain_state_from_store(&self, genesis_hash: BlockHash) -> Result<(), StoreError> {
         self.set_genesis_blockhash(genesis_hash);
         debug!(
-            "Initialized chain state: tip={}, height={}, work={}",
+            "Initialised chain state: tip={}, height={}, work={}",
             self.get_chain_tip()?,
             self.get_top_confirmed_height()?,
             self.get_total_work()?,
