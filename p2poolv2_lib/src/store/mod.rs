@@ -90,19 +90,27 @@ fn blockhash_list_merge(
     Some(result)
 }
 
-/// Parse bytes as either a serialized `Vec<BlockHash>` (with compact_size
-/// length prefix) or a single raw 32-byte `BlockHash`.
+/// Parse bytes as either a single raw 32-byte `BlockHash` or a
+/// serialized `Vec<BlockHash>` (compact_size length prefix + N hashes).
+///
+/// Disambiguation is by length: a raw `BlockHash` is always exactly
+/// 32 bytes, while a serialized `Vec<BlockHash>` is never 32 bytes
+/// (0 elements = 1 byte, 1 element = 33 bytes, 2 elements = 65 bytes,
+/// etc.). This avoids relying on `encode::deserialize` trial order,
+/// which is unsafe because `deserialize` does not require full input
+/// consumption -- a 32-byte hash starting with 0x00 would decode as
+/// an empty Vec, silently losing the hash.
 ///
 /// Returns `None` on unrecognised input so the merge operator can
 /// propagate the failure to RocksDB instead of silently discarding data.
 fn parse_blockhash_bytes(bytes: &[u8]) -> Option<Vec<BlockHash>> {
-    if let Ok(hashes) = encode::deserialize::<Vec<BlockHash>>(bytes) {
-        return Some(hashes);
-    }
-    if let Ok(hash) = encode::deserialize::<BlockHash>(bytes) {
+    const BLOCKHASH_LEN: usize = 32;
+    if bytes.len() == BLOCKHASH_LEN {
+        let hash = encode::deserialize::<BlockHash>(bytes).ok()?;
         return Some(vec![hash]);
     }
-    None
+    let hashes = encode::deserialize::<Vec<BlockHash>>(bytes).ok()?;
+    Some(hashes)
 }
 
 /// A rocksdb based store for share blocks.
@@ -624,6 +632,15 @@ mod tests {
         assert_eq!(parsed.len(), 2);
         assert!(parsed.contains(&hash1));
         assert!(parsed.contains(&hash2));
+
+        // Hash with 0x00 first byte must NOT be misread as empty Vec
+        let mut zero_prefix_bytes = [0x00u8; 32];
+        zero_prefix_bytes[31] = 0x42;
+        let zero_prefix_hash = BlockHash::from_byte_array(zero_prefix_bytes);
+        let raw_zero = consensus::serialize(&zero_prefix_hash);
+        let parsed = parse_blockhash_bytes(&raw_zero).expect("0x00-prefixed hash should parse");
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0], zero_prefix_hash);
 
         // Empty input returns None (unrecognised format)
         assert!(parse_blockhash_bytes(&[]).is_none());
