@@ -41,6 +41,7 @@ use tracing::{error, info, trace};
 use crate::signal::{ShutdownReason, setup_signal_handler};
 
 mod background_tasks;
+mod bitcoin_node;
 mod signal;
 
 /// Interval in seconds to poll for new block templates since the last zmq event signal
@@ -142,6 +143,11 @@ async fn main() -> ExitCode {
         return ExitCode::FAILURE;
     };
     info!("Latest tip {} at height {}", tip, height);
+
+    if let Err(error) = bitcoin_node::wait_for_ibd(&config.bitcoinrpc).await {
+        error!("Failed while waiting for Bitcoin node sync: {error}");
+        return ExitCode::FAILURE;
+    }
 
     background_tasks::start_background_tasks(
         store.clone(),

@@ -109,6 +109,13 @@ impl fmt::Display for BitcoindRpcError {
     }
 }
 
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+pub struct GetBlockchainInfo {
+    #[serde(rename = "initialblockdownload")]
+    pub initial_block_download: bool,
+    pub headers: u64,
+}
+
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct BitcoindRpcClient {
@@ -211,6 +218,14 @@ impl BitcoindRpcClient {
         let params: Vec<serde_json::Value> = vec![];
         let result: serde_json::Value = self.request("getdifficulty", params).await?;
         Ok(result.as_f64().unwrap())
+    }
+
+    pub async fn getblockchaininfo(&self) -> Result<GetBlockchainInfo, BitcoindRpcError> {
+        self.request("getblockchaininfo", vec![]).await
+    }
+
+    pub async fn getblockcount(&self) -> Result<u64, BitcoindRpcError> {
+        self.request("getblockcount", vec![]).await
     }
 
     /// Get current bitcoin block count from bitcoind rpc
@@ -420,6 +435,67 @@ mod tests {
         let difficulty = client.get_difficulty().await.unwrap();
 
         assert_eq!(difficulty, 1234.56);
+    }
+
+    #[tokio::test]
+    async fn test_getblockchaininfo() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(header("Authorization", "Basic cDJwb29sOnAycG9vbA=="))
+            .and(body_json(serde_json::json!({
+                "method": "getblockchaininfo",
+                "params": [],
+                "id": 0
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": {
+                    "initialblockdownload": true,
+                    "headers": 321
+                },
+                "error": null,
+                "id": 0
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
+        let info = client.getblockchaininfo().await.unwrap();
+
+        assert_eq!(
+            info,
+            GetBlockchainInfo {
+                initial_block_download: true,
+                headers: 321,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn test_getblockcount() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(header("Authorization", "Basic cDJwb29sOnAycG9vbA=="))
+            .and(body_json(serde_json::json!({
+                "method": "getblockcount",
+                "params": [],
+                "id": 0
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": 654,
+                "error": null,
+                "id": 0
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
+        let count = client.getblockcount().await.unwrap();
+
+        assert_eq!(count, 654);
     }
 
     #[tokio::test]

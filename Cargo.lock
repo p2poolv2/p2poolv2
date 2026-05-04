@@ -3364,6 +3364,7 @@ dependencies = [
 name = "p2poolv2_node"
 version = "0.10.9"
 dependencies = [
+ "base64 0.22.1",
  "bitcoin",
  "bitcoindrpc",
  "clap",
@@ -3374,10 +3375,12 @@ dependencies = [
  "p2poolv2_cli",
  "p2poolv2_lib",
  "serde",
+ "serde_json",
  "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "wiremock",
 ]
 
 [[package]]
