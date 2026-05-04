@@ -294,12 +294,16 @@ fn main() {
                 ));
             }
 
-            // 10d. Uncle is ancestor-type (its parent is an ancestor of the nephew)
+            // 10d. Uncle parent ancestry check (informational)
+            // An uncle's parent does NOT have to be on the confirmed chain.
+            // Deep-fork uncles (whose parents were never confirmed) are valid
+            // as long as the uncle itself has valid PoW and is at an ancestor
+            // height. This is a warning, not an error.
             if let Some(uncle_hdr) = &uncle_header {
                 let uncle_parent = uncle_hdr.prev_share_blockhash;
                 if !is_uncle_ancestor_type(&uncle_parent, height, &confirmed_hashes) {
-                    summary.error(format!(
-                        "h:{height} {blockhash} - uncle {uncle_hash} parent {uncle_parent} is not an ancestor on confirmed chain (uncle should be an ancestor, not a sibling)"
+                    summary.warn(format!(
+                        "h:{height} {blockhash} - uncle {uncle_hash} parent {uncle_parent} is not on confirmed chain (deep-fork uncle)"
                     ));
                 }
 
