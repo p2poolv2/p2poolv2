@@ -2880,4 +2880,102 @@ mod tests {
         let result = store.first_confirmed_for_locator(&locator);
         assert_eq!(result, Some(share_a.block_hash()));
     }
+
+    // --- query_dag tests ---
+
+    #[test]
+    fn test_query_dag_returns_genesis() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let entries = store.query_dag(0, 0);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].blockhash, genesis.block_hash());
+        assert_eq!(entries[0].height, 0);
+        assert_eq!(entries[0].status, "Confirmed");
+        assert!(entries[0].has_block_data);
+    }
+
+    #[test]
+    fn test_query_dag_returns_multiple_blocks_at_same_height() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Two blocks at height 1 with same parent (genesis)
+        let share_a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        store.push_to_confirmed_chain(&share_a).unwrap();
+
+        let share_b = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695793)
+            .build();
+
+        // Store block + organise header so it appears in height index
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&share_b, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+        let mut batch = Store::get_write_batch();
+        store.organise_header(&share_b.header, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let entries = store.query_dag(1, 1);
+        assert_eq!(entries.len(), 2);
+
+        let hashes: Vec<BlockHash> = entries.iter().map(|e| e.blockhash).collect();
+        assert!(hashes.contains(&share_a.block_hash()));
+        assert!(hashes.contains(&share_b.block_hash()));
+    }
+
+    #[test]
+    fn test_query_dag_returns_empty_for_unpopulated_heights() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Query heights above the chain -- should return empty
+        let entries = store.query_dag(5, 10);
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn test_query_dag_shows_has_block_data_false_for_header_only() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Organise header only (no block data stored)
+        let share = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store.organise_header(&share.header, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let entries = store.query_dag(1, 1);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].blockhash, share.block_hash());
+        assert!(!entries[0].has_block_data);
+    }
 }

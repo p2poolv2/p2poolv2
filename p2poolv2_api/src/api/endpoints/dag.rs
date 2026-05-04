@@ -84,3 +84,96 @@ pub(crate) async fn dag(
         entries,
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::server::{AppConfig, AppState};
+    use axum::extract::{Query, State};
+    use p2poolv2_lib::accounting::stats::metrics;
+    use p2poolv2_lib::monitoring_events::create_monitoring_event_channel;
+    use p2poolv2_lib::node::actor::NodeHandle;
+    use p2poolv2_lib::stratum::work::tracker::start_tracker_actor;
+    use p2poolv2_lib::test_utils::{genesis_for_tests, setup_test_chain_store_handle};
+
+    async fn build_test_state(node_handle: NodeHandle) -> (Arc<AppState>, tempfile::TempDir) {
+        let (chain_store_handle, temp_dir) = setup_test_chain_store_handle(true).await;
+        let metrics_temp = tempfile::tempdir().unwrap();
+        let metrics_handle =
+            metrics::start_metrics(metrics_temp.path().to_str().unwrap().to_string())
+                .await
+                .unwrap();
+        let tracker_handle = start_tracker_actor();
+        let state = Arc::new(AppState {
+            app_config: AppConfig {
+                pool_signature_length: 0,
+                network: bitcoin::Network::Signet,
+                cors_allowed: false,
+            },
+            chain_store_handle,
+            metrics_handle,
+            tracker_handle,
+            node_handle,
+            monitoring_event_sender: create_monitoring_event_channel().0,
+            auth_user: None,
+            auth_token: None,
+        });
+        (state, temp_dir)
+    }
+
+    #[tokio::test]
+    async fn test_dag_rejects_num_zero() {
+        let node_handle = NodeHandle::new_for_test();
+        let (state, _temp_dir) = build_test_state(node_handle).await;
+
+        let query = Query(DagQuery {
+            to: None,
+            num: Some(0),
+        });
+
+        let result = dag(State(state), query).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_dag_rejects_num_above_max() {
+        let node_handle = NodeHandle::new_for_test();
+        let (state, _temp_dir) = build_test_state(node_handle).await;
+
+        let query = Query(DagQuery {
+            to: None,
+            num: Some(1001),
+        });
+
+        let result = dag(State(state), query).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_dag_returns_genesis_entries() {
+        let node_handle = NodeHandle::new_for_test();
+        let (state, _temp_dir) = build_test_state(node_handle).await;
+
+        let genesis = genesis_for_tests();
+        state
+            .chain_store_handle
+            .init_or_setup_genesis(genesis.clone())
+            .await
+            .unwrap();
+
+        let query = Query(DagQuery {
+            to: Some(0),
+            num: Some(1),
+        });
+
+        let result = dag(State(state), query).await;
+        assert!(result.is_ok());
+        let response = result.unwrap().0;
+        assert_eq!(response.from_height, 0);
+        assert_eq!(response.to_height, 0);
+        assert_eq!(response.entries.len(), 1);
+        assert_eq!(response.entries[0].blockhash, genesis.block_hash());
+        assert_eq!(response.entries[0].status, "Confirmed");
+        assert!(response.entries[0].has_block_data);
+    }
+}
