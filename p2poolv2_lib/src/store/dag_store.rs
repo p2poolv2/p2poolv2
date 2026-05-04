@@ -20,6 +20,7 @@ use crate::shares::chain::chain_store_handle::{COMMON_ANCESTOR_DEPTH, ConfirmedH
 use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::shares::validation::MAX_UNCLES;
 use bitcoin::consensus::{self, Encodable, encode};
+use bitcoin::hashes::Hash;
 use bitcoin::{BlockHash, CompactTarget, Work};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -603,6 +604,66 @@ impl Store {
         let header_map = self.fetch_header_map(&candidate_chain)?;
         Ok(self.assemble_share_infos(&candidate_chain, &header_map))
     }
+
+    /// Query ALL share headers in the height index for a range of heights.
+    ///
+    /// Unlike query_shares/query_candidates which only return confirmed or
+    /// candidate chain entries, this returns every block at each height
+    /// regardless of status (Confirmed, Candidate, HeaderValid, etc.).
+    pub fn query_dag(&self, from_height: u32, to_height: u32) -> Vec<DagEntry> {
+        let estimated_capacity = ((to_height - from_height + 1) * 2) as usize;
+        let mut entries = Vec::with_capacity(estimated_capacity);
+
+        let mut height = from_height;
+        while height <= to_height {
+            let blockhashes = self.get_blockhashes_for_height(height);
+            for blockhash in &blockhashes {
+                let status = self
+                    .get_block_metadata(blockhash)
+                    .map(|metadata| format!("{:?}", metadata.status))
+                    .unwrap_or_else(|_| "Unknown".to_string());
+
+                let (parent, uncles, miner_address) = match self.get_share_header(blockhash) {
+                    Ok(Some(header)) => (
+                        header.prev_share_blockhash,
+                        header.uncles.clone(),
+                        header.miner_bitcoin_address.to_string(),
+                    ),
+                    _ => (BlockHash::all_zeros(), vec![], "unknown".to_string()),
+                };
+
+                let has_block_data = self.share_block_exists(blockhash);
+
+                entries.push(DagEntry {
+                    blockhash: *blockhash,
+                    height,
+                    status,
+                    parent,
+                    uncles,
+                    miner_address,
+                    has_block_data,
+                });
+            }
+            height += 1;
+        }
+
+        entries
+    }
+}
+
+/// Entry representing a single share header at a height in the DAG.
+///
+/// Includes all blocks at that height regardless of chain status,
+/// useful for debugging fork structure and missing block data.
+#[derive(Clone, Debug, Serialize)]
+pub struct DagEntry {
+    pub blockhash: BlockHash,
+    pub height: u32,
+    pub status: String,
+    pub parent: BlockHash,
+    pub uncles: Vec<BlockHash>,
+    pub miner_address: String,
+    pub has_block_data: bool,
 }
 
 #[cfg(test)]

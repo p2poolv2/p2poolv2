@@ -17,6 +17,7 @@
 pub mod api_client;
 pub mod candidates;
 pub mod chain_info;
+pub mod dag;
 pub mod db_query;
 pub mod gen_auth;
 pub mod peers_info;
@@ -105,6 +106,18 @@ pub enum Commands {
         #[arg(short, long, default_value = "false")]
         full: bool,
     },
+    /// Display all share headers at each height in the height index (DAG view)
+    Dag {
+        /// Height to query up to, inclusive. Default is confirmed chain tip.
+        #[arg(short, long)]
+        to: Option<u32>,
+        /// Number of heights to display going back from --to. Default 10.
+        #[arg(short, long, default_value = "10")]
+        num: u32,
+        /// Output as Graphviz DOT format DAG (requires --db-path)
+        #[arg(short, long, default_value = "false")]
+        dot: bool,
+    },
     /// Show connected peers by querying the running node's API
     PeersInfo,
     /// Generate API authentication credentials (salt, password, HMAC)
@@ -131,7 +144,8 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
             | Commands::PplnsShares { .. }
             | Commands::Shares { .. }
             | Commands::Candidates { .. }
-            | Commands::Share { .. },
+            | Commands::Share { .. }
+            | Commands::Dag { .. },
         ) => {
             if let Some(db_path) = &cli.db_path {
                 // Direct database query mode (offline, no running node required)
@@ -169,6 +183,9 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
                     }
                     Some(Commands::Share { hash, height, full }) => {
                         commands::db_query::share_lookup(&store, hash.clone(), *height, *full)?;
+                    }
+                    Some(Commands::Dag { to, num, dot }) => {
+                        commands::db_query::dag(&store, *to, *num, *dot)?;
                     }
                     _ => unreachable!(),
                 }
@@ -221,6 +238,9 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
                     }
                     Some(Commands::Share { hash, height, full }) => {
                         commands::share::execute(&config.api, hash.clone(), *height, *full).await?;
+                    }
+                    Some(Commands::Dag { to, num, dot: _ }) => {
+                        commands::dag::execute(&config.api, *to, *num).await?;
                     }
                     _ => unreachable!(),
                 }

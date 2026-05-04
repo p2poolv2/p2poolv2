@@ -22,7 +22,7 @@
 use bitcoin::BlockHash;
 use p2poolv2_lib::store::Store;
 use p2poolv2_lib::store::block_tx_metadata::Status;
-use p2poolv2_lib::store::dag_store::MAX_UNCLES_DEPTH;
+use p2poolv2_lib::store::dag_store::{DagEntry, MAX_UNCLES_DEPTH};
 use p2poolv2_lib::store::writer::StoreError;
 use p2poolv2_lib::utils::time_provider::format_timestamp;
 use serde::Serialize;
@@ -217,6 +217,35 @@ pub fn pplns_shares(
     Ok(())
 }
 
+/// Query all share headers at each height in the height index.
+pub fn dag(store: &Store, to: Option<u32>, num: u32, dot: bool) -> Result<(), Box<dyn Error>> {
+    let tip_height = store
+        .get_top_confirmed_height()
+        .map_err(|error| format!("Failed to get tip height: {error}"))?;
+
+    let to_height = match to {
+        Some(height) if height > tip_height => tip_height,
+        Some(height) => height,
+        None => tip_height,
+    };
+
+    let from_height = to_height.saturating_sub(num.saturating_sub(1));
+
+    let entries = store.query_dag(from_height, to_height);
+
+    if dot {
+        print_dag_dot(&entries);
+    } else {
+        let response = serde_json::json!({
+            "from_height": from_height,
+            "to_height": to_height,
+            "entries": entries,
+        });
+        println!("{}", serde_json::to_string_pretty(&response)?);
+    }
+    Ok(())
+}
+
 // --- DOT output helpers ---
 
 use p2poolv2_lib::store::dag_store::ShareInfo;
@@ -304,6 +333,71 @@ fn print_shares_dot(shares: &[ShareInfo], graph_name: &str) {
             let uncle_hash = uncle.blockhash.to_string();
             let uncle_prev = uncle.prev_blockhash.to_string();
             println!("    \"{uncle_hash}\" -> \"{uncle_prev}\" [color=\"#999999\"];");
+        }
+    }
+
+    println!("}}");
+    use std::io::Write;
+    std::io::stdout().flush().ok();
+}
+
+/// Render DagEntry list as a Graphviz DOT digraph.
+///
+/// Colours nodes by status: green for Confirmed, yellow for Candidate,
+/// grey for HeaderValid/other. Marks nodes without block data with a
+/// double border. Only emits edges between nodes present in the result.
+fn print_dag_dot(entries: &[DagEntry]) {
+    let known_hashes: std::collections::HashSet<String> = entries
+        .iter()
+        .map(|entry| entry.blockhash.to_string())
+        .collect();
+
+    println!("digraph dag {{");
+    println!("    node [shape=record, style=filled];");
+    println!();
+
+    for entry in entries {
+        let hash = entry.blockhash.to_string();
+        let identifier = short(&hash, 8);
+        let miner = short(&entry.miner_address, 8);
+        let data_marker = if entry.has_block_data { "D" } else { "-" };
+        let label = format!(
+            "{}|h:{}|{}|{}|{}",
+            identifier, entry.height, miner, entry.status, data_marker
+        );
+        let fill_color = match entry.status.as_str() {
+            "Confirmed" => "#a8d5ba",
+            "Candidate" => "#ffffb3",
+            "HeaderValid" | "BlockValid" => "#d9d9d9",
+            _ => "#f4a582",
+        };
+        let border = if entry.has_block_data {
+            ""
+        } else {
+            ", peripheries=2"
+        };
+        println!("    \"{hash}\" [label=\"{label}\", fillcolor=\"{fill_color}\"{border}];");
+    }
+
+    println!();
+
+    // Edges: block -> parent (only if parent is in result set)
+    for entry in entries {
+        let hash = entry.blockhash.to_string();
+        let parent = entry.parent.to_string();
+        if known_hashes.contains(&parent) {
+            println!("    \"{hash}\" -> \"{parent}\";");
+        }
+    }
+
+    // Edges: block -> uncles (only if uncle is in result set)
+    for entry in entries {
+        let hash = entry.blockhash.to_string();
+        for uncle in &entry.uncles {
+            let uncle_hash = uncle.to_string();
+            if known_hashes.contains(&uncle_hash) {
+                println!("    \"{hash}\" -> \"{uncle_hash}\" [style=dashed, color=\"#cc6633\"];");
+            }
         }
     }
 
