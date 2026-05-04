@@ -118,7 +118,8 @@ pub async fn handle_share_headers<C: Send + Sync>(
 /// 1. Every header passes validate_header_minimum_difficulty
 /// 2. Every header's prev_share_blockhash references the anchor or another header in the batch
 /// 3. Main chain headers have bits matching ASERT-computed target
-/// 4. Cumulative work of extended main chain exceeds MIN_CUMULATIVE_CHAIN_WORK
+/// 4. Verifies all uncles have been received and stored [don't need to candidated or confirmed]
+/// 5. Cumulative work of extended main chain exceeds MIN_CUMULATIVE_CHAIN_WORK
 fn validate_header_chain(
     share_headers: &[ShareHeader],
     chain_store_handle: &ChainStoreHandle,
