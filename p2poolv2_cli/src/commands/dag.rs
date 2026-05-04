@@ -14,12 +14,24 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-pub mod candidates;
-pub mod chain_info;
-pub mod dag;
-pub mod share;
-pub mod share_headers;
-pub mod shares;
+use crate::commands::api_client::ApiClient;
+use p2poolv2_lib::config::ApiConfig;
+use std::error::Error;
 
-/// Maximum number of candidates and shares that can be requested in a single query.
-pub(crate) const MAX_NUM_SHARES_IN_RESPONSE: u32 = 100;
+/// Execute the dag command by querying the running node's API.
+pub async fn execute(
+    api_config: &ApiConfig,
+    to: Option<u32>,
+    num: u32,
+) -> Result<(), Box<dyn Error>> {
+    let api_client = ApiClient::new(api_config);
+
+    let mut path = format!("/dag?num={num}");
+    if let Some(to_height) = to {
+        path.push_str(&format!("&to={to_height}"));
+    }
+
+    let response: serde_json::Value = api_client.get_json(&path).await?;
+    println!("{}", serde_json::to_string_pretty(&response)?);
+    Ok(())
+}
