@@ -219,14 +219,20 @@ pub fn pplns_shares(
 
 /// Query all share headers at each height in the height index.
 pub fn dag(store: &Store, to: Option<u32>, num: u32, dot: bool) -> Result<(), Box<dyn Error>> {
-    let tip_height = store
-        .get_top_confirmed_height()
-        .map_err(|error| format!("Failed to get tip height: {error}"))?;
+    let confirmed_height = store.get_top_confirmed_height().ok();
+    let candidate_height = store.get_top_candidate_height().ok();
+
+    let max_height = match (confirmed_height, candidate_height) {
+        (Some(confirmed), Some(candidate)) => confirmed.max(candidate),
+        (Some(confirmed), None) => confirmed,
+        (None, Some(candidate)) => candidate,
+        (None, None) => return Err("No confirmed or candidate chain found in store".into()),
+    };
 
     let to_height = match to {
-        Some(height) if height > tip_height => tip_height,
+        Some(height) if height > max_height => max_height,
         Some(height) => height,
-        None => tip_height,
+        None => max_height,
     };
 
     let from_height = to_height.saturating_sub(num.saturating_sub(1));

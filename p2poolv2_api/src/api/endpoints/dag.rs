@@ -60,15 +60,30 @@ pub(crate) async fn dag(
         )));
     }
 
-    let tip_height = chain_store_handle
+    let confirmed_height = chain_store_handle
         .get_tip_height()
-        .map_err(|error| ApiError::ServerError(format!("Failed to get tip height: {error}")))?
-        .ok_or_else(|| ApiError::ServerError("No confirmed chain tip found".to_string()))?;
+        .map_err(|error| ApiError::ServerError(format!("Failed to get tip height: {error}")))?;
+    let candidate_height = chain_store_handle
+        .get_candidate_tip_height()
+        .map_err(|error| {
+            ApiError::ServerError(format!("Failed to get candidate tip height: {error}"))
+        })?;
+
+    let max_height = match (confirmed_height, candidate_height) {
+        (Some(confirmed), Some(candidate)) => confirmed.max(candidate),
+        (Some(confirmed), None) => confirmed,
+        (None, Some(candidate)) => candidate,
+        (None, None) => {
+            return Err(ApiError::ServerError(
+                "No confirmed or candidate chain found".to_string(),
+            ));
+        }
+    };
 
     let to_height = match query.to {
-        Some(height) if height > tip_height => tip_height,
+        Some(height) if height > max_height => max_height,
         Some(height) => height,
-        None => tip_height,
+        None => max_height,
     };
 
     let from_height = to_height.saturating_sub(num.saturating_sub(1));
