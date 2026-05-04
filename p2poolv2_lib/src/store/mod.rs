@@ -53,32 +53,52 @@ pub struct Store {
     genesis_blockhash: Arc<RwLock<Option<BlockHash>>>,
 }
 
-/// Merge operator for appending BlockHashes to a Vec<BlockHash>
-/// This allows atomic append operations without read-modify-write cycles
+/// Merge operator for appending BlockHashes to a Vec<BlockHash>.
+///
+/// This allows atomic append operations without read-modify-write cycles.
+///
+/// Registered via `set_merge_operator_associative`, so the same function
+/// handles both full merge and partial merge:
+/// - Full merge: `existing_val` is the base value from a prior Put/merge
+///   result (a serialized `Vec<BlockHash>`) or `None`.
+/// - Partial merge: `existing_val` is `Some(left_operand)` where the left
+///   operand may be a raw 32-byte `BlockHash` OR a previously merged
+///   `Vec<BlockHash>`. Operands may also be either format.
+///
+/// Each value passed in (existing_val or operand) is parsed by trying
+/// `Vec<BlockHash>` first, then falling back to a single `BlockHash`.
 fn blockhash_list_merge(
     _key: &[u8],
     existing_val: Option<&[u8]>,
     operands: &rocksdb::MergeOperands,
 ) -> Option<Vec<u8>> {
-    // Deserialize existing vector or start with empty
     let mut blockhashes: Vec<BlockHash> = existing_val
-        .and_then(|bytes| encode::deserialize(bytes).ok())
+        .map(|bytes| parse_blockhash_bytes(bytes))
         .unwrap_or_default();
 
-    // Process each merge operand (each is a single BlockHash to append)
     for op in operands {
-        if let Ok(new_hash) = encode::deserialize::<BlockHash>(op) {
-            // Only add if not already present
-            if !blockhashes.contains(&new_hash) {
-                blockhashes.push(new_hash);
+        for hash in parse_blockhash_bytes(op) {
+            if !blockhashes.contains(&hash) {
+                blockhashes.push(hash);
             }
         }
     }
 
-    // Serialize the result
     let mut result = Vec::new();
     blockhashes.consensus_encode(&mut result).ok()?;
     Some(result)
+}
+
+/// Parse bytes as either a serialized `Vec<BlockHash>` (with compact_size
+/// length prefix) or a single raw 32-byte `BlockHash`.
+fn parse_blockhash_bytes(bytes: &[u8]) -> Vec<BlockHash> {
+    if let Ok(hashes) = encode::deserialize::<Vec<BlockHash>>(bytes) {
+        return hashes;
+    }
+    if let Ok(hash) = encode::deserialize::<BlockHash>(bytes) {
+        return vec![hash];
+    }
+    Vec::new()
 }
 
 /// A rocksdb based store for share blocks.
@@ -424,6 +444,7 @@ mod tests {
     use super::*;
     use crate::test_utils::TestShareBlockBuilder;
     use crate::test_utils::multiplied_compact_target_as_work;
+    use bitcoin::consensus;
     use bitcoin::hashes::Hash;
     use tempfile::tempdir;
 
@@ -573,6 +594,110 @@ mod tests {
         assert!(hashes.contains(&hash1));
         assert!(hashes.contains(&hash2));
         assert!(hashes.contains(&hash3));
+    }
+
+    /// Tests parse_blockhash_bytes handles both formats correctly.
+    ///
+    /// In partial merge mode, RocksDB passes raw 32-byte BlockHash
+    /// operands. In full merge mode, existing_val is a serialized
+    /// Vec<BlockHash>. The parse function must handle both.
+    #[test]
+    fn test_parse_blockhash_bytes_handles_raw_and_vec_formats() {
+        let hash1 = BlockHash::from_byte_array([0xAAu8; 32]);
+        let hash2 = BlockHash::from_byte_array([0xBBu8; 32]);
+
+        // Raw 32-byte operand (as seen in partial merge)
+        let raw_operand = consensus::serialize(&hash1);
+        assert_eq!(raw_operand.len(), 32);
+        let parsed = parse_blockhash_bytes(&raw_operand);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0], hash1);
+
+        // Serialized Vec<BlockHash> (as seen in full merge existing_val)
+        let vec_value = consensus::serialize(&vec![hash1, hash2]);
+        assert_eq!(vec_value.len(), 65); // compact_size(2) + 32 + 32
+        let parsed = parse_blockhash_bytes(&vec_value);
+        assert_eq!(parsed.len(), 2);
+        assert!(parsed.contains(&hash1));
+        assert!(parsed.contains(&hash2));
+
+        // Empty input
+        let parsed = parse_blockhash_bytes(&[]);
+        assert!(parsed.is_empty());
+    }
+
+    /// Tests the merge operator with compaction forcing SST-level merges.
+    ///
+    /// Writes two hashes at the same height in separate flushes, then
+    /// compacts. In a fresh DB compaction reaches the bottommost level
+    /// (full merge with existing_val=None), so both hashes survive.
+    /// This test verifies the baseline full-merge path works.
+    #[test]
+    fn test_merge_operator_survives_compaction() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let height = 3224u32;
+        let hash1 = BlockHash::from_byte_array([0xAAu8; 32]);
+        let hash2 = BlockHash::from_byte_array([0xBBu8; 32]);
+
+        // Write hash1 in its own batch and flush to an SST file
+        let mut batch = Store::get_write_batch();
+        store
+            .set_height_to_blockhash(&hash1, height, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+        let block_height_cf = store.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
+        store
+            .db
+            .flush_cf(&block_height_cf)
+            .expect("flush should succeed");
+
+        // Write hash2 in a separate batch and flush to a second SST file
+        let mut batch = Store::get_write_batch();
+        store
+            .set_height_to_blockhash(&hash2, height, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+        store
+            .db
+            .flush_cf(&block_height_cf)
+            .expect("flush should succeed");
+
+        // Force compaction -- this triggers partial merge on the two
+        // merge operands sitting in separate SST files
+        store
+            .db
+            .compact_range_cf(&block_height_cf, None::<&[u8]>, None::<&[u8]>);
+
+        // After compaction, both hashes must still be present
+        let hashes = store.get_blockhashes_for_height(height);
+        assert_eq!(
+            hashes.len(),
+            2,
+            "Both hashes should survive compaction, got: {:?}",
+            hashes
+        );
+        assert!(hashes.contains(&hash1), "hash1 lost after compaction");
+        assert!(hashes.contains(&hash2), "hash2 lost after compaction");
+    }
+
+    /// Verifies that parse_blockhash_bytes correctly handles a
+    /// partial-merge result (serialized Vec) appearing as an operand.
+    #[test]
+    fn test_parse_blockhash_bytes_handles_partial_merge_result_as_operand() {
+        let hash1 = BlockHash::from_byte_array([0xCCu8; 32]);
+        let hash2 = BlockHash::from_byte_array([0xDDu8; 32]);
+
+        // A partial merge result is a serialized Vec<BlockHash>
+        let partial_merge_result = consensus::serialize(&vec![hash1, hash2]);
+        assert_eq!(partial_merge_result.len(), 65);
+
+        // parse_blockhash_bytes must extract both hashes
+        let parsed = parse_blockhash_bytes(&partial_merge_result);
+        assert_eq!(parsed.len(), 2);
+        assert!(parsed.contains(&hash1));
+        assert!(parsed.contains(&hash2));
     }
 
     #[test]
