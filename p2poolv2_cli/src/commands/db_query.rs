@@ -783,6 +783,30 @@ mod tests {
         print_shares_dot(&shares, "test_graph");
     }
 
+    // --- dag tests ---
+
+    #[tokio::test]
+    async fn test_dag_with_genesis() {
+        let (store, _temp_dir) = setup_store_with_genesis().await;
+        let result = dag(&store, Some(0), 1, false);
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_dag_errors_on_empty_store() {
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let store = chain_store_handle.store_handle().store();
+        let result = dag(store, None, 10, false);
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_dag_dot_with_genesis() {
+        let (store, _temp_dir) = setup_store_with_genesis().await;
+        let result = dag(&store, Some(0), 1, true);
+        assert!(result.is_ok());
+    }
+
     // --- format_status tests ---
 
     #[test]
