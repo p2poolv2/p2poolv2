@@ -271,10 +271,23 @@ pub fn setup_header_chain_validation_mocks(chain_store_handle: &mut MockChainSto
             })
         });
 
-    // Return first parent
     chain_store_handle
-        .expect_first_existing_share_header()
-        .returning(|hashes| hashes.first().copied());
+        .expect_get_block_metadata_batch()
+        .returning(|hashes| {
+            hashes
+                .iter()
+                .map(|hash| {
+                    (
+                        *hash,
+                        BlockMetadata {
+                            expected_height: Some(0),
+                            chain_work: bitcoin::Work::from_hex("0x00").unwrap(),
+                            status: Status::Confirmed,
+                        },
+                    )
+                })
+                .collect()
+        });
 }
 
 #[cfg(test)]
