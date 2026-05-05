@@ -17,6 +17,7 @@
 use crate::shares::share_block::ShareBlock;
 use crate::store::block_tx_metadata::{BlockMetadata, Status};
 use crate::store::column_families::ColumnFamily;
+use crate::store::dag_store::MAX_UNCLES_DEPTH;
 use bitcoin::consensus::{Encodable, encode};
 use bitcoin::{BlockHash, Work};
 use rocksdb::{ColumnFamilyDescriptor, DB, Options as RocksDbOptions};
@@ -232,10 +233,13 @@ impl Store {
     /// Get confirmed chain blockhashes descending from a given blockhash,
     /// including uncle blockhashes referenced by each confirmed block.
     ///
-    /// Walks the confirmed chain from the starting block's height + 1 up
-    /// to the top confirmed height. For each confirmed block, its uncle
-    /// blockhashes are inserted before the confirmed blockhash so that a
-    /// peer receives uncle data before the share that depends on it.
+    /// Walks the confirmed chain from anchor_height - MAX_UNCLES_DEPTH + 1
+    /// up to the top confirmed height. Starting earlier than the anchor
+    /// ensures that uncle blocks referenced by shares near the anchor
+    /// are included in the response. For each confirmed block, its
+    /// uncle blockhashes are inserted before the confirmed blockhash so
+    /// that a peer receives uncle data before the share that depends on
+    /// it.
     fn get_descendant_blockhashes(
         &self,
         blockhash: &BlockHash,
@@ -255,7 +259,7 @@ impl Store {
             Err(_) => return Ok(blockhashes),
         };
 
-        let mut height = start_height + 1;
+        let mut height = start_height.saturating_sub(MAX_UNCLES_DEPTH as u32) + 1;
         while height <= top_confirmed_height && blockhashes.len() < limit {
             let confirmed_hash = self.get_confirmed_at_height(height)?;
 
