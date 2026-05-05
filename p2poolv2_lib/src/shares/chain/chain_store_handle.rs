@@ -547,6 +547,16 @@ impl ChainStoreHandle {
         self.store_handle.store().get_block_metadata(hash)
     }
 
+    /// Batch fetch metadata for multiple blockhashes in a single multi_get.
+    pub fn get_block_metadata_batch(
+        &self,
+        blockhashes: &[BlockHash],
+    ) -> Vec<(BlockHash, BlockMetadata)> {
+        self.store_handle
+            .store()
+            .get_block_metadata_batch(blockhashes)
+    }
+
     /// Look up full uncle details for a list of uncle blockhashes.
     pub fn get_uncle_infos(&self, uncle_hashes: &[BlockHash]) -> Vec<UncleInfo> {
         self.store_handle.store().get_uncle_infos(uncle_hashes)
@@ -738,6 +748,7 @@ mockall::mock! {
     pub ChainStoreHandle {
         pub fn is_candidate(&self, blockhash: &BlockHash) -> bool;
         pub fn get_block_metadata(&self, hash: &BlockHash) -> Result<BlockMetadata, StoreError>;
+        pub fn get_block_metadata_batch(&self, blockhashes: &[BlockHash]) -> Vec<(BlockHash, BlockMetadata)>;
         pub fn get_uncle_infos(&self, uncle_hashes: &[BlockHash]) -> Vec<UncleInfo>;
         pub fn has_status(&self, hash: &BlockHash, status: Status) -> bool;
         pub fn get_blockhashes_for_height(&self, height: u32) -> Vec<BlockHash>;
