@@ -1046,13 +1046,26 @@ mod tests {
         assert_eq!(descendants[1], uncle1.block_hash());
         assert_eq!(descendants[2], share_b.block_hash());
 
-        // Descendants from share_a: should get uncle1 then share_b
+        // Descendants from share_a: uncle scan covers h:0..=1, so both
+        // share_a and uncle1 at h:1 are included, then share_b from the
+        // confirmed chain walk.
         let descendants = store
             .get_descendant_blockhashes(&share_a.block_hash(), &BlockHash::all_zeros(), 10)
             .unwrap();
-        assert_eq!(descendants.len(), 2);
-        assert_eq!(descendants[0], uncle1.block_hash());
-        assert_eq!(descendants[1], share_b.block_hash());
+        assert_eq!(descendants.len(), 3);
+        assert!(descendants.contains(&share_a.block_hash()));
+        assert!(descendants.contains(&uncle1.block_hash()));
+        assert!(descendants.contains(&share_b.block_hash()));
+        // uncle1 must appear before share_b (its nephew)
+        let uncle1_pos = descendants
+            .iter()
+            .position(|h| *h == uncle1.block_hash())
+            .unwrap();
+        let share_b_pos = descendants
+            .iter()
+            .position(|h| *h == share_b.block_hash())
+            .unwrap();
+        assert!(uncle1_pos < share_b_pos);
 
         // Test with limit: limit=2 stops after height 1 (share_a) but height 2
         // adds uncle1 + share_b atomically so the batch contains all 3
@@ -1070,6 +1083,117 @@ mod tests {
             .unwrap();
         assert_eq!(descendants.len(), 1);
         assert_eq!(descendants[0], share_a.block_hash());
+    }
+
+    /// Long chain test: when the anchor is deep in the chain, the
+    /// confirmed walk starts from anchor - MAX_UNCLES_DEPTH so that
+    /// uncle references near the anchor are served. Blocks before the
+    /// uncle depth window are excluded.
+    ///
+    /// Chain:
+    ///   genesis(h:0) -> h:1 -> ... -> h:5 -> h:6 -> ... -> h:8 -> h:9(uncles=[uncle]) -> h:10
+    ///                                      \-> uncle(h:6, parent=h:5)
+    ///
+    /// Anchor at h:8. Walk starts at h:8 - 3 + 1 = h:6.
+    /// Confirmed blocks h:6..h:10 and the uncle at h:6 (referenced
+    /// by h:9) should be included. Blocks at h:1 through h:5 must NOT.
+    /// The uncle's parent is at h:5, which is MAX_UNCLES_DEPTH below
+    /// the anchor -- the deepest allowed uncle ancestor, because h:8 has to be confirmed anchor.
+    #[test]
+    fn test_get_descendant_blockhashes_long_chain_starts_at_uncle_depth() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Build h:1 through h:8 without uncle references
+        let mut chain: Vec<ShareBlock> = Vec::with_capacity(10);
+        let mut prev_hash = genesis.block_hash().to_string();
+        for nonce in 1..=8u32 {
+            let block = TestShareBlockBuilder::new()
+                .prev_share_blockhash(prev_hash)
+                .work(2)
+                .nonce(nonce)
+                .build();
+            store.push_to_confirmed_chain(&block).unwrap();
+            prev_hash = block.block_hash().to_string();
+            chain.push(block);
+        }
+
+        // Uncle at h:6 (parent is chain[4] at h:5) -- deepest possible
+        // uncle reachable from h:8 anchor (parent at h:8 - 3 = h:5)
+        let uncle = TestShareBlockBuilder::new()
+            .prev_share_blockhash(chain[4].block_hash().to_string())
+            .nonce(200)
+            .build();
+        store.store_with_valid_metadata(&uncle);
+
+        // h:9 references the uncle
+        let block_h9 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(chain[7].block_hash().to_string())
+            .uncles(vec![uncle.block_hash()])
+            .work(2)
+            .nonce(9)
+            .build();
+        store.push_to_confirmed_chain(&block_h9).unwrap();
+        chain.push(block_h9);
+
+        // h:10
+        let block_h10 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(chain[8].block_hash().to_string())
+            .work(2)
+            .nonce(10)
+            .build();
+        store.push_to_confirmed_chain(&block_h10).unwrap();
+        chain.push(block_h10);
+
+        // Anchor at h:8 (chain[7]). Walk starts at h:8 - 3 + 1 = h:6.
+        let anchor = &chain[7];
+        let descendants = store
+            .get_descendant_blockhashes(&anchor.block_hash(), &BlockHash::all_zeros(), 100)
+            .unwrap();
+
+        // h:6 (chain[5]), h:7 (chain[6]), h:8 (chain[7]) from early
+        // walk, then uncle (referenced by h:9) + h:9 + h:10
+        assert!(
+            descendants.contains(&chain[5].block_hash()),
+            "h:6 should be included (walk starts at h:6)"
+        );
+        assert!(
+            descendants.contains(&chain[6].block_hash()),
+            "h:7 should be included"
+        );
+        assert!(
+            descendants.contains(&chain[7].block_hash()),
+            "h:8 should be included"
+        );
+        assert!(
+            descendants.contains(&uncle.block_hash()),
+            "uncle at h:6 should be included (referenced by h:9)"
+        );
+        assert!(
+            descendants.contains(&chain[8].block_hash()),
+            "h:9 should be included"
+        );
+        assert!(
+            descendants.contains(&chain[9].block_hash()),
+            "h:10 should be included"
+        );
+
+        // Blocks before uncle depth window should NOT be included
+        assert!(
+            !descendants.contains(&genesis.block_hash()),
+            "genesis should not be included"
+        );
+        for early_block in &chain[..5] {
+            assert!(
+                !descendants.contains(&early_block.block_hash()),
+                "block before uncle depth window should not be included"
+            );
+        }
     }
 
     #[test]
