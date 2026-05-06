@@ -11,7 +11,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.10.9"
+version = "0.10.10"
 edition = "2024"
 authors = ["Kulpreet Singh<kp@opdup.com>"]
 license = "AGPL-3.0-or-later"
