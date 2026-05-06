@@ -66,6 +66,7 @@ pub async fn handle_share_headers<C: Send + Sync>(
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     debug!("Received {} ShareHeaders", share_headers.len());
 
+    // No new headers, start fetching any block data for received headers
     if share_headers.is_empty() {
         return trigger_or_request(
             peer_id,
@@ -345,10 +346,12 @@ async fn trigger_block_fetch(
             "Requesting {} blocks from block fetcher",
             missing_blockhashes.len()
         );
+        let use_peer = chain_store_handle.is_current();
         if let Err(send_error) = block_fetcher_handle
             .send(BlockFetcherEvent::FetchBlocks {
                 blockhashes: missing_blockhashes,
                 peer_id,
+                use_peer,
             })
             .await
         {
@@ -593,6 +596,7 @@ mod tests {
         chain_store_handle
             .expect_get_candidate_blocks_missing_data()
             .returning(move |_| Ok(returned_hashes.clone()));
+        chain_store_handle.expect_is_current().returning(|| true);
         setup_chain_validation_mocks(&mut chain_store_handle);
 
         let (swarm_tx, _swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
@@ -623,9 +627,11 @@ mod tests {
             BlockFetcherEvent::FetchBlocks {
                 blockhashes,
                 peer_id: event_peer_id,
+                use_peer,
             } => {
                 assert_eq!(blockhashes, expected_hashes);
                 assert_eq!(event_peer_id, peer_id);
+                assert!(use_peer, "use_peer should be true when chain is current");
             }
             other => panic!("expected FetchBlocks event, got: {other}"),
         }

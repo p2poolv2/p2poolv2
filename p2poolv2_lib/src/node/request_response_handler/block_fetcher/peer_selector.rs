@@ -112,6 +112,14 @@ impl PeerSelector {
         }
     }
 
+    /// Returns true if the peer is known and below the in-flight capacity limit.
+    pub(super) fn peer_has_capacity(&self, peer_id: &PeerId) -> bool {
+        match self.peers.get(peer_id) {
+            Some(&count) => count < MAX_IN_FLIGHT_PER_PEER,
+            None => false,
+        }
+    }
+
     /// Returns true if there are known peers.
     pub(super) fn has_peers(&self) -> bool {
         !self.peers.is_empty()

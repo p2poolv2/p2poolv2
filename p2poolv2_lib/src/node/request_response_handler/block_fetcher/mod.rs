@@ -57,14 +57,26 @@ const BLOCK_FETCHER_CHANNEL_CAPACITY: usize = 8192;
 /// bounding memory in the downstream block receiver.
 const FETCH_BATCH_SIZE: usize = 1000;
 
+/// A blockhash queued for fetching, with an optional preferred peer
+/// that is known to have the block body (the inv/headers source).
+/// When preferred_peer is Some, dispatch targets that peer first.
+/// When None, round-robin is used for load distribution.
+struct PendingBlock {
+    blockhash: BlockHash,
+    preferred_peer: Option<PeerId>,
+}
+
 /// Events sent to the block fetcher from p2p message handlers.
 pub enum BlockFetcherEvent {
-    /// Blocks identified by handle_share_headers
+    /// Blocks identified by handle_share_headers.
+    /// The peer_id is always added to the peer selector.
+    /// When use_peer is true, blocks are fetched from this peer
+    /// (steady-state: peer announced the block and has the body).
+    /// When false, round-robin distributes across peers (initial sync).
     FetchBlocks {
         blockhashes: Vec<BlockHash>,
-        /// If peer is not known it is added to the list of peers
-        /// block fetcher knows about.
         peer_id: PeerId,
+        use_peer: bool,
     },
     /// A block request completed (received or not found) and can be removed from in-flight.
     BlockRequestCompleted(BlockHash),
@@ -80,11 +92,13 @@ impl fmt::Display for BlockFetcherEvent {
             BlockFetcherEvent::FetchBlocks {
                 blockhashes,
                 peer_id,
+                use_peer,
             } => write!(
                 formatter,
-                "FetchBlocks({} hashes, peer={})",
+                "FetchBlocks({} hashes, peer={}, use_peer={})",
                 blockhashes.len(),
-                peer_id
+                peer_id,
+                use_peer
             ),
             BlockFetcherEvent::BlockRequestCompleted(hash) => {
                 write!(formatter, "BlockRequestCompleted({hash})")
@@ -140,13 +154,13 @@ pub struct BlockFetcher {
     swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
     /// Blockhashes that have been requested -- inflight
     in_flight: HashMap<BlockHash, InFlightRequest>,
-    /// Blockhashes waiting to be requested (not yet in-flight).
+    /// Blocks waiting to be requested (not yet in-flight).
     /// Holds at most one batch of FETCH_BATCH_SIZE entries.
-    pending: VecDeque<BlockHash>,
-    /// Blockhashes that have not yet been moved into `pending`.
+    pending: VecDeque<PendingBlock>,
+    /// Blocks that have not yet been moved into `pending`.
     /// Batches of FETCH_BATCH_SIZE are promoted when the current
     /// batch is fully processed (pending and in_flight both empty).
-    backlog: VecDeque<BlockHash>,
+    backlog: VecDeque<PendingBlock>,
     /// Peer selection with round-robin distribution and capacity tracking.
     peer_selector: PeerSelector,
 }
@@ -176,8 +190,8 @@ impl BlockFetcher {
             tokio::select! {
                 event = self.event_rx.recv() => {
                     match event {
-                        Some(BlockFetcherEvent::FetchBlocks { blockhashes, peer_id }) => {
-                            self.handle_fetch_blocks(blockhashes, peer_id).await;
+                        Some(BlockFetcherEvent::FetchBlocks { blockhashes, peer_id, use_peer }) => {
+                            self.handle_fetch_blocks(blockhashes, peer_id, use_peer).await;
                         }
                         Some(BlockFetcherEvent::BlockRequestCompleted(blockhash)) => {
                             self.handle_block_request_completed(blockhash);
@@ -209,24 +223,41 @@ impl BlockFetcher {
     /// Check whether a blockhash is already tracked in any queue.
     fn is_known(&self, blockhash: &BlockHash) -> bool {
         self.in_flight.contains_key(blockhash)
-            || self.pending.contains(blockhash)
-            || self.backlog.contains(blockhash)
+            || self
+                .pending
+                .iter()
+                .any(|entry| entry.blockhash == *blockhash)
+            || self
+                .backlog
+                .iter()
+                .any(|entry| entry.blockhash == *blockhash)
     }
 
     /// Handle a FetchBlocks event by adding new blockhashes to the
     /// backlog and refilling pending if the current batch is done.
-    async fn handle_fetch_blocks(&mut self, blockhashes: Vec<BlockHash>, peer_id: PeerId) {
+    async fn handle_fetch_blocks(
+        &mut self,
+        blockhashes: Vec<BlockHash>,
+        peer_id: PeerId,
+        use_peer: bool,
+    ) {
         info!(
-            "Block fetcher received {} blockhashes to fetch from peer {}",
+            "Block fetcher received {} blockhashes to fetch from peer {}, use_peer: {}",
             blockhashes.len(),
-            peer_id
+            peer_id,
+            use_peer
         );
 
         self.peer_selector.add_peer(peer_id);
 
+        let preferred_peer = if use_peer { Some(peer_id) } else { None };
+
         for blockhash in blockhashes {
             if !self.is_known(&blockhash) {
-                self.backlog.push_back(blockhash);
+                self.backlog.push_back(PendingBlock {
+                    blockhash,
+                    preferred_peer,
+                });
             }
         }
 
@@ -240,8 +271,8 @@ impl BlockFetcher {
             debug!("Block request completed, removed from in-flight: {blockhash}");
             self.peer_selector.record_completion(request.peer_id);
         }
-        self.pending.retain(|hash| *hash != blockhash);
-        self.backlog.retain(|hash| *hash != blockhash);
+        self.pending.retain(|entry| entry.blockhash != blockhash);
+        self.backlog.retain(|entry| entry.blockhash != blockhash);
     }
 
     /// Remove a disconnected peer from the selector and drop any
@@ -272,6 +303,17 @@ impl BlockFetcher {
                 dropped.len()
             );
         }
+
+        for entry in &mut self.pending {
+            if entry.preferred_peer == Some(peer_id) {
+                entry.preferred_peer = None;
+            }
+        }
+        for entry in &mut self.backlog {
+            if entry.preferred_peer == Some(peer_id) {
+                entry.preferred_peer = None;
+            }
+        }
     }
 
     /// Move the next batch of blockhashes from the backlog into
@@ -296,8 +338,12 @@ impl BlockFetcher {
         self.dispatch_pending_requests().await;
     }
 
-    /// Send GetData::Block requests for pending blockhashes, respecting
-    /// per-peer in-flight limits.
+    /// Send GetData::Block requests for pending blockhashes,
+    /// respecting per-peer in-flight limits.  Send GetData::Block
+    /// requests for pending blocks, respecting per-peer in-flight
+    /// limits. When a pending block has a preferred peer
+    /// (steady-state inv handling), dispatch to that peer.  Otherwise
+    /// use round-robin (initial sync / retry).
     async fn dispatch_pending_requests(&mut self) {
         if !self.peer_selector.has_peers() || self.pending.is_empty() {
             return;
@@ -305,17 +351,15 @@ impl BlockFetcher {
 
         let mut dispatch_count = 0usize;
 
-        while let Some(&blockhash) = self.pending.front() {
-            let peer_id = match self.peer_selector.select_peer() {
+        while let Some(pending_block) = self.pending.front() {
+            let blockhash = pending_block.blockhash;
+            let peer_id = match self.select_peer_for_block(pending_block.preferred_peer) {
                 Some(peer_id) => peer_id,
-                None => {
-                    // All peers are at capacity -- keep remaining in pending
-                    return;
-                }
+                None => return,
             };
 
             let message = Message::GetData(GetData::Block(blockhash));
-            debug!("Sending {message} for {blockhash}");
+            debug!("Sending GetData for {blockhash}");
             if let Err(send_error) = self
                 .swarm_tx
                 .send(SwarmSend::Request(peer_id, message))
@@ -354,14 +398,7 @@ impl BlockFetcher {
             return;
         }
 
-        let now = Instant::now();
-        let mut timed_out = Vec::new();
-
-        for (blockhash, request) in &self.in_flight {
-            if now.duration_since(request.requested_at) > REQUEST_TIMEOUT {
-                timed_out.push(*blockhash);
-            }
-        }
+        let timed_out = self.collect_timed_out_requests();
 
         for blockhash in timed_out {
             let old_request = self.in_flight.remove(&blockhash).unwrap();
@@ -370,10 +407,43 @@ impl BlockFetcher {
                 old_request.peer_id
             );
             self.peer_selector.record_completion(old_request.peer_id);
-            // Re-add to front of pending for retry ahead of other pending
-            if !self.pending.contains(&blockhash) {
-                self.pending.push_front(blockhash);
-            }
+            self.requeue_for_retry(blockhash);
+        }
+    }
+
+    /// Select a peer for a block request. Uses the preferred peer if
+    /// available and has capacity, otherwise falls back to round-robin.
+    /// Returns None if all peers are at capacity.
+    fn select_peer_for_block(&mut self, preferred_peer: Option<PeerId>) -> Option<PeerId> {
+        match preferred_peer {
+            Some(preferred) if self.peer_selector.peer_has_capacity(&preferred) => Some(preferred),
+            _ => self.peer_selector.select_peer(),
+        }
+    }
+
+    /// Return blockhashes of in-flight requests that have exceeded
+    /// the request timeout.
+    fn collect_timed_out_requests(&self) -> Vec<BlockHash> {
+        let now = Instant::now();
+        self.in_flight
+            .iter()
+            .filter(|(_, request)| now.duration_since(request.requested_at) > REQUEST_TIMEOUT)
+            .map(|(blockhash, _)| *blockhash)
+            .collect()
+    }
+
+    /// Re-add a block to the front of the pending queue for retry
+    /// with round-robin peer selection (no preferred peer).
+    fn requeue_for_retry(&mut self, blockhash: BlockHash) {
+        let already_pending = self
+            .pending
+            .iter()
+            .any(|entry| entry.blockhash == blockhash);
+        if !already_pending {
+            self.pending.push_front(PendingBlock {
+                blockhash,
+                preferred_peer: None,
+            });
         }
     }
 }
@@ -413,6 +483,7 @@ mod tests {
             .send(BlockFetcherEvent::FetchBlocks {
                 blockhashes: vec![blockhash],
                 peer_id,
+                use_peer: true,
             })
             .await
             .unwrap();
@@ -451,6 +522,7 @@ mod tests {
             .send(BlockFetcherEvent::FetchBlocks {
                 blockhashes: vec![blockhash],
                 peer_id,
+                use_peer: true,
             })
             .await
             .unwrap();
@@ -488,10 +560,12 @@ mod tests {
         let blockhash_one = random_blockhash();
         let blockhash_two = random_blockhash();
 
+        // No preferred peer -- round-robin should distribute across peers
         block_fetcher_tx
             .send(BlockFetcherEvent::FetchBlocks {
                 blockhashes: vec![blockhash_one, blockhash_two],
                 peer_id: peer_a,
+                use_peer: false,
             })
             .await
             .unwrap();
@@ -538,6 +612,7 @@ mod tests {
             .send(BlockFetcherEvent::FetchBlocks {
                 blockhashes: vec![blockhash],
                 peer_id,
+                use_peer: true,
             })
             .await
             .unwrap();
@@ -546,6 +621,7 @@ mod tests {
             .send(BlockFetcherEvent::FetchBlocks {
                 blockhashes: vec![blockhash],
                 peer_id,
+                use_peer: true,
             })
             .await
             .unwrap();
@@ -575,6 +651,7 @@ mod tests {
             .send(BlockFetcherEvent::FetchBlocks {
                 blockhashes: vec![blockhash],
                 peer_id,
+                use_peer: true,
             })
             .await
             .unwrap();
@@ -610,6 +687,7 @@ mod tests {
             .send(BlockFetcherEvent::FetchBlocks {
                 blockhashes: blockhashes.clone(),
                 peer_id,
+                use_peer: true,
             })
             .await
             .unwrap();
@@ -687,6 +765,7 @@ mod tests {
             .send(BlockFetcherEvent::FetchBlocks {
                 blockhashes: vec![blockhash],
                 peer_id: peer_a,
+                use_peer: true,
             })
             .await
             .unwrap();
