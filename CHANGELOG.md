@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Locator response now starts the confirmed chain walk from
+  `anchor_height` - `MAX_UNCLES_DEPTH`, ensuring uncle blocks
+  referenced by shares near the anchor are included in header
+  batches. Previously the walk started at anchor_height + 1, causing
+  "Declared uncle not delivered in batch and not in store" errors that
+  broke sync between nodes.
+
+- Block fetcher now dispatches body requests to the announcing peer
+  (the inv/headers source) when the chain is current. Previously
+  round-robin selection often picked a peer that hadn't received the
+  body yet, resulting in NotFound responses and 2-7 second lag on
+  non-mining nodes.
+
+- Node now retries header sync every 60 seconds when the confirmed
+  tip is stale (older than 300 seconds). Previously a single failed
+  sync attempt during handshake left the node permanently stuck with
+  no recovery path.
+
 ## [v0.10.9] - 2026-05-02
 
 ### Fixed
