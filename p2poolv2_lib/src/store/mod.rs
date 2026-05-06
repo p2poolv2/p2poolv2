@@ -21,7 +21,7 @@ use crate::store::dag_store::MAX_UNCLES_DEPTH;
 use bitcoin::consensus::{Encodable, encode};
 use bitcoin::{BlockHash, Work};
 use rocksdb::{ColumnFamilyDescriptor, DB, Options as RocksDbOptions};
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, RwLock};
 use tracing::debug;
 use writer::StoreError;
@@ -263,16 +263,7 @@ impl Store {
         while height <= top_confirmed_height && blockhashes.len() < limit {
             let confirmed_hash = self.get_confirmed_at_height(height)?;
 
-            // Insert uncle blockhashes before the confirmed block.
-            // We only check the limit at the top of the loop so that a
-            // confirmed block and its uncles are never split across batches.
-            if let Ok(Some(header)) = self.get_share_header(&confirmed_hash) {
-                for uncle_blockhash in &header.uncles {
-                    if seen.insert(*uncle_blockhash) {
-                        blockhashes.push(*uncle_blockhash);
-                    }
-                }
-            }
+            self.collect_uncle_chain(&confirmed_hash, &mut seen, &mut blockhashes);
 
             if seen.insert(confirmed_hash) {
                 blockhashes.push(confirmed_hash);
@@ -286,6 +277,35 @@ impl Store {
         }
 
         Ok(blockhashes)
+    }
+
+    /// Collect uncle blockhashes for a block, chasing transitive
+    /// uncle references (uncle-of-uncle) so the receiver has all
+    /// declared uncles available. The DAG is finite and acyclic, and
+    /// the seen set prevents revisits, so this always terminates.
+    fn collect_uncle_chain(
+        &self,
+        blockhash: &BlockHash,
+        seen: &mut HashSet<BlockHash>,
+        blockhashes: &mut Vec<BlockHash>,
+    ) {
+        let header = match self.get_share_header(blockhash) {
+            Ok(Some(header)) => header,
+            _ => return,
+        };
+        let mut uncle_queue: VecDeque<BlockHash> = header.uncles.iter().copied().collect();
+        while let Some(uncle_hash) = uncle_queue.pop_front() {
+            if seen.insert(uncle_hash) {
+                blockhashes.push(uncle_hash);
+                if let Ok(Some(uncle_header)) = self.get_share_header(&uncle_hash) {
+                    for nested_uncle in &uncle_header.uncles {
+                        if !seen.contains(nested_uncle) {
+                            uncle_queue.push_back(*nested_uncle);
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Get genesis block hash from chain state

@@ -27,6 +27,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sync attempt during handshake left the node permanently stuck with
   no recovery path.
 
+- Locator response now chases transitive uncle references
+  (uncle-of-uncle chains) so the receiver has all declared uncle
+  bodies available. Previously only direct uncles of confirmed blocks
+  were included, causing "Declared uncle not delivered in batch"
+  errors when an uncle itself referenced another uncle.
+
 ## [v0.10.9] - 2026-05-02
 
 ### Fixed

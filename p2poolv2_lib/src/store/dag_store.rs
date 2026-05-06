@@ -1085,6 +1085,94 @@ mod tests {
         assert_eq!(descendants[0], share_a.block_hash());
     }
 
+    /// Uncle-of-uncle test: when a confirmed block references an uncle
+    /// that itself references another uncle, both are included in the
+    /// descendant response.
+    ///
+    /// Chain:
+    ///   genesis(h:0) -> A(h:1) -> B(h:2, uncles=[uncle1])
+    ///                \-> uncle2(h:1)
+    ///                \-> uncle1(h:1, uncles=[uncle2])
+    ///
+    /// uncle1 is referenced by B. uncle1 references uncle2.
+    /// Both uncle1 and uncle2 must appear in descendants.
+    #[test]
+    fn test_get_descendant_blockhashes_chases_uncle_of_uncle() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // uncle2: child of genesis, no uncles of its own
+        let uncle2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(200)
+            .build();
+        store.store_with_valid_metadata(&uncle2);
+
+        // uncle1: child of genesis, references uncle2
+        let uncle1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .uncles(vec![uncle2.block_hash()])
+            .nonce(100)
+            .build();
+        store.store_with_valid_metadata(&uncle1);
+
+        // A: confirmed at h:1
+        let share_a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .work(2)
+            .nonce(1)
+            .build();
+        store.push_to_confirmed_chain(&share_a).unwrap();
+
+        // B: confirmed at h:2, references uncle1
+        let share_b = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_a.block_hash().to_string())
+            .uncles(vec![uncle1.block_hash()])
+            .nonce(2)
+            .build();
+        store.push_to_confirmed_chain(&share_b).unwrap();
+
+        let descendants = store
+            .get_descendant_blockhashes(&genesis.block_hash(), &BlockHash::all_zeros(), 10)
+            .unwrap();
+
+        assert!(
+            descendants.contains(&share_a.block_hash()),
+            "confirmed A should be included"
+        );
+        assert!(
+            descendants.contains(&uncle1.block_hash()),
+            "uncle1 should be included (referenced by B)"
+        );
+        assert!(
+            descendants.contains(&uncle2.block_hash()),
+            "uncle2 should be included (uncle-of-uncle, referenced by uncle1)"
+        );
+        assert!(
+            descendants.contains(&share_b.block_hash()),
+            "confirmed B should be included"
+        );
+
+        // uncle2 must appear before share_b (transitive dependency)
+        let uncle2_pos = descendants
+            .iter()
+            .position(|h| *h == uncle2.block_hash())
+            .unwrap();
+        let share_b_pos = descendants
+            .iter()
+            .position(|h| *h == share_b.block_hash())
+            .unwrap();
+        assert!(
+            uncle2_pos < share_b_pos,
+            "uncle2 must appear before share_b"
+        );
+    }
+
     /// Long chain test: when the anchor is deep in the chain, the
     /// confirmed walk starts from anchor - MAX_UNCLES_DEPTH so that
     /// uncle references near the anchor are served. Blocks before the
