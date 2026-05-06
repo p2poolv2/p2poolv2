@@ -599,6 +599,116 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_block_fetcher_uses_preferred_peer_when_use_peer_true() {
+        let (block_fetcher_tx, block_fetcher_rx) = create_block_fetcher_channel();
+        let (swarm_tx, mut swarm_rx) = mpsc::channel(64);
+        let fetcher = BlockFetcher::new(block_fetcher_rx, swarm_tx);
+
+        let peer_a = PeerId::random();
+        let peer_b = PeerId::random();
+
+        // Register both peers so round-robin has two options
+        block_fetcher_tx
+            .send(BlockFetcherEvent::PeersUpdated(vec![peer_a, peer_b]))
+            .await
+            .unwrap();
+
+        let blockhash_one = random_blockhash();
+        let blockhash_two = random_blockhash();
+
+        // use_peer=true: both blocks should go to peer_a
+        block_fetcher_tx
+            .send(BlockFetcherEvent::FetchBlocks {
+                blockhashes: vec![blockhash_one, blockhash_two],
+                peer_id: peer_a,
+                use_peer: true,
+            })
+            .await
+            .unwrap();
+        drop(block_fetcher_tx);
+
+        let fetcher_handle = tokio::spawn(fetcher.run());
+
+        let message_one = swarm_rx.recv().await.unwrap();
+        let message_two = swarm_rx.recv().await.unwrap();
+
+        for message in [message_one, message_two] {
+            match message {
+                SwarmSend::Request(peer, Message::GetData(GetData::Block(_))) => {
+                    assert_eq!(peer, peer_a, "Expected preferred peer_a, got {peer}");
+                }
+                other => panic!("Expected GetData::Block request, got: {other:?}"),
+            }
+        }
+
+        let result = fetcher_handle.await.unwrap();
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_block_fetcher_falls_back_to_round_robin_when_preferred_at_capacity() {
+        let (block_fetcher_tx, block_fetcher_rx) = create_block_fetcher_channel();
+        let (swarm_tx, mut swarm_rx) = mpsc::channel(64);
+        let fetcher = BlockFetcher::new(block_fetcher_rx, swarm_tx);
+
+        let peer_a = PeerId::random();
+        let peer_b = PeerId::random();
+
+        block_fetcher_tx
+            .send(BlockFetcherEvent::PeersUpdated(vec![peer_a, peer_b]))
+            .await
+            .unwrap();
+
+        // Fill peer_a to capacity + 1 overflow block, all preferring peer_a
+        let all_hashes: Vec<BlockHash> = (0..MAX_IN_FLIGHT_PER_PEER + 1)
+            .map(|_| random_blockhash())
+            .collect();
+        let overflow_hash = all_hashes[MAX_IN_FLIGHT_PER_PEER];
+
+        block_fetcher_tx
+            .send(BlockFetcherEvent::FetchBlocks {
+                blockhashes: all_hashes.clone(),
+                peer_id: peer_a,
+                use_peer: true,
+            })
+            .await
+            .unwrap();
+        drop(block_fetcher_tx);
+
+        let fetcher_handle = tokio::spawn(fetcher.run());
+
+        // First MAX_IN_FLIGHT_PER_PEER requests go to peer_a
+        for _ in 0..MAX_IN_FLIGHT_PER_PEER {
+            let message = swarm_rx.recv().await.unwrap();
+            match message {
+                SwarmSend::Request(peer, Message::GetData(GetData::Block(_))) => {
+                    assert_eq!(
+                        peer, peer_a,
+                        "Capacity requests should go to preferred peer_a"
+                    );
+                }
+                other => panic!("Expected GetData::Block request, got: {other:?}"),
+            }
+        }
+
+        // The overflow request should fall back to peer_b
+        let message = swarm_rx.recv().await.unwrap();
+        match message {
+            SwarmSend::Request(peer, Message::GetData(GetData::Block(hash))) => {
+                assert_eq!(hash, overflow_hash);
+                assert_eq!(
+                    peer, peer_b,
+                    "Expected fallback to peer_b when peer_a is at capacity"
+                );
+            }
+            other => panic!("Expected GetData::Block request, got: {other:?}"),
+        }
+
+        let result = fetcher_handle.await.unwrap();
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
     async fn test_block_fetcher_skips_duplicate_blockhashes() {
         let (block_fetcher_tx, block_fetcher_rx) = create_block_fetcher_channel();
         let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
