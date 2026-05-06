@@ -50,7 +50,7 @@ const TESTNET4_GENESIS_DATA: GenesisData = GenesisData {
     // for bitcoin blockhash 00000000000000013c0a1f4152b458118ed666282e6235d744bf2a5d66ecf022
     bitcoin_block_hex: include!("testnet4.rs"),
     bitcoin_height: 130754,
-    timestamp: 1777757400,
+    timestamp: 1778097600,
 };
 
 // Using the following JSON data for the genesis block
