@@ -35,18 +35,18 @@ async fn test_three_nodes_connectivity() {
     // Create three different configurations as strings
 
     let config1 = common::default_test_config()
-        .with_listen_address("/ip4/127.0.0.1/tcp/6884".to_string())
+        .with_listen_address("/ip4/127.0.0.1/tcp/7884".to_string())
         .with_store_path("test_chain_1.db".to_string());
     let config2 = common::default_test_config()
-        .with_listen_address("/ip4/127.0.0.1/tcp/6885".to_string())
+        .with_listen_address("/ip4/127.0.0.1/tcp/7885".to_string())
         .with_store_path("test_chain_2.db".to_string())
-        .with_dial_peers(vec!["/ip4/127.0.0.1/tcp/6884".to_string()]);
+        .with_dial_peers(vec!["/ip4/127.0.0.1/tcp/7884".to_string()]);
     let config3 = common::default_test_config()
-        .with_listen_address("/ip4/127.0.0.1/tcp/6886".to_string())
+        .with_listen_address("/ip4/127.0.0.1/tcp/7886".to_string())
         .with_store_path("test_chain_3.db".to_string())
         .with_dial_peers(vec![
-            "/ip4/127.0.0.1/tcp/6884".to_string(),
-            "/ip4/127.0.0.1/tcp/6885".to_string(),
+            "/ip4/127.0.0.1/tcp/7884".to_string(),
+            "/ip4/127.0.0.1/tcp/7885".to_string(),
         ]);
 
     let temp_dir1 = tempdir().unwrap();
