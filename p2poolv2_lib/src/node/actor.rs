@@ -566,10 +566,15 @@ impl NodeActor {
                 }
                 _ = sync_retry_interval.tick(), if !self.chain_store_handle.is_current() => {
                     let peers = self.node.connected_peers();
-                    if let Some(peer_id) = peers.first() {
+                    if !peers.is_empty() {
+                        let now_secs = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs() as usize;
+                        let peer_id = peers[now_secs % peers.len()];
                         info!("Chain tip stale, sending getheaders to peer {peer_id}");
                         if let Err(error) = send_getheaders(
-                            *peer_id,
+                            peer_id,
                             self.chain_store_handle.clone(),
                             self.node.swarm_tx.clone(),
                         ).await {
