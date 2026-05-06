@@ -35,6 +35,7 @@ use crate::node::p2p_message_handlers::receivers::block_receiver::{
     BlockReceiver, create_block_receiver_channel,
 };
 use crate::node::p2p_message_handlers::senders::send_block_inventory;
+use crate::node::p2p_message_handlers::senders::send_getheaders;
 use crate::node::request_response_handler::block_fetcher::{
     BlockFetcher, BlockFetcherError, create_block_fetcher_channel,
 };
@@ -362,6 +363,11 @@ impl NodeActor {
         // Skip the immediate first tick so we don't reconnect while initial dials are in progress
         reconnect_interval.tick().await;
 
+        const SYNC_RETRY_INTERVAL: u64 = 60;
+        let mut sync_retry_interval =
+            tokio::time::interval(std::time::Duration::from_secs(SYNC_RETRY_INTERVAL));
+        sync_retry_interval.tick().await;
+
         loop {
             tokio::select! {
                 buf = self.node.swarm_rx.recv() => {
@@ -557,6 +563,19 @@ impl NodeActor {
                 }
                 _ = reconnect_interval.tick(), if self.node.peer_reconnector.has_peers() => {
                     self.node.attempt_reconnections();
+                }
+                _ = sync_retry_interval.tick(), if !self.chain_store_handle.is_current() => {
+                    let peers = self.node.connected_peers();
+                    if let Some(peer_id) = peers.first() {
+                        info!("Chain tip stale, sending getheaders to peer {peer_id}");
+                        if let Err(error) = send_getheaders(
+                            *peer_id,
+                            self.chain_store_handle.clone(),
+                            self.node.swarm_tx.clone(),
+                        ).await {
+                            error!("Sync retry getheaders failed: {error}");
+                        }
+                    }
                 }
             }
         }
