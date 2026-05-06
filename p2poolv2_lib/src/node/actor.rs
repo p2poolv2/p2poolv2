@@ -360,12 +360,14 @@ impl NodeActor {
 
         let mut reconnect_interval =
             tokio::time::interval(crate::node::peer_reconnector::PeerReconnector::check_interval());
+        reconnect_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         // Skip the immediate first tick so we don't reconnect while initial dials are in progress
         reconnect_interval.tick().await;
 
         const SYNC_RETRY_INTERVAL: u64 = 60;
         let mut sync_retry_interval =
             tokio::time::interval(std::time::Duration::from_secs(SYNC_RETRY_INTERVAL));
+        sync_retry_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         sync_retry_interval.tick().await;
 
         loop {
