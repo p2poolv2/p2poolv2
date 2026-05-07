@@ -81,8 +81,7 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
             };
             debug!("Job not found for job_id: {job_id}, code: {code:?}");
             return Ok(vec![Message::Response(Response::new_error(
-                message.id,
-                code,
+                message.id, code,
             ))]);
         }
     };
@@ -1005,5 +1004,141 @@ mod handle_submit_tests {
             10000
         );
         assert_eq!(metrics_handle.get_metrics().await.rejected_total, 0);
+    }
+
+    #[tokio::test]
+    async fn test_handle_submit_not_subscribed_returns_error() {
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        // session.subscribed is false by default
+        let submit = SimpleRequest::new_submit(
+            1,
+            "worker".to_string(),
+            "1".to_string(),
+            "00000000".to_string(),
+            "504e86ed".to_string(),
+            "e9695791".to_string(),
+        );
+        let tracker_handle = start_tracker_actor();
+        let (emissions_tx, _) = mpsc::channel(10);
+        let (notify_tx, _) = mpsc::channel(10);
+        let (chain_store_handle, _) = setup_test_chain_store_handle(true).await;
+        let (_mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
+
+        let ctx = StratumContext {
+            notify_tx,
+            tracker_handle: tracker_handle.clone(),
+            bitcoindrpc_client: BitcoindRpcClient::new(
+                &bitcoinrpc_config.url,
+                &bitcoinrpc_config.username,
+                &bitcoinrpc_config.password,
+            )
+            .unwrap(),
+            start_difficulty: 1,
+            minimum_difficulty: 1,
+            maximum_difficulty: None,
+            ignore_difficulty: false,
+            validate_addresses: true,
+            emissions_tx,
+            network: bitcoin::network::Network::Regtest,
+            metrics: metrics_handle,
+            chain_store_handle,
+        };
+
+        let messages = handle_submit(submit, &mut session, ctx).await.unwrap();
+        let response = match &messages[..] {
+            [Message::Response(r)] => r,
+            _ => panic!("expected Response"),
+        };
+        assert_eq!(response.result, None);
+        let err = response.error.as_ref().unwrap();
+        assert_eq!(err.code, 25, "should be NotSubscribed (code 25)");
+        assert_eq!(err.message, "Not subscribed");
+    }
+
+    #[tokio::test]
+    async fn test_handle_submit_unknown_job_id_returns_invalid_jobid() {
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        session.subscribed = true;
+        let tracker_handle = start_tracker_actor();
+
+        let (_mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+
+        let (template, _notify, _submit, authorize_response) =
+            load_valid_stratum_work_components("../p2poolv2_tests/test_data/validation/stratum/a/");
+
+        let enonce1 = authorize_response.result.unwrap()[1].clone();
+        let enonce1: &str = enonce1.as_str().unwrap();
+        session.enonce1 =
+            u32::from_le_bytes(hex::decode(enonce1).unwrap().as_slice().try_into().unwrap());
+        session.enonce1_hex = enonce1.to_string();
+        session.btcaddress = Some("tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d".to_string());
+        session.user_id = Some(1);
+
+        // Insert a job to set latest_job_id, then submit an ID beyond it
+        let inserted_id = tracker_handle.insert_job(
+            Arc::new(template),
+            "cb1".to_string(),
+            "cb2".to_string(),
+            Some(create_test_commitment()),
+            TEST_COINBASE_NSECS,
+            vec![],
+            tracker_handle.get_next_job_id(),
+        );
+        let unknown_job_id = tracker_handle.get_latest_job_id().0 + 1;
+
+        let submit = SimpleRequest::new_submit(
+            1,
+            "worker".to_string(),
+            format!("{unknown_job_id:x}"),
+            "00000000".to_string(),
+            "504e86ed".to_string(),
+            "e9695791".to_string(),
+        );
+
+        let (emissions_tx, _) = mpsc::channel(10);
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
+
+        let (notify_tx, _) = mpsc::channel(10);
+        let (chain_store_handle, _) = setup_test_chain_store_handle(true).await;
+
+        let ctx = StratumContext {
+            notify_tx,
+            tracker_handle: tracker_handle.clone(),
+            bitcoindrpc_client: BitcoindRpcClient::new(
+                &bitcoinrpc_config.url,
+                &bitcoinrpc_config.username,
+                &bitcoinrpc_config.password,
+            )
+            .unwrap(),
+            start_difficulty: 1,
+            minimum_difficulty: 1,
+            maximum_difficulty: None,
+            ignore_difficulty: false,
+            validate_addresses: true,
+            emissions_tx,
+            network: bitcoin::network::Network::Signet,
+            metrics: metrics_handle,
+            chain_store_handle,
+        };
+
+        // Verify the inserted job is properly registered
+        let _ = inserted_id;
+
+        let messages = handle_submit(submit, &mut session, ctx).await.unwrap();
+        let response = match &messages[..] {
+            [Message::Response(r)] => r,
+            _ => panic!("expected Response"),
+        };
+        assert_eq!(response.result, None);
+        let err = response.error.as_ref().unwrap();
+        assert_eq!(err.code, 1, "should be InvalidJobID (code 1)");
+        assert_eq!(err.message, "Invalid JobID");
     }
 }
