@@ -24,8 +24,9 @@ use crate::stratum::client_connections::ClientConnectionsHandle;
 use crate::stratum::difficulty_adjuster::{DifficultyAdjuster, DifficultyAdjusterTrait};
 use crate::stratum::emission::EmissionSender;
 use crate::stratum::error::Error;
+use crate::stratum::error::StratumErrorCode;
 use crate::stratum::message_handlers::handle_message;
-use crate::stratum::messages::Request;
+use crate::stratum::messages::{Request, Response};
 use crate::stratum::session::Session;
 use crate::stratum::session_timeout::{self, check_session_timeouts};
 use crate::stratum::work::notify::NotifySender;
@@ -517,9 +518,15 @@ where
                 Err(Box::new(responses.unwrap_err()))
             }
         }
-        Err(e) => {
-            error!("Failed to parse message from {}: {}", addr, e);
-            Ok(())
+        Err(_) => {
+            let error_response = Response::new_error(None, StratumErrorCode::ParseError);
+            if let Ok(json) = serde_json::to_string(&error_response) {
+                let _ = writer.write_all(format!("{json}\n").as_bytes()).await;
+            }
+            Err(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Parse error",
+            )))
         }
     }
 }
@@ -784,17 +791,24 @@ mod stratum_server_tests {
         )
         .await;
 
-        // Verify results - even with bad json, we do not return an error to close the connection
+        // Verify results - invalid JSON should return a parse error and close
         assert!(
-            result.is_ok(),
-            "handle_connection should handle invalid JSON gracefully"
+            result.is_err(),
+            "handle_connection should return error for invalid JSON"
         );
 
-        // Check that no response was written
+        // Check that a parse error response was written
+        let response = String::from_utf8_lossy(&writer);
         assert!(
-            writer.is_empty(),
-            "No response should be written for invalid JSON"
+            !response.is_empty(),
+            "Parse error response should be written"
         );
+        let parsed: serde_json::Value =
+            serde_json::from_str(response.trim()).expect("Response should be valid JSON");
+        assert_eq!(parsed["result"], serde_json::Value::Null);
+        assert!(parsed["error"].is_array(), "Error should be an array");
+        assert_eq!(parsed["error"][0], -32700, "Error code should be -32700");
+        assert_eq!(parsed["error"][1], "Parse error");
     }
 
     #[tokio::test]

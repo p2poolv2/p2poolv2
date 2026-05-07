@@ -55,6 +55,12 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
     stratum_context: StratumContext,
 ) -> Result<Vec<Message<'a>>, Error> {
     debug!("Handling mining.submit message");
+    if !session.subscribed {
+        return Ok(vec![Message::Response(Response::new_error(
+            message.id,
+            StratumErrorCode::NotSubscribed,
+        ))]);
+    }
     if message.params.len() < 4 {
         return Err(Error::InvalidParams("Missing parameters".into()));
     }
@@ -67,10 +73,16 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
     let job = match stratum_context.tracker_handle.get_job(JobId(job_id)) {
         Some(job) => job,
         None => {
-            debug!("Job not found for job_id: {}", job_id);
+            let latest = stratum_context.tracker_handle.get_latest_job_id().0;
+            let code = if job_id <= latest {
+                StratumErrorCode::Stale
+            } else {
+                StratumErrorCode::InvalidJobId
+            };
+            debug!("Job not found for job_id: {job_id}, code: {code:?}");
             return Ok(vec![Message::Response(Response::new_error(
                 message.id,
-                StratumErrorCode::InvalidJobId,
+                code,
             ))]);
         }
     };
@@ -273,6 +285,7 @@ mod handle_submit_tests {
     #[tokio::test]
     async fn test_handle_submit_meets_difficulty_should_submit() {
         let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        session.subscribed = true;
         let tracker_handle = start_tracker_actor();
 
         let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
@@ -369,6 +382,7 @@ mod handle_submit_tests {
     #[tokio::test]
     async fn test_handle_submit_a_meets_difficulty_should_submit() {
         let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        session.subscribed = true;
         let tracker_handle = start_tracker_actor();
 
         let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
@@ -462,6 +476,7 @@ mod handle_submit_tests {
     #[tokio::test]
     async fn test_handle_submit_with_version_rolling_meets_difficulty_should_submit() {
         let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        session.subscribed = true;
         let tracker_handle = start_tracker_actor();
 
         let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
@@ -553,6 +568,7 @@ mod handle_submit_tests {
         });
 
         let mut session = Session::<MockDifficultyAdjusterTrait>::new(1, 1, None, 0x1fffe000);
+        session.subscribed = true;
         let tracker_handle = start_tracker_actor();
 
         let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
@@ -632,8 +648,9 @@ mod handle_submit_tests {
     }
 
     #[tokio::test]
-    async fn test_handle_submit_with_unknown_job_id_returns_false() {
+    async fn test_handle_submit_with_stale_job_returns_error() {
         let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        session.subscribed = true;
         let tracker_handle = start_tracker_actor();
 
         let (_mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
@@ -685,17 +702,18 @@ mod handle_submit_tests {
             _ => panic!("Expected a Response message"),
         };
 
-        // Should return error for unknown job_id
+        // Should return stale error
         assert_eq!(response.result, None);
         let err = response.error.as_ref().unwrap();
-        assert_eq!(err.code, 1, "should be Invalid JobID (code 1)");
-        assert_eq!(err.message, "Invalid JobID");
+        assert_eq!(err.code, 2, "should be Stale (code 2)");
+        assert_eq!(err.message, "Stale");
     }
 
     #[tokio::test]
     async fn test_handle_submit_with_less_difficulty_than_session_even_if_we_meet_bitcoin_diff_should_increment_rejected()
      {
         let mut session = Session::<DifficultyAdjuster>::new(10_000, 10_000, None, 0x1fffe000);
+        session.subscribed = true;
         let tracker_handle = start_tracker_actor();
 
         let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
@@ -786,6 +804,7 @@ mod handle_submit_tests {
     #[tokio::test]
     async fn test_handle_submit_duplicate_share_is_rejected() {
         let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        session.subscribed = true;
         let tracker_handle = start_tracker_actor();
 
         let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
@@ -904,6 +923,7 @@ mod handle_submit_tests {
     async fn test_handle_submit_accepts_low_difficulty_share_when_ignore_difficulty_is_true() {
         // Set high session difficulty (10_000) so the share won't meet it normally
         let mut session = Session::<DifficultyAdjuster>::new(10_000, 10_000, None, 0x1fffe000);
+        session.subscribed = true;
         let tracker_handle = start_tracker_actor();
 
         let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
