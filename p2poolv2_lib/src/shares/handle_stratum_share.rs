@@ -50,8 +50,8 @@ pub async fn handle_stratum_share(
     if let Some(share_commitment) = share_commitment {
         // TODO: Get share chain transactions and use them here. When
         // non-coinbase share transactions are added, pass them to
-        // create_coinbase_transaction so the BIP141 witness commitment
-        // covers their wtxids.
+        // build_sharechain_coinbase_transaction so the BIP141 witness
+        // commitment covers their wtxids.
         let other_share_transactions: Vec<ShareTransaction> = Vec::new();
         let share_coinbase = build_sharechain_coinbase_transaction(
             &share_commitment.miner_bitcoin_address,
