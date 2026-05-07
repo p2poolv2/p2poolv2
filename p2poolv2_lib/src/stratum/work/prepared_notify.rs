@@ -15,7 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use super::block_template::{BlockTemplate, parse_flags};
-use super::coinbase::{build_coinbase_transaction, get_timestamp_bytes, split_coinbase};
+use super::coinbase::{build_bitcoin_coinbase_transaction, get_timestamp_bytes, split_coinbase};
 use super::error::WorkError;
 use super::gbt::build_merkle_branches_for_template;
 use super::tracker::JobTracker;
@@ -258,7 +258,7 @@ impl PreparedNotifyParamsBuilder {
         // with [commitment_hash_push][nsecs_push][pool_sig_push]...
         let dummy_commitment_hash = hashes::sha256::Hash::from_byte_array([0xab_u8; 32]);
 
-        let coinbase = build_coinbase_transaction(
+        let coinbase = build_bitcoin_coinbase_transaction(
             Version::TWO,
             self.output_distribution.as_slice(),
             self.template.height as i64,

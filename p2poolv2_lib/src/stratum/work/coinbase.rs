@@ -106,7 +106,7 @@ fn append_default_witness_commitment(
 /// When `extranonce` is provided, it replaces the placeholder separator
 /// in the scriptSig. When `None`, the separator placeholder is left in
 /// place (used by the stratum server before split_coinbase).
-pub(crate) fn build_coinbase_transaction(
+pub(crate) fn build_bitcoin_coinbase_transaction(
     version: Version,
     output_data: &[OutputPair],
     height: i64,
@@ -423,7 +423,7 @@ mod tests {
         .unwrap();
         let value = Amount::from_str("50 BTC").unwrap();
         let height = 100;
-        let coinbase = build_coinbase_transaction(
+        let coinbase = build_bitcoin_coinbase_transaction(
             Version(2),
             &[OutputPair {
                 address: addr.clone(),
@@ -479,7 +479,7 @@ mod tests {
         .unwrap();
         let value = Amount::from_str("50 BTC").unwrap();
         let height = 100;
-        let coinbase = build_coinbase_transaction(
+        let coinbase = build_bitcoin_coinbase_transaction(
             Version(2),
             &[OutputPair {
                 address: addr.clone(),
@@ -538,7 +538,7 @@ mod tests {
         )
         .unwrap();
 
-        let coinbase = build_coinbase_transaction(
+        let coinbase = build_bitcoin_coinbase_transaction(
             Version(1), // ckpool uses version 1
             &[
                 OutputPair {
@@ -645,7 +645,7 @@ mod tests {
 
         let share_commitment_cloned = share_commitment.clone();
 
-        let coinbase = build_coinbase_transaction(
+        let coinbase = build_bitcoin_coinbase_transaction(
             Version(1), // ckpool uses version 1
             &[
                 OutputPair {
@@ -731,7 +731,7 @@ mod tests {
         let data = include_str!(
             "../../../../p2poolv2_tests/test_data/gbt/regtest/ckpool/four-txns/gbt.json"
         );
-        let template: BlockTemplate = serde_json::from_str(&data).expect("Invalid JSON");
+        let template: BlockTemplate = serde_json::from_str(data).expect("Invalid JSON");
 
         let address = parse_address(
             "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr",
@@ -757,7 +757,7 @@ mod tests {
 
         let pool_sig = b"P2Poolv2";
         //  Build and Split
-        let coinbase_tx = build_coinbase_transaction(
+        let coinbase_tx = build_bitcoin_coinbase_transaction(
             Version(1),
             &output_pairs,
             template.height as i64,
@@ -844,7 +844,7 @@ mod tests {
         };
         let expected_hash = share_commitment.hash();
 
-        let coinbase = build_coinbase_transaction(
+        let coinbase = build_bitcoin_coinbase_transaction(
             Version(1),
             &[OutputPair {
                 address: address.clone(),
@@ -872,7 +872,7 @@ mod tests {
         )
         .unwrap();
 
-        let coinbase = build_coinbase_transaction(
+        let coinbase = build_bitcoin_coinbase_transaction(
             Version(1),
             &[OutputPair {
                 address: address.clone(),
@@ -920,7 +920,7 @@ mod tests {
         )
         .unwrap();
         let height = 506;
-        let coinbase = build_coinbase_transaction(
+        let coinbase = build_bitcoin_coinbase_transaction(
             Version(2),
             &[OutputPair {
                 address: addr,
@@ -948,7 +948,7 @@ mod tests {
         )
         .unwrap();
         let height = 840_000;
-        let coinbase = build_coinbase_transaction(
+        let coinbase = build_bitcoin_coinbase_transaction(
             Version(2),
             &[OutputPair {
                 address: addr,
@@ -976,7 +976,7 @@ mod tests {
         )
         .unwrap();
         let height = 10;
-        let coinbase = build_coinbase_transaction(
+        let coinbase = build_bitcoin_coinbase_transaction(
             Version(2),
             &[OutputPair {
                 address: addr,

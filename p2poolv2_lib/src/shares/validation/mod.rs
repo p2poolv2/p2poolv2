@@ -41,7 +41,7 @@ use crate::shares::share_commitment::ShareCommitment;
 use crate::shares::transactions::coinbase::{compute_commitment_hash, compute_witness_root};
 use crate::shares::witness_commitment::WITNESS_COMMITMENT_LENGTH;
 use crate::store::block_tx_metadata::Status;
-use crate::stratum::work::coinbase::build_coinbase_transaction;
+use crate::stratum::work::coinbase::build_bitcoin_coinbase_transaction;
 use crate::stratum::work::gbt::compute_merkle_root_from_branches;
 use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
 use bitcoin::hashes::Hash as HashTrait;
@@ -641,7 +641,7 @@ impl DefaultShareValidator {
             None => PushBytesBuf::from(&[0u8]),
         };
         let pool_signature = &self.pool_signature;
-        let reconstructed_coinbase = build_coinbase_transaction(
+        let reconstructed_coinbase = build_bitcoin_coinbase_transaction(
             Version::TWO,
             &expected_outputs,
             share.header.bitcoin_height as i64,
@@ -2615,7 +2615,7 @@ mod tests {
         let commitment_hash = ShareCommitment::from_share_header(&share_block.header).hash();
 
         // Build coinbase matching how the validator reconstructs it
-        let coinbase_tx = build_coinbase_transaction(
+        let coinbase_tx = build_bitcoin_coinbase_transaction(
             Version::TWO,
             &[
                 OutputPair {
@@ -2689,7 +2689,7 @@ mod tests {
         let commitment_hash = ShareCommitment::from_share_header(&share_block.header).hash();
 
         // Build coinbase with 50/50 split (wrong for 60/40 distribution)
-        let coinbase_tx = build_coinbase_transaction(
+        let coinbase_tx = build_bitcoin_coinbase_transaction(
             Version::TWO,
             &[
                 OutputPair {
@@ -2776,7 +2776,7 @@ mod tests {
             "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
         );
 
-        let coinbase_tx = build_coinbase_transaction(
+        let coinbase_tx = build_bitcoin_coinbase_transaction(
             Version(2),
             &[OutputPair {
                 address: address_a,
@@ -2832,7 +2832,7 @@ mod tests {
         let commitment_hash = ShareCommitment::from_share_header(&share_block.header).hash();
 
         // Build coinbase with 1 sat matching the header
-        let coinbase_tx = build_coinbase_transaction(
+        let coinbase_tx = build_bitcoin_coinbase_transaction(
             Version::TWO,
             &[OutputPair {
                 address: address_a.clone(),
@@ -2931,7 +2931,7 @@ mod tests {
         let commitment_hash = ShareCommitment::from_share_header(&share_block.header).hash();
 
         // Build coinbase: donation, fee, then 3 miners in sorted address order
-        let coinbase_tx = build_coinbase_transaction(
+        let coinbase_tx = build_bitcoin_coinbase_transaction(
             Version::TWO,
             &[
                 OutputPair {
@@ -3037,7 +3037,7 @@ mod tests {
 
         let commitment_hash = ShareCommitment::from_share_header(&share_block.header).hash();
 
-        let coinbase_tx = build_coinbase_transaction(
+        let coinbase_tx = build_bitcoin_coinbase_transaction(
             Version::TWO,
             &[OutputPair {
                 address: address_a.clone(),

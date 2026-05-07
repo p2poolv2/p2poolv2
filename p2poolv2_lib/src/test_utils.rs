@@ -34,7 +34,7 @@ use crate::shares::extranonce::Extranonce;
 #[cfg(any(test, feature = "test-utils"))]
 use crate::shares::share_block::{ShareBlock, ShareHeader, ShareTransaction};
 #[cfg(any(test, feature = "test-utils"))]
-use crate::shares::transactions::coinbase::create_coinbase_transaction;
+use crate::shares::transactions::coinbase::build_sharechain_coinbase_transaction;
 #[cfg(any(test, feature = "test-utils"))]
 use bitcoin::hashes::Hash;
 #[cfg(any(test, feature = "test-utils"))]
@@ -70,7 +70,7 @@ use crate::stratum::messages::SimpleRequest;
 #[cfg(test)]
 use crate::stratum::work::block_template::BlockTemplate;
 #[cfg(any(test, feature = "test-utils"))]
-use crate::stratum::work::coinbase::build_coinbase_transaction;
+use crate::stratum::work::coinbase::build_bitcoin_coinbase_transaction;
 #[cfg(test)]
 use crate::stratum::work::gbt::build_merkle_branches_for_template;
 #[cfg(test)]
@@ -109,7 +109,7 @@ pub fn make_test_address(index: usize) -> Address {
 #[cfg(any(test, feature = "test-utils"))]
 pub fn test_coinbase_transaction(index: usize) -> bitcoin::Transaction {
     let address = make_test_address(index);
-    create_coinbase_transaction(&address, &[])
+    build_sharechain_coinbase_transaction(&address, &[])
 }
 
 /// Setup returns both chain handle and tempdir (tempdir must stay alive)
@@ -408,7 +408,7 @@ pub fn build_block_from_work_components(path: &str, nsecs: u64) -> ShareBlock {
     let commitment_hash = share_commitment.hash();
 
     // Build bitcoin coinbase with the commitment hash embedded in scriptSig
-    let bitcoin_coinbase = build_coinbase_transaction(
+    let bitcoin_coinbase = build_bitcoin_coinbase_transaction(
         bitcoin::transaction::Version::TWO,
         &[OutputPair {
             address: miner_bitcoin_address.clone(),
@@ -568,7 +568,8 @@ impl TestShareBlockBuilder {
             .into_iter()
             .map(ShareTransaction)
             .collect();
-        let coinbase = create_coinbase_transaction(&btcaddress, &other_share_transactions);
+        let coinbase =
+            build_sharechain_coinbase_transaction(&btcaddress, &other_share_transactions);
         let all_transactions: Vec<ShareTransaction> = {
             let mut txs = Vec::with_capacity(1 + other_share_transactions.len());
             txs.push(ShareTransaction(coinbase));
@@ -667,7 +668,7 @@ fn test_share_block(
                 coinbase_value: 5_000_000_000,
             };
 
-            let bitcoin_coinbase = build_coinbase_transaction(
+            let bitcoin_coinbase = build_bitcoin_coinbase_transaction(
                 bitcoin::transaction::Version::TWO,
                 &[OutputPair {
                     address: btcaddress.clone(),

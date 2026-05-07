@@ -37,7 +37,7 @@ const WITNESS_RESERVED_VALUE: [u8; 32] = [0u8; 32];
 ///
 /// Also places the 32-byte witness reserved value on the coinbase input's
 /// witness stack so validators can recompute the commitment.
-pub fn create_coinbase_transaction(
+pub fn build_sharechain_coinbase_transaction(
     btcaddress: &Address,
     other_share_transactions: &[ShareTransaction],
 ) -> Transaction {
@@ -128,7 +128,7 @@ mod tests {
             .unwrap();
         let address = Address::p2wpkh(&pubkey, Network::Regtest);
 
-        let transaction = create_coinbase_transaction(&address, &[]);
+        let transaction = build_sharechain_coinbase_transaction(&address, &[]);
 
         assert_eq!(transaction.version, bitcoin::transaction::Version::TWO);
         assert_eq!(transaction.lock_time, bitcoin::absolute::LockTime::ZERO);
@@ -212,7 +212,8 @@ mod tests {
         });
 
         let other_share_transactions = vec![first_share_transaction, second_share_transaction];
-        let transaction = create_coinbase_transaction(&address, &other_share_transactions);
+        let transaction =
+            build_sharechain_coinbase_transaction(&address, &other_share_transactions);
 
         assert_eq!(transaction.version, bitcoin::transaction::Version::TWO);
         assert_eq!(transaction.lock_time, bitcoin::absolute::LockTime::ZERO);
@@ -246,7 +247,7 @@ mod tests {
 
         // Commitment must differ from the empty-transactions case, proving
         // the witness root actually covers the share transactions.
-        let empty_transaction = create_coinbase_transaction(&address, &[]);
+        let empty_transaction = build_sharechain_coinbase_transaction(&address, &[]);
         assert_ne!(
             commitment_output.script_pubkey,
             empty_transaction.output[1].script_pubkey

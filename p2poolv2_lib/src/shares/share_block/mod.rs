@@ -353,7 +353,8 @@ impl ShareBlock {
             .parse::<CompressedPublicKey>()
             .unwrap();
         let btcaddress = Address::p2wpkh(&public_key, network);
-        let coinbase = transactions::coinbase::create_coinbase_transaction(&btcaddress, &[]);
+        let coinbase =
+            transactions::coinbase::build_sharechain_coinbase_transaction(&btcaddress, &[]);
         let coinbase_value = coinbase
             .output
             .iter()
@@ -555,7 +556,7 @@ mod tests {
         append_proportional_distribution, include_address_and_cut,
     };
     use crate::shares::share_commitment::ShareCommitment;
-    use crate::stratum::work::coinbase::build_coinbase_transaction;
+    use crate::stratum::work::coinbase::build_bitcoin_coinbase_transaction;
     use crate::stratum::work::gbt::compute_merkle_root_from_branches;
     use crate::test_utils::TestShareBlockBuilder;
     use bitcoin::consensus::{deserialize, serialize};
@@ -786,7 +787,7 @@ mod tests {
                 None => PushBytesBuf::from(&[0u8]),
             };
 
-            let reconstructed_coinbase = build_coinbase_transaction(
+            let reconstructed_coinbase = build_bitcoin_coinbase_transaction(
                 Version::TWO,
                 &outputs,
                 header.bitcoin_height as i64,

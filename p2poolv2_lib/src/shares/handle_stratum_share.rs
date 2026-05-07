@@ -21,7 +21,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::coinbaseaux_flags::CoinbaseAuxFlags;
 use crate::shares::share_block::{ShareBlock, ShareHeader, ShareTransaction};
-use crate::shares::transactions::coinbase::create_coinbase_transaction;
+use crate::shares::transactions::coinbase::build_sharechain_coinbase_transaction;
 use crate::shares::witness_commitment::WitnessCommitment;
 use crate::stratum::emission::Emission;
 use bitcoin::merkle_tree;
@@ -53,7 +53,7 @@ pub async fn handle_stratum_share(
         // create_coinbase_transaction so the BIP141 witness commitment
         // covers their wtxids.
         let other_share_transactions: Vec<ShareTransaction> = Vec::new();
-        let share_coinbase = create_coinbase_transaction(
+        let share_coinbase = build_sharechain_coinbase_transaction(
             &share_commitment.miner_bitcoin_address,
             &other_share_transactions,
         );
