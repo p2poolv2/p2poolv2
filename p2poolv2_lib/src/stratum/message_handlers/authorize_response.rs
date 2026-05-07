@@ -15,13 +15,14 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
-use crate::stratum::difficulty_adjuster::DifficultyAdjusterTrait;
-use crate::stratum::error::Error;
-use crate::stratum::messages::{Message, Response, SetDifficultyNotification, SimpleRequest};
-use crate::stratum::parse_password;
-use crate::stratum::server::StratumContext;
-use crate::stratum::session::Session;
-use crate::stratum::validate_username;
+use crate::stratum::{
+    difficulty_adjuster::DifficultyAdjusterTrait,
+    error::{Error, StratumErrorCode},
+    messages::{Message, Response, SetDifficultyNotification, SimpleRequest},
+    server::StratumContext,
+    session::Session,
+    validate_username,
+};
 use tracing::debug;
 
 /// Register user in the store and update session with their IDs
@@ -64,24 +65,22 @@ pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
     let username = match message.params[0].clone() {
         Some(name) => name,
         None => {
-            return Ok(vec![Message::Response(Response::new_error(
-                message.id,
-                -401,
-                "Empty username".to_string(),
-            ))]);
+            return Ok(vec![Message::Response(
+                Response::new_error(message.id, StratumErrorCode::UnauthorizedWorker)
+                    .with_message("Empty username".to_string()),
+            )]);
         }
     };
     let parsed_username =
         match validate_username::validate(&username, ctx.validate_addresses, ctx.network) {
             Ok(validated) => validated,
-            Err(e) => {
+            Err(_e) => {
                 if !session.auth_failed_once {
                     session.auth_failed_once = true;
-                    return Ok(vec![Message::Response(Response::new_error(
-                        message.id,
-                        -401,
-                        format!("Invalid username {e}"),
-                    ))]);
+                    return Ok(vec![Message::Response(
+                        Response::new_error(message.id, StratumErrorCode::UnauthorizedWorker)
+                            .with_message("Invalid username".to_string()),
+                    )]);
                 } else {
                     return Err(Error::AuthorizationFailure(
                         "Second invalid username. Disconnecting.".to_string(),
@@ -449,10 +448,10 @@ mod tests {
             Message::Response(response) => {
                 assert!(response.error.is_some(), "Response should have an error");
                 let error = response.error.as_ref().unwrap();
-                assert_eq!(error.code, -401, "Error code should be -401");
-                assert!(
-                    error.message.contains("Invalid username"),
-                    "Error message should mention invalid username"
+                assert_eq!(error.code, 24, "Error code should be 24");
+                assert_eq!(
+                    error.message, "Invalid username",
+                    "Error message should be 'Invalid username'"
                 );
             }
             _ => panic!("Expected Response message"),

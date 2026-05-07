@@ -18,6 +18,7 @@
 use std::borrow::Cow;
 use std::vec;
 
+use crate::stratum::error::StratumErrorCode;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -60,13 +61,27 @@ impl PartialEq for Id {
 }
 
 /// StratumError represents the error structure in Stratum responses
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Error<'a> {
     pub code: i32,
     #[serde(borrow)]
     pub message: Cow<'a, str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<Value>,
+}
+
+// Serialize as the standard 3-element array: [code, message, null]
+impl Serialize for Error<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeSeq;
+        let mut seq = serializer.serialize_seq(Some(3))?;
+        seq.serialize_element(&self.code)?;
+        seq.serialize_element(&self.message)?;
+        seq.serialize_element(&self.data.clone().unwrap_or(json!("")))?;
+        seq.end()
+    }
 }
 
 /// Message type capturing all possible stratum message types.
@@ -373,16 +388,25 @@ impl Response<'_> {
         }
     }
 
-    pub fn new_error(id: Option<Id>, code: i32, message: String) -> Self {
+    pub fn new_error(id: Option<Id>, error_code: StratumErrorCode) -> Self {
         Response {
             id,
             result: None,
             error: Some(Error {
-                code,
-                message: Cow::Owned(message),
+                // SAFETY: [StratumErrorCode] is repr(i32)
+                code: error_code as i32,
+                message: Cow::Owned(error_code.to_string()),
                 data: None,
             }),
         }
+    }
+
+    /// Override the default error message with a custom one.
+    pub fn with_message(mut self, msg: String) -> Self {
+        if let Some(ref mut error) = self.error {
+            error.message = Cow::Owned(msg);
+        }
+        self
     }
 }
 
@@ -619,7 +643,7 @@ mod tests {
         let serialized_error = serde_json::to_string(&error).unwrap();
         assert_eq!(
             serialized_error,
-            r#"{"code":-1,"message":"An error occurred","data":"Additional error data"}"#
+            r#"[-1,"An error occurred","Additional error data"]"#
         );
     }
 
@@ -697,8 +721,7 @@ mod tests {
         // Test new_error
         let response = Response::new_error(
             Some(Id::String("abc".to_string())),
-            -32601,
-            "Method not found".to_string(),
+            StratumErrorCode::MethodNotFound,
         );
         assert_eq!(response.id, Some(Id::String("abc".to_string())));
         assert!(response.result.is_none());
