@@ -39,6 +39,9 @@ const SEQUENCE_LENGTH: usize = 4;
 /// Length of the lock time bytes in coinbase
 const LOCKTIME_LENGTH: usize = 4;
 
+/// Sequence for coinbase
+const BIP54_COINBASE_SEQUENCE: Sequence = Sequence(0xffff_fffe);
+
 /// Parse Address from a string provided by the miner.
 ///
 /// Delegates to `p2poolv2_config::parse_address` and converts the error.
@@ -149,17 +152,20 @@ pub(crate) fn build_bitcoin_coinbase_transaction(
 
     let mut outputs = build_outputs(output_data);
     append_default_witness_commitment(&mut outputs, default_witness_commitment);
+    let lock_time = LockTime::from_height(height as u32 - 1).map_err(|_| WorkError {
+        message: "Error getting locktime from height".into(),
+    })?;
 
     let coinbase_tx = Transaction {
         version,
-        lock_time: LockTime::ZERO,
+        lock_time,
         input: vec![TxIn {
             previous_output: bitcoin::OutPoint {
                 txid: sha256d::Hash::all_zeros().into(),
                 vout: u32::MAX,
             },
             script_sig: coinbase_script,
-            sequence: Sequence::MAX,
+            sequence: BIP54_COINBASE_SEQUENCE,
             witness: Vec::<Vec<u8>>::new().into(),
         }],
         output: outputs,
@@ -439,9 +445,12 @@ mod tests {
         )
         .unwrap();
 
-        // Check version and lock_time
+        // Check version and BIP54 lock_time (height - 1)
         assert_eq!(coinbase.version, Version(2));
-        assert_eq!(coinbase.lock_time, LockTime::ZERO);
+        assert_eq!(
+            coinbase.lock_time,
+            LockTime::from_height(height as u32 - 1).unwrap()
+        );
 
         // Check input
         assert_eq!(coinbase.input.len(), 1);
@@ -451,7 +460,7 @@ mod tests {
             sha256d::Hash::all_zeros().into()
         );
         assert_eq!(input.previous_output.vout, u32::MAX);
-        assert_eq!(input.sequence, Sequence::MAX);
+        assert_eq!(input.sequence, BIP54_COINBASE_SEQUENCE);
 
         let script_bytes = input.script_sig.as_bytes();
         // Check coinbase script contains height
@@ -565,7 +574,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(coinbase.version, Version(1));
-        assert_eq!(coinbase.lock_time, LockTime::ZERO);
+        assert_eq!(
+            coinbase.lock_time,
+            LockTime::from_height(template.height as u32 - 1).unwrap()
+        );
         assert_eq!(coinbase.input.len(), 1);
         let input = &coinbase.input[0];
         assert_eq!(
@@ -573,7 +585,7 @@ mod tests {
             sha256d::Hash::all_zeros().into()
         );
         assert_eq!(input.previous_output.vout, u32::MAX);
-        assert_eq!(input.sequence, Sequence::MAX);
+        assert_eq!(input.sequence, BIP54_COINBASE_SEQUENCE);
         assert_eq!(input.witness.len(), 0); // No witness data in this test
         assert_eq!(coinbase.output.len(), 3);
         let output1 = &coinbase.output[0];
@@ -672,7 +684,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(coinbase.version, Version(1));
-        assert_eq!(coinbase.lock_time, LockTime::ZERO);
+        assert_eq!(
+            coinbase.lock_time,
+            LockTime::from_height(template.height as u32 - 1).unwrap()
+        );
         assert_eq!(coinbase.input.len(), 1);
         let input = &coinbase.input[0];
         assert_eq!(
@@ -680,7 +695,7 @@ mod tests {
             sha256d::Hash::all_zeros().into()
         );
         assert_eq!(input.previous_output.vout, u32::MAX);
-        assert_eq!(input.sequence, Sequence::MAX);
+        assert_eq!(input.sequence, BIP54_COINBASE_SEQUENCE);
         assert_eq!(input.witness.len(), 0); // No witness data in this test
         assert_eq!(coinbase.output.len(), 3);
         let output1 = &coinbase.output[0];

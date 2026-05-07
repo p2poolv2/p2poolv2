@@ -734,25 +734,29 @@ mod tests {
 
         let pool_signature = b"P2Poolv2";
 
-        // Build PPLNS distribution with the same algo as pplns window does
+        let network = bitcoin::Network::Signet;
+        let difficulty_scale: u128 = 10;
+
+        // Build PPLNS distribution matching the production PplnsWindow logic.
+        // The threshold uses the bitcoin header difficulty (from the template),
+        // while each share contributes its share chain difficulty (from header.bits).
         for (index, block) in blocks.iter().enumerate().skip(1) {
             let header = &block.header;
-            let target_difficulty = header.bitcoin_header.difficulty(bitcoin::Network::Signet);
+            let bitcoin_difficulty = header.bitcoin_header.difficulty(network);
+            let scaled_threshold = bitcoin_difficulty.saturating_mul(difficulty_scale);
 
-            // Walk prior shares newest-to-oldest collecting the PPLNS window
             let mut address_difficulty_map: HashMap<bitcoin::Address, u128> =
                 HashMap::with_capacity(4);
             let mut accumulated_difficulty: u128 = 0;
             for prior_index in (0..index).rev() {
                 let prior_header = &blocks[prior_index].header;
-                let prior_difficulty = prior_header
-                    .bitcoin_header
-                    .difficulty(bitcoin::Network::Signet);
+                let share_difficulty = prior_header.get_difficulty(network);
+                let scaled_contribution = share_difficulty.saturating_mul(difficulty_scale);
                 *address_difficulty_map
                     .entry(prior_header.miner_bitcoin_address.clone())
-                    .or_insert(0) += prior_difficulty;
-                accumulated_difficulty = accumulated_difficulty.saturating_add(prior_difficulty);
-                if accumulated_difficulty >= target_difficulty {
+                    .or_insert(0) += scaled_contribution;
+                accumulated_difficulty = accumulated_difficulty.saturating_add(scaled_contribution);
+                if accumulated_difficulty >= scaled_threshold {
                     break;
                 }
             }
