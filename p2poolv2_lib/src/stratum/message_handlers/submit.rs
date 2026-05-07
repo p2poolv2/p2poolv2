@@ -16,18 +16,19 @@
 
 use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::shares::extranonce::Extranonce;
-use crate::stratum::difficulty_adjuster::DifficultyAdjusterTrait;
-use crate::stratum::emission::Emission;
-use crate::stratum::error::Error;
-use crate::stratum::messages::{Message, Response, SetDifficultyNotification, SimpleRequest};
-use crate::stratum::server::StratumContext;
-use crate::stratum::session::Session;
-use crate::stratum::work::block_template::BlockTemplate;
-use crate::stratum::work::difficulty::validate::validate_bitcoin_difficulty;
-use crate::stratum::work::tracker::JobId;
-use bitcoin::block::Header;
-use bitcoin::blockdata::block::Block;
-use bitcoin::hashes::Hash;
+use crate::stratum::{
+    difficulty_adjuster::DifficultyAdjusterTrait,
+    emission::Emission,
+    error::{Error, StratumErrorCode},
+    messages::{Message, Response, SetDifficultyNotification, SimpleRequest},
+    server::StratumContext,
+    session::Session,
+    work::{
+        block_template::BlockTemplate, difficulty::validate::validate_bitcoin_difficulty,
+        tracker::JobId,
+    },
+};
+use bitcoin::{block::Header, blockdata::block::Block, hashes::Hash};
 use bitcoindrpc::BitcoindRpcClient;
 use serde_json::json;
 use std::time::SystemTime;
@@ -67,9 +68,9 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
         Some(job) => job,
         None => {
             debug!("Job not found for job_id: {}", job_id);
-            return Ok(vec![Message::Response(Response::new_ok(
+            return Ok(vec![Message::Response(Response::new_error(
                 message.id,
-                json!(false),
+                StratumErrorCode::InvalidJobId,
             ))]);
         }
     };
@@ -85,10 +86,9 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
             Ok(result) => result,
             Err(e) => {
                 debug!("Share validation failed: {}", e);
-                // return error to asic client if our server is failing to run validation. They will know something is wrong.
-                return Ok(vec![Message::Response(Response::new_ok(
+                return Ok(vec![Message::Response(Response::new_error(
                     message.id,
-                    json!(false),
+                    StratumErrorCode::OtherUnknown,
                 ))]);
             }
         };
@@ -98,10 +98,9 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
         .add_share(JobId(job_id), validation_result.header.block_hash());
 
     if !is_new_share {
-        // return error to asic client if share already exists or duplicate detection failed
-        return Ok(vec![Message::Response(Response::new_ok(
+        return Ok(vec![Message::Response(Response::new_error(
             message.id,
-            json!(false),
+            StratumErrorCode::Duplicate,
         ))]);
     }
 
@@ -125,9 +124,9 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
                 validation_result.header.block_hash(),
                 commitment.bits
             );
-            return Ok(vec![Message::Response(Response::new_ok(
+            return Ok(vec![Message::Response(Response::new_error(
                 message.id,
-                json!(false),
+                StratumErrorCode::AboveTarget,
             ))]);
         }
     }
@@ -686,8 +685,11 @@ mod handle_submit_tests {
             _ => panic!("Expected a Response message"),
         };
 
-        // Should return result false for unknown job_id
-        assert_eq!(response.result, Some(json!(false)));
+        // Should return error for unknown job_id
+        assert_eq!(response.result, None);
+        let err = response.error.as_ref().unwrap();
+        assert_eq!(err.code, 1, "should be Invalid JobID (code 1)");
+        assert_eq!(err.message, "Invalid JobID");
     }
 
     #[tokio::test]
@@ -885,8 +887,11 @@ mod handle_submit_tests {
             _ => panic!("Expected a Response message"),
         };
 
-        // Duplicate submission should return false
-        assert_eq!(response2.result, Some(json!(false)));
+        // Duplicate submission should return error code 4
+        assert_eq!(response2.result, None);
+        let err = response2.error.as_ref().unwrap();
+        assert_eq!(err.code, 4, "should be Duplicate (code 4)");
+        assert_eq!(err.message, "Duplicate");
 
         // No additional emission should be sent for duplicate
         assert!(emissions_rx.try_recv().is_err());
