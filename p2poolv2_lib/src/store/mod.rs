@@ -383,23 +383,26 @@ impl Store {
 
     /// Store a share block and create Valid metadata for it.
     ///
-    /// Used for shares that arrive out of order and need to be
-    /// discoverable by forward walks and uncle lookups. The metadata
-    /// height and chain_work are computed from the parent if available,
-    /// or default to height 1 with just the share's own work.
+    /// Used in tests for shares that need to be discoverable by
+    /// forward walks and uncle lookups. The metadata height and
+    /// chain_work are computed from the parent. Panics if the parent
+    /// is not in the store -- missing parent in test setup is a bug.
     /// Does NOT go through organise_header, so it avoids candidate
     /// chain side effects.
     pub fn store_with_valid_metadata(&self, share: &ShareBlock) {
         let blockhash = share.block_hash();
         let share_work = share.header.get_work();
-        let (height, chain_work) = match self.get_block_metadata(&share.header.prev_share_blockhash)
-        {
-            Ok(parent_metadata) => {
-                let parent_height = parent_metadata.expected_height.unwrap_or_default();
-                (parent_height + 1, parent_metadata.chain_work + share_work)
-            }
-            Err(_) => (1, share_work),
-        };
+        let parent_metadata = self
+            .get_block_metadata(&share.header.prev_share_blockhash)
+            .unwrap_or_else(|_| {
+                panic!(
+                    "Parent {} not found for block {blockhash} in test setup",
+                    share.header.prev_share_blockhash
+                )
+            });
+        let parent_height = parent_metadata.expected_height.unwrap_or_default();
+        let height = parent_height + 1;
+        let chain_work = parent_metadata.chain_work + share_work;
         let mut batch = Store::get_write_batch();
         self.add_share_block(share, &mut batch).unwrap();
         self.set_height_to_blockhash(&blockhash, height, &mut batch)
@@ -417,22 +420,23 @@ impl Store {
     /// Create Valid metadata for a share without storing its block data.
     ///
     /// Also stores the header in the Header CF so that downstream
-    /// children can look up parent timestamps and heights. Used to set
-    /// up metadata for intermediate shares so that downstream children
-    /// can compute their cumulative height and work correctly, even
-    /// when the intermediate share has not arrived yet in the test
-    /// scenario.
+    /// children can look up parent timestamps and heights. Panics if
+    /// the parent is not in the store -- missing parent in test setup
+    /// is a bug.
     pub fn create_valid_metadata_only(&self, share: &ShareBlock) {
         let blockhash = share.block_hash();
         let share_work = share.header.get_work();
-        let (height, chain_work) = match self.get_block_metadata(&share.header.prev_share_blockhash)
-        {
-            Ok(parent_metadata) => {
-                let parent_height = parent_metadata.expected_height.unwrap_or_default();
-                (parent_height + 1, parent_metadata.chain_work + share_work)
-            }
-            Err(_) => (1, share_work),
-        };
+        let parent_metadata = self
+            .get_block_metadata(&share.header.prev_share_blockhash)
+            .unwrap_or_else(|_| {
+                panic!(
+                    "Parent {} not found for block {blockhash} in test setup",
+                    share.header.prev_share_blockhash
+                )
+            });
+        let parent_height = parent_metadata.expected_height.unwrap_or_default();
+        let height = parent_height + 1;
+        let chain_work = parent_metadata.chain_work + share_work;
         let mut batch = Store::get_write_batch();
         self.add_share_header(&share.header, &mut batch).unwrap();
         self.set_height_to_blockhash(&blockhash, height, &mut batch)

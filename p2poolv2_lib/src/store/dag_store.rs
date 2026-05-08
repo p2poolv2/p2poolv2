@@ -2846,14 +2846,14 @@ mod tests {
             .nonce(5)
             .build();
 
-        // Store uncle shares with Valid metadata so find_uncles can read their metadata
+        // Confirm main chain up to each uncle's parent before storing uncles
+        store.push_to_confirmed_chain(&share1).unwrap();
         store.store_with_valid_metadata(&uncle_deep);
+        store.push_to_confirmed_chain(&share2).unwrap();
+        store.push_to_confirmed_chain(&share3).unwrap();
         store.store_with_valid_metadata(&uncle_within);
-
-        // Confirm main chain (share1 through share5) using push_to_confirmed_chain
-        for share in [&share1, &share2, &share3, &share4, &share5] {
-            store.push_to_confirmed_chain(share).unwrap();
-        }
+        store.push_to_confirmed_chain(&share4).unwrap();
+        store.push_to_confirmed_chain(&share5).unwrap();
 
         // find_uncles from share5 (height 5)
         // Should only find uncle_within (at height 3, within depth 3: heights 2,3,4)
@@ -2901,12 +2901,12 @@ mod tests {
             .nonce(101)
             .build();
 
-        // Store uncle shares with Valid metadata so find_uncles can read their metadata
+        // Confirm share1 first so uncle1 and uncle2 can find their parents
+        store.push_to_confirmed_chain(&share1).unwrap();
         store.store_with_valid_metadata(&uncle1);
         store.store_with_valid_metadata(&uncle2);
 
-        // Confirm main chain using push_to_confirmed_chain
-        store.push_to_confirmed_chain(&share1).unwrap();
+        // Confirm share2
         store.push_to_confirmed_chain(&share2).unwrap();
 
         // Mark uncle1 as already used as uncle
