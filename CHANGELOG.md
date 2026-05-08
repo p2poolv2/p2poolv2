@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Share header sync now uses height-based DAG walking instead of
+  confirmed-chain walk + uncle reference chasing. The sender collects
+  ALL valid blocks at each height from the height index, producing a
+  complete topologically sorted subgraph. This fixes sync failures
+  caused by missing fork block ancestors that the old approach never
+  included.
+
+- Locator matching relaxed from confirmed-only to any valid block
+  status (HeaderValid, Candidate, Confirmed, BlockValid). This
+  prevents follow-up batch failures when the last header in a batch
+  was a fork block.
+
+- Receiver supports multiple chain anchors per batch, allowing
+  height-based batches with blocks from different branches to
+  validate correctly.
+
+### Fixed
+
+- Fork block ancestors missing from header sync response. The old
+  confirmed-chain walk + `collect_uncle_chain` missed fork blocks whose
+  `prev_share_blockhash` pointed to non-confirmed blocks, causing
+  "parent not in batch or store" errors during testnet4 sync.
+
+- Out-of-order header arrival no longer creates phantom entries at
+  height 1 in the height index. `initialise_new_header` now returns an
+  error when the parent is missing instead of silently defaulting.
+
+- Missing external parents in a share headers batch now trigger a
+  retry with a deeper locator instead of dropping the batch.
+  HeaderSyncError enum distinguishes retryable errors (missing
+  parent/uncle) from non-retryable errors (ASERT mismatch,
+  insufficient work). Retry depth is computed from the lowest anchor
+  height in the failed batch.
+
+- `build_locator` and `send_getheaders` accept a depth parameter so
+  the retry locator can start further back than the confirmed tip.
+
 ## [v0.10.10] - 2026-05-06
 
 ### Fixed
