@@ -1051,11 +1051,13 @@ mod tests {
         expected.push(share_b.block_hash());
         assert_eq!(descendants, expected);
 
-        // Descendants from share_a (h:1): starts at h:2, only share_b
+        // Descendants from share_a (h:1): with MAX_UNCLES_DEPTH overlap,
+        // starts at max(1-3,0)+1 = h:1. Includes h:1 (share_a, uncle1)
+        // and h:2 (share_b).
         let descendants = store
             .get_descendant_blockhashes(&share_a.block_hash(), &BlockHash::all_zeros(), 10)
             .unwrap();
-        assert_eq!(descendants, vec![share_b.block_hash()]);
+        assert_eq!(descendants, expected);
 
         // Test with limit: limit=2 completes h:1 (2 blocks) then stops
         let descendants = store
@@ -1147,17 +1149,17 @@ mod tests {
     }
 
     /// Long chain test: locator match deep in the chain. Height-based
-    /// walk starts at locator_height+1 and includes all blocks at each
-    /// height up to top confirmed. Blocks at or below the locator
-    /// height are not included (receiver already has them from a
-    /// previous batch).
+    /// walk starts at locator_height - MAX_UNCLES_DEPTH + 1 and
+    /// includes all blocks at each height up to top confirmed. The
+    /// overlap ensures fork block parents near the boundary are
+    /// included.
     ///
     /// Chain:
     ///   genesis(h:0) -> h:1 -> ... -> h:5 -> h:6 -> ... -> h:8 -> h:9(uncles=[uncle]) -> h:10
     ///                                      \-> uncle(h:6, parent=h:5)
     ///
-    /// Locator at h:8. Walk starts at h:9. Uncle at h:6 is below
-    /// locator height so it is NOT in this batch (was in previous batch).
+    /// Locator at h:8. Walk starts at max(8-3,0)+1 = h:6. Uncle at
+    /// h:6 is included in the overlap.
     #[test]
     fn test_get_descendant_blockhashes_long_chain_starts_at_uncle_depth() {
         let temp_dir = tempdir().unwrap();
@@ -1209,15 +1211,25 @@ mod tests {
         store.push_to_confirmed_chain(&block_h10).unwrap();
         chain.push(block_h10);
 
-        // Locator at h:8 (chain[7]). Walk starts at h:9.
+        // Locator at h:8 (chain[7]). With MAX_UNCLES_DEPTH=3 overlap,
+        // walk starts at max(8-3,0)+1 = h:6. Includes h:6 (chain[5] +
+        // uncle), h:7 (chain[6]), h:8 (chain[7]), h:9 (chain[8]),
+        // h:10 (chain[9]).
         let locator_block = &chain[7];
         let descendants = store
             .get_descendant_blockhashes(&locator_block.block_hash(), &BlockHash::all_zeros(), 100)
             .unwrap();
 
-        // h:9 has confirmed + uncle (both at h:9... wait, uncle is at h:6)
-        // Actually uncle is at h:6, below locator. Only h:9 and h:10.
-        let expected = vec![chain[8].block_hash(), chain[9].block_hash()];
+        let mut expected: Vec<BlockHash> = Vec::new();
+        // h:6: chain[5] + uncle
+        let mut height_6 = vec![chain[5].block_hash(), uncle.block_hash()];
+        height_6.sort();
+        expected.extend(height_6);
+        // h:7, h:8, h:9, h:10
+        expected.push(chain[6].block_hash());
+        expected.push(chain[7].block_hash());
+        expected.push(chain[8].block_hash());
+        expected.push(chain[9].block_hash());
         assert_eq!(descendants, expected);
     }
 
@@ -3475,14 +3487,18 @@ mod tests {
         store.push_to_confirmed_chain(&share_b).unwrap();
 
         // Locator with only the uncle hash -- uncle is HeaderValid at
-        // h:1, so it matches. Descendants start from h:2 (share_b).
+        // h:1, so it matches. With MAX_UNCLES_DEPTH overlap, start
+        // height is max(1-3,0)+1 = 1. Returns all blocks at h:1
+        // (uncle, share_a) and h:2 (share_b).
         let locator = vec![uncle.block_hash()];
         let result = store
             .get_blockhashes_for_locator(&locator, &BlockHash::all_zeros(), 10)
             .unwrap();
 
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0], share_b.block_hash());
+        assert_eq!(result.len(), 3);
+        assert!(result.contains(&uncle.block_hash()));
+        assert!(result.contains(&share_a.block_hash()));
+        assert!(result.contains(&share_b.block_hash()));
     }
 
     /// first_known_for_locator returns the first known hash from the

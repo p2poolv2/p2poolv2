@@ -804,14 +804,13 @@ mod tests {
 
         assert_eq!(store.get_top_candidate_height().unwrap(), 2);
 
-        // orphan_share has an unknown parent (not on the chain) so
-        // push_to_candidate_chain computes height 1 with only its own work,
-        // which is not enough to extend or reorg.
+        // orphan_share has an unknown parent (not in store), so
+        // organise_header returns an error for missing parent.
         let orphan_share = TestShareBlockBuilder::new().nonce(0xe9695793).build();
-        let result = store.push_to_candidate_chain(&orphan_share).unwrap();
+        let result = store.push_to_candidate_chain(&orphan_share);
 
-        // Should not change the candidate chain
-        assert!(result.is_none());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
         assert_eq!(store.get_top_candidate_height().unwrap(), 2);
     }
 

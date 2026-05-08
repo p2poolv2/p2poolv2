@@ -17,6 +17,7 @@
 use crate::shares::share_block::ShareBlock;
 use crate::store::block_tx_metadata::{BlockMetadata, Status};
 use crate::store::column_families::ColumnFamily;
+use crate::store::dag_store::MAX_UNCLES_DEPTH;
 use bitcoin::consensus::{Encodable, encode};
 use bitcoin::{BlockHash, Work};
 use rocksdb::{ColumnFamilyDescriptor, DB, Options as RocksDbOptions};
@@ -228,8 +229,8 @@ impl Store {
         self.db.write(batch)
     }
 
-    /// Get all blockhashes from blockhash' height+1 up to top
-    /// confirmed height.
+    /// Get all blockhashes from locator height up to top confirmed
+    /// height.
     ///
     /// Walks the height index and collects all valid blocks at each
     /// height (confirmed, candidate, header-valid, block-valid).
@@ -237,6 +238,13 @@ impl Store {
     /// blocks are sorted lexicographically by blockhash for
     /// deterministic ordering. Heights are never split across batches
     /// -- all blocks at a height are included atomically.
+    ///
+    /// Starts MAX_UNCLES_DEPTH heights before the locator match so
+    /// that fork blocks near the boundary have their parents included
+    /// in the batch. The overlap is small and duplicate headers are
+    /// handled as no-ops by organise_header on the receiver. This
+    /// prevents in the common case starting to fetch from a locator
+    /// much deeper down.
     ///
     /// This produces a topologically sorted DAG subgraph because every
     /// block's parent is at height H-1, which is either in this batch
@@ -249,10 +257,11 @@ impl Store {
     ) -> Result<Vec<BlockHash>, StoreError> {
         let mut blockhashes = Vec::with_capacity(limit);
 
-        let start_height = match self.get_block_metadata(blockhash) {
-            Ok(metadata) => metadata.expected_height.unwrap_or(0) + 1,
-            Err(_) => 1,
+        let locator_height = match self.get_block_metadata(blockhash) {
+            Ok(metadata) => metadata.expected_height.unwrap_or(0),
+            Err(_) => 0,
         };
+        let start_height = locator_height.saturating_sub(MAX_UNCLES_DEPTH as u32) + 1;
 
         let top_confirmed_height = match self.get_top_confirmed_height() {
             Ok(height) => height,
