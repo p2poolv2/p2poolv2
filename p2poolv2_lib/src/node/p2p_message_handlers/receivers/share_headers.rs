@@ -122,21 +122,25 @@ fn validate_header_chain(
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let pool_difficulty = share_validator.pool_difficulty();
 
-    let (anchor_hash, anchor_metadata) = find_chain_anchor(share_headers, chain_store_handle)?;
-    debug!(
-        "Anchor hash {:?} and anchor height {:?}",
-        anchor_hash, anchor_metadata.expected_height
-    );
+    let anchors = find_chain_anchors(share_headers, chain_store_handle)?;
+    let anchor_hashes: HashSet<BlockHash> = anchors.iter().map(|(hash, _)| *hash).collect();
+    debug!("Found {} anchor(s) for header batch", anchors.len());
+
+    let best_anchor_work = anchors
+        .iter()
+        .map(|(_, metadata)| metadata.chain_work)
+        .max()
+        .unwrap_or(Work::from_hex("0x00").unwrap());
 
     let (batch_hashes, cumulative_chain_work) = validate_dag_connectivity_and_difficulty(
         share_headers,
         share_validator,
         pool_difficulty,
-        anchor_hash,
+        &anchor_hashes,
         chain_store_handle,
     )?;
     verify_all_uncles_available(share_headers, &batch_hashes, chain_store_handle)?;
-    validate_cumulative_work(anchor_metadata.chain_work, cumulative_chain_work)?;
+    validate_cumulative_work(best_anchor_work, cumulative_chain_work)?;
 
     debug!(
         "Validated {} headers, cumulative chain work: {cumulative_chain_work}",
@@ -178,11 +182,12 @@ fn validate_dag_connectivity_and_difficulty(
     share_headers: &[ShareHeader],
     share_validator: &(dyn ShareValidator + Send + Sync),
     pool_difficulty: &PoolDifficulty,
-    anchor_hash: BlockHash,
+    anchor_hashes: &HashSet<BlockHash>,
     chain_store_handle: &ChainStoreHandle,
 ) -> Result<(HashSet<BlockHash>, Work), Box<dyn Error + Send + Sync>> {
-    let mut known_hashes: HashSet<BlockHash> = HashSet::with_capacity(share_headers.len() + 1);
-    known_hashes.insert(anchor_hash);
+    let mut known_hashes: HashSet<BlockHash> =
+        HashSet::with_capacity(share_headers.len() + anchor_hashes.len());
+    known_hashes.extend(anchor_hashes);
 
     let mut cumulative_work = Work::from_hex("0x00").unwrap();
     let mut time_height_cache: HashMap<BlockHash, (u32, u32)> =
@@ -249,20 +254,18 @@ fn verify_all_uncles_available(
     Ok(())
 }
 
-/// Find the chain anchor: the highest-height parent from the batch that
-/// exists in our store.
+/// Find all chain anchors: external parents from the batch that exist
+/// in our store.
 ///
 /// Collects all `prev_share_blockhash` values that are NOT themselves
 /// hashes of headers in this batch (i.e., external parents from the
-/// store). Among those, picks the one with the highest expected_height
-/// to avoid deep-fork uncle parents pulling the anchor too far back.
-///
-/// Uncle references will all be the hash which is also the anchor
-/// point, or lower, they can't be higher than the anchor point.
-fn find_chain_anchor(
+/// store). With height-based batches, multiple blocks may have
+/// external parents at the previous batch boundary on different
+/// branches.
+fn find_chain_anchors(
     share_headers: &[ShareHeader],
     chain_store_handle: &ChainStoreHandle,
-) -> Result<(BlockHash, BlockMetadata), Box<dyn Error + Send + Sync>> {
+) -> Result<Vec<(BlockHash, BlockMetadata)>, Box<dyn Error + Send + Sync>> {
     let batch_hashes: HashSet<BlockHash> = share_headers
         .iter()
         .map(|header| header.block_hash())
@@ -276,11 +279,21 @@ fn find_chain_anchor(
 
     let metadata_results = chain_store_handle.get_block_metadata_batch(&external_parents);
 
-    let best_anchor = metadata_results
-        .into_iter()
-        .max_by_key(|(_, metadata)| metadata.expected_height);
+    // If the sender's DAG changed between batches (new fork blocks or
+    // reorg), some external parents may be missing from our store. We
+    // reject the batch and the stale tip retry will restart sync.
+    // TODO: instead of rejecting, request the missing parents via a
+    // targeted GetShareHeaders to preserve partial sync progress.
+    if metadata_results.len() != external_parents.len() {
+        let found: HashSet<BlockHash> = metadata_results.iter().map(|(hash, _)| *hash).collect();
+        let missing: Vec<&BlockHash> = external_parents
+            .iter()
+            .filter(|hash| !found.contains(*hash))
+            .collect();
+        return Err(format!("External parent(s) not found in store: {missing:?}").into());
+    }
 
-    best_anchor.ok_or_else(|| "No header in batch has a parent in the store".into())
+    Ok(metadata_results)
 }
 
 /// Verify cumulative chain work exceeds the minimum threshold.
@@ -780,7 +793,7 @@ mod tests {
             result
                 .unwrap_err()
                 .to_string()
-                .contains("No header in batch has a parent in the store"),
+                .contains("External parent(s) not found in store"),
         );
     }
 
@@ -851,8 +864,8 @@ mod tests {
             result
                 .unwrap_err()
                 .to_string()
-                .contains("not in batch or store"),
-            "Expected 'not in batch or store' error for disconnected subtree"
+                .contains("External parent(s) not found in store"),
+            "Expected external parent not found error for disconnected subtree"
         );
     }
 
@@ -1080,5 +1093,135 @@ mod tests {
         let headers = vec![share_a, fork_parent, share_b, uncle_u, share_c];
         let result = validate_header_chain(&headers, &chain_store_handle, &mock_validator);
         assert!(result.is_ok(), "Expected Ok, got: {}", result.unwrap_err());
+    }
+
+    /// Multiple anchors: two headers in the batch have different
+    /// external parents, both present in the store. This models a
+    /// height-based batch where blocks at the first height have
+    /// parents on different branches from the previous batch.
+    ///
+    /// anchor_a(h:0) -> share_a(h:1)
+    /// anchor_b(h:0) -> share_b(h:1)
+    ///
+    /// Both anchor_a and anchor_b are external parents in the store.
+    #[test]
+    fn test_validate_header_chain_accepts_multiple_anchors() {
+        let anchor_a = TestShareBlockBuilder::new().nonce(1).build();
+        let anchor_b = TestShareBlockBuilder::new().nonce(2).build();
+        let anchor_a_hash = anchor_a.block_hash();
+        let anchor_b_hash = anchor_b.block_hash();
+
+        let mut share_a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(anchor_a.block_hash().to_string())
+            .nonce(10)
+            .build()
+            .header;
+        share_a.bits = CompactTarget::from_consensus(MAX_POOL_TARGET);
+
+        let mut share_b = TestShareBlockBuilder::new()
+            .prev_share_blockhash(anchor_b.block_hash().to_string())
+            .nonce(20)
+            .build()
+            .header;
+        share_b.bits = CompactTarget::from_consensus(MAX_POOL_TARGET);
+
+        let mut chain_store_handle = ChainStoreHandle::default();
+        let template_header = build_valid_test_header();
+        chain_store_handle
+            .expect_get_share_header()
+            .returning(move |_| Ok(template_header.clone()));
+        chain_store_handle
+            .expect_get_block_metadata()
+            .returning(move |hash| {
+                if *hash == anchor_a_hash || *hash == anchor_b_hash {
+                    Ok(BlockMetadata {
+                        expected_height: Some(0),
+                        chain_work: Work::from_hex("0x00").unwrap(),
+                        status: Status::Confirmed,
+                    })
+                } else {
+                    Err(StoreError::NotFound(format!("{hash} not found")))
+                }
+            });
+        chain_store_handle
+            .expect_get_block_metadata_batch()
+            .returning(move |hashes| {
+                hashes
+                    .iter()
+                    .filter(|hash| **hash == anchor_a_hash || **hash == anchor_b_hash)
+                    .map(|hash| {
+                        (
+                            *hash,
+                            BlockMetadata {
+                                expected_height: Some(0),
+                                chain_work: Work::from_hex("0x00").unwrap(),
+                                status: Status::Confirmed,
+                            },
+                        )
+                    })
+                    .collect()
+            });
+        let mut mock_validator = MockDefaultShareValidator::default();
+        setup_minimum_difficulty_mock(&mut mock_validator);
+
+        let headers = vec![share_a, share_b];
+        let result = validate_header_chain(&headers, &chain_store_handle, &mock_validator);
+        assert!(result.is_ok(), "Expected Ok, got: {}", result.unwrap_err());
+    }
+
+    /// Batch has an external parent that is completely unknown to the
+    /// receiver. This can happen if the sender's DAG changed between
+    /// batches. The batch should be rejected.
+    #[test]
+    fn test_validate_header_chain_rejects_batch_with_unknown_external_parent() {
+        let known_anchor = TestShareBlockBuilder::new().nonce(1).build();
+        let unknown_anchor = TestShareBlockBuilder::new().nonce(99).build();
+        let known_anchor_hash = known_anchor.block_hash();
+
+        let mut share_a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(known_anchor.block_hash().to_string())
+            .nonce(10)
+            .build()
+            .header;
+        share_a.bits = CompactTarget::from_consensus(MAX_POOL_TARGET);
+
+        let mut share_b = TestShareBlockBuilder::new()
+            .prev_share_blockhash(unknown_anchor.block_hash().to_string())
+            .nonce(20)
+            .build()
+            .header;
+        share_b.bits = CompactTarget::from_consensus(MAX_POOL_TARGET);
+
+        let mut chain_store_handle = ChainStoreHandle::default();
+        chain_store_handle
+            .expect_get_block_metadata_batch()
+            .returning(move |hashes| {
+                hashes
+                    .iter()
+                    .filter(|hash| **hash == known_anchor_hash)
+                    .map(|hash| {
+                        (
+                            *hash,
+                            BlockMetadata {
+                                expected_height: Some(0),
+                                chain_work: Work::from_hex("0x00").unwrap(),
+                                status: Status::Confirmed,
+                            },
+                        )
+                    })
+                    .collect()
+            });
+        let mut mock_validator = MockDefaultShareValidator::default();
+        setup_minimum_difficulty_mock(&mut mock_validator);
+
+        let headers = vec![share_a, share_b];
+        let result = validate_header_chain(&headers, &chain_store_handle, &mock_validator);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("External parent(s) not found in store"),
+        );
     }
 }
