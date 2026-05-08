@@ -179,7 +179,7 @@ impl Store {
         stop_blockhash: &BlockHash,
         limit: usize,
     ) -> Result<Vec<BlockHash>, StoreError> {
-        let start_blockhash = self.first_confirmed_for_locator(locator);
+        let start_blockhash = self.first_known_for_locator(locator);
         // If no blockhash found, return vector with genesis block
         let start_blockhash = match start_blockhash {
             Some(hash) => hash,
@@ -192,19 +192,23 @@ impl Store {
         self.get_descendant_blockhashes(&start_blockhash, stop_blockhash, limit)
     }
 
-    /// Find the first locator hash that is on our confirmed chain.
+    /// Find the first locator hash that we know about.
     ///
     /// Uses a single batch metadata lookup and then walks the locator
-    /// in order to return the first hash with Confirmed status. This
-    /// prevents matching on uncles or stale blocks, which would cause
-    /// get_descendant_blockhashes to walk the confirmed chain from the
-    /// wrong branch.
-    fn first_confirmed_for_locator(&self, locator: &[BlockHash]) -> Option<BlockHash> {
+    /// in order to return the first hash with a valid status
+    /// (HeaderValid, Candidate, Confirmed, or BlockValid). Pending
+    /// and Invalid blocks are skipped.
+    ///
+    /// With height-based walking, get_descendant_blockhashes sends all
+    /// blocks at each height regardless of status, so matching any
+    /// valid block is correct. The locator is ordered newest-first, so
+    /// the first match gives the highest known height.
+    fn first_known_for_locator(&self, locator: &[BlockHash]) -> Option<BlockHash> {
         let metadata_results: HashMap<BlockHash, BlockMetadata> =
             self.get_block_metadata_batch(locator).into_iter().collect();
         for blockhash in locator {
             if let Some(metadata) = metadata_results.get(blockhash) {
-                if metadata.status == Status::Confirmed {
+                if metadata.status != Status::Pending && metadata.status != Status::Invalid {
                     return Some(*blockhash);
                 }
             }
@@ -3428,21 +3432,19 @@ mod tests {
         assert!(result.is_empty());
     }
 
-    /// Locator containing only a non-confirmed block (uncle) must not
-    /// be matched. The old code used get_first_existing_blockhash which
-    /// matched any block in the store regardless of confirmed status.
-    /// That caused get_descendant_blockhashes to walk the confirmed
-    /// chain from the wrong height, returning headers whose parents
-    /// the requester does not have.
+    /// Locator containing a non-confirmed block (uncle) matches it.
+    /// With height-based walking, any valid block in the store is a
+    /// valid locator match. The uncle at h:1 matches, so descendants
+    /// start from h:2.
     ///
     /// Chain:
     ///   genesis(h:0) -> share_a(h:1) -> share_b(h:2)
-    ///                \-> uncle(h:1, not confirmed)
+    ///                \-> uncle(h:1, HeaderValid)
     ///
     /// Locator: [uncle_hash]
-    /// Expected: falls back to genesis, returns share_a then share_b.
+    /// Expected: matches uncle at h:1, returns share_b at h:2.
     #[test]
-    fn test_get_blockhashes_for_locator_skips_non_confirmed_block() {
+    fn test_get_blockhashes_for_locator_matches_non_confirmed_block() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
@@ -3451,7 +3453,7 @@ mod tests {
         store.setup_genesis(&genesis, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
-        // uncle: child of genesis, stored but not confirmed
+        // uncle: child of genesis, stored as HeaderValid
         let uncle = TestShareBlockBuilder::new()
             .prev_share_blockhash(genesis.block_hash().to_string())
             .nonce(100)
@@ -3472,27 +3474,27 @@ mod tests {
             .build();
         store.push_to_confirmed_chain(&share_b).unwrap();
 
-        // Locator with only the uncle hash
+        // Locator with only the uncle hash -- uncle is HeaderValid at
+        // h:1, so it matches. Descendants start from h:2 (share_b).
         let locator = vec![uncle.block_hash()];
         let result = store
             .get_blockhashes_for_locator(&locator, &BlockHash::all_zeros(), 10)
             .unwrap();
 
-        // Uncle is not confirmed, so no locator match is found.
-        // Falls back to returning just the genesis hash so the
-        // requester can restart sync from the beginning.
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0], genesis.block_hash());
+        assert_eq!(result[0], share_b.block_hash());
     }
 
-    /// first_confirmed_locator_match returns the first confirmed hash
-    /// from the locator, skipping uncles and unknown hashes.
+    /// first_known_for_locator returns the first known hash from the
+    /// locator, matching any valid status (HeaderValid, Candidate,
+    /// Confirmed, BlockValid). Only unknown and invalid hashes are
+    /// skipped.
     ///
     /// Chain:
     ///   genesis(h:0) -> share_a(h:1) -> share_b(h:2)
-    ///                \-> uncle(h:1, not confirmed)
+    ///                \-> uncle(h:1, HeaderValid)
     #[test]
-    fn test_first_confirmed_locator_match_skips_non_confirmed() {
+    fn test_first_known_for_locator_matches_any_valid_status() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
@@ -3526,29 +3528,33 @@ mod tests {
             .unwrap();
 
         // Locator: [unknown, uncle, share_b, genesis]
-        // Should skip unknown (not in store) and uncle (not confirmed),
-        // then match share_b (confirmed at h:2).
+        // Skips unknown (not in store), matches uncle (HeaderValid).
         let locator = vec![
             unknown_hash,
             uncle.block_hash(),
             share_b.block_hash(),
             genesis.block_hash(),
         ];
-        let result = store.first_confirmed_for_locator(&locator);
-        assert_eq!(result, Some(share_b.block_hash()));
+        let result = store.first_known_for_locator(&locator);
+        assert_eq!(result, Some(uncle.block_hash()));
 
-        // Locator with only non-confirmed entries returns None
-        let locator = vec![unknown_hash, uncle.block_hash()];
-        let result = store.first_confirmed_for_locator(&locator);
+        // Locator with only unknown entries returns None
+        let locator = vec![unknown_hash];
+        let result = store.first_known_for_locator(&locator);
         assert_eq!(result, None);
 
         // Empty locator returns None
-        let result = store.first_confirmed_for_locator(&[]);
+        let result = store.first_known_for_locator(&[]);
         assert_eq!(result, None);
+
+        // Locator with HeaderValid entry matches it
+        let locator = vec![uncle.block_hash(), genesis.block_hash()];
+        let result = store.first_known_for_locator(&locator);
+        assert_eq!(result, Some(uncle.block_hash()));
 
         // Locator with only confirmed entries returns the first one
         let locator = vec![share_a.block_hash(), genesis.block_hash()];
-        let result = store.first_confirmed_for_locator(&locator);
+        let result = store.first_known_for_locator(&locator);
         assert_eq!(result, Some(share_a.block_hash()));
     }
 
