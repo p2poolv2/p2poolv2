@@ -170,7 +170,7 @@ pub struct MiningConfigureParams<'a> {
 
 /// Response represents a Stratum response message from the server to the client
 /// We use Value in result to allow for different types of responses.
-/// TODO: Consider using various Response types to avoing using Value (which will result in memory allocations)
+/// TODO: Consider using various Response types to avoiding using Value (which will result in memory allocations)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Response<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -359,7 +359,7 @@ impl<'a> MiningConfigure<'a> {
 }
 
 /// Response represents a Stratum response message from the server to the client
-/// Supported resposes are set_difficulty (in response to subscribe), ok and error.
+/// Supported responses are set_difficulty (in response to subscribe), ok and error.
 impl Response<'_> {
     pub fn new_set_difficulty_response(
         id: Option<Id>,
