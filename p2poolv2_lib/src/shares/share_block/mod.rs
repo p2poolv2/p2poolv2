@@ -23,7 +23,6 @@ use crate::shares::extranonce::Extranonce;
 use crate::shares::genesis;
 use crate::shares::share_commitment::ShareCommitment;
 use crate::shares::witness_commitment::WitnessCommitment;
-use crate::stratum::work::coinbase::extract_height_from_coinbase;
 use bitcoin::consensus::encode::Error::ParseFailed;
 use bitcoin::{
     Address, BlockHash, CompactTarget, CompressedPublicKey, Target, TxMerkleNode, Txid, VarInt,

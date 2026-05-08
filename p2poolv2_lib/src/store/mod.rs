@@ -17,11 +17,9 @@
 use crate::shares::share_block::ShareBlock;
 use crate::store::block_tx_metadata::{BlockMetadata, Status};
 use crate::store::column_families::ColumnFamily;
-use crate::store::dag_store::MAX_UNCLES_DEPTH;
 use bitcoin::consensus::{Encodable, encode};
 use bitcoin::{BlockHash, Work};
 use rocksdb::{ColumnFamilyDescriptor, DB, Options as RocksDbOptions};
-use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, RwLock};
 use tracing::debug;
 use writer::StoreError;
@@ -230,16 +228,19 @@ impl Store {
         self.db.write(batch)
     }
 
-    /// Get confirmed chain blockhashes descending from a given blockhash,
-    /// including uncle blockhashes referenced by each confirmed block.
+    /// Get all blockhashes from blockhash' height+1 up to top
+    /// confirmed height.
     ///
-    /// Walks the confirmed chain from anchor_height - MAX_UNCLES_DEPTH + 1
-    /// up to the top confirmed height. Starting earlier than the anchor
-    /// ensures that uncle blocks referenced by shares near the anchor
-    /// are included in the response. For each confirmed block, its
-    /// uncle blockhashes are inserted before the confirmed blockhash so
-    /// that a peer receives uncle data before the share that depends on
-    /// it.
+    /// Walks the height index and collects all valid blocks at each
+    /// height (confirmed, candidate, header-valid, block-valid).
+    /// Pending and invalid blocks are excluded. Within each height,
+    /// blocks are sorted lexicographically by blockhash for
+    /// deterministic ordering. Heights are never split across batches
+    /// -- all blocks at a height are included atomically.
+    ///
+    /// This produces a topologically sorted DAG subgraph because every
+    /// block's parent is at height H-1, which is either in this batch
+    /// or was sent in a previous batch.
     fn get_descendant_blockhashes(
         &self,
         blockhash: &BlockHash,
@@ -247,11 +248,10 @@ impl Store {
         limit: usize,
     ) -> Result<Vec<BlockHash>, StoreError> {
         let mut blockhashes = Vec::with_capacity(limit);
-        let mut seen = HashSet::with_capacity(limit);
 
         let start_height = match self.get_block_metadata(blockhash) {
-            Ok(metadata) => metadata.expected_height.unwrap_or(0),
-            Err(_) => 0,
+            Ok(metadata) => metadata.expected_height.unwrap_or(0) + 1,
+            Err(_) => 1,
         };
 
         let top_confirmed_height = match self.get_top_confirmed_height() {
@@ -259,53 +259,26 @@ impl Store {
             Err(_) => return Ok(blockhashes),
         };
 
-        let mut height = start_height.saturating_sub(MAX_UNCLES_DEPTH as u32) + 1;
-        while height <= top_confirmed_height && blockhashes.len() < limit {
-            let confirmed_hash = self.get_confirmed_at_height(height)?;
+        for height in start_height..=top_confirmed_height {
+            let mut hashes_at_height = self.get_blockhashes_for_height(height);
+            hashes_at_height.retain(|hash| {
+                self.get_block_metadata(hash)
+                    .map(|metadata| {
+                        metadata.status != Status::Pending && metadata.status != Status::Invalid
+                    })
+                    .unwrap_or(false)
+            });
+            hashes_at_height.sort();
 
-            self.collect_uncle_chain(&confirmed_hash, &mut seen, &mut blockhashes);
+            let found_stop = hashes_at_height.contains(stop_blockhash);
+            blockhashes.extend(hashes_at_height);
 
-            if seen.insert(confirmed_hash) {
-                blockhashes.push(confirmed_hash);
-            }
-
-            if confirmed_hash == *stop_blockhash {
+            if found_stop || blockhashes.len() >= limit {
                 return Ok(blockhashes);
             }
-
-            height += 1;
         }
 
         Ok(blockhashes)
-    }
-
-    /// Collect uncle blockhashes for a block, chasing transitive
-    /// uncle references (uncle-of-uncle) so the receiver has all
-    /// declared uncles available. The DAG is finite and acyclic, and
-    /// the seen set prevents revisits, so this always terminates.
-    fn collect_uncle_chain(
-        &self,
-        blockhash: &BlockHash,
-        seen: &mut HashSet<BlockHash>,
-        blockhashes: &mut Vec<BlockHash>,
-    ) {
-        let header = match self.get_share_header(blockhash) {
-            Ok(Some(header)) => header,
-            _ => return,
-        };
-        let mut uncle_queue: VecDeque<BlockHash> = header.uncles.iter().copied().collect();
-        while let Some(uncle_hash) = uncle_queue.pop_front() {
-            if seen.insert(uncle_hash) {
-                blockhashes.push(uncle_hash);
-                if let Ok(Some(uncle_header)) = self.get_share_header(&uncle_hash) {
-                    for nested_uncle in &uncle_header.uncles {
-                        if !seen.contains(nested_uncle) {
-                            uncle_queue.push_back(*nested_uncle);
-                        }
-                    }
-                }
-            }
-        }
     }
 
     /// Get genesis block hash from chain state

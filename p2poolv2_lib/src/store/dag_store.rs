@@ -996,8 +996,9 @@ mod tests {
         assert_eq!(result[1], block_hashes[2]);
     }
 
-    /// Test that get_descendant_blockhashes walks the confirmed chain
-    /// and includes uncle blockhashes before the nephew that references them.
+    /// Test that get_descendant_blockhashes gets all descendants from
+    /// height index and includes uncle blockhashes before the nephew
+    /// that references them.
     ///
     /// Chain:
     ///   genesis(h:0) -> share_a(h:1) -> share_b(h:2, uncles=[uncle1])
@@ -1036,66 +1037,45 @@ mod tests {
             .build();
         store.push_to_confirmed_chain(&share_b).unwrap();
 
-        // Descendants from genesis: should get share_a, uncle1, share_b
+        // Descendants from genesis: h:1 (share_a, uncle1 lex sorted), h:2 (share_b)
         let descendants = store
             .get_descendant_blockhashes(&genesis.block_hash(), &BlockHash::all_zeros(), 10)
             .unwrap();
-        assert_eq!(descendants.len(), 3);
-        assert_eq!(descendants[0], share_a.block_hash());
-        // uncle1 must appear before share_b (its nephew)
-        assert_eq!(descendants[1], uncle1.block_hash());
-        assert_eq!(descendants[2], share_b.block_hash());
+        let mut height_1 = vec![share_a.block_hash(), uncle1.block_hash()];
+        height_1.sort();
+        let mut expected = height_1.clone();
+        expected.push(share_b.block_hash());
+        assert_eq!(descendants, expected);
 
-        // Descendants from share_a: uncle scan covers h:0..=1, so both
-        // share_a and uncle1 at h:1 are included, then share_b from the
-        // confirmed chain walk.
+        // Descendants from share_a (h:1): starts at h:2, only share_b
         let descendants = store
             .get_descendant_blockhashes(&share_a.block_hash(), &BlockHash::all_zeros(), 10)
             .unwrap();
-        assert_eq!(descendants.len(), 3);
-        assert!(descendants.contains(&share_a.block_hash()));
-        assert!(descendants.contains(&uncle1.block_hash()));
-        assert!(descendants.contains(&share_b.block_hash()));
-        // uncle1 must appear before share_b (its nephew)
-        let uncle1_pos = descendants
-            .iter()
-            .position(|h| *h == uncle1.block_hash())
-            .unwrap();
-        let share_b_pos = descendants
-            .iter()
-            .position(|h| *h == share_b.block_hash())
-            .unwrap();
-        assert!(uncle1_pos < share_b_pos);
+        assert_eq!(descendants, vec![share_b.block_hash()]);
 
-        // Test with limit: limit=2 stops after height 1 (share_a) but height 2
-        // adds uncle1 + share_b atomically so the batch contains all 3
+        // Test with limit: limit=2 completes h:1 (2 blocks) then stops
         let descendants = store
             .get_descendant_blockhashes(&genesis.block_hash(), &BlockHash::all_zeros(), 2)
             .unwrap();
-        assert_eq!(descendants.len(), 3);
-        assert_eq!(descendants[0], share_a.block_hash());
-        assert_eq!(descendants[1], uncle1.block_hash());
-        assert_eq!(descendants[2], share_b.block_hash());
+        assert_eq!(descendants, height_1);
 
-        // Test with stop_blockhash - stop at share_a includes share_a
+        // Test with stop_blockhash: stop hash at h:1, completes h:1
         let descendants = store
             .get_descendant_blockhashes(&genesis.block_hash(), &share_a.block_hash(), 10)
             .unwrap();
-        assert_eq!(descendants.len(), 1);
-        assert_eq!(descendants[0], share_a.block_hash());
+        assert_eq!(descendants, height_1);
     }
 
-    /// Uncle-of-uncle test: when a confirmed block references an uncle
-    /// that itself references another uncle, both are included in the
-    /// descendant response.
+    /// Uncle-of-uncle test with valid ancestor relationships.
+    /// Height-based walk includes all blocks at each height.
     ///
     /// Chain:
-    ///   genesis(h:0) -> A(h:1) -> B(h:2, uncles=[uncle1])
+    ///   genesis(h:0) -> A(h:1) -> B(h:2) -> C(h:3, uncles=[uncle1])
     ///                \-> uncle2(h:1)
-    ///                \-> uncle1(h:1, uncles=[uncle2])
+    ///                    A(h:1) -> uncle1(h:2, uncles=[uncle2])
     ///
-    /// uncle1 is referenced by B. uncle1 references uncle2.
-    /// Both uncle1 and uncle2 must appear in descendants.
+    /// uncle1 at h:2 is uncle of C at h:3 (ancestor height).
+    /// uncle2 at h:1 is uncle of uncle1 at h:2 (ancestor height).
     #[test]
     fn test_get_descendant_blockhashes_chases_uncle_of_uncle() {
         let temp_dir = tempdir().unwrap();
@@ -1106,21 +1086,6 @@ mod tests {
         store.setup_genesis(&genesis, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
-        // uncle2: child of genesis, no uncles of its own
-        let uncle2 = TestShareBlockBuilder::new()
-            .prev_share_blockhash(genesis.block_hash().to_string())
-            .nonce(200)
-            .build();
-        store.store_with_valid_metadata(&uncle2);
-
-        // uncle1: child of genesis, references uncle2
-        let uncle1 = TestShareBlockBuilder::new()
-            .prev_share_blockhash(genesis.block_hash().to_string())
-            .uncles(vec![uncle2.block_hash()])
-            .nonce(100)
-            .build();
-        store.store_with_valid_metadata(&uncle1);
-
         // A: confirmed at h:1
         let share_a = TestShareBlockBuilder::new()
             .prev_share_blockhash(genesis.block_hash().to_string())
@@ -1129,64 +1094,66 @@ mod tests {
             .build();
         store.push_to_confirmed_chain(&share_a).unwrap();
 
-        // B: confirmed at h:2, references uncle1
+        // uncle2: child of genesis at h:1, no uncles
+        let uncle2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(200)
+            .build();
+        store.store_with_valid_metadata(&uncle2);
+
+        // B: confirmed at h:2
         let share_b = TestShareBlockBuilder::new()
             .prev_share_blockhash(share_a.block_hash().to_string())
-            .uncles(vec![uncle1.block_hash()])
+            .work(2)
             .nonce(2)
             .build();
         store.push_to_confirmed_chain(&share_b).unwrap();
+
+        // uncle1: child of A at h:2, references uncle2 at h:1 as uncle
+        let uncle1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_a.block_hash().to_string())
+            .uncles(vec![uncle2.block_hash()])
+            .nonce(100)
+            .build();
+        store.store_with_valid_metadata(&uncle1);
+
+        // C: confirmed at h:3, references uncle1 at h:2 as uncle
+        let share_c = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_b.block_hash().to_string())
+            .uncles(vec![uncle1.block_hash()])
+            .work(2)
+            .nonce(3)
+            .build();
+        store.push_to_confirmed_chain(&share_c).unwrap();
 
         let descendants = store
             .get_descendant_blockhashes(&genesis.block_hash(), &BlockHash::all_zeros(), 10)
             .unwrap();
 
-        assert!(
-            descendants.contains(&share_a.block_hash()),
-            "confirmed A should be included"
-        );
-        assert!(
-            descendants.contains(&uncle1.block_hash()),
-            "uncle1 should be included (referenced by B)"
-        );
-        assert!(
-            descendants.contains(&uncle2.block_hash()),
-            "uncle2 should be included (uncle-of-uncle, referenced by uncle1)"
-        );
-        assert!(
-            descendants.contains(&share_b.block_hash()),
-            "confirmed B should be included"
-        );
-
-        // uncle2 must appear before share_b (transitive dependency)
-        let uncle2_pos = descendants
-            .iter()
-            .position(|h| *h == uncle2.block_hash())
-            .unwrap();
-        let share_b_pos = descendants
-            .iter()
-            .position(|h| *h == share_b.block_hash())
-            .unwrap();
-        assert!(
-            uncle2_pos < share_b_pos,
-            "uncle2 must appear before share_b"
-        );
+        // h:1 has share_a, uncle2; h:2 has share_b, uncle1; h:3 has share_c
+        let mut expected: Vec<BlockHash> = Vec::new();
+        let mut height_1 = vec![share_a.block_hash(), uncle2.block_hash()];
+        height_1.sort();
+        expected.extend(height_1);
+        let mut height_2 = vec![share_b.block_hash(), uncle1.block_hash()];
+        height_2.sort();
+        expected.extend(height_2);
+        expected.push(share_c.block_hash());
+        assert_eq!(descendants, expected);
     }
 
-    /// Long chain test: when the anchor is deep in the chain, the
-    /// confirmed walk starts from anchor - MAX_UNCLES_DEPTH so that
-    /// uncle references near the anchor are served. Blocks before the
-    /// uncle depth window are excluded.
+    /// Long chain test: locator match deep in the chain. Height-based
+    /// walk starts at locator_height+1 and includes all blocks at each
+    /// height up to top confirmed. Blocks at or below the locator
+    /// height are not included (receiver already has them from a
+    /// previous batch).
     ///
     /// Chain:
     ///   genesis(h:0) -> h:1 -> ... -> h:5 -> h:6 -> ... -> h:8 -> h:9(uncles=[uncle]) -> h:10
     ///                                      \-> uncle(h:6, parent=h:5)
     ///
-    /// Anchor at h:8. Walk starts at h:8 - 3 + 1 = h:6.
-    /// Confirmed blocks h:6..h:10 and the uncle at h:6 (referenced
-    /// by h:9) should be included. Blocks at h:1 through h:5 must NOT.
-    /// The uncle's parent is at h:5, which is MAX_UNCLES_DEPTH below
-    /// the anchor -- the deepest allowed uncle ancestor, because h:8 has to be confirmed anchor.
+    /// Locator at h:8. Walk starts at h:9. Uncle at h:6 is below
+    /// locator height so it is NOT in this batch (was in previous batch).
     #[test]
     fn test_get_descendant_blockhashes_long_chain_starts_at_uncle_depth() {
         let temp_dir = tempdir().unwrap();
@@ -1238,50 +1205,609 @@ mod tests {
         store.push_to_confirmed_chain(&block_h10).unwrap();
         chain.push(block_h10);
 
-        // Anchor at h:8 (chain[7]). Walk starts at h:8 - 3 + 1 = h:6.
-        let anchor = &chain[7];
+        // Locator at h:8 (chain[7]). Walk starts at h:9.
+        let locator_block = &chain[7];
         let descendants = store
-            .get_descendant_blockhashes(&anchor.block_hash(), &BlockHash::all_zeros(), 100)
+            .get_descendant_blockhashes(&locator_block.block_hash(), &BlockHash::all_zeros(), 100)
             .unwrap();
 
-        // h:6 (chain[5]), h:7 (chain[6]), h:8 (chain[7]) from early
-        // walk, then uncle (referenced by h:9) + h:9 + h:10
+        // h:9 has confirmed + uncle (both at h:9... wait, uncle is at h:6)
+        // Actually uncle is at h:6, below locator. Only h:9 and h:10.
+        let expected = vec![chain[8].block_hash(), chain[9].block_hash()];
+        assert_eq!(descendants, expected);
+    }
+
+    /// A parallel fork chain runs alongside the confirmed chain.
+    /// Height-based walking includes all blocks at each height, so
+    /// fork blocks appear naturally without chasing uncle references.
+    ///
+    /// DAG structure:
+    ///
+    /// Confirmed: genesis -> C1(h:1) -> C2(h:2) -> C3(h:3) -> C4(h:4) -> C5(h:5)
+    /// Fork:                 C1(h:1) -> F2(h:2) -> F3(h:3) -> F4(h:4) -> F5(h:5)
+    /// Fork2:                                       F3(h:3) -> G4(h:4) -> G5(h:5)
+    ///
+    /// All blocks at each height are included: confirmed, fork, and
+    /// fork2 blocks all appear in the response sorted lexicographically
+    /// within each height.
+    #[test]
+    fn test_get_descendant_blockhashes_includes_fork_chain_ancestry() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Confirmed chain: genesis -> C1 -> C2 -> C3 -> C4 -> C5
+        let confirmed_1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .work(2)
+            .nonce(10)
+            .build();
+        store.push_to_confirmed_chain(&confirmed_1).unwrap();
+
+        let confirmed_2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(confirmed_1.block_hash().to_string())
+            .work(2)
+            .nonce(20)
+            .build();
+        store.push_to_confirmed_chain(&confirmed_2).unwrap();
+
+        let confirmed_3 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(confirmed_2.block_hash().to_string())
+            .work(2)
+            .nonce(30)
+            .build();
+        store.push_to_confirmed_chain(&confirmed_3).unwrap();
+
+        let confirmed_4 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(confirmed_3.block_hash().to_string())
+            .work(2)
+            .nonce(40)
+            .build();
+        store.push_to_confirmed_chain(&confirmed_4).unwrap();
+
+        // Fork chain: C1 -> F2 -> F3 -> F4 -> F5
+        let fork_2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(confirmed_1.block_hash().to_string())
+            .nonce(200)
+            .build();
+        store.store_with_valid_metadata(&fork_2);
+
+        let fork_3 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(fork_2.block_hash().to_string())
+            .uncles(vec![confirmed_2.block_hash()])
+            .nonce(300)
+            .build();
+        store.store_with_valid_metadata(&fork_3);
+
+        let fork_4 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(fork_3.block_hash().to_string())
+            .nonce(400)
+            .build();
+        store.store_with_valid_metadata(&fork_4);
+
+        let fork_5 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(fork_4.block_hash().to_string())
+            .uncles(vec![confirmed_4.block_hash()])
+            .nonce(500)
+            .build();
+        store.store_with_valid_metadata(&fork_5);
+
+        // Second fork chain from F3: F3 -> G4 -> G5 (unreferenced)
+        let fork2_4 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(fork_3.block_hash().to_string())
+            .nonce(410)
+            .build();
+        store.store_with_valid_metadata(&fork2_4);
+
+        let fork2_5 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(fork2_4.block_hash().to_string())
+            .nonce(510)
+            .build();
+        store.store_with_valid_metadata(&fork2_5);
+
+        // C5 references F2 as uncle, pulling the fork into the DAG
+        let confirmed_5 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(confirmed_4.block_hash().to_string())
+            .uncles(vec![fork_2.block_hash()])
+            .work(2)
+            .nonce(50)
+            .build();
+        store.push_to_confirmed_chain(&confirmed_5).unwrap();
+
+        let descendants = store
+            .get_descendant_blockhashes(&genesis.block_hash(), &BlockHash::all_zeros(), 100)
+            .unwrap();
+
+        // Build expected: all blocks per height, lex sorted within height
+        let mut expected: Vec<BlockHash> = Vec::new();
+        // h:1
+        let mut height_1 = vec![confirmed_1.block_hash()];
+        height_1.sort();
+        expected.extend(height_1);
+        // h:2
+        let mut height_2 = vec![confirmed_2.block_hash(), fork_2.block_hash()];
+        height_2.sort();
+        expected.extend(height_2);
+        // h:3
+        let mut height_3 = vec![confirmed_3.block_hash(), fork_3.block_hash()];
+        height_3.sort();
+        expected.extend(height_3);
+        // h:4
+        let mut height_4 = vec![
+            confirmed_4.block_hash(),
+            fork_4.block_hash(),
+            fork2_4.block_hash(),
+        ];
+        height_4.sort();
+        expected.extend(height_4);
+        // h:5
+        let mut height_5 = vec![
+            confirmed_5.block_hash(),
+            fork_5.block_hash(),
+            fork2_5.block_hash(),
+        ];
+        height_5.sort();
+        expected.extend(height_5);
+
+        assert_eq!(descendants, expected);
+    }
+
+    /// Same DAG as the previous test but F5 also references G4 as
+    /// uncle. With height-based walking all blocks appear regardless
+    /// of uncle references.
+    ///
+    /// Confirmed: genesis -> C1(h:1) -> C2(h:2) -> C3(h:3) -> C4(h:4) -> C5(h:5)
+    /// Fork:                 C1(h:1) -> F2(h:2) -> F3(h:3) -> F4(h:4) -> F5(h:5)
+    /// Fork2:                                       F3(h:3) -> G4(h:4) -> G5(h:5)
+    #[test]
+    fn test_get_descendant_blockhashes_includes_fork_uncle_of_fork() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Confirmed chain: genesis -> C1 -> C2 -> C3 -> C4 -> C5
+        let confirmed_1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .work(2)
+            .nonce(10)
+            .build();
+        store.push_to_confirmed_chain(&confirmed_1).unwrap();
+
+        let confirmed_2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(confirmed_1.block_hash().to_string())
+            .work(2)
+            .nonce(20)
+            .build();
+        store.push_to_confirmed_chain(&confirmed_2).unwrap();
+
+        let confirmed_3 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(confirmed_2.block_hash().to_string())
+            .work(2)
+            .nonce(30)
+            .build();
+        store.push_to_confirmed_chain(&confirmed_3).unwrap();
+
+        let confirmed_4 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(confirmed_3.block_hash().to_string())
+            .work(2)
+            .nonce(40)
+            .build();
+        store.push_to_confirmed_chain(&confirmed_4).unwrap();
+
+        // Fork chain: C1 -> F2 -> F3 -> F4 -> F5
+        let fork_2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(confirmed_1.block_hash().to_string())
+            .nonce(200)
+            .build();
+        store.store_with_valid_metadata(&fork_2);
+
+        let fork_3 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(fork_2.block_hash().to_string())
+            .uncles(vec![confirmed_2.block_hash()])
+            .nonce(300)
+            .build();
+        store.store_with_valid_metadata(&fork_3);
+
+        let fork_4 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(fork_3.block_hash().to_string())
+            .nonce(400)
+            .build();
+        store.store_with_valid_metadata(&fork_4);
+
+        // Second fork from F3: F3 -> G4 -> G5
+        let fork2_4 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(fork_3.block_hash().to_string())
+            .nonce(410)
+            .build();
+        store.store_with_valid_metadata(&fork2_4);
+
+        let fork2_5 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(fork2_4.block_hash().to_string())
+            .nonce(510)
+            .build();
+        store.store_with_valid_metadata(&fork2_5);
+
+        // F5 references both C4 and G4 as uncles
+        let fork_5 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(fork_4.block_hash().to_string())
+            .uncles(vec![confirmed_4.block_hash(), fork2_4.block_hash()])
+            .nonce(500)
+            .build();
+        store.store_with_valid_metadata(&fork_5);
+
+        // C5 references F2 as uncle
+        let confirmed_5 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(confirmed_4.block_hash().to_string())
+            .uncles(vec![fork_2.block_hash()])
+            .work(2)
+            .nonce(50)
+            .build();
+        store.push_to_confirmed_chain(&confirmed_5).unwrap();
+
+        let descendants = store
+            .get_descendant_blockhashes(&genesis.block_hash(), &BlockHash::all_zeros(), 100)
+            .unwrap();
+
+        // Confirmed chain
         assert!(
-            descendants.contains(&chain[5].block_hash()),
-            "h:6 should be included (walk starts at h:6)"
+            descendants.contains(&confirmed_1.block_hash()),
+            "C1 missing"
         );
         assert!(
-            descendants.contains(&chain[6].block_hash()),
-            "h:7 should be included"
+            descendants.contains(&confirmed_2.block_hash()),
+            "C2 missing"
         );
         assert!(
-            descendants.contains(&chain[7].block_hash()),
-            "h:8 should be included"
+            descendants.contains(&confirmed_3.block_hash()),
+            "C3 missing"
         );
         assert!(
-            descendants.contains(&uncle.block_hash()),
-            "uncle at h:6 should be included (referenced by h:9)"
+            descendants.contains(&confirmed_4.block_hash()),
+            "C4 missing"
         );
         assert!(
-            descendants.contains(&chain[8].block_hash()),
-            "h:9 should be included"
-        );
-        assert!(
-            descendants.contains(&chain[9].block_hash()),
-            "h:10 should be included"
+            descendants.contains(&confirmed_5.block_hash()),
+            "C5 missing"
         );
 
-        // Blocks before uncle depth window should NOT be included
+        // All fork blocks included via height-based walk
+        assert!(descendants.contains(&fork_2.block_hash()), "F2 missing");
+        assert!(descendants.contains(&fork_3.block_hash()), "F3 missing");
+        assert!(descendants.contains(&fork_4.block_hash()), "F4 missing");
+        assert!(descendants.contains(&fork_5.block_hash()), "F5 missing");
+        assert!(descendants.contains(&fork2_4.block_hash()), "G4 missing");
         assert!(
-            !descendants.contains(&genesis.block_hash()),
-            "genesis should not be included"
+            descendants.contains(&fork2_5.block_hash()),
+            "G5 should appear (height-based walk includes all blocks at each height)"
         );
-        for early_block in &chain[..5] {
-            assert!(
-                !descendants.contains(&early_block.block_hash()),
-                "block before uncle depth window should not be included"
-            );
-        }
+    }
+
+    /// Height-based walking includes all blocks at each height,
+    /// covering fork blocks that the old reference-chasing approach
+    /// missed.
+    ///
+    /// Confirmed: genesis -> C1(h:1) -> C2(h:2) -> C3(h:3) -> C4(h:4) -> C5(h:5) -> C6(h:6) -> C7(h:7)
+    /// Fork:                 C1(h:1) -> F2(h:2) -> F3(h:3) -> F4(h:4) -> F5(h:5)
+    /// Fork2:                                       F3(h:3) -> G4(h:4) -> G5(h:5)
+    /// Uncle:                                                              U6(h:6)
+    #[test]
+    fn test_get_descendant_blockhashes_chases_uncle_parent_chain() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Confirmed chain: genesis -> C1 -> C2 -> C3 -> C4 -> C5 -> C6
+        let confirmed_1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .work(2)
+            .nonce(10)
+            .build();
+        store.push_to_confirmed_chain(&confirmed_1).unwrap();
+
+        let confirmed_2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(confirmed_1.block_hash().to_string())
+            .work(2)
+            .nonce(20)
+            .build();
+        store.push_to_confirmed_chain(&confirmed_2).unwrap();
+
+        let confirmed_3 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(confirmed_2.block_hash().to_string())
+            .work(2)
+            .nonce(30)
+            .build();
+        store.push_to_confirmed_chain(&confirmed_3).unwrap();
+
+        let confirmed_4 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(confirmed_3.block_hash().to_string())
+            .work(2)
+            .nonce(40)
+            .build();
+        store.push_to_confirmed_chain(&confirmed_4).unwrap();
+
+        // Fork chain: C1 -> F2 -> F3 -> F4 -> F5
+        let fork_2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(confirmed_1.block_hash().to_string())
+            .nonce(200)
+            .build();
+        store.store_with_valid_metadata(&fork_2);
+
+        let fork_3 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(fork_2.block_hash().to_string())
+            .nonce(300)
+            .build();
+        store.store_with_valid_metadata(&fork_3);
+
+        let fork_4 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(fork_3.block_hash().to_string())
+            .nonce(400)
+            .build();
+        store.store_with_valid_metadata(&fork_4);
+
+        let fork_5 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(fork_4.block_hash().to_string())
+            .nonce(500)
+            .build();
+        store.store_with_valid_metadata(&fork_5);
+
+        // Second fork from F3: F3 -> G4 -> G5 (unreferenced)
+        let fork2_4 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(fork_3.block_hash().to_string())
+            .nonce(410)
+            .build();
+        store.store_with_valid_metadata(&fork2_4);
+
+        let fork2_5 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(fork2_4.block_hash().to_string())
+            .nonce(510)
+            .build();
+        store.store_with_valid_metadata(&fork2_5);
+
+        // C5 references F2 (fork base) as uncle
+        let confirmed_5 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(confirmed_4.block_hash().to_string())
+            .uncles(vec![fork_2.block_hash()])
+            .work(2)
+            .nonce(50)
+            .build();
+        store.push_to_confirmed_chain(&confirmed_5).unwrap();
+
+        let confirmed_6 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(confirmed_5.block_hash().to_string())
+            .work(2)
+            .nonce(60)
+            .build();
+        store.push_to_confirmed_chain(&confirmed_6).unwrap();
+
+        // U6: uncle at h:6 that references F5 (fork tip) as its uncle
+        let uncle_6 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(confirmed_5.block_hash().to_string())
+            .uncles(vec![fork_5.block_hash()])
+            .nonce(600)
+            .build();
+        store.store_with_valid_metadata(&uncle_6);
+
+        // C7 references U6 as uncle
+        let confirmed_7 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(confirmed_6.block_hash().to_string())
+            .uncles(vec![uncle_6.block_hash()])
+            .work(2)
+            .nonce(70)
+            .build();
+        store.push_to_confirmed_chain(&confirmed_7).unwrap();
+
+        let descendants = store
+            .get_descendant_blockhashes(&genesis.block_hash(), &BlockHash::all_zeros(), 100)
+            .unwrap();
+
+        let mut expected: Vec<BlockHash> = Vec::new();
+        // h:1
+        expected.push(confirmed_1.block_hash());
+        // h:2
+        let mut height_2 = vec![confirmed_2.block_hash(), fork_2.block_hash()];
+        height_2.sort();
+        expected.extend(height_2);
+        // h:3
+        let mut height_3 = vec![confirmed_3.block_hash(), fork_3.block_hash()];
+        height_3.sort();
+        expected.extend(height_3);
+        // h:4
+        let mut height_4 = vec![
+            confirmed_4.block_hash(),
+            fork_4.block_hash(),
+            fork2_4.block_hash(),
+        ];
+        height_4.sort();
+        expected.extend(height_4);
+        // h:5
+        let mut height_5 = vec![
+            confirmed_5.block_hash(),
+            fork_5.block_hash(),
+            fork2_5.block_hash(),
+        ];
+        height_5.sort();
+        expected.extend(height_5);
+        // h:6
+        let mut height_6 = vec![confirmed_6.block_hash(), uncle_6.block_hash()];
+        height_6.sort();
+        expected.extend(height_6);
+        // h:7
+        expected.push(confirmed_7.block_hash());
+
+        assert_eq!(descendants, expected);
+    }
+
+    /// Same DAG as above but F5 also references G4 as uncle. With
+    /// height-based walking all blocks appear regardless of uncle
+    /// references.
+    ///
+    /// Confirmed: genesis -> C1 -> C2 -> C3 -> C4 -> C5 -> C6 -> C7
+    /// Fork:                 C1 -> F2 -> F3 -> F4 -> F5
+    /// Fork2:                            F3 -> G4 -> G5
+    /// Uncle:                                          U6
+    #[test]
+    fn test_get_descendant_blockhashes_chases_uncle_parent_chain_with_fork_uncle() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Confirmed chain: genesis -> C1 -> C2 -> C3 -> C4
+        let confirmed_1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .work(2)
+            .nonce(10)
+            .build();
+        store.push_to_confirmed_chain(&confirmed_1).unwrap();
+
+        let confirmed_2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(confirmed_1.block_hash().to_string())
+            .work(2)
+            .nonce(20)
+            .build();
+        store.push_to_confirmed_chain(&confirmed_2).unwrap();
+
+        let confirmed_3 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(confirmed_2.block_hash().to_string())
+            .work(2)
+            .nonce(30)
+            .build();
+        store.push_to_confirmed_chain(&confirmed_3).unwrap();
+
+        let confirmed_4 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(confirmed_3.block_hash().to_string())
+            .work(2)
+            .nonce(40)
+            .build();
+        store.push_to_confirmed_chain(&confirmed_4).unwrap();
+
+        // Fork chain: C1 -> F2 -> F3 -> F4
+        let fork_2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(confirmed_1.block_hash().to_string())
+            .nonce(200)
+            .build();
+        store.store_with_valid_metadata(&fork_2);
+
+        let fork_3 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(fork_2.block_hash().to_string())
+            .nonce(300)
+            .build();
+        store.store_with_valid_metadata(&fork_3);
+
+        let fork_4 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(fork_3.block_hash().to_string())
+            .nonce(400)
+            .build();
+        store.store_with_valid_metadata(&fork_4);
+
+        // Second fork from F3: F3 -> G4 -> G5
+        let fork2_4 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(fork_3.block_hash().to_string())
+            .nonce(410)
+            .build();
+        store.store_with_valid_metadata(&fork2_4);
+
+        let fork2_5 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(fork2_4.block_hash().to_string())
+            .nonce(510)
+            .build();
+        store.store_with_valid_metadata(&fork2_5);
+
+        // F5 references G4 as uncle
+        let fork_5 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(fork_4.block_hash().to_string())
+            .uncles(vec![fork2_4.block_hash()])
+            .nonce(500)
+            .build();
+        store.store_with_valid_metadata(&fork_5);
+
+        // C5 references F2 as uncle
+        let confirmed_5 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(confirmed_4.block_hash().to_string())
+            .uncles(vec![fork_2.block_hash()])
+            .work(2)
+            .nonce(50)
+            .build();
+        store.push_to_confirmed_chain(&confirmed_5).unwrap();
+
+        let confirmed_6 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(confirmed_5.block_hash().to_string())
+            .work(2)
+            .nonce(60)
+            .build();
+        store.push_to_confirmed_chain(&confirmed_6).unwrap();
+
+        // U6 references F5 as uncle
+        let uncle_6 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(confirmed_5.block_hash().to_string())
+            .uncles(vec![fork_5.block_hash()])
+            .nonce(600)
+            .build();
+        store.store_with_valid_metadata(&uncle_6);
+
+        // C7 references U6 as uncle
+        let confirmed_7 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(confirmed_6.block_hash().to_string())
+            .uncles(vec![uncle_6.block_hash()])
+            .work(2)
+            .nonce(70)
+            .build();
+        store.push_to_confirmed_chain(&confirmed_7).unwrap();
+
+        let descendants = store
+            .get_descendant_blockhashes(&genesis.block_hash(), &BlockHash::all_zeros(), 100)
+            .unwrap();
+
+        let mut expected: Vec<BlockHash> = Vec::new();
+        // h:1
+        expected.push(confirmed_1.block_hash());
+        // h:2
+        let mut height_2 = vec![confirmed_2.block_hash(), fork_2.block_hash()];
+        height_2.sort();
+        expected.extend(height_2);
+        // h:3
+        let mut height_3 = vec![confirmed_3.block_hash(), fork_3.block_hash()];
+        height_3.sort();
+        expected.extend(height_3);
+        // h:4
+        let mut height_4 = vec![
+            confirmed_4.block_hash(),
+            fork_4.block_hash(),
+            fork2_4.block_hash(),
+        ];
+        height_4.sort();
+        expected.extend(height_4);
+        // h:5
+        let mut height_5 = vec![
+            confirmed_5.block_hash(),
+            fork_5.block_hash(),
+            fork2_5.block_hash(),
+        ];
+        height_5.sort();
+        expected.extend(height_5);
+        // h:6
+        let mut height_6 = vec![confirmed_6.block_hash(), uncle_6.block_hash()];
+        height_6.sort();
+        expected.extend(height_6);
+        // h:7
+        expected.push(confirmed_7.block_hash());
+
+        assert_eq!(descendants, expected);
     }
 
     #[test]
@@ -2957,73 +3483,6 @@ mod tests {
         // requester can restart sync from the beginning.
         assert_eq!(result.len(), 1);
         assert_eq!(result[0], genesis.block_hash());
-    }
-
-    /// When the locator contains a non-confirmed block at a different
-    /// height than its confirmed counterpart
-    ///
-    /// Chain:
-    ///   genesis(h:0) -> share_a(h:1) -> share_b(h:2) -> share_c(h:3)
-    ///
-    /// Unconfirmed block stored at height 2:
-    ///   uncle(h:2, parent=share_a, not confirmed)
-    ///
-    /// Locator: [uncle_hash, genesis_hash]
-    ///
-    /// Required behavior: skips uncle (not confirmed), matches genesis,
-    ///   returns [share_a, share_b, share_c] -- a complete chain.
-    #[test]
-    fn test_get_blockhashes_for_locator_skips_uncle_at_different_height() {
-        let temp_dir = tempdir().unwrap();
-        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-
-        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
-        let mut batch = Store::get_write_batch();
-        store.setup_genesis(&genesis, &mut batch).unwrap();
-        store.commit_batch(batch).unwrap();
-
-        let share_a = TestShareBlockBuilder::new()
-            .prev_share_blockhash(genesis.block_hash().to_string())
-            .work(2)
-            .nonce(1)
-            .build();
-        store.push_to_confirmed_chain(&share_a).unwrap();
-
-        let share_b = TestShareBlockBuilder::new()
-            .prev_share_blockhash(share_a.block_hash().to_string())
-            .work(2)
-            .nonce(2)
-            .build();
-        store.push_to_confirmed_chain(&share_b).unwrap();
-
-        let share_c = TestShareBlockBuilder::new()
-            .prev_share_blockhash(share_b.block_hash().to_string())
-            .work(2)
-            .nonce(3)
-            .build();
-        store.push_to_confirmed_chain(&share_c).unwrap();
-
-        // Uncle at height 2: stored but not on the confirmed chain.
-        // Its parent is share_a, so it competes with share_b for h:2.
-        let uncle = TestShareBlockBuilder::new()
-            .prev_share_blockhash(share_a.block_hash().to_string())
-            .nonce(100)
-            .build();
-        store.store_with_valid_metadata(&uncle);
-
-        // Locator: uncle first (exists at h:2 but not confirmed),
-        // then genesis (confirmed at h:0).
-        let locator = vec![uncle.block_hash(), genesis.block_hash()];
-        let result = store
-            .get_blockhashes_for_locator(&locator, &BlockHash::all_zeros(), 10)
-            .unwrap();
-
-        // Should skip uncle, match genesis, return all confirmed
-        // descendants: share_a, share_b, share_c.
-        assert_eq!(result.len(), 3);
-        assert_eq!(result[0], share_a.block_hash());
-        assert_eq!(result[1], share_b.block_hash());
-        assert_eq!(result[2], share_c.block_hash());
     }
 
     /// first_confirmed_locator_match returns the first confirmed hash
