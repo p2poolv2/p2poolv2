@@ -455,10 +455,14 @@ impl ChainStoreHandle {
     /// Build a locator for the chain using only confirmed chain blocks.
     ///
     /// Returns blockhashes at exponentially spaced heights from the
-    /// confirmed chain tip back to genesis. Only confirmed blocks are
-    /// included so that the peer can match against its own confirmed
-    /// chain and find the true fork point.
-    pub fn build_locator(&self) -> Result<Vec<BlockHash>, StoreError> {
+    /// starting height back to genesis. Only confirmed blocks are
+    /// included so that the peer can match against its own chain.
+    ///
+    /// When depth is 0, starts from the confirmed tip (normal
+    /// behavior). When depth > 0, starts from confirmed_tip - depth,
+    /// providing a deeper locator to cover fork block parents that
+    /// the receiver may not have.
+    pub fn build_locator(&self, depth: u32) -> Result<Vec<BlockHash>, StoreError> {
         let tip_height = self.get_tip_height()?;
         match tip_height {
             Some(tip_height) => {
@@ -476,10 +480,12 @@ impl ChainStoreHandle {
             }
         }
 
+        let start_height = tip_height.unwrap().saturating_sub(depth);
+
         let mut indexes = Vec::new();
         let mut step = 1;
 
-        let mut height = tip_height.unwrap();
+        let mut height = start_height;
         while height > 0 {
             if indexes.len() >= 10 {
                 step *= 2;
@@ -769,7 +775,7 @@ mockall::mock! {
         pub fn get_blockhashes_for_locator(&self, locator: &[BlockHash], stop_block_hash: &BlockHash, max_blockhashes: usize) -> Result<Vec<BlockHash>, StoreError>;
         pub fn get_tip_height(&self) -> Result<Option<u32>, StoreError>;
         pub fn get_candidate_tip_height(&self) -> Result<Option<u32>, StoreError>;
-        pub fn build_locator(&self) -> Result<Vec<BlockHash>, StoreError>;
+        pub fn build_locator(&self, depth: u32) -> Result<Vec<BlockHash>, StoreError>;
         pub fn get_chain_tip(&self) -> Result<BlockHash, StoreError>;
         pub fn get_chain_tip_header(&self) -> Result<ShareHeader, StoreError>;
         pub fn get_candidate_tip_header(&self) -> Result<ShareHeader, StoreError>;
@@ -869,7 +875,7 @@ mod tests {
             .await
             .unwrap();
 
-        let locator = chain_handle.build_locator().unwrap();
+        let locator = chain_handle.build_locator(0).unwrap();
         assert_eq!(locator.len(), 1, "Locator should contain exactly genesis");
         assert_eq!(
             locator[0],
@@ -881,7 +887,7 @@ mod tests {
     #[tokio::test]
     async fn test_build_locator_empty_chain() {
         let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
-        let locator = chain_handle.build_locator().unwrap();
+        let locator = chain_handle.build_locator(0).unwrap();
         assert!(
             locator.is_empty(),
             "Locator for empty chain should be empty"
@@ -917,7 +923,7 @@ mod tests {
             shares.push(share);
         }
 
-        let locator = chain_handle.build_locator().unwrap();
+        let locator = chain_handle.build_locator(0).unwrap();
         // With tip at height 5, step=1 for all entries: heights 5,4,3,2,1,0
         assert_eq!(
             locator.len(),
@@ -984,7 +990,7 @@ mod tests {
             shares.push(share);
         }
 
-        let locator = chain_handle.build_locator().unwrap();
+        let locator = chain_handle.build_locator(0).unwrap();
         // The locator should have fewer entries than the chain length
         // due to step doubling after 10 entries
         assert!(
@@ -1201,7 +1207,7 @@ mod tests {
             "Height 1 should have both confirmed share and uncle"
         );
 
-        let locator = chain_handle.build_locator().unwrap();
+        let locator = chain_handle.build_locator(0).unwrap();
 
         // Locator should contain only confirmed blocks
         assert!(

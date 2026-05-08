@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::node::p2p_message_handlers::MAX_HEADERS_IN_RESPONSE;
+use crate::node::p2p_message_handlers::senders::send_getheaders;
 use crate::node::request_response_handler::block_fetcher::{BlockFetcherEvent, BlockFetcherHandle};
 use crate::node::{SwarmSend, messages::Message};
 #[cfg(test)]
@@ -37,8 +38,102 @@ use bitcoin::hashes::Hash;
 use bitcoin::{BlockHash, CompactTarget, Target, Work};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
+use std::fmt;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
+
+/// Depth to go back when retrying getheaders after missing parents/uncles.
+const DEEP_LOCATOR_DEPTH: u32 = 100;
+
+/// Errors from share header batch validation. Retryable variants
+/// indicate missing data that a deeper getheaders may resolve.
+/// Non-retryable variants indicate invalid data from the peer.
+#[derive(Debug)]
+enum HeaderSyncError {
+    MissingExternalParents(Vec<BlockHash>),
+    MissingUncle(BlockHash),
+    MissingParentInBatch {
+        header: BlockHash,
+        parent: BlockHash,
+    },
+    AsertMismatch {
+        block_hash: BlockHash,
+        declared: u32,
+        expected: u32,
+    },
+    InsufficientWork,
+    Other(Box<dyn Error + Send + Sync>),
+}
+
+impl HeaderSyncError {
+    fn is_retryable(&self) -> bool {
+        matches!(
+            self,
+            HeaderSyncError::MissingExternalParents(_)
+                | HeaderSyncError::MissingUncle(_)
+                | HeaderSyncError::MissingParentInBatch { .. }
+        )
+    }
+}
+
+impl fmt::Display for HeaderSyncError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            HeaderSyncError::MissingExternalParents(hashes) => {
+                write!(
+                    formatter,
+                    "External parent(s) not found in store: {hashes:?}"
+                )
+            }
+            HeaderSyncError::MissingUncle(hash) => {
+                write!(
+                    formatter,
+                    "Declared uncle {hash} not delivered in batch and not in store"
+                )
+            }
+            HeaderSyncError::MissingParentInBatch { header, parent } => {
+                write!(
+                    formatter,
+                    "Header {header} has parent {parent} which is not in batch or store"
+                )
+            }
+            HeaderSyncError::AsertMismatch {
+                block_hash,
+                declared,
+                expected,
+            } => {
+                write!(
+                    formatter,
+                    "ASERT mismatch for {block_hash}: declared bits {declared:#010x}, expected {expected:#010x}"
+                )
+            }
+            HeaderSyncError::InsufficientWork => {
+                write!(formatter, "Cumulative chain work below minimum")
+            }
+            HeaderSyncError::Other(error) => write!(formatter, "{error}"),
+        }
+    }
+}
+
+impl std::error::Error for HeaderSyncError {}
+
+impl From<Box<dyn Error + Send + Sync>> for HeaderSyncError {
+    fn from(error: Box<dyn Error + Send + Sync>) -> Self {
+        HeaderSyncError::Other(error)
+    }
+}
+
+impl From<StoreError> for HeaderSyncError {
+    fn from(error: StoreError) -> Self {
+        HeaderSyncError::Other(error.into())
+    }
+}
+
+impl From<crate::shares::validation::ValidationError> for HeaderSyncError {
+    fn from(error: crate::shares::validation::ValidationError) -> Self {
+        HeaderSyncError::Other(error.into())
+    }
+}
 
 /// Handle ShareHeaders received from a peer.
 ///
@@ -80,7 +175,16 @@ pub async fn handle_share_headers<C: Send + Sync>(
     }
 
     // Phase 1: Validate the header chain in memory
-    validate_header_chain(&share_headers, &chain_store_handle, share_validator)?;
+    if let Err(sync_error) =
+        validate_header_chain(&share_headers, &chain_store_handle, share_validator)
+    {
+        if sync_error.is_retryable() {
+            info!("Retryable header sync error, sending deeper getheaders: {sync_error}");
+            send_getheaders(peer_id, chain_store_handle, swarm_tx, DEEP_LOCATOR_DEPTH).await?;
+            return Ok(());
+        }
+        return Err(sync_error.into());
+    }
 
     // Phase 2: Organise validated headers into the candidate chain
     for header in &share_headers {
@@ -119,7 +223,7 @@ fn validate_header_chain(
     share_headers: &[ShareHeader],
     chain_store_handle: &ChainStoreHandle,
     share_validator: &(dyn ShareValidator + Send + Sync),
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+) -> Result<(), HeaderSyncError> {
     let pool_difficulty = share_validator.pool_difficulty();
 
     let anchors = find_chain_anchors(share_headers, chain_store_handle)?;
@@ -184,7 +288,7 @@ fn validate_dag_connectivity_and_difficulty(
     pool_difficulty: &PoolDifficulty,
     anchor_hashes: &HashSet<BlockHash>,
     chain_store_handle: &ChainStoreHandle,
-) -> Result<(HashSet<BlockHash>, Work), Box<dyn Error + Send + Sync>> {
+) -> Result<(HashSet<BlockHash>, Work), HeaderSyncError> {
     let mut known_hashes: HashSet<BlockHash> =
         HashSet::with_capacity(share_headers.len() + anchor_hashes.len());
     known_hashes.extend(anchor_hashes);
@@ -200,12 +304,10 @@ fn validate_dag_connectivity_and_difficulty(
         if !known_hashes.contains(&parent_hash)
             && chain_store_handle.get_block_metadata(&parent_hash).is_err()
         {
-            return Err(format!(
-                "Header {} has parent {} which is not in batch or store",
-                header.block_hash(),
-                parent_hash
-            )
-            .into());
+            return Err(HeaderSyncError::MissingParentInBatch {
+                header: header.block_hash(),
+                parent: parent_hash,
+            });
         }
 
         let (parent_time, parent_height) =
@@ -213,13 +315,11 @@ fn validate_dag_connectivity_and_difficulty(
 
         let expected_bits = pool_difficulty.calculate_target_clamped(parent_time, parent_height);
         if header.bits != expected_bits {
-            let block_hash = header.block_hash();
-            return Err(format!(
-                "ASERT mismatch for {block_hash}: declared bits {:#010x}, expected {:#010x}",
-                header.bits.to_consensus(),
-                expected_bits.to_consensus()
-            )
-            .into());
+            return Err(HeaderSyncError::AsertMismatch {
+                block_hash: header.block_hash(),
+                declared: header.bits.to_consensus(),
+                expected: expected_bits.to_consensus(),
+            });
         }
 
         let header_hash = header.block_hash();
@@ -238,16 +338,13 @@ fn verify_all_uncles_available(
     share_headers: &[ShareHeader],
     batch_hashes: &HashSet<BlockHash>,
     chain_store_handle: &ChainStoreHandle,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+) -> Result<(), HeaderSyncError> {
     for header in share_headers {
         for uncle_hash in &header.uncles {
             if !batch_hashes.contains(uncle_hash)
                 && chain_store_handle.get_block_metadata(uncle_hash).is_err()
             {
-                return Err(format!(
-                    "Declared uncle {uncle_hash} not delivered in batch and not in store"
-                )
-                .into());
+                return Err(HeaderSyncError::MissingUncle(*uncle_hash));
             }
         }
     }
@@ -265,7 +362,7 @@ fn verify_all_uncles_available(
 fn find_chain_anchors(
     share_headers: &[ShareHeader],
     chain_store_handle: &ChainStoreHandle,
-) -> Result<Vec<(BlockHash, BlockMetadata)>, Box<dyn Error + Send + Sync>> {
+) -> Result<Vec<(BlockHash, BlockMetadata)>, HeaderSyncError> {
     let batch_hashes: HashSet<BlockHash> = share_headers
         .iter()
         .map(|header| header.block_hash())
@@ -279,18 +376,13 @@ fn find_chain_anchors(
 
     let metadata_results = chain_store_handle.get_block_metadata_batch(&external_parents);
 
-    // If the sender's DAG changed between batches (new fork blocks or
-    // reorg), some external parents may be missing from our store. We
-    // reject the batch and the stale tip retry will restart sync.
-    // TODO: instead of rejecting, request the missing parents via a
-    // targeted GetShareHeaders to preserve partial sync progress.
     if metadata_results.len() != external_parents.len() {
         let found: HashSet<BlockHash> = metadata_results.iter().map(|(hash, _)| *hash).collect();
-        let missing: Vec<&BlockHash> = external_parents
-            .iter()
-            .filter(|hash| !found.contains(*hash))
+        let missing: Vec<BlockHash> = external_parents
+            .into_iter()
+            .filter(|hash| !found.contains(hash))
             .collect();
-        return Err(format!("External parent(s) not found in store: {missing:?}").into());
+        return Err(HeaderSyncError::MissingExternalParents(missing));
     }
 
     Ok(metadata_results)
@@ -300,7 +392,7 @@ fn find_chain_anchors(
 fn validate_cumulative_work(
     anchor_chain_work: Work,
     batch_chain_work: Work,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+) -> Result<(), HeaderSyncError> {
     let single_share_work =
         Target::from_compact(CompactTarget::from_consensus(MAX_POOL_TARGET)).to_work();
     let zero_work = Work::from_hex("0x00").unwrap();
@@ -309,10 +401,7 @@ fn validate_cumulative_work(
     let candidate_work = anchor_chain_work + batch_chain_work;
 
     if candidate_work < min_cumulative_work {
-        return Err(format!(
-            "Cumulative chain work {candidate_work} below minimum {min_cumulative_work}"
-        )
-        .into());
+        return Err(HeaderSyncError::InsufficientWork);
     }
     Ok(())
 }
@@ -1167,6 +1256,134 @@ mod tests {
         let headers = vec![share_a, share_b];
         let result = validate_header_chain(&headers, &chain_store_handle, &mock_validator);
         assert!(result.is_ok(), "Expected Ok, got: {}", result.unwrap_err());
+    }
+
+    /// Missing external parent is a retryable error.
+    #[test]
+    fn test_missing_external_parent_is_retryable() {
+        let error = HeaderSyncError::MissingExternalParents(vec![BlockHash::all_zeros()]);
+        assert!(error.is_retryable());
+    }
+
+    /// Missing uncle is a retryable error.
+    #[test]
+    fn test_missing_uncle_is_retryable() {
+        let error = HeaderSyncError::MissingUncle(BlockHash::all_zeros());
+        assert!(error.is_retryable());
+    }
+
+    /// Missing parent in batch is a retryable error.
+    #[test]
+    fn test_missing_parent_in_batch_is_retryable() {
+        let error = HeaderSyncError::MissingParentInBatch {
+            header: BlockHash::all_zeros(),
+            parent: BlockHash::all_zeros(),
+        };
+        assert!(error.is_retryable());
+    }
+
+    /// ASERT mismatch is not retryable.
+    #[test]
+    fn test_asert_mismatch_is_not_retryable() {
+        let error = HeaderSyncError::AsertMismatch {
+            block_hash: BlockHash::all_zeros(),
+            declared: 0,
+            expected: 1,
+        };
+        assert!(!error.is_retryable());
+    }
+
+    /// Insufficient work is not retryable.
+    #[test]
+    fn test_insufficient_work_is_not_retryable() {
+        let error = HeaderSyncError::InsufficientWork;
+        assert!(!error.is_retryable());
+    }
+
+    /// When handle_share_headers gets a missing external parent error,
+    /// it sends a deeper getheaders instead of propagating the error.
+    #[tokio::test]
+    async fn test_handle_share_headers_retries_on_missing_external_parent() {
+        let peer_id = libp2p::PeerId::random();
+        let unknown_parent = TestShareBlockBuilder::new().nonce(99).build();
+
+        let mut share = TestShareBlockBuilder::new()
+            .prev_share_blockhash(unknown_parent.block_hash().to_string())
+            .nonce(10)
+            .build()
+            .header;
+        share.bits = CompactTarget::from_consensus(MAX_POOL_TARGET);
+
+        let mut chain_store_handle = ChainStoreHandle::default();
+        // External parent not found in store
+        chain_store_handle
+            .expect_get_block_metadata_batch()
+            .returning(|_| Vec::new());
+        // build_locator for the retry getheaders
+        chain_store_handle
+            .expect_build_locator()
+            .return_once(|_| Ok(vec![BlockHash::all_zeros()]));
+        let mut mock_validator = MockDefaultShareValidator::default();
+        setup_minimum_difficulty_mock(&mut mock_validator);
+
+        let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
+        let (block_fetcher_handle, _block_fetcher_rx) =
+            block_fetcher::create_block_fetcher_channel();
+
+        let result = handle_share_headers(
+            peer_id,
+            vec![share],
+            chain_store_handle,
+            swarm_tx,
+            block_fetcher_handle,
+            &mock_validator,
+        )
+        .await;
+
+        // Should succeed (retry sent, not an error)
+        assert!(result.is_ok());
+
+        // Should have sent a getheaders request
+        let message = swarm_rx.try_recv().expect("expected a getheaders retry");
+        match message {
+            SwarmSend::Request(sent_peer, Message::GetShareHeaders(_, _)) => {
+                assert_eq!(sent_peer, peer_id);
+            }
+            other => panic!("expected GetShareHeaders, got: {other:?}"),
+        }
+    }
+
+    /// When handle_share_headers gets an ASERT mismatch, it propagates
+    /// the error instead of retrying.
+    #[tokio::test]
+    async fn test_handle_share_headers_propagates_asert_mismatch() {
+        let peer_id = libp2p::PeerId::random();
+        let mut chain_store_handle = ChainStoreHandle::default();
+        setup_chain_validation_mocks(&mut chain_store_handle);
+
+        let (swarm_tx, _swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
+        let (block_fetcher_handle, _block_fetcher_rx) =
+            block_fetcher::create_block_fetcher_channel();
+
+        let mut mock_validator = MockDefaultShareValidator::default();
+        setup_minimum_difficulty_mock(&mut mock_validator);
+
+        // Header with wrong bits -- will trigger ASERT mismatch
+        let header = TestShareBlockBuilder::new().build().header;
+        let share_headers = vec![header];
+
+        let result = handle_share_headers(
+            peer_id,
+            share_headers,
+            chain_store_handle,
+            swarm_tx,
+            block_fetcher_handle,
+            &mock_validator,
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("ASERT mismatch"));
     }
 
     /// Batch has an external parent that is completely unknown to the

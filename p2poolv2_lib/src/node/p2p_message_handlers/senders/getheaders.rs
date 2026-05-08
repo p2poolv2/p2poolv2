@@ -27,14 +27,19 @@ use std::error::Error;
 use tokio::sync::mpsc;
 use tracing::{debug, error};
 
-/// Handle outbound connection established events
-/// Send a getheaders request to the peer
+/// Send a getheaders request to the peer.
+///
+/// When depth is 0, the locator starts from the confirmed tip
+/// (normal behavior). When depth > 0, the locator starts from
+/// confirmed_tip - depth, providing overlap to cover fork block
+/// parents that the receiver may not have.
 pub async fn send_getheaders<C>(
     peer_id: libp2p::PeerId,
     chain_store_handle: ChainStoreHandle,
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
+    depth: u32,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let locator = chain_store_handle.build_locator()?;
+    let locator = chain_store_handle.build_locator(depth)?;
     let stop_block_hash: BlockHash = BlockHash::all_zeros();
     let getheaders_request = Message::GetShareHeaders(locator.clone(), stop_block_hash);
     debug!("Sending GetHeaders to peer {peer_id}: {getheaders_request:?}");
@@ -71,9 +76,9 @@ mod tests {
         chain_store_handle
             .expect_build_locator()
             .times(1)
-            .return_once(move || Ok(test_locator_clone));
+            .return_once(move |_| Ok(test_locator_clone));
 
-        let send_result = send_getheaders(peer_id, chain_store_handle, swarm_tx).await;
+        let send_result = send_getheaders(peer_id, chain_store_handle, swarm_tx, 0).await;
         assert!(send_result.is_ok());
 
         if let Some(SwarmSend::Request(received_peer_id, message)) = swarm_rx.recv().await {
@@ -110,14 +115,14 @@ mod tests {
         chain_store_handle
             .expect_build_locator()
             .times(1)
-            .return_once(move || Ok(test_locator.clone()));
+            .return_once(move |_| Ok(test_locator.clone()));
 
         let swarm_tx_clone = swarm_tx.clone();
 
         // Drop receiver to close channel
         drop(swarm_tx_clone);
 
-        let send_result = send_getheaders(peer_id, chain_store_handle, swarm_tx).await;
+        let send_result = send_getheaders(peer_id, chain_store_handle, swarm_tx, 0).await;
         assert!(send_result.is_err());
         assert!(
             send_result
@@ -133,12 +138,12 @@ mod tests {
 
         mock_chain_store
             .expect_build_locator()
-            .returning(|| Err(StoreError::Database("Build locator failed".to_string())));
+            .returning(|_| Err(StoreError::Database("Build locator failed".to_string())));
 
         let (swarm_tx, _swarm_rx) = channel::<SwarmSend<()>>(1);
         let peer_id = libp2p::PeerId::random();
 
-        let send_result = send_getheaders(peer_id, mock_chain_store, swarm_tx).await;
+        let send_result = send_getheaders(peer_id, mock_chain_store, swarm_tx, 0).await;
         assert!(send_result.is_err());
     }
 }

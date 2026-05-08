@@ -361,7 +361,7 @@ mod tests {
             .returning(move |_| missing.clone());
         chain_store_handle
             .expect_build_locator()
-            .return_once(|| Ok(vec![BlockHash::all_zeros()]));
+            .return_once(|_| Ok(vec![BlockHash::all_zeros()]));
 
         let inventory = InventoryMessage::BlockHashes(block_hashes);
 

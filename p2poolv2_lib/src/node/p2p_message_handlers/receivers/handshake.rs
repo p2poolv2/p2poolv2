@@ -89,7 +89,7 @@ pub async fn handle_handshake<C: Send + Sync>(
     };
 
     if needs_sync {
-        send_getheaders(peer, chain_store_handle, swarm_tx).await?;
+        send_getheaders(peer, chain_store_handle, swarm_tx, 0).await?;
     }
 
     Ok(())
@@ -131,7 +131,7 @@ mod tests {
         chain_store_handle
             .expect_build_locator()
             .times(1)
-            .return_once(move || Ok(vec![locator_hash]));
+            .return_once(move |_| Ok(vec![locator_hash]));
 
         let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<u32>>(10);
         let response_channel = 1u32;
@@ -296,7 +296,7 @@ mod tests {
         chain_store_handle
             .expect_build_locator()
             .times(1)
-            .return_once(move || Ok(vec![locator_hash]));
+            .return_once(move |_| Ok(vec![locator_hash]));
 
         let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<u32>>(10);
         let response_channel = 5u32;
@@ -355,7 +355,7 @@ mod tests {
         chain_store_handle
             .expect_build_locator()
             .times(1)
-            .return_once(move || Ok(vec![genesis_hash]));
+            .return_once(move |_| Ok(vec![genesis_hash]));
 
         let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<u32>>(10);
         let response_channel = 4u32;

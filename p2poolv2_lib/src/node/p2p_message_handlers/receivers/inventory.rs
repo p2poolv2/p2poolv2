@@ -71,7 +71,7 @@ pub async fn handle_inventory<C: Send + Sync>(
                     missing_blocks.len(),
                     peer
                 );
-                send_getheaders(peer, chain_store_handle, swarm_tx).await?;
+                send_getheaders(peer, chain_store_handle, swarm_tx, 0).await?;
             }
         }
         InventoryMessage::TransactionHashes(transaction_hashes) => {
@@ -115,7 +115,7 @@ mod tests {
             .returning(move |_| missing_blocks.clone());
         chain_store_handle
             .expect_build_locator()
-            .return_once(|| Ok(vec![BlockHash::all_zeros()]));
+            .return_once(|_| Ok(vec![BlockHash::all_zeros()]));
 
         let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<u32>>(10);
         let response_channel = 1u32;

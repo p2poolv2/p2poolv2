@@ -579,6 +579,7 @@ impl NodeActor {
                             peer_id,
                             self.chain_store_handle.clone(),
                             self.node.swarm_tx.clone(),
+                            0,
                         ).await {
                             error!("Sync retry getheaders failed: {error}");
                         }
