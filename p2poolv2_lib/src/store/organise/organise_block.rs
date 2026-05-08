@@ -267,14 +267,13 @@ mod tests {
         assert_eq!(top_before.hash, share2.block_hash());
         assert_eq!(top_before.height, 2);
 
-        // orphan_share has an unknown parent so organise_header computes
-        // height 1 with only its own work. That work is less than the
-        // top candidate cumulative work, so neither extend nor reorg fires.
+        // orphan_share has an unknown parent so organise_header
+        // returns an error for missing parent.
         let orphan_share = TestShareBlockBuilder::new().nonce(0xe9695794).build();
-        let result = store.push_to_candidate_chain(&orphan_share).unwrap();
+        let result = store.push_to_candidate_chain(&orphan_share);
 
-        // Candidate chain unchanged
-        assert!(result.is_none());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
         let top_after = store.get_top_candidate().unwrap();
         assert_eq!(top_after.hash, share2.block_hash());
         assert_eq!(top_after.height, 2);

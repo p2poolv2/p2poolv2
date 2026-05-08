@@ -181,15 +181,22 @@ impl Store {
 
         let share_work = header.get_work();
 
-        let (new_height, new_chain_work) =
-            match self.get_block_metadata(&header.prev_share_blockhash) {
-                Ok(prev_metadata) => {
-                    let prev_height = prev_metadata.expected_height.unwrap_or_default();
-                    let new_chain_work = prev_metadata.chain_work + share_work;
-                    (prev_height + 1, new_chain_work)
-                }
-                Err(_) => (1, share_work),
-            };
+        let prev_metadata = self
+            .get_block_metadata(&header.prev_share_blockhash)
+            .map_err(|_| {
+                StoreError::NotFound(format!(
+                    "Parent {} not found for block {}",
+                    header.prev_share_blockhash, blockhash
+                ))
+            })?;
+        let prev_height = prev_metadata.expected_height.ok_or_else(|| {
+            StoreError::Database(format!(
+                "Parent {} has no expected height for block {}",
+                header.prev_share_blockhash, blockhash
+            ))
+        })?;
+        let new_height = prev_height + 1;
+        let new_chain_work = prev_metadata.chain_work + share_work;
 
         for uncle_blockhash in &header.uncles {
             self.update_block_index(uncle_blockhash, blockhash, batch)?;
@@ -292,17 +299,14 @@ mod tests {
         assert_eq!(top_before.hash, share2.block_hash());
         assert_eq!(top_before.height, 2);
 
-        // orphan_share has an unknown parent so organise_header computes
-        // height 1 with only its own work. That work is less than the
-        // top candidate cumulative work, so neither extend nor reorg fires.
+        // orphan_share has an unknown parent so organise_header
+        // returns an error for missing parent.
         let orphan_share = TestShareBlockBuilder::new().nonce(0xe9695794).build();
         let mut batch = Store::get_write_batch();
-        let result = store
-            .organise_header(&orphan_share.header, &mut batch)
-            .unwrap();
+        let result = store.organise_header(&orphan_share.header, &mut batch);
 
-        // Candidate chain unchanged
-        assert!(result.is_none());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
         let top_after = store.get_top_candidate().unwrap();
         assert_eq!(top_after.hash, share2.block_hash());
         assert_eq!(top_after.height, 2);
