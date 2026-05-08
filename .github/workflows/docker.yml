@@ -1,0 +1,202 @@
+name: Docker
+
+on:
+  push:
+    branches: ["main"]
+    tags: ["v*"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag (e.g. v0.10.0)"
+        required: true
+        type: string
+
+env:
+  IMAGE_NAME: p2poolv2
+  REGISTRY: ghcr.io
+  IMAGE_TAG: ${{ github.sha }}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    name: Build and verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/build-push-action@v7
+        id: build
+        with:
+          context: .
+          file: docker/p2poolv2/Dockerfile
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+            docker.io/${{ github.repository }}:${{ env.IMAGE_TAG }}
+            ghcr.io/${{ github.repository }}:${{ env.IMAGE_TAG }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.description="P2Poolv2 is a peer-to-peer Bitcoin mining pool where miners coordinate directly and verify their rewards without centralized operators."
+            org.opencontainers.image.licenses=GPL-3.0
+          cache-from: type=gha,scope=build-docker-main
+          cache-to: type=gha,scope=build-docker-main,mode=max
+          load: true
+
+      - name: Verify binaries
+        run: |
+          docker run --rm --entrypoint /bin/sh ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }} -c \
+            'test -f /usr/local/bin/p2poolv2 && test -f /usr/local/bin/p2poolv2_cli && echo "Binaries OK" && sha256sum /usr/local/bin/p2poolv2 /usr/local/bin/p2poolv2_cli'
+
+      - name: Run CLI
+        run: |
+          docker run --rm ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }} --help
+
+  multi-arch-push:
+    name: Build ${{ matrix.platform }}
+    needs: [build]
+    if: github.event_name != 'pull_request'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+            arch: amd64
+            qemu: false
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            arch: arm64
+            qemu: false
+          - platform: linux/arm/v7
+            runner: ubuntu-24.04-arm
+            arch: armv7
+            qemu: true
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up QEMU
+        if: matrix.qemu
+        uses: docker/setup-qemu-action@v4
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/p2poolv2/Dockerfile
+          platforms: ${{ matrix.platform }}
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ env.IMAGE_TAG }}-${{ matrix.arch }}
+            docker.io/${{ github.repository }}:${{ env.IMAGE_TAG }}-${{ matrix.arch }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.description="P2Poolv2 is a peer-to-peer Bitcoin mining pool where miners coordinate directly and verify their rewards without centralized operators."
+            org.opencontainers.image.licenses=GPL-3.0
+          cache-from: type=gha,scope=build-docker-${{ matrix.arch }}
+          cache-to: type=gha,scope=build-docker-${{ matrix.arch }},mode=max
+          provenance: false
+          push: true
+
+  merge:
+    name: Merge multi-arch manifest
+    needs: [multi-arch-push]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Determine tags
+        id: tags
+        run: |
+          SHA="${{ env.IMAGE_TAG }}"
+          REPO_GHCR="ghcr.io/${{ github.repository }}"
+          REPO_DH="docker.io/${{ github.repository }}"
+
+          SOURCES_GHCR="$REPO_GHCR:$SHA-amd64 $REPO_GHCR:$SHA-arm64 $REPO_GHCR:$SHA-armv7"
+          SOURCES_DH="$REPO_DH:$SHA-amd64 $REPO_DH:$SHA-arm64 $REPO_DH:$SHA-armv7"
+
+          TAGS_GHCR="$REPO_GHCR:$SHA"
+          TAGS_DH="$REPO_DH:$SHA"
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            TAG="${{ github.event.inputs.tag }}"
+            TAGS_GHCR="$TAGS_GHCR $REPO_GHCR:$TAG $REPO_GHCR:latest"
+            TAGS_DH="$TAGS_DH $REPO_DH:$TAG $REPO_DH:latest"
+          elif [[ "${{ github.ref_type }}" == "tag" ]]; then
+            TAG="${{ github.ref_name }}"
+            TAGS_GHCR="$TAGS_GHCR $REPO_GHCR:$TAG $REPO_GHCR:latest"
+            TAGS_DH="$TAGS_DH $REPO_DH:$TAG $REPO_DH:latest"
+          else
+            TAGS_GHCR="$TAGS_GHCR $REPO_GHCR:main"
+            TAGS_DH="$TAGS_DH $REPO_DH:main"
+          fi
+
+          echo "sources_ghcr=$SOURCES_GHCR" >> "$GITHUB_OUTPUT"
+          echo "sources_dh=$SOURCES_DH" >> "$GITHUB_OUTPUT"
+          echo "tags_ghcr=$TAGS_GHCR" >> "$GITHUB_OUTPUT"
+          echo "tags_dh=$TAGS_DH" >> "$GITHUB_OUTPUT"
+
+      - name: Create GHCR manifests
+        run: |
+          for tag in ${{ steps.tags.outputs.tags_ghcr }}; do
+            echo "Creating manifest: $tag"
+            docker buildx imagetools create -t "$tag" \
+              --annotation "org.opencontainers.image.source=https://github.com/${{ github.repository }}" \
+              --annotation "org.opencontainers.image.description=P2Poolv2 is a peer-to-peer Bitcoin mining pool where miners coordinate directly and verify their rewards without centralized operators." \
+              ${{ steps.tags.outputs.sources_ghcr }}
+          done
+
+      - name: Create Docker Hub manifests
+        run: |
+          for tag in ${{ steps.tags.outputs.tags_dh }}; do
+            echo "Creating manifest: $tag"
+            docker buildx imagetools create -t "$tag" \
+              --annotation "org.opencontainers.image.source=https://github.com/${{ github.repository }}" \
+              --annotation "org.opencontainers.image.description=P2Poolv2 is a peer-to-peer Bitcoin mining pool where miners coordinate directly and verify their rewards without centralized operators." \
+              ${{ steps.tags.outputs.sources_dh }}
+          done
+
+      - name: Verify manifest
+        run: |
+          REPO_GHCR="ghcr.io/${{ github.repository }}"
+          SHA="${{ env.IMAGE_TAG }}"
+          echo "Checking platforms in $REPO_GHCR:$SHA"
+          docker buildx imagetools inspect "$REPO_GHCR:$SHA" --raw | grep -o '"architecture":"[^"]*"' | sort -u
