@@ -48,13 +48,22 @@ const DEEP_LOCATOR_DEPTH: u32 = 100;
 /// Errors from share header batch validation. Retryable variants
 /// indicate missing data that a deeper getheaders may resolve.
 /// Non-retryable variants indicate invalid data from the peer.
+/// Retryable variants carry the lowest anchor height so the retry
+/// locator can start from that point minus a margin.
 #[derive(Debug)]
 enum HeaderSyncError {
-    MissingExternalParents(Vec<BlockHash>),
-    MissingUncle(BlockHash),
+    MissingExternalParents {
+        missing: Vec<BlockHash>,
+        lowest_anchor_height: u32,
+    },
+    MissingUncle {
+        uncle_hash: BlockHash,
+        lowest_anchor_height: u32,
+    },
     MissingParentInBatch {
         header: BlockHash,
         parent: BlockHash,
+        lowest_anchor_height: u32,
     },
     AsertMismatch {
         block_hash: BlockHash,
@@ -69,29 +78,52 @@ impl HeaderSyncError {
     fn is_retryable(&self) -> bool {
         matches!(
             self,
-            HeaderSyncError::MissingExternalParents(_)
-                | HeaderSyncError::MissingUncle(_)
+            HeaderSyncError::MissingExternalParents { .. }
+                | HeaderSyncError::MissingUncle { .. }
                 | HeaderSyncError::MissingParentInBatch { .. }
         )
+    }
+
+    /// Returns the retry depth if this error is retryable.
+    /// The depth is calculated so the locator starts 100 blocks
+    /// before the lowest anchor height from the failed batch.
+    fn retry_depth(&self, tip_height: u32) -> Option<u32> {
+        let lowest_anchor_height = match self {
+            HeaderSyncError::MissingExternalParents {
+                lowest_anchor_height,
+                ..
+            } => *lowest_anchor_height,
+            HeaderSyncError::MissingUncle {
+                lowest_anchor_height,
+                ..
+            } => *lowest_anchor_height,
+            HeaderSyncError::MissingParentInBatch {
+                lowest_anchor_height,
+                ..
+            } => *lowest_anchor_height,
+            _ => return None,
+        };
+        let target_height = lowest_anchor_height.saturating_sub(DEEP_LOCATOR_DEPTH);
+        Some(tip_height.saturating_sub(target_height))
     }
 }
 
 impl fmt::Display for HeaderSyncError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            HeaderSyncError::MissingExternalParents(hashes) => {
+            HeaderSyncError::MissingExternalParents { missing, .. } => {
                 write!(
                     formatter,
-                    "External parent(s) not found in store: {hashes:?}"
+                    "External parent(s) not found in store: {missing:?}"
                 )
             }
-            HeaderSyncError::MissingUncle(hash) => {
+            HeaderSyncError::MissingUncle { uncle_hash, .. } => {
                 write!(
                     formatter,
-                    "Declared uncle {hash} not delivered in batch and not in store"
+                    "Declared uncle {uncle_hash} not delivered in batch and not in store"
                 )
             }
-            HeaderSyncError::MissingParentInBatch { header, parent } => {
+            HeaderSyncError::MissingParentInBatch { header, parent, .. } => {
                 write!(
                     formatter,
                     "Header {header} has parent {parent} which is not in batch or store"
@@ -179,8 +211,16 @@ pub async fn handle_share_headers<C: Send + Sync>(
         validate_header_chain(&share_headers, &chain_store_handle, share_validator)
     {
         if sync_error.is_retryable() {
-            info!("Retryable header sync error, sending deeper getheaders: {sync_error}");
-            send_getheaders(peer_id, chain_store_handle, swarm_tx, DEEP_LOCATOR_DEPTH).await?;
+            let tip_height = chain_store_handle
+                .get_tip_height()
+                .ok()
+                .flatten()
+                .unwrap_or(0);
+            let depth = sync_error.retry_depth(tip_height).unwrap_or(0);
+            info!(
+                "Retryable header sync error, sending getheaders with depth {depth}: {sync_error}"
+            );
+            send_getheaders(peer_id, chain_store_handle, swarm_tx, depth).await?;
             return Ok(());
         }
         return Err(sync_error.into());
@@ -230,6 +270,12 @@ fn validate_header_chain(
     let anchor_hashes: HashSet<BlockHash> = anchors.iter().map(|(hash, _)| *hash).collect();
     debug!("Found {} anchor(s) for header batch", anchors.len());
 
+    let lowest_anchor_height = anchors
+        .iter()
+        .filter_map(|(_, metadata)| metadata.expected_height)
+        .min()
+        .unwrap_or(0);
+
     let best_anchor_work = anchors
         .iter()
         .map(|(_, metadata)| metadata.chain_work)
@@ -242,8 +288,14 @@ fn validate_header_chain(
         pool_difficulty,
         &anchor_hashes,
         chain_store_handle,
+        lowest_anchor_height,
     )?;
-    verify_all_uncles_available(share_headers, &batch_hashes, chain_store_handle)?;
+    verify_all_uncles_available(
+        share_headers,
+        &batch_hashes,
+        chain_store_handle,
+        lowest_anchor_height,
+    )?;
     validate_cumulative_work(best_anchor_work, cumulative_chain_work)?;
 
     debug!(
@@ -288,6 +340,7 @@ fn validate_dag_connectivity_and_difficulty(
     pool_difficulty: &PoolDifficulty,
     anchor_hashes: &HashSet<BlockHash>,
     chain_store_handle: &ChainStoreHandle,
+    lowest_anchor_height: u32,
 ) -> Result<(HashSet<BlockHash>, Work), HeaderSyncError> {
     let mut known_hashes: HashSet<BlockHash> =
         HashSet::with_capacity(share_headers.len() + anchor_hashes.len());
@@ -307,6 +360,7 @@ fn validate_dag_connectivity_and_difficulty(
             return Err(HeaderSyncError::MissingParentInBatch {
                 header: header.block_hash(),
                 parent: parent_hash,
+                lowest_anchor_height,
             });
         }
 
@@ -338,13 +392,17 @@ fn verify_all_uncles_available(
     share_headers: &[ShareHeader],
     batch_hashes: &HashSet<BlockHash>,
     chain_store_handle: &ChainStoreHandle,
+    lowest_anchor_height: u32,
 ) -> Result<(), HeaderSyncError> {
     for header in share_headers {
         for uncle_hash in &header.uncles {
             if !batch_hashes.contains(uncle_hash)
                 && chain_store_handle.get_block_metadata(uncle_hash).is_err()
             {
-                return Err(HeaderSyncError::MissingUncle(*uncle_hash));
+                return Err(HeaderSyncError::MissingUncle {
+                    uncle_hash: *uncle_hash,
+                    lowest_anchor_height,
+                });
             }
         }
     }
@@ -382,7 +440,15 @@ fn find_chain_anchors(
             .into_iter()
             .filter(|hash| !found.contains(hash))
             .collect();
-        return Err(HeaderSyncError::MissingExternalParents(missing));
+        let lowest_anchor_height = metadata_results
+            .iter()
+            .filter_map(|(_, metadata)| metadata.expected_height)
+            .min()
+            .unwrap_or(0);
+        return Err(HeaderSyncError::MissingExternalParents {
+            missing,
+            lowest_anchor_height,
+        });
     }
 
     Ok(metadata_results)
@@ -1258,46 +1324,56 @@ mod tests {
         assert!(result.is_ok(), "Expected Ok, got: {}", result.unwrap_err());
     }
 
-    /// Missing external parent is a retryable error.
+    /// Missing external parent returns a retry depth.
     #[test]
-    fn test_missing_external_parent_is_retryable() {
-        let error = HeaderSyncError::MissingExternalParents(vec![BlockHash::all_zeros()]);
-        assert!(error.is_retryable());
+    fn test_missing_external_parent_has_retry_depth() {
+        let error = HeaderSyncError::MissingExternalParents {
+            missing: vec![BlockHash::all_zeros()],
+            lowest_anchor_height: 500,
+        };
+        // tip=600, target=500-100=400, depth=600-400=200
+        assert_eq!(error.retry_depth(600), Some(200));
     }
 
-    /// Missing uncle is a retryable error.
+    /// Missing uncle returns a retry depth.
     #[test]
-    fn test_missing_uncle_is_retryable() {
-        let error = HeaderSyncError::MissingUncle(BlockHash::all_zeros());
-        assert!(error.is_retryable());
+    fn test_missing_uncle_has_retry_depth() {
+        let error = HeaderSyncError::MissingUncle {
+            uncle_hash: BlockHash::all_zeros(),
+            lowest_anchor_height: 300,
+        };
+        // tip=400, target=300-100=200, depth=400-200=200
+        assert_eq!(error.retry_depth(400), Some(200));
     }
 
-    /// Missing parent in batch is a retryable error.
+    /// Missing parent in batch returns a retry depth.
     #[test]
-    fn test_missing_parent_in_batch_is_retryable() {
+    fn test_missing_parent_in_batch_has_retry_depth() {
         let error = HeaderSyncError::MissingParentInBatch {
             header: BlockHash::all_zeros(),
             parent: BlockHash::all_zeros(),
+            lowest_anchor_height: 50,
         };
-        assert!(error.is_retryable());
+        // tip=100, target=50-100=0 (saturating), depth=100-0=100
+        assert_eq!(error.retry_depth(100), Some(100));
     }
 
-    /// ASERT mismatch is not retryable.
+    /// ASERT mismatch has no retry depth.
     #[test]
-    fn test_asert_mismatch_is_not_retryable() {
+    fn test_asert_mismatch_has_no_retry_depth() {
         let error = HeaderSyncError::AsertMismatch {
             block_hash: BlockHash::all_zeros(),
             declared: 0,
             expected: 1,
         };
-        assert!(!error.is_retryable());
+        assert_eq!(error.retry_depth(600), None);
     }
 
-    /// Insufficient work is not retryable.
+    /// Insufficient work has no retry depth.
     #[test]
-    fn test_insufficient_work_is_not_retryable() {
+    fn test_insufficient_work_has_no_retry_depth() {
         let error = HeaderSyncError::InsufficientWork;
-        assert!(!error.is_retryable());
+        assert_eq!(error.retry_depth(600), None);
     }
 
     /// When handle_share_headers gets a missing external parent error,
@@ -1319,6 +1395,10 @@ mod tests {
         chain_store_handle
             .expect_get_block_metadata_batch()
             .returning(|_| Vec::new());
+        // get_tip_height for computing retry depth
+        chain_store_handle
+            .expect_get_tip_height()
+            .returning(|| Ok(Some(100)));
         // build_locator for the retry getheaders
         chain_store_handle
             .expect_build_locator()
