@@ -269,14 +269,15 @@ impl Store {
         };
 
         for height in start_height..=top_confirmed_height {
-            let mut hashes_at_height = self.get_blockhashes_for_height(height);
-            hashes_at_height.retain(|hash| {
-                self.get_block_metadata(hash)
-                    .map(|metadata| {
-                        metadata.status != Status::Pending && metadata.status != Status::Invalid
-                    })
-                    .unwrap_or(false)
-            });
+            let raw_hashes = self.get_blockhashes_for_height(height);
+            let mut hashes_at_height: Vec<BlockHash> = self
+                .get_block_metadata_batch(&raw_hashes)
+                .into_iter()
+                .filter(|(_, metadata)| {
+                    metadata.status != Status::Pending && metadata.status != Status::Invalid
+                })
+                .map(|(hash, _)| hash)
+                .collect();
             hashes_at_height.sort();
 
             let found_stop = hashes_at_height.contains(stop_blockhash);
