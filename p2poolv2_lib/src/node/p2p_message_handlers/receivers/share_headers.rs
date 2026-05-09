@@ -430,6 +430,8 @@ fn find_chain_anchors(
         .iter()
         .map(|header| header.prev_share_blockhash)
         .filter(|parent| !batch_hashes.contains(parent))
+        .collect::<HashSet<_>>()
+        .into_iter()
         .collect();
 
     let metadata_results = chain_store_handle.get_block_metadata_batch(&external_parents);
