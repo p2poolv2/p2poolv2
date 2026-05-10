@@ -73,15 +73,10 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
     let job = match stratum_context.tracker_handle.get_job(JobId(job_id)) {
         Some(job) => job,
         None => {
-            let latest = stratum_context.tracker_handle.get_latest_job_id().0;
-            let code = if job_id <= latest {
-                StratumErrorCode::Stale
-            } else {
-                StratumErrorCode::InvalidJobId
-            };
-            debug!("Job not found for job_id: {job_id}, code: {code:?}");
+            debug!("Job not found for job_id: {job_id}");
             return Ok(vec![Message::Response(Response::new_error(
-                message.id, code,
+                message.id,
+                StratumErrorCode::JobNotFound,
             ))]);
         }
     };
@@ -111,7 +106,7 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
     if !is_new_share {
         return Ok(vec![Message::Response(Response::new_error(
             message.id,
-            StratumErrorCode::Duplicate,
+            StratumErrorCode::DuplicateShare,
         ))]);
     }
 
@@ -137,7 +132,7 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
             );
             return Ok(vec![Message::Response(Response::new_error(
                 message.id,
-                StratumErrorCode::AboveTarget,
+                StratumErrorCode::LowDifficultyShare,
             ))]);
         }
     }
@@ -704,8 +699,8 @@ mod handle_submit_tests {
         // Should return stale error
         assert_eq!(response.result, None);
         let err = response.error.as_ref().unwrap();
-        assert_eq!(err.code, 2, "should be Stale (code 2)");
-        assert_eq!(err.message, "Stale");
+        assert_eq!(err.code, 21, "should be JobNotFound (code 21)");
+        assert_eq!(err.message, "Job not found");
     }
 
     #[tokio::test]
@@ -908,8 +903,8 @@ mod handle_submit_tests {
         // Duplicate submission should return error code 4
         assert_eq!(response2.result, None);
         let err = response2.error.as_ref().unwrap();
-        assert_eq!(err.code, 4, "should be Duplicate (code 4)");
-        assert_eq!(err.message, "Duplicate");
+        assert_eq!(err.code, 22, "should be DuplicateShare (code 22)");
+        assert_eq!(err.message, "Duplicate share");
 
         // No additional emission should be sent for duplicate
         assert!(emissions_rx.try_recv().is_err());
@@ -1138,7 +1133,7 @@ mod handle_submit_tests {
         };
         assert_eq!(response.result, None);
         let err = response.error.as_ref().unwrap();
-        assert_eq!(err.code, 1, "should be InvalidJobID (code 1)");
-        assert_eq!(err.message, "Invalid JobID");
+        assert_eq!(err.code, 21, "should be JobNotFound (code 21)");
+        assert_eq!(err.message, "Job not found");
     }
 }

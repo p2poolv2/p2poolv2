@@ -38,23 +38,21 @@ pub enum Error {
 
 /// Stratum V1 JSON-RPC error codes sent to miners.
 ///
-/// Share submission codes 1..5 follow ckpool's `share_err` enum
-/// (libckpool.h:340-355). Protocol codes 20-25 follow the blitzpool
-/// convention (eStratumErrorCode.ts). Negative codes -32700..-32600
-/// follow JSON-RPC 2.0.
+/// Codes 20-25 follow the stratum v1 convention from slush
+/// https://web.archive.org/web/20240225191319/https://braiins.com/stratum-v1/docs
+///
+/// Minimal negative codes -32700..-32600 from JSON-RPC 2.0 convention.
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StratumErrorCode {
-    /// Unknown or expired job ID
-    InvalidJobId = 1,
-    /// Share submitted against a retired job
-    Stale = 2,
-    /// Duplicate share submission
-    Duplicate = 4,
-    /// Share hash above pool target (below pool difficulty)
-    AboveTarget = 5,
     /// Catch-all unknown error
     OtherUnknown = 20,
+    /// Job not found or stale
+    JobNotFound = 21,
+    /// Duplicate share submission
+    DuplicateShare = 22,
+    /// Share hash does not meet pool difficulty
+    LowDifficultyShare = 23,
     /// Worker not authorized
     UnauthorizedWorker = 24,
     /// Must subscribe before submitting shares
@@ -68,11 +66,10 @@ pub enum StratumErrorCode {
 impl Display for StratumErrorCode {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         let msg = match self {
-            Self::InvalidJobId => "Invalid JobID",
-            Self::Stale => "Stale",
-            Self::Duplicate => "Duplicate",
-            Self::AboveTarget => "Above target",
-            Self::OtherUnknown => "Unknown error",
+            Self::OtherUnknown => "Other/Unknown",
+            Self::JobNotFound => "Job not found",
+            Self::DuplicateShare => "Duplicate share",
+            Self::LowDifficultyShare => "Low difficulty share",
             Self::UnauthorizedWorker => "Unauthorized worker",
             Self::NotSubscribed => "Not subscribed",
             Self::ParseError => "Parse error",
@@ -107,23 +104,28 @@ mod tests {
 
     #[test]
     fn test_error_code_values() {
-        assert_eq!(StratumErrorCode::Duplicate as i32, 4);
-        assert_eq!(StratumErrorCode::AboveTarget as i32, 5);
-        assert_eq!(StratumErrorCode::Stale as i32, 2);
-        assert_eq!(StratumErrorCode::InvalidJobId as i32, 1);
+        assert_eq!(StratumErrorCode::OtherUnknown as i32, 20);
+        assert_eq!(StratumErrorCode::JobNotFound as i32, 21);
+        assert_eq!(StratumErrorCode::DuplicateShare as i32, 22);
+        assert_eq!(StratumErrorCode::LowDifficultyShare as i32, 23);
         assert_eq!(StratumErrorCode::UnauthorizedWorker as i32, 24);
         assert_eq!(StratumErrorCode::NotSubscribed as i32, 25);
         assert_eq!(StratumErrorCode::ParseError as i32, -32700);
-        assert_eq!(StratumErrorCode::OtherUnknown as i32, 20);
         assert_eq!(StratumErrorCode::MethodNotFound as i32, -32601);
     }
 
     #[test]
     fn test_error_code_display() {
-        assert_eq!(StratumErrorCode::Duplicate.to_string(), "Duplicate");
-        assert_eq!(StratumErrorCode::AboveTarget.to_string(), "Above target");
-        assert_eq!(StratumErrorCode::Stale.to_string(), "Stale");
-        assert_eq!(StratumErrorCode::InvalidJobId.to_string(), "Invalid JobID");
+        assert_eq!(StratumErrorCode::OtherUnknown.to_string(), "Other/Unknown");
+        assert_eq!(StratumErrorCode::JobNotFound.to_string(), "Job not found");
+        assert_eq!(
+            StratumErrorCode::DuplicateShare.to_string(),
+            "Duplicate share"
+        );
+        assert_eq!(
+            StratumErrorCode::LowDifficultyShare.to_string(),
+            "Low difficulty share"
+        );
         assert_eq!(
             StratumErrorCode::UnauthorizedWorker.to_string(),
             "Unauthorized worker"
@@ -133,7 +135,6 @@ mod tests {
             "Not subscribed"
         );
         assert_eq!(StratumErrorCode::ParseError.to_string(), "Parse error");
-        assert_eq!(StratumErrorCode::OtherUnknown.to_string(), "Unknown error");
         assert_eq!(
             StratumErrorCode::MethodNotFound.to_string(),
             "Method not found"
