@@ -61,7 +61,8 @@ pub fn build_coinbase_from_components(
     let complete_tx = format!("{coinbase1}{enonce1}{enonce2}{coinbase2}");
     debug!("Complete coinbase tx hex: {}", complete_tx);
 
-    let tx_bytes = Vec::from_hex(&complete_tx).unwrap();
+    let tx_bytes = Vec::from_hex(&complete_tx)
+        .map_err(|_| Error::InvalidParams("Invalid coinbase hex".into()))?;
     bitcoin::Transaction::consensus_decode(&mut std::io::Cursor::new(tx_bytes))
         .map_err(|_e| Error::InvalidParams("Failed to decode coinbase transaction".into()))
 }
