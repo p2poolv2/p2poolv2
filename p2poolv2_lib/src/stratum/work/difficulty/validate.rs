@@ -75,13 +75,16 @@ fn apply_version_mask(
     params: &[Option<String>],
 ) -> Result<i32, Error> {
     if params.len() > 5 {
-        debug!("Applying version mask from params: {:?}", params[5]);
+        let version_bits_hex = params[5]
+            .as_ref()
+            .ok_or_else(|| Error::InvalidParams("Missing version bits".into()))?;
+        debug!("Applying version mask from params: {:?}", version_bits_hex);
         let bits = i32::from_be_bytes(
-            hex::decode(params[5].as_ref().unwrap())
-                .map_err(|_| Error::InvalidParams("Failed to decode hex".into()))?
+            hex::decode(version_bits_hex)
+                .map_err(|_| Error::InvalidParams("Failed to decode version bits hex".into()))?
                 .as_slice()
                 .try_into()
-                .map_err(|_| Error::InvalidParams("Failed to decode hex".into()))?,
+                .map_err(|_| Error::InvalidParams("Invalid version bits length".into()))?,
         );
         Ok((header_version & !version_mask) | (bits & version_mask))
     } else {
