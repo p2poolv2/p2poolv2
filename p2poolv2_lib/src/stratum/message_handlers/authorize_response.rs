@@ -63,7 +63,7 @@ pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
             "Already authorized".to_string(),
         ));
     }
-    let username = match message.params[0].clone() {
+    let username = match message.params.first().and_then(|p| p.clone()) {
         Some(name) => name,
         None => {
             return Ok(vec![Message::Response(
@@ -90,11 +90,11 @@ pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
             }
         };
 
-    session.username = Some(message.params[0].clone().unwrap());
+    session.username = Some(username.clone());
     session.btcaddress = Some(parsed_username.address_str.to_string());
     session.parsed_address = parsed_username.parsed_address;
     session.workername = parsed_username.worker_name.map(|s| s.to_string());
-    session.password = message.params[1].clone();
+    session.password = message.params.get(1).and_then(|p| p.clone());
 
     // Register user in the store
     register_user(session, parsed_username.address_str, ctx.chain_store_handle).await?;
@@ -670,5 +670,55 @@ mod tests {
             session.btcaddress.is_none(),
             "BTC address should not be set for invalid address"
         );
+    }
+
+    #[tokio::test]
+    async fn test_handle_authorize_empty_params_returns_error_not_panic() {
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        let request = SimpleRequest {
+            id: Some(Id::Number(1)),
+            method: std::borrow::Cow::Owned("mining.authorize".to_string()),
+            params: std::borrow::Cow::Owned(vec![]),
+        };
+        let (notify_tx, _) = mpsc::channel(1);
+        let (emissions_tx, _) = mpsc::channel(10);
+        let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        let tracker_handle = start_tracker_actor();
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+
+        let ctx = StratumContext {
+            notify_tx,
+            tracker_handle,
+            bitcoindrpc_client: BitcoindRpcClient::new(
+                &bitcoinrpc_config.url,
+                &bitcoinrpc_config.username,
+                &bitcoinrpc_config.password,
+            )
+            .unwrap(),
+            start_difficulty: 1000,
+            minimum_difficulty: 1,
+            maximum_difficulty: None,
+            ignore_difficulty: false,
+            validate_addresses: true,
+            emissions_tx,
+            network: bitcoin::network::Network::Testnet,
+            metrics: metrics_handle,
+            chain_store_handle,
+        };
+
+        let result = handle_authorize(request, &mut session, ctx).await;
+        assert!(result.is_ok());
+        let messages = result.unwrap();
+        let response = match &messages[..] {
+            [Message::Response(r)] => r,
+            _ => panic!("expected Response"),
+        };
+        let err = response.error.as_ref().unwrap();
+        assert_eq!(err.code, 24, "should be UnauthorizedWorker (code 24)");
+        assert_eq!(err.message, "Empty username");
     }
 }
