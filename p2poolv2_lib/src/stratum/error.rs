@@ -38,37 +38,17 @@ pub enum Error {
 
 /// Stratum V1 JSON-RPC error codes sent to miners.
 ///
-/// Share submission codes -9..5 follow ckpool's `share_err` enum
+/// Share submission codes 1..5 follow ckpool's `share_err` enum
 /// (libckpool.h:340-355). Protocol codes 20-25 follow the blitzpool
 /// convention (eStratumErrorCode.ts). Negative codes -32700..-32600
 /// follow JSON-RPC 2.0.
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StratumErrorCode {
-    /// Invalid nonce2 hex length
-    InvalidNonce2 = -9,
-    /// Worker name does not match session
-    WorkerMismatch = -8,
-    /// Missing nonce parameter
-    NoNonce = -7,
-    /// Missing ntime parameter
-    NoNtime = -6,
-    /// Missing nonce2 parameter
-    NoNonce2 = -5,
-    /// Missing job_id parameter
-    NoJobId = -4,
-    /// Missing username parameter
-    NoUsername = -3,
-    /// Submit params array too short
-    InvalidSize = -2,
-    /// Params is not a JSON array
-    NotArray = -1,
     /// Unknown or expired job ID
     InvalidJobId = 1,
     /// Share submitted against a retired job
     Stale = 2,
-    /// ntime out of allowed range
-    NtimeOutOfRange = 3,
     /// Duplicate share submission
     Duplicate = 4,
     /// Share hash above pool target (below pool difficulty)
@@ -83,25 +63,13 @@ pub enum StratumErrorCode {
     ParseError = -32700,
     /// Unknown method name
     MethodNotFound = -32601,
-    /// Invalid method parameters
-    InvalidParams = -32602,
 }
 
 impl Display for StratumErrorCode {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         let msg = match self {
-            Self::InvalidNonce2 => "Invalid nonce2 length",
-            Self::WorkerMismatch => "Worker mismatch",
-            Self::NoNonce => "No nonce",
-            Self::NoNtime => "No ntime",
-            Self::NoNonce2 => "No nonce2",
-            Self::NoJobId => "No job_id",
-            Self::NoUsername => "No username",
-            Self::InvalidSize => "Invalid array size",
-            Self::NotArray => "Params not array",
             Self::InvalidJobId => "Invalid JobID",
             Self::Stale => "Stale",
-            Self::NtimeOutOfRange => "Ntime out of range",
             Self::Duplicate => "Duplicate",
             Self::AboveTarget => "Above target",
             Self::OtherUnknown => "Unknown error",
@@ -109,7 +77,6 @@ impl Display for StratumErrorCode {
             Self::NotSubscribed => "Not subscribed",
             Self::ParseError => "Parse error",
             Self::MethodNotFound => "Method not found",
-            Self::InvalidParams => "Invalid params",
         };
         f.write_str(msg)
     }
@@ -148,6 +115,7 @@ mod tests {
         assert_eq!(StratumErrorCode::NotSubscribed as i32, 25);
         assert_eq!(StratumErrorCode::ParseError as i32, -32700);
         assert_eq!(StratumErrorCode::OtherUnknown as i32, 20);
+        assert_eq!(StratumErrorCode::MethodNotFound as i32, -32601);
     }
 
     #[test]
@@ -166,6 +134,10 @@ mod tests {
         );
         assert_eq!(StratumErrorCode::ParseError.to_string(), "Parse error");
         assert_eq!(StratumErrorCode::OtherUnknown.to_string(), "Unknown error");
+        assert_eq!(
+            StratumErrorCode::MethodNotFound.to_string(),
+            "Method not found"
+        );
     }
 
     #[test]
