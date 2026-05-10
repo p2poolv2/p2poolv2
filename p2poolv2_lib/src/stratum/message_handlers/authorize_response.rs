@@ -19,6 +19,7 @@ use crate::stratum::{
     difficulty_adjuster::DifficultyAdjusterTrait,
     error::{Error, StratumErrorCode},
     messages::{Message, Response, SetDifficultyNotification, SimpleRequest},
+    parse_password::parse_password,
     server::StratumContext,
     session::Session,
     validate_username,
@@ -114,7 +115,7 @@ pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
 
     let start_difficulty = match &session.password {
         Some(password) => {
-            let parsed = parse_password::parse_password(password);
+            let parsed = parse_password(password);
             match parsed.difficulty {
                 Some(requested_difficulty) => {
                     let constrained = session.difficulty_adjuster.apply_difficulty_constraints(
