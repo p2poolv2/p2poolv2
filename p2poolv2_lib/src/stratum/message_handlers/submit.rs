@@ -61,11 +61,13 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
             StratumErrorCode::NotSubscribed,
         ))]);
     }
-    if message.params.len() < 4 {
+    if message.params.len() < 5 {
         return Err(Error::InvalidParams("Missing parameters".into()));
     }
 
-    let id = message.params[1].as_ref().unwrap();
+    let id = message.params[1]
+        .as_ref()
+        .ok_or_else(|| Error::InvalidParams("Missing job_id".into()))?;
 
     let job_id =
         u64::from_str_radix(id, 16).map_err(|_| Error::InvalidParams("Invalid job_id".into()))?;
