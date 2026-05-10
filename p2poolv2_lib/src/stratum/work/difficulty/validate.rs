@@ -105,7 +105,10 @@ pub fn validate_bitcoin_difficulty(
         .map_err(|_| Error::InvalidParams("Failed to parse compact target".into()))?;
     let target = bitcoin::Target::from_compact(compact_target);
 
-    let enonce2 = submission.params[2].as_ref().unwrap().as_str();
+    let enonce2 = submission.params[2]
+        .as_ref()
+        .ok_or_else(|| Error::InvalidParams("Missing enonce2".into()))?
+        .as_str();
 
     debug!(
         "Coinbase components coinbase1: {} enonce1: {}, enonce2: {}, coinbase2: {}",
@@ -133,8 +136,11 @@ pub fn validate_bitcoin_difficulty(
 
     debug!("Merkle root: {}", merkle_root);
 
-    let n_time = u32::from_str_radix(submission.params[3].as_ref().unwrap(), 16)
-        .map_err(|_| Error::InvalidParams("Bad nTime".into()))?;
+    let ntime_str = submission.params[3]
+        .as_ref()
+        .ok_or_else(|| Error::InvalidParams("Missing ntime".into()))?;
+    let n_time =
+        u32::from_str_radix(ntime_str, 16).map_err(|_| Error::InvalidParams("Bad nTime".into()))?;
 
     let version = apply_version_mask(job.blocktemplate.version, version_mask, &submission.params)?;
 
@@ -145,7 +151,13 @@ pub fn validate_bitcoin_difficulty(
         merkle_root,
         time: n_time,
         bits: compact_target,
-        nonce: u32::from_str_radix(submission.params[4].as_ref().unwrap(), 16).unwrap(),
+        nonce: u32::from_str_radix(
+            submission.params[4]
+                .as_ref()
+                .ok_or_else(|| Error::InvalidParams("Missing nonce".into()))?,
+            16,
+        )
+        .map_err(|_| Error::InvalidParams("Bad nonce".into()))?,
     };
 
     debug!(
