@@ -21,6 +21,7 @@ use crate::stratum::server::StratumContext;
 use crate::stratum::session::Session;
 use authorize_response::handle_authorize;
 use configure::handle_configure;
+use extranonce_subscribe::handle_extranonce_subscribe;
 use submit::handle_submit;
 use subscribe::handle_subscribe;
 use suggest_difficulty::handle_suggest_difficulty;
@@ -28,6 +29,7 @@ use tracing::debug;
 
 pub mod authorize_response;
 pub mod configure;
+pub mod extranonce_subscribe;
 pub mod submit;
 pub mod subscribe;
 pub mod suggest_difficulty;
@@ -66,6 +68,7 @@ async fn handle_simple_request<'a, D: DifficultyAdjusterTrait>(
         "mining.subscribe" => handle_subscribe(message, session, ctx.start_difficulty).await,
         "mining.authorize" => handle_authorize(message, session, ctx).await,
         "mining.submit" => handle_submit(message, session, ctx).await,
+        "mining.extranonce.subscribe" => handle_extranonce_subscribe(message).await,
         method => Err(Error::InvalidMethod(method.to_string())),
     }
 }
