@@ -92,10 +92,9 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
             Ok(result) => result,
             Err(e) => {
                 debug!("Share validation failed: {}", e);
-                return Ok(vec![Message::Response(Response::new_error(
-                    message.id,
-                    StratumErrorCode::OtherUnknown,
-                ))]);
+                let response = Response::new_error(message.id, StratumErrorCode::OtherUnknown)
+                    .with_message(e.to_string());
+                return Ok(vec![Message::Response(response)]);
             }
         };
 
@@ -1135,5 +1134,103 @@ mod handle_submit_tests {
         let err = response.error.as_ref().unwrap();
         assert_eq!(err.code, 21, "should be JobNotFound (code 21)");
         assert_eq!(err.message, "Job not found");
+    }
+
+    #[tokio::test]
+    async fn test_handle_submit_validation_failure_returns_other_unknown_with_message() {
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        session.subscribed = true;
+        session.enonce1_hex = "deadbeef".to_string();
+        session.user_id = Some(1);
+
+        let tracker_handle = start_tracker_actor();
+
+        let template: BlockTemplate = serde_json::from_value(json!({
+             "version": 536870912,
+            "rules": [],
+            "vbavailable": {},
+            "vbrequired": 0,
+            "previousblockhash": "0000000000000000000000000000000000000000000000000000000000000000",
+            "transactions": [],
+            "coinbaseaux": {},
+            "coinbasevalue": 5000000000_u64,
+            "longpollid": "0",
+            "target": "00000000ffff0000000000000000000000000000000000000000000000000000",
+            "mintime": 1,
+            "mutable": [],
+            "noncerange": "00000000ffffffff",
+            "sigoplimit": 80000,
+            "sizelimit": 4000000,
+            "weightlimit": 4000000,
+            "curtime": 1,
+            "bits": "1d00ffff",
+            "height": 1,
+            "default_witness_commitment": ""
+        }))
+        .unwrap();
+
+        // bad coinbase fields make sure the validation fails
+        let job_id = JobId(1);
+        let _ = tracker_handle.insert_job(
+            Arc::new(template),
+            "deadbeef".to_string(),
+            "cafebabe".to_string(),
+            None,
+            0,
+            vec![],
+            job_id,
+        );
+
+        let submit = SimpleRequest::new_submit(
+            4,
+            "worker".to_string(),
+            "1".to_string(),
+            "00000000".to_string(),
+            "504e86ed".to_string(),
+            "e9695791".to_string(),
+        );
+
+        let (_mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        let (emissions_tx, _) = mpsc::channel(10);
+        let (notify_tx, _) = mpsc::channel(10);
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
+
+        let ctx = StratumContext {
+            notify_tx,
+            tracker_handle: tracker_handle.clone(),
+            bitcoindrpc_client: BitcoindRpcClient::new(
+                &bitcoinrpc_config.url,
+                &bitcoinrpc_config.username,
+                &bitcoinrpc_config.password,
+            )
+            .unwrap(),
+            start_difficulty: 1,
+            minimum_difficulty: 1,
+            maximum_difficulty: None,
+            ignore_difficulty: false,
+            validate_addresses: true,
+            emissions_tx,
+            network: bitcoin::network::Network::Regtest,
+            metrics: metrics_handle,
+            chain_store_handle,
+        };
+
+        let messages = handle_submit(submit, &mut session, ctx).await.unwrap();
+        let response = match &messages[..] {
+            [Message::Response(r)] => r,
+            _ => panic!("expected Response"),
+        };
+        assert_eq!(response.result, None);
+        let err = response.error.as_ref().unwrap();
+        assert_eq!(err.code, 20, "should be OtherUnknown (code 20)");
+        assert!(
+            err.message.starts_with("Invalid parameters provided:"),
+            "error message should contain the validation failure reason, got: {}",
+            err.message
+        );
     }
 }
