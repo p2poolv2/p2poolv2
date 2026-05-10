@@ -18,6 +18,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::stratum::difficulty_adjuster::DifficultyAdjusterTrait;
 use crate::stratum::error::Error;
 use crate::stratum::messages::{Message, Response, SetDifficultyNotification, SimpleRequest};
+use crate::stratum::parse_password;
 use crate::stratum::server::StratumContext;
 use crate::stratum::session::Session;
 use crate::stratum::validate_username;
@@ -112,9 +113,30 @@ pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
         }
     };
 
+    let start_difficulty = match &session.password {
+        Some(password) => {
+            let parsed = parse_password::parse_password(password);
+            match parsed.difficulty {
+                Some(requested_difficulty) => {
+                    let constrained = session.difficulty_adjuster.apply_difficulty_constraints(
+                        requested_difficulty,
+                        Some(requested_difficulty),
+                    );
+                    debug!(
+                        "Password difficulty override: requested={}, constrained={}",
+                        requested_difficulty, constrained
+                    );
+                    constrained
+                }
+                None => ctx.start_difficulty,
+            }
+        }
+        None => ctx.start_difficulty,
+    };
+
     session
         .difficulty_adjuster
-        .set_current_difficulty(ctx.start_difficulty);
+        .set_current_difficulty(start_difficulty);
     // After authorization, the connection handler will pick up the current
     // prepared template from the watch channel and send the first notify.
     // We set a flag so handle_connection knows to send the initial notify.
@@ -122,7 +144,7 @@ pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
 
     Ok(vec![
         Message::Response(Response::new_ok(message.id, serde_json::json!(true))),
-        Message::SetDifficulty(SetDifficultyNotification::new(ctx.start_difficulty)),
+        Message::SetDifficulty(SetDifficultyNotification::new(start_difficulty)),
     ])
 }
 
@@ -469,6 +491,119 @@ mod tests {
             session.worker_id.is_none(),
             "worker_id should remain None for invalid username"
         );
+    }
+
+    #[tokio::test]
+    async fn test_handle_authorize_with_password_difficulty_override() {
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        let request = SimpleRequest::new_authorize(
+            12345,
+            "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx".to_string(),
+            Some("d=500".to_string()),
+        );
+        let (notify_tx, _notify_rx) = mpsc::channel(1);
+        let (emissions_tx, _emissions_rx) = mpsc::channel(10);
+        let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let tracker_handle = start_tracker_actor();
+
+        let ctx = StratumContext {
+            notify_tx,
+            tracker_handle,
+            bitcoindrpc_client: BitcoindRpcClient::new(
+                &bitcoinrpc_config.url,
+                &bitcoinrpc_config.username,
+                &bitcoinrpc_config.password,
+            )
+            .unwrap(),
+            start_difficulty: 1000,
+            minimum_difficulty: 1,
+            maximum_difficulty: None,
+            ignore_difficulty: false,
+            validate_addresses: true,
+            emissions_tx,
+            network: bitcoin::network::Network::Testnet,
+            metrics: metrics_handle,
+            chain_store_handle,
+        };
+
+        let messages = handle_authorize(request, &mut session, ctx).await.unwrap();
+
+        assert_eq!(session.password, Some("d=500".to_string()));
+        assert_eq!(
+            session.difficulty_adjuster.get_current_difficulty(),
+            500,
+            "Difficulty should be overridden to 500 from password"
+        );
+
+        if let Message::SetDifficulty(notification) = &messages[1] {
+            assert_eq!(
+                notification.params[0], 500,
+                "SetDifficulty notification should use password difficulty"
+            );
+        } else {
+            panic!("Expected SetDifficulty message");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_authorize_password_difficulty_respects_minimum() {
+        let mut session = Session::<DifficultyAdjuster>::new(1, 100, None, 0x1fffe000);
+        let request = SimpleRequest::new_authorize(
+            12345,
+            "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx".to_string(),
+            Some("d=50".to_string()),
+        );
+        let (notify_tx, _notify_rx) = mpsc::channel(1);
+        let (emissions_tx, _emissions_rx) = mpsc::channel(10);
+        let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let tracker_handle = start_tracker_actor();
+
+        let ctx = StratumContext {
+            notify_tx,
+            tracker_handle,
+            bitcoindrpc_client: BitcoindRpcClient::new(
+                &bitcoinrpc_config.url,
+                &bitcoinrpc_config.username,
+                &bitcoinrpc_config.password,
+            )
+            .unwrap(),
+            start_difficulty: 1000,
+            minimum_difficulty: 100,
+            maximum_difficulty: None,
+            ignore_difficulty: false,
+            validate_addresses: true,
+            emissions_tx,
+            network: bitcoin::network::Network::Testnet,
+            metrics: metrics_handle,
+            chain_store_handle,
+        };
+
+        let messages = handle_authorize(request, &mut session, ctx).await.unwrap();
+
+        assert_eq!(
+            session.difficulty_adjuster.get_current_difficulty(),
+            100,
+            "Difficulty should be clamped to pool minimum of 100"
+        );
+
+        if let Message::SetDifficulty(notification) = &messages[1] {
+            assert_eq!(
+                notification.params[0], 100,
+                "SetDifficulty notification should use clamped difficulty"
+            );
+        } else {
+            panic!("Expected SetDifficulty message");
+        }
     }
 
     #[tokio::test]

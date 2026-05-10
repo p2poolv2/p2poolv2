@@ -20,6 +20,7 @@ pub mod emission;
 pub mod error;
 pub mod message_handlers;
 pub mod messages;
+pub(crate) mod parse_password;
 pub mod server;
 pub mod session;
 pub mod session_timeout;
