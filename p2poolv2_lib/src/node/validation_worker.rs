@@ -47,7 +47,7 @@ use libp2p::request_response::ResponseChannel;
 use std::fmt;
 use std::sync::{Arc, RwLock};
 use tokio::sync::{Semaphore, mpsc};
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 /// Channel capacity for blocks pending validation.
 const VALIDATION_CHANNEL_CAPACITY: usize = 8192;
@@ -211,7 +211,7 @@ async fn validate_and_emit(
         return;
     }
 
-    info!("Share block {block_hash} validated successfully");
+    debug!("Share block {block_hash} validated successfully");
 
     if let Err(send_error) = organise_tx.send(OrganiseEvent::Block(share_block)).await {
         error!("Failed to send validated block to organise worker: {send_error}");

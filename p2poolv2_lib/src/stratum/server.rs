@@ -237,7 +237,7 @@ impl StratumServer {
                             if let Err(e) = stream.set_nodelay(true) {
                                 error!("Failed to set TCP_NODELAY for {}: {}", addr, e);
                             }
-                            info!("New connection from: {}", addr);
+                            debug!("New connection from: {}", addr);
                             let (message_rx, shutdown_rx) = self.connections_handle.add(addr).await;
                             let (reader, writer) = stream.into_split();
                             let buf_reader = BufReader::new(reader);
@@ -282,7 +282,7 @@ impl StratumServer {
                             });
                         }
                         Err(e) => {
-                            info!("Connection failed: {}", e);
+                            error!("Connection failed: {}", e);
                             continue;
                         }
                     }
@@ -391,7 +391,7 @@ where
                 if session.username.is_none() {
                     // Ignore messages until the user has authorized
                 } else {
-                    info!("Tx {addr} {message:?}");
+                    debug!("Tx {addr} {message:?}");
                     if let Err(e) = writer.write_all(format!("{message}\n").as_bytes()).await {
                         error!("Failed to write to {}: {}", addr, e);
                         break;
@@ -421,7 +421,7 @@ where
             }
             // Read a line from the stream
             line = framed.next() => {
-                info!("Rx {} {:?}", addr, line);
+                debug!("Rx {} {:?}", addr, line);
                 match line {
                     Some(Ok(line)) => {
                         if line.is_empty() {
@@ -444,7 +444,7 @@ where
                         return Err(Box::new(e));
                     }
                     None => {
-                        info!("Connection closed by client: {}", addr);
+                        debug!("Connection closed by client: {}", addr);
                         break; // End of stream
                     }
                 }
@@ -453,7 +453,7 @@ where
                 match check_session_timeouts::<T>(session, time_provider) {
                     Ok(()) => {}
                     Err(Error::TimeoutError) => {
-                        info!("{addr} inactive, disconnecting...");
+                        debug!("{addr} inactive, disconnecting...");
                         break;
                     }
                     Err(err) => {
@@ -500,7 +500,7 @@ where
                         }
                     };
 
-                    info!("Tx {addr} {response_json:?}");
+                    debug!("Tx {addr} {response_json:?}");
                     if let Err(e) = writer
                         .write_all(format!("{response_json}\n").as_bytes())
                         .await

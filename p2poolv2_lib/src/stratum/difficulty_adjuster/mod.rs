@@ -24,7 +24,7 @@ use crate::accounting::calc::{decay_time, sane_time_diff, time_bias};
 #[cfg(test)]
 use mockall::automock;
 use std::time::SystemTime;
-use tracing::{debug, info};
+use tracing::debug;
 
 /// The target Difficulty Rate Ratio (DRR) for standard clients
 /// This aims for about 1 share every 3.33 seconds
@@ -292,7 +292,7 @@ impl DifficultyAdjusterTrait for DifficultyAdjuster {
                 self.last_difficulty_change_timestamp = Some(current_timestamp); // Update last difficulty change time
                 self.last_diff_change_job_id = Some(job_id);
 
-                info!(
+                debug!(
                     "Difficulty changed from {} to {} based on DRR calculation",
                     self.old_difficulty, self.current_difficulty
                 );

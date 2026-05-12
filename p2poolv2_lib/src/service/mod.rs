@@ -24,7 +24,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tower::limit::RateLimit;
 use tower::{Service, ServiceBuilder, ServiceExt, limit::RateLimitLayer};
-use tracing::{debug, error, info};
+use tracing::{debug, error};
 
 /// Minimum per-peer channel capacity, matching the block fetcher's
 /// maximum in-flight requests per peer so a legitimate sync burst
@@ -148,13 +148,13 @@ async fn run_peer_service<C, T>(
             }
             Ok(Err(err)) => {
                 error!("Service not ready for peer {}: {}", peer_id, err);
-                info!("Disconnecting peer {} due to service error", peer_id);
+                debug!("Disconnecting peer {} due to service error", peer_id);
                 let _ = swarm_tx.send(SwarmSend::Disconnect(peer_id)).await;
                 return;
             }
             Err(_) => {
                 error!("Rate limit timeout for peer {}", peer_id);
-                info!(
+                debug!(
                     "Disconnecting peer {} due to sustained rate limit violation",
                     peer_id
                 );

@@ -40,7 +40,7 @@ use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info};
+use tracing::{debug, error};
 
 /// Depth to go back when retrying getheaders after missing parents/uncles.
 const DEEP_LOCATOR_DEPTH: u32 = 100;
@@ -217,7 +217,7 @@ pub async fn handle_share_headers<C: Send + Sync>(
                 .flatten()
                 .unwrap_or(0);
             let depth = sync_error.retry_depth(tip_height).unwrap_or(0);
-            info!(
+            debug!(
                 "Retryable header sync error, sending getheaders with depth {depth}: {sync_error}"
             );
             send_getheaders(peer_id, chain_store_handle, swarm_tx, depth).await?;
@@ -512,7 +512,7 @@ async fn trigger_block_fetch(
     let missing_blockhashes =
         chain_store_handle.get_candidate_blocks_missing_data(min_organised_height)?;
     if !missing_blockhashes.is_empty() {
-        info!(
+        debug!(
             "Requesting {} blocks from block fetcher",
             missing_blockhashes.len()
         );

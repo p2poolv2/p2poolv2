@@ -32,7 +32,7 @@ use bitcoin::Address;
 use bitcoin::BlockHash;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::error::Error;
-use tracing::info;
+use tracing::debug;
 
 /// Maximum number of confirmed shares in the PPLNS window.
 /// At 6 shares per minute over 2 weeks: 6 * 60 * 24 * 14 = 120,960.
@@ -493,13 +493,13 @@ impl PplnsWindow {
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         match self.find_fork_height(chain_store_handle)? {
             Some(fork_height) => {
-                info!("Reorg detected in PPLNS window, rolling back to fork height {fork_height}");
+                debug!("Reorg detected in PPLNS window, rolling back to fork height {fork_height}");
                 self.remove_entries_above_height(fork_height);
                 self.cached_top_height = Some(fork_height);
                 self.load_range(chain_store_handle, fork_height + 1, tip_height)?;
             }
             None => {
-                info!("Deep reorg detected in PPLNS window, full cache invalidation");
+                debug!("Deep reorg detected in PPLNS window, full cache invalidation");
                 self.invalidate();
                 let estimated_min_height =
                     tip_height.saturating_sub(MAX_PPLNS_WINDOW_SHARES as u32);

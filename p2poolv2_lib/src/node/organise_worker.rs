@@ -283,7 +283,7 @@ impl OrganiseWorker {
             );
             return;
         }
-        info!(
+        debug!(
             "Buffering block {} at parent height {parent_height} (confirmed tip not yet reached)",
             share_block.block_hash()
         );
@@ -322,7 +322,7 @@ impl OrganiseWorker {
             }
 
             let total_processable: usize = processable.values().map(|v| v.len()).sum();
-            info!(
+            debug!(
                 "Draining {total_processable} buffered blocks with parent height <= confirmed tip {confirmed_tip}",
             );
 

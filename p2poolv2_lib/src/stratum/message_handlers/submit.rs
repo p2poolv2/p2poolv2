@@ -214,7 +214,7 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
 
 /// Submit block to bitcoind using the shared RPC client.
 pub async fn submit_block(block: &Block, bitcoindrpc_client: &BitcoindRpcClient) {
-    tracing::warn!(
+    tracing::info!(
         "Submitting block to bitcoind: {:?}",
         block.header.block_hash()
     );
