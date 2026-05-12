@@ -13,6 +13,7 @@ categories.workspace = true
 rust-version.workspace = true
 
 [features]
+hydrapool-pplns-accounting = []
 test-utils = ["dep:rand", "dep:tempfile", "p2poolv2_config/test-utils"]
 
 [dependencies]
