@@ -147,6 +147,7 @@ impl Store {
         }
 
         self.set_top_confirmed_height(new_top_height, batch);
+        tracing::info!("Chain reorg completed to height {new_top_height}");
         Ok(Some(new_top_height))
     }
 

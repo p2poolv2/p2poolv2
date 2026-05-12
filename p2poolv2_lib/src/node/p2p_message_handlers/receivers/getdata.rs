@@ -25,7 +25,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use bitcoin::BlockHash;
 use std::error::Error;
 use tokio::sync::mpsc;
-use tracing::{debug, info};
+use tracing::debug;
 
 /// Handle a GetData::Block request from a peer.
 ///
@@ -42,11 +42,11 @@ pub async fn handle_getdata_block<C: Send + Sync>(
 
     let response_message = match chain_store_handle.get_share(&block_hash) {
         Some(share_block) => {
-            info!("Serving block {} to peer", block_hash);
+            debug!("Serving block {} to peer", block_hash);
             Message::ShareBlock(share_block)
         }
         None => {
-            info!("Block {} not found, sending notfound", block_hash);
+            debug!("Block {} not found, sending notfound", block_hash);
             Message::NotFound(GetData::Block(block_hash))
         }
     };

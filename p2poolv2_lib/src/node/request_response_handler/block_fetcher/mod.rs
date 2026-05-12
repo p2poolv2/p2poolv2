@@ -241,7 +241,7 @@ impl BlockFetcher {
         peer_id: PeerId,
         use_peer: bool,
     ) {
-        info!(
+        debug!(
             "Block fetcher received {} blockhashes to fetch from peer {}, use_peer: {}",
             blockhashes.len(),
             peer_id,
@@ -283,7 +283,7 @@ impl BlockFetcher {
     /// and propagating those requests to other peers who do not have
     /// the blocks would waste their bandwidth.
     fn handle_peer_removed(&mut self, peer_id: PeerId) {
-        info!("Removing peer {peer_id} from block fetcher");
+        debug!("Removing peer {peer_id} from block fetcher");
         self.peer_selector.remove_peer(&peer_id);
 
         let dropped: Vec<BlockHash> = self
@@ -298,7 +298,7 @@ impl BlockFetcher {
         }
 
         if !dropped.is_empty() {
-            info!(
+            debug!(
                 "Dropped {} in-flight requests from removed peer {peer_id}",
                 dropped.len()
             );
@@ -329,7 +329,7 @@ impl BlockFetcher {
         let batch_size = FETCH_BATCH_SIZE.min(self.backlog.len());
         self.pending.extend(self.backlog.drain(..batch_size));
 
-        info!(
+        debug!(
             "Loaded batch of {} blocks from backlog ({} remaining)",
             self.pending.len(),
             self.backlog.len()

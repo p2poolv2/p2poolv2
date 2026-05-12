@@ -257,7 +257,7 @@ impl Node {
         for address in addresses {
             match self.swarm.dial(address.clone()) {
                 Ok(_) => {
-                    info!("Reconnecting to {address}");
+                    debug!("Reconnecting to {address}");
                 }
                 Err(error) => {
                     error!("Failed to redial {address}: {error}");
@@ -273,7 +273,7 @@ impl Node {
         peer_id: &libp2p::PeerId,
         message: Message,
     ) -> Result<(), Box<dyn Error>> {
-        info!("Sending message to peer: {peer_id}, message: {message:?}");
+        debug!("Sending message to peer: {peer_id}, message: {message:?}");
         self.swarm
             .behaviour_mut()
             .request_response
@@ -300,7 +300,7 @@ impl Node {
     ) -> Result<(), Box<dyn Error>> {
         match event {
             SwarmEvent::NewListenAddr { address, .. } => {
-                info!("Listening on {address:?}");
+                debug!("Listening on {address:?}");
                 Ok(())
             }
             SwarmEvent::ConnectionEstablished {
@@ -324,7 +324,7 @@ impl Node {
                                 peer_id, error
                             );
                         } else {
-                            info!(
+                            debug!(
                                 "Outbound connection established, handshake sent to peer: {}",
                                 peer_id
                             );
@@ -343,7 +343,7 @@ impl Node {
                                 peer_id, error
                             );
                         } else {
-                            info!(
+                            debug!(
                                 "Inbound connection established, handshake sent to peer: {}",
                                 peer_id
                             );
@@ -428,12 +428,12 @@ impl Node {
                         .add_address(&peer_id, addr.clone());
                 }
                 // Also add our observed address to Kademlia so other peers can reach us
-                info!("Peer {} observed us as {}", peer_id, info.observed_addr);
+                debug!("Peer {} observed us as {}", peer_id, info.observed_addr);
                 self.swarm.add_external_address(info.observed_addr);
                 if let Err(e) = self.swarm.behaviour_mut().kademlia.bootstrap() {
                     warn!("Failed to bootstrap Kademlia: {}", e);
                 } else {
-                    info!("Successfully started Kademlia bootstrap");
+                    debug!("Successfully started Kademlia bootstrap");
                 }
             }
             _ => {
@@ -465,7 +465,7 @@ impl Node {
                 bucket_range,
                 old_peer,
             } => {
-                info!(
+                debug!(
                     "Routing updated for peer: {peer}, is_new_peer: {is_new_peer}, addresses: {addresses:?}, bucket_range: {bucket_range:?}, old_peer: {old_peer:?}"
                 );
             }

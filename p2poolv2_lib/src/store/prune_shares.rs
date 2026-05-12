@@ -19,7 +19,7 @@ use crate::store::Store;
 use crate::store::column_families::ColumnFamily;
 use crate::store::writer::StoreError;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tracing::info;
+use tracing::debug;
 
 impl Store {
     /// Delete all PPLNS shares older than the given TTL.
@@ -36,7 +36,7 @@ impl Store {
             .as_micros() as u64;
         let cutoff_micros = now.saturating_sub(pplns_ttl.as_micros() as u64);
 
-        info!(
+        debug!(
             "Cleaning up PPLNS shares older than {} seconds (cutoff: {})",
             pplns_ttl.as_secs(),
             cutoff_micros
@@ -53,7 +53,7 @@ impl Store {
         self.db
             .delete_range_cf(&pplns_share_cf, &start_key, &end_key)?;
 
-        info!("Deleted PPLNS shares older than cutoff time");
+        debug!("Deleted PPLNS shares older than cutoff time");
 
         Ok(())
     }

@@ -468,7 +468,7 @@ impl NodeActor {
                             return;
                         },
                         Some(Command::GetPplnsShares(query, tx)) => {
-                            info!(
+                            debug!(
                                 "Received GetPplnsShares command with limit: {}",
                                 query.limit
                             );

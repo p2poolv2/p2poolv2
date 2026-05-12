@@ -20,7 +20,7 @@ use crate::stratum::work::notify::{NotifyCmd, NotifySender};
 use bitcoin::hashes::{Hash, sha256d};
 use bitcoindrpc::{BitcoinRpcConfig, BitcoindRpcClient};
 use std::sync::Arc;
-use tracing::{debug, info};
+use tracing::{debug, error};
 
 #[cfg(test)]
 const GBT_NO_TRANSACTIONS_FIXTURE: &str =
@@ -123,7 +123,7 @@ pub async fn start_gbt(
     ) {
         Ok(client) => client,
         Err(e) => {
-            info!("Failed to connect to bitcoind: {}", e);
+            error!("Failed to connect to bitcoind: {}", e);
             return Err(Box::new(WorkError {
                 message: format!("Failed to connect to bitcoind: {e}"),
             }));
@@ -132,13 +132,13 @@ pub async fn start_gbt(
 
     // Print network difficulty at startup
     if let Ok(difficulty) = bitcoind.get_difficulty().await {
-        info!("Bitcoin network difficulty: {}", difficulty);
+        debug!("Bitcoin network difficulty: {}", difficulty);
     }
 
     let template = match get_block_template(&bitcoind, network).await {
         Ok(template) => template,
         Err(e) => {
-            info!("Error getting block template: {}", e);
+            error!("Error getting block template: {}", e);
             return Err(Box::new(WorkError {
                 message: format!("Error getting initial block template: {e}"),
             }));
@@ -153,7 +153,7 @@ pub async fn start_gbt(
         .await
         .is_err()
     {
-        info!("Failed to send block template to channel");
+        error!("Failed to send block template to channel");
     }
 
     tokio::spawn(async move {
@@ -171,11 +171,11 @@ pub async fn start_gbt(
                                 .await
                                 .is_err()
                             {
-                                info!("Failed to send block template to channel");
+                                error!("Failed to send block template to channel");
                             }
                         }
                         Err(e) => {
-                            info!("Error polling block template: {}", e);
+                            error!("Error polling block template: {}", e);
                         }
                     }
                 }
@@ -192,12 +192,12 @@ pub async fn start_gbt(
                                         .await
                                         .is_err()
                                     {
-                                        info!("Failed to send block template to channel");
+                                        error!("Failed to send block template to channel");
                                     }
                                     interval.reset();
                                 }
                                 Err(e) => {
-                                    info!(
+                                    error!(
                                         "Error getting block template after ZMQ notification: {}",
                                         e
                                     );
@@ -205,7 +205,7 @@ pub async fn start_gbt(
                             }
                         }
                         None => {
-                            info!("ZMQ channel closed, stopping GBT task");
+                            debug!("ZMQ channel closed, stopping GBT task");
                             break;
                         }
                     }

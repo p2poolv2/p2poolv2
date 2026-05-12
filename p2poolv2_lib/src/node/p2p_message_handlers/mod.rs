@@ -40,7 +40,7 @@ use receivers::share_headers::handle_share_headers;
 use std::error::Error;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, warn};
 
 const MAX_HEADERS_IN_RESPONSE: usize = 2000;
 
@@ -81,11 +81,11 @@ pub async fn handle_request<C: Send + Sync, T: TimeProvider + Send + Sync>(
             .await
         }
         Message::NotFound(_) => {
-            info!("Received not found message");
+            debug!("Received not found message");
             Ok(())
         }
         Message::GetData(get_data) => {
-            info!("Received get data: {:?}", get_data);
+            debug!("Received get data: {:?}", get_data);
             match get_data {
                 GetData::Block(block_hash) => {
                     handle_getdata_block(
@@ -97,13 +97,13 @@ pub async fn handle_request<C: Send + Sync, T: TimeProvider + Send + Sync>(
                     .await
                 }
                 GetData::Txid(txid) => {
-                    info!("Received txid: {:?}", txid);
+                    debug!("Received txid: {:?}", txid);
                     Ok(())
                 }
             }
         }
         Message::Transaction(transaction) => {
-            info!("Received transaction: {:?}", transaction);
+            debug!("Received transaction: {:?}", transaction);
             Ok(())
         }
         Message::Handshake(handshake_data) => {
@@ -124,7 +124,7 @@ pub async fn handle_request<C: Send + Sync, T: TimeProvider + Send + Sync>(
             Ok(())
         }
         other => {
-            info!("Unexpected request type {other}");
+            debug!("Unexpected request type {other}");
             Ok(())
         }
     }
@@ -179,7 +179,7 @@ pub async fn handle_response<C: Send + Sync>(
             format!("Failed to add share from response: {e}").into()
         }),
         Message::NotFound(get_data) => {
-            info!("Received not found response from peer: {}", peer);
+            debug!("Received not found response from peer: {}", peer);
             match get_data {
                 GetData::Block(block_hash) => {
                     let _ = block_fetcher_handle
@@ -195,7 +195,7 @@ pub async fn handle_response<C: Send + Sync>(
             Ok(())
         }
         other => {
-            info!("Unexpected response type from peer {}: {}", peer, other);
+            debug!("Unexpected response type from peer {}: {}", peer, other);
             Ok(())
         }
     }

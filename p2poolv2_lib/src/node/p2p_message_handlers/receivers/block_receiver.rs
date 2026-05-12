@@ -268,7 +268,7 @@ impl BlockReceiver {
             return Err(error.into());
         }
 
-        info!("Committed and queued validation for block {block_hash}");
+        debug!("Committed and queued validation for block {block_hash}");
         Ok(())
     }
 

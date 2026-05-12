@@ -21,7 +21,7 @@ use bitcoin::BlockHash;
 use libp2p::PeerId;
 use std::error::Error;
 use tokio::sync::mpsc;
-use tracing::{debug, info};
+use tracing::debug;
 
 /// Send a block inventory announcement to one or all connected peers.
 ///
@@ -47,7 +47,7 @@ pub async fn send_block_inventory<C: Send + Sync>(
         if peer_block_knowledge.peer_knows_block(&peer_id, &block_hash) {
             debug!("Skipping inv to peer {peer_id}: already knows block {block_hash}");
         } else {
-            info!("Sending Inv for block {block_hash} to peer {peer_id}");
+            debug!("Sending Inv for block {block_hash} to peer {peer_id}");
             swarm_tx
                 .send(SwarmSend::Request(peer_id, inventory_message.clone()))
                 .await

@@ -682,7 +682,7 @@ impl ChainStoreHandle {
     pub async fn organise_header(&self, header: ShareHeader) -> Result<Option<u32>, StoreError> {
         let blockhash = header.block_hash();
         let result = self.store_handle.organise_header(header).await?;
-        info!("Organised header {blockhash} into candidate chain");
+        debug!("Organised header {blockhash} into candidate chain");
         Ok(result)
     }
 
@@ -690,7 +690,7 @@ impl ChainStoreHandle {
     /// Returns the confirmed chain height after organising, if changed.
     pub async fn organise_block(&self) -> Result<Option<u32>, StoreError> {
         let height = self.store_handle.organise_block().await?;
-        info!("Organised block at confirmed height {height:?}");
+        debug!("Organised block at confirmed height {height:?}");
         Ok(height)
     }
 

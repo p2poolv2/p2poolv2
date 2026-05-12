@@ -68,7 +68,7 @@ fn build_output_distribution(
     ) {
         Ok(distribution) => distribution,
         Err(e) => {
-            debug!("Payout distribution failed: {}", e);
+            error!("Payout distribution failed: {}", e);
             Vec::new()
         }
     }

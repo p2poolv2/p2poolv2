@@ -24,7 +24,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use std::error::Error;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info};
+use tracing::{debug, error};
 
 /// Handle a Handshake message received from a peer.
 ///
@@ -61,7 +61,7 @@ pub async fn handle_handshake<C: Send + Sync>(
         error
     })?;
 
-    info!(
+    debug!(
         "Received Handshake from peer {peer}: peer_height={}, peer_hash={}, local_height={local_tip_height}, local_hash={local_tip_hash}",
         handshake_data.tip_height, handshake_data.tip_hash
     );
