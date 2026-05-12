@@ -81,11 +81,11 @@ async fn main() -> ExitCode {
     }
     let config = config.unwrap();
     // Configure logging based on config
-    // hold guard to ensure logging is set up correctly
-    let _guard = match setup_logging(&config.logging) {
-        Ok(guard) => {
+    // hold guards to keep non-blocking writers alive
+    let _guards = match setup_logging(&config.logging) {
+        Ok(guards) => {
             info!("Logging set up successfully");
-            guard
+            guards
         }
         Err(e) => {
             error!("Failed to set up logging: {e}");

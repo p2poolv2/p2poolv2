@@ -16,7 +16,6 @@
 
 use crate::config::LoggingConfig;
 use std::error::Error;
-use tracing::info;
 use tracing_appender::non_blocking;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{EnvFilter, Registry, fmt, layer::SubscriberExt, util::SubscriberInitExt};
@@ -42,9 +41,12 @@ fn should_enable_console(logging_config: &LoggingConfig) -> (bool, bool) {
 ///
 /// If both console logging is disabled and no file logging is configured,
 /// console logging is enabled as a fallback to prevent silent operation.
+///
+/// Returns worker guards that must be held for the lifetime of the process.
+/// Dropping a guard flushes and stops its non-blocking writer.
 pub fn setup_logging(
     logging_config: &LoggingConfig,
-) -> Result<Option<non_blocking::WorkerGuard>, Box<dyn Error>> {
+) -> Result<Vec<non_blocking::WorkerGuard>, Box<dyn Error>> {
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&logging_config.level));
 
@@ -56,17 +58,20 @@ pub fn setup_logging(
         );
     }
 
+    let mut guards = Vec::with_capacity(2);
+
     let console_layer = if enable_console {
         eprintln!("Console logging enabled");
-        Some(fmt::layer())
+        let (console_writer, console_guard) = non_blocking(std::io::stderr());
+        guards.push(console_guard);
+        Some(fmt::layer().with_writer(console_writer).compact())
     } else {
         eprintln!("Console logging disabled");
         None
     };
 
-    let (file_layer, guard) = if let Some(file_path) = &logging_config.file {
-        info!("File logging is enabled, writing to: {}", file_path);
-        // Create directory structure if it doesn't exist
+    let file_layer = if let Some(file_path) = &logging_config.file {
+        eprintln!("File logging is enabled, writing to: {}", file_path);
         if let Some(parent) = std::path::Path::new(file_path).parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -81,28 +86,23 @@ pub fn setup_logging(
             .to_str()
             .unwrap_or("p2pool.log");
 
-        info!(
+        eprintln!(
             "Logging to directory: {}, filename: {}",
             directory.display(),
             filename
         );
 
-        // Configure rolling file appender
-        let file_appender = RollingFileAppender::new(
-            Rotation::DAILY, // Use daily rotation
-            directory,
-            filename,
-        );
-
-        // Use the non_blocking function directly from tracing_appender
-        let (non_blocking_appender, guard) = non_blocking(file_appender);
-        let layer = fmt::layer()
-            .with_writer(non_blocking_appender)
-            .with_ansi(false);
-
-        (Some(layer), Some(guard))
+        let file_appender = RollingFileAppender::new(Rotation::DAILY, directory, filename);
+        let (non_blocking_appender, file_guard) = non_blocking(file_appender);
+        guards.push(file_guard);
+        Some(
+            fmt::layer()
+                .with_writer(non_blocking_appender)
+                .with_ansi(false)
+                .compact(),
+        )
     } else {
-        (None, None)
+        None
     };
 
     Registry::default()
@@ -111,7 +111,7 @@ pub fn setup_logging(
         .with(file_layer)
         .init();
 
-    Ok(guard)
+    Ok(guards)
 }
 
 #[cfg(test)]
