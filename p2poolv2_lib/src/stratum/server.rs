@@ -37,8 +37,8 @@ use bitcoindrpc::{BitcoinRpcConfig, BitcoindRpcClient};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::TcpListener;
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot, watch};
 use tokio_stream::StreamExt;
 use tokio_util::codec::{FramedRead, LinesCodec};
 use tracing::{debug, error, info};
@@ -55,6 +55,7 @@ pub struct StratumServer {
     pub validate_addresses: bool,
     pub network: bitcoin::Network,
     pub version_mask: i32,
+    pub max_connections: Option<u32>,
     shutdown_rx: oneshot::Receiver<()>,
     connections_handle: ClientConnectionsHandle,
     emissions_tx: EmissionSender,
@@ -73,6 +74,7 @@ pub struct StratumServerBuilder {
     validate_addresses: Option<bool>,
     network: Option<bitcoin::Network>,
     version_mask: Option<i32>,
+    max_connections: Option<Option<u32>>,
     shutdown_rx: Option<oneshot::Receiver<()>>,
     connections_handle: Option<ClientConnectionsHandle>,
     emissions_tx: Option<EmissionSender>,
@@ -126,6 +128,11 @@ impl StratumServerBuilder {
         self
     }
 
+    pub fn max_connections(mut self, max_connections: Option<u32>) -> Self {
+        self.max_connections = Some(max_connections);
+        self
+    }
+
     pub fn shutdown_rx(mut self, shutdown_rx: oneshot::Receiver<()>) -> Self {
         self.shutdown_rx = Some(shutdown_rx);
         self
@@ -173,6 +180,7 @@ impl StratumServerBuilder {
                 .connections_handle
                 .ok_or("connections_handle is required")?,
             emissions_tx: self.emissions_tx.ok_or("shares_tx is required")?,
+            max_connections: self.max_connections.unwrap_or(None),
             chain_store_handle: self
                 .chain_store_handle
                 .ok_or("chain store handle is required")?,
@@ -214,8 +222,11 @@ impl StratumServer {
             }
         };
 
+        let max_connections = self.max_connections.unwrap_or_else(default_max_connections);
+        info!("Stratum server max connections: {}", max_connections);
+        let connection_semaphore = Arc::new(Semaphore::new(max_connections as usize));
+
         if let Some(ready_tx) = ready_tx {
-            // Notify that the server is ready to accept connections
             info!(
                 "Stratum server is ready to accept connections on {}",
                 bind_address
@@ -224,66 +235,47 @@ impl StratumServer {
         }
         loop {
             tokio::select! {
-                // Check for shutdown signal
                 _ = &mut self.shutdown_rx => {
                     info!("Shutdown signal received");
                     break;
                 }
                 connection = listener.accept() => {
                     match connection {
-                        Ok(connection) => {
-                            let (stream, addr) = connection;
-                            // Disable Nagle's algorithm for lower latency
-                            if let Err(e) = stream.set_nodelay(true) {
-                                error!("Failed to set TCP_NODELAY for {}: {}", addr, e);
-                            }
-                            debug!("New connection from: {}", addr);
-                            let (message_rx, shutdown_rx) = self.connections_handle.add(addr).await;
-                            let (reader, writer) = stream.into_split();
-                            let buf_reader = BufReader::new(reader);
-
-                            let ctx = StratumContext {
-                                notify_tx: notify_tx.clone(),
-                                tracker_handle: tracker_handle.clone(),
-                                bitcoindrpc_client: bitcoindrpc_client.clone(),
-                                start_difficulty: self.start_difficulty,
-                                minimum_difficulty: self.minimum_difficulty,
-                                maximum_difficulty: self.maximum_difficulty,
-                                ignore_difficulty: self.ignore_difficulty,
-                                validate_addresses: self.validate_addresses,
-                                emissions_tx: self.emissions_tx.clone(),
-                                network: self.network,
-                                metrics: metrics.clone(),
-                                chain_store_handle: self.chain_store_handle.clone(),
-                            };
-                            let version_mask = self.version_mask;
-                            let connection_template_rx = template_rx.clone();
-                            // Spawn a new task for each connection
-                            tokio::spawn(async move {
-                                // Handle the connection with graceful shutdown support
-                                if handle_connection(
-                                    buf_reader,
-                                    writer,
-                                    addr,
-                                    message_rx,
-                                    shutdown_rx,
-                                    version_mask,
-                                    ctx,
-                                    &SystemTimeProvider {},
-                                    connection_template_rx,
-                                )
-                                .await
-                                .is_err()
-                                {
-                                    error!(
-                                        "Error occurred while handling connection {addr}. Closing connection."
-                                    );
+                        Ok((stream, addr)) => {
+                            match connection_semaphore.clone().try_acquire_owned() {
+                                Ok(permit) => {
+                                    let ctx = StratumContext {
+                                        notify_tx: notify_tx.clone(),
+                                        tracker_handle: tracker_handle.clone(),
+                                        bitcoindrpc_client: bitcoindrpc_client.clone(),
+                                        start_difficulty: self.start_difficulty,
+                                        minimum_difficulty: self.minimum_difficulty,
+                                        maximum_difficulty: self.maximum_difficulty,
+                                        ignore_difficulty: self.ignore_difficulty,
+                                        validate_addresses: self.validate_addresses,
+                                        emissions_tx: self.emissions_tx.clone(),
+                                        network: self.network,
+                                        metrics: metrics.clone(),
+                                        chain_store_handle: self.chain_store_handle.clone(),
+                                    };
+                                    accept_connection(
+                                        stream,
+                                        addr,
+                                        &self.connections_handle,
+                                        ctx,
+                                        self.version_mask,
+                                        template_rx.clone(),
+                                        permit,
+                                    ).await;
                                 }
-                            });
+                                Err(_) => {
+                                    info!("Max connections ({}) reached, rejecting {}", max_connections, addr);
+                                    drop(stream);
+                                }
+                            }
                         }
                         Err(e) => {
                             error!("Connection failed: {}", e);
-                            continue;
                         }
                     }
                 }
@@ -291,6 +283,75 @@ impl StratumServer {
         }
         Ok(())
     }
+}
+
+/// Returns a default max connections value based on the OS soft file descriptor limit.
+///
+/// Computes 90% of the soft NOFILE limit. Falls back to 1024 if the limit
+/// cannot be queried.
+fn default_max_connections() -> u32 {
+    match rlimit::getrlimit(rlimit::Resource::NOFILE) {
+        Ok((soft_limit, _hard_limit)) => {
+            let limit = (soft_limit as f64 * 0.9) as u32;
+            info!(
+                "Default max_connections: {} (90% of OS fd limit {})",
+                limit, soft_limit
+            );
+            limit
+        }
+        Err(_) => {
+            let fallback = 1024;
+            info!(
+                "Could not query OS fd limit, default max_connections: {}",
+                fallback
+            );
+            fallback
+        }
+    }
+}
+
+/// Accepts a new stratum connection, spawning a handler task.
+///
+/// Sets TCP_NODELAY, registers the connection, and spawns a tokio task that
+/// runs `handle_connection`. The semaphore permit is moved into the spawned
+/// task so it is released when the connection closes.
+async fn accept_connection(
+    stream: TcpStream,
+    addr: SocketAddr,
+    connections_handle: &ClientConnectionsHandle,
+    ctx: StratumContext,
+    version_mask: i32,
+    template_rx: watch::Receiver<Option<Arc<PreparedNotifyParams>>>,
+    connection_permit: OwnedSemaphorePermit,
+) {
+    if let Err(e) = stream.set_nodelay(true) {
+        error!("Failed to set TCP_NODELAY for {}: {}", addr, e);
+    }
+    debug!("New connection from: {}", addr);
+
+    let (message_rx, shutdown_rx) = connections_handle.add(addr).await;
+    let (reader, writer) = stream.into_split();
+    let buf_reader = BufReader::new(reader);
+
+    tokio::spawn(async move {
+        let _permit = connection_permit;
+        if handle_connection(
+            buf_reader,
+            writer,
+            addr,
+            message_rx,
+            shutdown_rx,
+            version_mask,
+            ctx,
+            &SystemTimeProvider {},
+            template_rx,
+        )
+        .await
+        .is_err()
+        {
+            error!("Error occurred while handling connection {addr}. Closing connection.");
+        }
+    });
 }
 
 /// A context for the Stratum server easing the number of parameters passed around.

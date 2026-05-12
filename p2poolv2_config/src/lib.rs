@@ -98,6 +98,8 @@ pub struct StratumConfig<State = Raw> {
     pub ignore_difficulty: Option<bool>,
     /// Optional pool signature to include in coinbase
     pub pool_signature: Option<String>,
+    /// Maximum concurrent stratum connections. Default: 90% of OS fd limit.
+    pub max_connections: Option<u32>,
 
     // Parsed addresses - only available when State = Parsed
     #[serde(skip)]
@@ -166,6 +168,7 @@ impl StratumConfig<Raw> {
             difficulty_multiplier: self.difficulty_multiplier,
             ignore_difficulty: self.ignore_difficulty,
             pool_signature: self.pool_signature,
+            max_connections: self.max_connections,
             bootstrap_address_parsed: Some(bootstrap_address_parsed),
             donation_address_parsed,
             fee_address_parsed,
@@ -216,6 +219,7 @@ impl StratumConfig<Raw> {
             difficulty_multiplier: 1.0,
             ignore_difficulty: None,
             pool_signature: None,
+            max_connections: None,
             bootstrap_address_parsed: None,
             donation_address_parsed: None,
             fee_address_parsed: None,
