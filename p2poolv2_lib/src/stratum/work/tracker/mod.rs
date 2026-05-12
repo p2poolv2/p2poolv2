@@ -17,13 +17,14 @@
 use super::block_template::BlockTemplate;
 use crate::shares::share_commitment::ShareCommitment;
 use bitcoin::BlockHash;
-use dashmap::{DashMap, DashSet};
+use dashmap::DashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::debug;
 pub mod parse_coinbase;
 
 const MAX_JOB_AGE_SECS: u64 = 15 * 60; // 15 minutes
+const EXPECTED_SHARES_PER_JOB: usize = 4; // new jobs are created every 10s. Target share period 3s.
 
 /// The job id sent to miners.
 /// A job id matches a block template.
@@ -64,8 +65,10 @@ pub struct JobDetails {
 #[derive(Debug)]
 pub struct JobTracker {
     job_details: DashMap<JobId, JobDetails>,
-    /// Tracks submitted shares per job for duplicate detection (internal only)
-    job_shares: DashMap<JobId, DashSet<BlockHash>>,
+    /// Tracks submitted share hashes per job for duplicate detection (internal only).
+    /// Vec is used instead because each job accumulates very few shares (~3),
+    /// making linear scan faster than hash lookups with far less memory overhead.
+    job_shares: DashMap<JobId, Vec<BlockHash>>,
     latest_job_id: AtomicU64,
 }
 
@@ -109,7 +112,8 @@ impl JobTracker {
                 template_merkle_branches,
             },
         );
-        self.job_shares.insert(job_id, DashSet::new());
+        self.job_shares
+            .insert(job_id, Vec::with_capacity(EXPECTED_SHARES_PER_JOB));
         job_id
     }
 
@@ -150,11 +154,15 @@ impl JobTracker {
         before_count - self.job_details.len()
     }
 
-    /// Add a share to shares tracker for duplicate detection
-    /// Returns true if share is newly inserted, false if job not found or share already exists
+    /// Add a share to shares tracker for duplicate detection.
+    /// Returns true if share is newly inserted, false if job not found or share already exists.
     pub fn add_share(&self, job_id: JobId, blockhash: BlockHash) -> bool {
-        if let Some(shares) = self.job_shares.get(&job_id) {
-            shares.insert(blockhash)
+        let Some(mut shares) = self.job_shares.get_mut(&job_id) else {
+            return false;
+        };
+        if !shares.contains(&blockhash) {
+            shares.push(blockhash);
+            true
         } else {
             false
         }
