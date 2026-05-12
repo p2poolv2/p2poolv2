@@ -83,6 +83,18 @@ impl PoolMetrics {
             .filter(|(_, u)| u.any_active_workers())
             .collect();
 
+        // User metrics with btcaddress label
+        output.push_str("# HELP user_shares_valid_total Total valid shares submitted by user\n");
+        output.push_str("# TYPE user_shares_valid_total counter\n");
+        for (btcaddress, user) in &active_users {
+            output.push_str(&format!(
+                "user_shares_valid_total{{btcaddress=\"{}\"}} {}\n",
+                btcaddress,
+                user.shares_valid_total * TWO32
+            ));
+        }
+        output.push('\n');
+
         // Worker metrics with btcaddress and workername labels
         output
             .push_str("# HELP worker_shares_valid_total Total valid shares submitted by worker\n");
@@ -241,6 +253,14 @@ mod tests {
 
         let exposition = metrics.get_exposition();
 
+        // Check user-level shares_valid_total metric
+        assert!(exposition.contains("# HELP user_shares_valid_total"));
+        assert!(exposition.contains("# TYPE user_shares_valid_total counter"));
+        assert!(exposition.contains(&format!(
+            r#"user_shares_valid_total{{btcaddress="bc1quser1"}} {}"#,
+            42 * TWO32
+        )));
+
         // Check worker metrics are present for active worker1
         assert!(exposition.contains("# HELP worker_shares_valid"));
         assert!(exposition.contains("# TYPE worker_shares_valid_total counter"));
@@ -323,6 +343,12 @@ mod tests {
         };
 
         let exposition = metrics.get_exposition();
+
+        // Check user-level metric
+        assert!(exposition.contains(&format!(
+            r#"user_shares_valid_total{{btcaddress="bc1qtest"}} {}"#,
+            10 * TWO32
+        )));
 
         // Verify that empty workername is replaced with "unnamed"
         assert!(exposition.contains(r#"workername="unnamed""#));
