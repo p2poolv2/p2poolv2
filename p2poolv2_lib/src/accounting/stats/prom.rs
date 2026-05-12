@@ -83,14 +83,20 @@ impl PoolMetrics {
             .filter(|(_, u)| u.any_active_workers())
             .collect();
 
+        let some_shares_users: Vec<_> = self
+            .users
+            .iter()
+            .filter(|(_, u)| u.shares_valid_total > 0)
+            .collect();
+
         // User metrics with btcaddress label
         output.push_str("# HELP user_shares_valid_total Total valid shares submitted by user\n");
         output.push_str("# TYPE user_shares_valid_total counter\n");
-        for (btcaddress, user) in &active_users {
+        for (btcaddress, user) in &some_shares_users {
             output.push_str(&format!(
                 "user_shares_valid_total{{btcaddress=\"{}\"}} {}\n",
                 btcaddress,
-                user.shares_valid_total * TWO32
+                user.shares_valid_total.saturating_mul(TWO32)
             ));
         }
         output.push('\n');
@@ -110,7 +116,7 @@ impl PoolMetrics {
                     "worker_shares_valid_total{{btcaddress=\"{}\",workername=\"{}\"}} {}\n",
                     btcaddress,
                     display_name,
-                    worker.shares_valid_total * TWO32
+                    worker.shares_valid_total.saturating_mul(TWO32)
                 ));
             }
         }
