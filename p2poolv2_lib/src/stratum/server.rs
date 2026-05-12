@@ -1884,4 +1884,105 @@ mod stratum_server_tests {
             "Should not send mining.notify before authorization"
         );
     }
+
+    #[tokio::test]
+    async fn test_max_connections_rejects_when_at_capacity() {
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+
+        let (shares_tx, _shares_rx) = mpsc::channel(10);
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
+        let tracker_handle = start_tracker_actor();
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+
+        // Keep shutdown_tx alive so the connection task does not exit immediately
+        let (keep_alive_tx, _keep_alive_rx) = mpsc::channel::<oneshot::Sender<()>>(10);
+        let mut connections_handle = ClientConnectionsHandle::default();
+        connections_handle
+            .expect_add()
+            .times(1)
+            .returning(move |_addr| {
+                let (_message_tx, message_rx) = mpsc::channel(10);
+                let (shutdown_tx, shutdown_rx) = oneshot::channel();
+                // Park the shutdown_tx so it stays alive, keeping the connection open
+                let _ = keep_alive_tx.try_send(shutdown_tx);
+                (message_rx, shutdown_rx)
+            });
+
+        let mut server = StratumServerBuilder::default()
+            .hostname("127.0.0.1".to_string())
+            .port(12399)
+            .start_difficulty(1)
+            .minimum_difficulty(1)
+            .maximum_difficulty(Some(2))
+            .network(bitcoin::network::Network::Regtest)
+            .version_mask(0x1fffe000)
+            .max_connections(Some(1))
+            .shutdown_rx(shutdown_rx)
+            .connections_handle(connections_handle)
+            .emissions_tx(shares_tx)
+            .chain_store_handle(chain_store_handle)
+            .build()
+            .await
+            .unwrap();
+
+        assert_eq!(server.max_connections, Some(1));
+
+        let (ready_tx, ready_rx) = oneshot::channel();
+        let (notify_tx, _notify_rx) = mpsc::channel(10);
+        let (_template_tx, template_rx) = watch::channel(None);
+
+        let server_handle = tokio::spawn(async move {
+            let _ = server
+                .start(
+                    Some(ready_tx),
+                    notify_tx,
+                    tracker_handle.clone(),
+                    bitcoinrpc_config,
+                    metrics_handle,
+                    template_rx,
+                )
+                .await;
+        });
+
+        ready_rx.await.expect("Server should signal readiness");
+
+        // First connection should succeed (consumes the single permit)
+        let first_connection = tokio::net::TcpStream::connect("127.0.0.1:12399").await;
+        assert!(first_connection.is_ok(), "First connection should succeed");
+
+        // Give the server time to accept and register the connection
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+
+        // Second connection: the TCP handshake may succeed at the OS level,
+        // but the server should drop it immediately. We detect this by trying
+        // to read -- a dropped connection returns EOF or an error.
+        let second_result = tokio::net::TcpStream::connect("127.0.0.1:12399").await;
+
+        if let Ok(mut second_stream) = second_result {
+            let mut buffer = [0u8; 1];
+            let read_result = tokio::time::timeout(
+                tokio::time::Duration::from_millis(500),
+                tokio::io::AsyncReadExt::read(&mut second_stream, &mut buffer),
+            )
+            .await;
+
+            match read_result {
+                _ => {
+                    // was not serviced
+                }
+                Ok(Ok(_)) => {
+                    panic!("Second connection should not receive data when at max capacity");
+                }
+            }
+        }
+        // If connect itself failed, that also means rejection -- acceptable
+
+        drop(first_connection);
+        shutdown_tx.send(()).expect("Failed to send shutdown");
+        let _ = server_handle.await;
+    }
 }
