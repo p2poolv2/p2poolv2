@@ -13,7 +13,7 @@ categories.workspace = true
 rust-version.workspace = true
 
 [dev-dependencies]
-p2poolv2_lib = { workspace = true, features = ["test-utils"] }
+p2poolv2_lib = { workspace = true, features = ["test-utils", "hydrapool-pplns-accounting"] }
 p2poolv2_api = { workspace = true }
 mockall.workspace = true
 mockall_double.workspace = true

@@ -16,17 +16,26 @@
 
 use super::{Store, column_families::ColumnFamily, writer::StoreError};
 use crate::accounting::payout::simple_pplns::SimplePplnsShare;
+#[cfg(any(feature = "hydrapool-pplns-accounting", test))]
 use crate::utils::snowflake_simplified::get_next_id;
+#[cfg(any(feature = "hydrapool-pplns-accounting", test))]
 use bitcoin::consensus::Encodable;
 use bitcoin::consensus::encode;
 use std::time::{SystemTime, UNIX_EPOCH};
 const INITIAL_SHARE_VEC_CAPACITY: usize = 100_000;
 
 impl Store {
-    /// Add PPLNS Share to pplns_share_cf
-    /// btcaddress and workername are skipped during serialization (serde(skip)) to minimize storage
+    /// No-op when hydrapool-pplns-accounting feature is disabled.
+    #[cfg(not(any(feature = "hydrapool-pplns-accounting", test)))]
+    pub fn add_pplns_share(&self, _pplns_share: SimplePplnsShare) -> Result<(), StoreError> {
+        Ok(())
+    }
+
+    /// Add PPLNS Share to pplns_share_cf.
+    /// btcaddress and workername are skipped during serialization (serde(skip)) to minimize storage.
     ///
-    /// Key is timestamp (8) + user_id (8) + share id (8) = 24 bytes
+    /// Key is timestamp (8) + user_id (8) + share id (8) = 24 bytes.
+    #[cfg(any(feature = "hydrapool-pplns-accounting", test))]
     pub fn add_pplns_share(&self, pplns_share: SimplePplnsShare) -> Result<(), StoreError> {
         let pplns_share_cf = self.db.cf_handle(&ColumnFamily::Share).unwrap();
 
