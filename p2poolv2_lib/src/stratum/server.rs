@@ -269,7 +269,7 @@ impl StratumServer {
                                     ).await;
                                 }
                                 Err(_) => {
-                                    info!("Max connections ({}) reached, rejecting {}", max_connections, addr);
+                                    debug!("Max connections ({}) reached, rejecting {}", max_connections, addr);
                                     drop(stream);
                                 }
                             }
