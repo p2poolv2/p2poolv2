@@ -257,6 +257,7 @@ async fn main() -> ExitCode {
             ))
             .network(stratum_config.network)
             .version_mask(stratum_config.version_mask)
+            .max_connections(stratum_config.max_connections)
             .chain_store_handle(chain_store_handle_for_stratum)
             .build()
             .await
