@@ -7,6 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.10.12] - 2026-05-13
+
+### Added
+
+- Max stratum connections limit to prevent resource exhaustion from
+  too many concurrent miner connections.
+
+- Support for `extranonce.subscribe` stratum extension, allowing
+  miners to request extranonce updates.
+
+- Support for user-provided start difficulty with d and th params in
+  password field.
+
+- Per-user share valid total prometheus metric for tracking individual
+  miner contribution rates.
+
+- Test coverage for max connections limit, empty authorize requests,
+  non-hex nonce in submit params, NotSubscribed and InvalidJobId
+  stratum error paths.
+
+### Changed
+
+- Stratum error handling refactored to use a dedicated
+  `StratumErrorCode` module with a minimal set of error codes,
+  replacing the ckpool/blitzpool codes that were not used in
+  production. Validation failures now pass the error reason in the
+  response message.
+
+- Set coinbase locktime and sequence per BIP54 and rename coinbase
+  builder functions for clarity.
+
+- Use Vec for share duplicate detection instead of HashMap.
+
+- Feature gate hydrapool PPLNS share storage so it is only compiled
+  when the hydrapool pplns storage feature is enabled.
+
+- Use non-blocking compact console logging and quieter info-level
+  logging to reduce log noise.
+
+- Use debug log level for max connections reached events.
+
+- Use share count for all users with non-zero shares in metrics.
+
+- Simplify finding height from coinbase and remove extract height
+  from coinbase dead code.
+
+- Update mainnet genesis block.
+
+### Fixed
+
+- Remove unwraps from submit param parsing and diff validator to
+  prevent panics on malformed miner input.
+
+- Check for none version masks to avoid panics when version rolling
+  is not configured.
+
+- Fix docker signet bootstrap script.
+
+- Fix typos across the codebase.
+
 ## [v0.10.11] - 2026-05-09
 
 ### Changed
