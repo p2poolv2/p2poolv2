@@ -68,7 +68,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    info!("Starting P2Pool v2...");
+    info!("Starting P2Poolv2...");
     // Parse command line arguments
     let args = Args::parse();
 
