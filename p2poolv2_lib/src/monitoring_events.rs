@@ -86,7 +86,7 @@ mod tests {
     use super::*;
     use crate::store::dag_store::UncleInfo;
     use bitcoin::hashes::Hash;
-    use bitcoin::{BlockHash, CompactTarget};
+    use bitcoin::{BlockHash, CompactTarget, Work};
 
     #[test]
     fn test_share_event_serialization() {
@@ -97,6 +97,7 @@ mod tests {
             miner_address: "02aa".to_string(),
             timestamp: 1700000000,
             bits: CompactTarget::from_consensus(0x1d00ffff),
+            chain_work: Work::from_hex("0x00").unwrap(),
             uncles: vec![],
         };
         let event = MonitoringEvent::Share(share);
@@ -137,6 +138,7 @@ mod tests {
             miner_address: "02aabbccdd".to_string(),
             timestamp: 1_700_000_000,
             bits: CompactTarget::from_consensus(0x1b4188f5),
+            chain_work: Work::from_hex("0x00").unwrap(),
             uncles: vec![],
         };
 
@@ -164,6 +166,7 @@ mod tests {
             miner_address: "02parent".to_string(),
             timestamp: 1_700_000_020,
             bits: CompactTarget::from_consensus(0x1b4188f5),
+            chain_work: Work::from_hex("0x00").unwrap(),
             uncles: vec![uncle],
         };
 

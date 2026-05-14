@@ -770,6 +770,7 @@ mod tests {
             miner_address: "bc1qmineraddress".to_string(),
             timestamp: 1700000000,
             bits: CompactTarget::from_consensus(0x1d00ffff),
+            chain_work: bitcoin::Work::from_hex("0x00").unwrap(),
             uncles: vec![p2poolv2_lib::store::dag_store::UncleInfo {
                 blockhash: BlockHash::from_str(
                     "00000000000000000000000000000000000000000000000000000000000000ff",

@@ -682,7 +682,9 @@ impl ChainStoreHandle {
     pub async fn organise_header(&self, header: ShareHeader) -> Result<Option<u32>, StoreError> {
         let blockhash = header.block_hash();
         let result = self.store_handle.organise_header(header).await?;
-        debug!("Organised header {blockhash} into candidate chain");
+        if let Some(height) = result {
+            debug!("Organised header {blockhash} into candidate chain at height {height}");
+        }
         Ok(result)
     }
 

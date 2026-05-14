@@ -38,6 +38,7 @@ pub struct ShareInfo {
     pub miner_address: String,
     pub timestamp: u32,
     pub bits: CompactTarget,
+    pub chain_work: Work,
     pub uncles: Vec<UncleInfo>,
 }
 
@@ -520,6 +521,11 @@ impl Store {
             .map(|info| (info.blockhash, info))
             .collect();
 
+        let chain_blockhashes: Vec<BlockHash> = chain.iter().map(|(_, hash)| *hash).collect();
+        let metadata_pairs = self.get_block_metadata_batch(&chain_blockhashes);
+        let metadata_map: HashMap<BlockHash, _> = metadata_pairs.into_iter().collect();
+        let zero_work = Work::from_hex("0x00").unwrap();
+
         let mut shares = Vec::with_capacity(chain.len());
         for (height, blockhash) in chain.iter().rev() {
             let header = header_map.get(blockhash).unwrap();
@@ -528,6 +534,10 @@ impl Store {
                 .iter()
                 .filter_map(|uncle_hash| uncle_map.remove(uncle_hash))
                 .collect();
+            let chain_work = metadata_map
+                .get(blockhash)
+                .map(|metadata| metadata.chain_work)
+                .unwrap_or(zero_work);
 
             shares.push(ShareInfo {
                 blockhash: *blockhash,
@@ -536,6 +546,7 @@ impl Store {
                 miner_address: header.miner_bitcoin_address.to_string(),
                 timestamp: header.time,
                 bits: header.bits,
+                chain_work,
                 uncles,
             });
         }
@@ -3290,6 +3301,7 @@ mod tests {
             miner_address: "02aabbccdd".to_string(),
             timestamp: 1_700_000_000,
             bits: CompactTarget::from_consensus(0x1b4188f5),
+            chain_work: Work::from_hex("0x00").unwrap(),
             uncles: vec![],
         };
 
@@ -3316,6 +3328,7 @@ mod tests {
             miner_address: "02parent".to_string(),
             timestamp: 1_700_000_020,
             bits: CompactTarget::from_consensus(0x1b4188f5),
+            chain_work: Work::from_hex("0x00").unwrap(),
             uncles: vec![uncle],
         };
 

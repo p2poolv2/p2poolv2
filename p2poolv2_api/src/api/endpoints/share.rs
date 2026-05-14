@@ -59,6 +59,7 @@ pub struct ShareLookupOutput {
     pub blockhash: String,
     pub height: Option<u32>,
     pub status: String,
+    pub chain_work: String,
     pub parent: String,
     pub uncles: Vec<String>,
     pub miner_address: String,
@@ -146,10 +147,16 @@ fn build_share_output(
         None
     };
 
+    let chain_work = metadata
+        .as_ref()
+        .map(|metadata| format!("{:#x}", metadata.chain_work))
+        .unwrap_or_else(|| "0x0".to_string());
+
     Ok(ShareLookupOutput {
         blockhash: blockhash.to_string(),
         height,
         status: status.to_string(),
+        chain_work,
         parent: share_header.prev_share_blockhash.to_string(),
         uncles: share_header
             .uncles

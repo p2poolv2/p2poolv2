@@ -213,6 +213,7 @@ mod tests {
             miner_address: "02aa".to_string(),
             timestamp: 0,
             bits: bitcoin::CompactTarget::from_consensus(0x1d00ffff),
+            chain_work: bitcoin::Work::from_hex("0x00").unwrap(),
             uncles: vec![],
         });
 
@@ -292,6 +293,7 @@ mod tests {
             miner_address: "02aa".to_string(),
             timestamp: 1000,
             bits: bitcoin::CompactTarget::from_consensus(0x1d00ffff),
+            chain_work: bitcoin::Work::from_hex("0x00").unwrap(),
             uncles: vec![],
         });
 
@@ -326,6 +328,7 @@ mod tests {
             miner_address: "02bb".to_string(),
             timestamp: 0,
             bits: bitcoin::CompactTarget::from_consensus(0x1d00ffff),
+            chain_work: bitcoin::Work::from_hex("0x00").unwrap(),
             uncles: vec![],
         });
 

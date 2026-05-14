@@ -39,6 +39,7 @@ use crate::shares::validation::ShareValidator;
 use crate::store::dag_store::ShareInfo;
 use crate::store::writer::StoreError;
 use crate::stratum::work::notify::{NotifyCmd, NotifySender};
+use bitcoin::Work;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::{Arc, RwLock};
@@ -381,6 +382,11 @@ impl OrganiseWorker {
             .chain_store_handle
             .get_uncle_infos(&share_block.header.uncles);
 
+        let chain_work = self
+            .chain_store_handle
+            .get_block_metadata(&share_block.block_hash())
+            .map(|metadata| metadata.chain_work)
+            .unwrap_or(Work::from_hex("0x00").unwrap());
         let share_info = ShareInfo {
             blockhash: share_block.block_hash(),
             prev_blockhash: share_block.header.prev_share_blockhash,
@@ -388,6 +394,7 @@ impl OrganiseWorker {
             miner_address: share_block.header.miner_bitcoin_address.to_string(),
             timestamp: share_block.header.time,
             bits: share_block.header.bits,
+            chain_work,
             uncles: uncle_infos,
         };
         let event = MonitoringEvent::Share(share_info);
