@@ -157,7 +157,7 @@ pub fn validate_bitcoin_difficulty(
             true
         }
         Err(e) => {
-            error!("Header does not meet the target: {}", e);
+            debug!("Header does not meet the bitcoin target: {}", e);
             false
         }
     };
