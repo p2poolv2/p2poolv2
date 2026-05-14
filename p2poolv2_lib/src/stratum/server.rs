@@ -425,7 +425,7 @@ where
                     &ctx.tracker_handle,
                 ) {
                     Ok(notify_json) => {
-                        debug!("Sending first notify after authorize: {notify_json}");
+                        debug!("Sending first notify after authorize");
                         if let Err(e) = writer
                             .write_all(format!("{notify_json}\n").as_bytes())
                             .await
