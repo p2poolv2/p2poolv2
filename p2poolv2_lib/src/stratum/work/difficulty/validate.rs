@@ -20,10 +20,9 @@ use crate::stratum::work::block_template::BlockTemplate;
 use crate::stratum::work::tracker::JobDetails;
 use bitcoin::blockdata::block::Header;
 use bitcoin::consensus::Decodable;
-use bitcoin::hex::DisplayHex;
 use hex::FromHex;
 use std::str::FromStr;
-use tracing::{debug, info};
+use tracing::{debug, info, error};
 
 /// Share validation result
 ///
@@ -56,10 +55,7 @@ pub fn build_coinbase_from_components(
     coinbase2: &str,
 ) -> Result<bitcoin::Transaction, Error> {
     // Add detailed logging to debug the issue
-    debug!("Building coinbase with coinb1: {}", coinbase1);
-
     let complete_tx = format!("{coinbase1}{enonce1}{enonce2}{coinbase2}");
-    debug!("Complete coinbase tx hex: {}", complete_tx);
 
     let tx_bytes = Vec::from_hex(&complete_tx)
         .map_err(|_| Error::InvalidParams("Invalid coinbase hex".into()))?;
@@ -78,7 +74,6 @@ fn apply_version_mask(
         let version_bits_hex = params[5]
             .as_ref()
             .ok_or_else(|| Error::InvalidParams("Missing version bits".into()))?;
-        debug!("Applying version mask from params: {:?}", version_bits_hex);
         let bits = i32::from_be_bytes(
             hex::decode(version_bits_hex)
                 .map_err(|_| Error::InvalidParams("Failed to decode version bits hex".into()))?
@@ -112,12 +107,7 @@ pub fn validate_bitcoin_difficulty(
         .as_ref()
         .ok_or_else(|| Error::InvalidParams("Missing enonce2".into()))?
         .as_str();
-
-    debug!(
-        "Coinbase components coinbase1: {} enonce1: {}, enonce2: {}, coinbase2: {}",
-        &job.coinbase1, enonce1_hex, enonce2, &job.coinbase2
-    );
-
+    
     // build coinbase from submission
     let coinbase =
         build_coinbase_from_components(&job.coinbase1, enonce1_hex, enonce2, &job.coinbase2)
@@ -136,8 +126,6 @@ pub fn validate_bitcoin_difficulty(
     let merkle_root: bitcoin::TxMerkleNode = bitcoin::merkle_tree::calculate_root(hashes)
         .map(|h| h.into())
         .unwrap();
-
-    debug!("Merkle root: {}", merkle_root);
 
     let ntime_str = submission.params[3]
         .as_ref()
@@ -163,19 +151,13 @@ pub fn validate_bitcoin_difficulty(
         .map_err(|_| Error::InvalidParams("Bad nonce".into()))?,
     };
 
-    debug!(
-        "Header hex : {}",
-        bitcoin::consensus::serialize(&header).to_lower_hex_string()
-    );
-    debug!("Header hash : {}", header.block_hash().to_string());
-
     let meets_bitcoin_difficulty = match header.validate_pow(target) {
         Ok(_) => {
             info!("Header meets current bitcoin target");
             true
         }
         Err(e) => {
-            debug!("Header does not meet the target: {}", e);
+            error!("Header does not meet the target: {}", e);
             false
         }
     };
