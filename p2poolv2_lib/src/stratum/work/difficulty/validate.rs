@@ -22,7 +22,7 @@ use bitcoin::blockdata::block::Header;
 use bitcoin::consensus::Decodable;
 use hex::FromHex;
 use std::str::FromStr;
-use tracing::{debug, info, error};
+use tracing::{debug, error, info};
 
 /// Share validation result
 ///
@@ -107,7 +107,7 @@ pub fn validate_bitcoin_difficulty(
         .as_ref()
         .ok_or_else(|| Error::InvalidParams("Missing enonce2".into()))?
         .as_str();
-    
+
     // build coinbase from submission
     let coinbase =
         build_coinbase_from_components(&job.coinbase1, enonce1_hex, enonce2, &job.coinbase2)
