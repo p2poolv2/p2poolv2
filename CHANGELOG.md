@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [v0.10.12] - 2026-05-13
+## [v0.10.12] - 2026-05-14
 
 ### Added
 
@@ -475,3 +475,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Pre v0.7.0
 
 We used tags like hydrapool.v0.x.0 and we didn't keep a changelog.
+
+[Unreleased]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.12...HEAD
+[v0.10.12]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.11...v0.10.12
+[v0.10.11]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.10...v0.10.11
+[v0.10.10]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.9...v0.10.10
+[v0.10.9]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.8...v0.10.9
+[v0.10.8]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.7...v0.10.8
+[v0.10.7]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.6...v0.10.7
+[v0.10.6]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.5...v0.10.6
+[v0.10.5]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.4...v0.10.5
+[v0.10.4]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.3...v0.10.4
+[v0.10.3]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.2...v0.10.3
+[v0.10.2]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.1...v0.10.2
+[v0.10.1]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.0...v0.10.1
+[v0.10.0]: https://github.com/p2poolv2/p2poolv2/compare/v0.9.1...v0.10.0
+[v0.9.1]: https://github.com/p2poolv2/p2poolv2/compare/v0.9.0...v0.9.1
+[v0.9.0]: https://github.com/p2poolv2/p2poolv2/compare/v0.8.0...v0.9.0
+[v0.8.0]: https://github.com/p2poolv2/p2poolv2/compare/v0.7.0...v0.8.0
+[v0.7.0]: https://github.com/p2poolv2/p2poolv2/compare/v0.1.0...v0.7.0
