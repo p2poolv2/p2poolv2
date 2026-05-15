@@ -16,13 +16,13 @@
 
 use crate::stratum::error::Error;
 use crate::stratum::messages::SimpleRequest;
-use crate::stratum::work::block_template::BlockTemplate;
+use crate::stratum::work::gbt::compute_merkle_root_from_branches;
 use crate::stratum::work::tracker::JobDetails;
 use bitcoin::blockdata::block::Header;
 use bitcoin::consensus::Decodable;
 use hex::FromHex;
 use std::str::FromStr;
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 
 /// Share validation result
 ///
@@ -34,17 +34,6 @@ pub struct ValidationResult {
     pub coinbase: bitcoin::Transaction,
     /// Does the block meet bitcoin difficulty
     pub meets_bitcoin_difficulty: bool,
-}
-
-/// parse all transactions from block template with data and txid
-fn decode_txids(blocktemplate: &BlockTemplate) -> Result<Vec<bitcoin::Txid>, Error> {
-    blocktemplate
-        .transactions
-        .iter()
-        .map(|tx| {
-            bitcoin::Txid::from_str(&tx.txid).map_err(|_| Error::InvalidParams("Bad txid".into()))
-        })
-        .collect()
 }
 
 /// Build coinbase from the submitted share and block template components.
@@ -115,17 +104,9 @@ pub fn validate_bitcoin_difficulty(
 
     debug!("Coinbase transaction: {:?}", coinbase);
 
-    // decode txids for making merkle root
-    let txids = decode_txids(&job.blocktemplate)
-        .map_err(|_| Error::InvalidParams("Failed to decode txids".into()))?;
-
-    let mut all_txids = vec![coinbase.compute_txid()];
-    all_txids.extend(txids);
-
-    let hashes = all_txids.iter().map(|obj| obj.to_raw_hash());
-    let merkle_root: bitcoin::TxMerkleNode = bitcoin::merkle_tree::calculate_root(hashes)
-        .map(|h| h.into())
-        .unwrap();
+    // Compute merkle root by walking the pre-computed branches along with the coinbase txid.
+    let merkle_root =
+        compute_merkle_root_from_branches(coinbase.compute_txid(), &job.template_merkle_branches);
 
     let ntime_str = submission.params[3]
         .as_ref()

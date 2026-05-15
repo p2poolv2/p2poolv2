@@ -258,6 +258,7 @@ mod handle_submit_tests {
     use crate::stratum::messages::Id;
     use crate::stratum::messages::SetDifficultyNotification;
     use crate::stratum::session::Session;
+    use crate::stratum::work::gbt::build_merkle_branches_for_template;
     use crate::stratum::work::tracker::start_tracker_actor;
     use crate::test_utils::{
         TEST_COINBASE_NSECS, create_test_commitment, load_valid_stratum_work_components,
@@ -299,17 +300,17 @@ mod handle_submit_tests {
 
         let job_id = JobId(u64::from_str_radix(&notify.params.job_id, 16).unwrap());
 
-        let test_merkle_branches = vec![
-            bitcoin::TxMerkleNode::all_zeros(),
-            bitcoin::TxMerkleNode::all_zeros(),
-        ];
+        let merkle_branches = build_merkle_branches_for_template(&template)
+            .into_iter()
+            .map(bitcoin::TxMerkleNode::from_raw_hash)
+            .collect();
         let _ = tracker_handle.insert_job(
             Arc::new(template),
             notify.params.coinbase1.to_string(),
             notify.params.coinbase2.to_string(),
             Some(create_test_commitment()),
             TEST_COINBASE_NSECS,
-            test_merkle_branches,
+            merkle_branches,
             job_id,
         );
 
@@ -366,7 +367,7 @@ mod handle_submit_tests {
         );
 
         // Verify merkle branches are passed through from JobDetails to Emission
-        assert_eq!(share.template_merkle_branches.len(), 2);
+        assert!(share.template_merkle_branches.is_empty());
 
         // Verify that the block is submitted to the mock server
         mock_server.verify().await;
