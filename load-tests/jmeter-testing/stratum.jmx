@@ -10,9 +10,9 @@
     </TestPlan>
     <hashTree>
       <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="Thread Group">
-        <intProp name="ThreadGroup.num_threads">5000</intProp>
-        <intProp name="ThreadGroup.ramp_time">60</intProp>
-        <longProp name="ThreadGroup.duration">300</longProp>
+        <stringProp name="ThreadGroup.num_threads">${__P(ThreadGroup.num_threads,5000)}</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">${__P(ThreadGroup.ramp_time,60)}</stringProp>
+        <stringProp name="ThreadGroup.duration">${__P(ThreadGroup.duration,300)}</stringProp>
         <boolProp name="ThreadGroup.same_user_on_next_iteration">false</boolProp>
         <boolProp name="ThreadGroup.scheduler">true</boolProp>
         <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
@@ -70,7 +70,9 @@ import groovy.json.JsonSlurper
 
 long startTime = System.nanoTime()
 
-def socket = new Socket(&quot;127.0.0.1&quot;, 3333)
+def host = props.get(&quot;stratum.host&quot;) ?: &quot;127.0.0.1&quot;
+def port = (props.get(&quot;stratum.port&quot;) ?: &quot;3333&quot;) as int
+def socket = new Socket(host, port)
 socket.setSoTimeout(30000)
 def writer = new PrintWriter(socket.getOutputStream(), true)
 def reader = new BufferedReader(new InputStreamReader(socket.getInputStream()))
@@ -172,7 +174,7 @@ SampleResult.setResponseCodeOK()
         </LoopController>
         <hashTree>
           <ConstantTimer guiclass="ConstantTimerGui" testclass="ConstantTimer" testname="Submit Delay">
-            <stringProp name="ConstantTimer.delay">3000</stringProp>
+            <stringProp name="ConstantTimer.delay">${__P(ConstantTimer.delay,3000)}</stringProp>
           </ConstantTimer>
           <hashTree/>
           <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="Submit Sampler" enabled="true">
