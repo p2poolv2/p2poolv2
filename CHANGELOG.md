@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.10.13] - 2026-05-15
+
+### Changed
+
+- Use precomputed merkle branches in share validation instead of
+  re-parsing all transaction IDs from hex on every mining.submit.
+  The branches are computed once when the block template arrives and
+  reused across all miners, eliminating ~30% CPU overhead from hex
+  parsing and full merkle tree rebuilds. Submit latency reduced by
+  ~33% average and ~51% at p99, throughput increased ~40%.
+
+- Parameterize JMeter stratum test plan so host, port, thread count,
+  ramp-up, duration and submit delay can be overridden from the
+  command line via JMeter properties.
+
+### Added
+
+- Standalone JMeter load generator script (run_remote_load.sh) for
+  driving stratum traffic against a remote server without needing a
+  local build or mock-bitcoind.
+
 ## [v0.10.12] - 2026-05-14
 
 ### Added
