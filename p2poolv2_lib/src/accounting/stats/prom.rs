@@ -15,7 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::accounting::stats::metrics::PoolMetrics;
-const TWO32: u64 = 1u64 << 32;
+const TWO32: f64 = (1u64 << 32) as f64;
 
 impl PoolMetrics {
     pub fn get_exposition(&self) -> String {
@@ -94,9 +94,9 @@ impl PoolMetrics {
         output.push_str("# TYPE user_shares_valid_total counter\n");
         for (btcaddress, user) in &some_shares_users {
             output.push_str(&format!(
-                "user_shares_valid_total{{btcaddress=\"{}\"}} {}\n",
+                "user_shares_valid_total{{btcaddress=\"{}\"}} {:.0}\n",
                 btcaddress,
-                user.shares_valid_total.saturating_mul(TWO32)
+                (user.shares_valid_total as f64) * TWO32
             ));
         }
         output.push('\n');
@@ -113,10 +113,10 @@ impl PoolMetrics {
                     workername
                 };
                 output.push_str(&format!(
-                    "worker_shares_valid_total{{btcaddress=\"{}\",workername=\"{}\"}} {}\n",
+                    "worker_shares_valid_total{{btcaddress=\"{}\",workername=\"{}\"}} {:.0}\n",
                     btcaddress,
                     display_name,
-                    worker.shares_valid_total.saturating_mul(TWO32)
+                    (worker.shares_valid_total as f64) * TWO32
                 ));
             }
         }
@@ -263,21 +263,21 @@ mod tests {
         assert!(exposition.contains("# HELP user_shares_valid_total"));
         assert!(exposition.contains("# TYPE user_shares_valid_total counter"));
         assert!(exposition.contains(&format!(
-            r#"user_shares_valid_total{{btcaddress="bc1quser1"}} {}"#,
-            42 * TWO32
+            r#"user_shares_valid_total{{btcaddress="bc1quser1"}} {:.0}"#,
+            42.0 * TWO32
         )));
 
         // Check worker metrics are present for active worker1
         assert!(exposition.contains("# HELP worker_shares_valid"));
         assert!(exposition.contains("# TYPE worker_shares_valid_total counter"));
         assert!(exposition.contains(&format!(
-            r#"worker_shares_valid_total{{btcaddress="bc1quser1",workername="worker1"}} {}"#,
-            20 * TWO32
+            r#"worker_shares_valid_total{{btcaddress="bc1quser1",workername="worker1"}} {:.0}"#,
+            20.0 * TWO32
         )));
         // Inactive worker2 should NOT be present
         assert!(!exposition.contains(&format!(
-            r#"worker_shares_valid_total{{btcaddress="bc1quser1",workername="worker2"}} {}"#,
-            22 * TWO32
+            r#"worker_shares_valid_total{{btcaddress="bc1quser1",workername="worker2"}} {:.0}"#,
+            22.0 * TWO32
         )));
 
         assert!(exposition.contains("# HELP worker_best_share"));
@@ -352,15 +352,15 @@ mod tests {
 
         // Check user-level metric
         assert!(exposition.contains(&format!(
-            r#"user_shares_valid_total{{btcaddress="bc1qtest"}} {}"#,
-            10 * TWO32
+            r#"user_shares_valid_total{{btcaddress="bc1qtest"}} {:.0}"#,
+            10.0 * TWO32
         )));
 
         // Verify that empty workername is replaced with "unnamed"
         assert!(exposition.contains(r#"workername="unnamed""#));
         assert!(exposition.contains(&format!(
-            r#"worker_shares_valid_total{{btcaddress="bc1qtest",workername="unnamed"}} {}"#,
-            10 * TWO32
+            r#"worker_shares_valid_total{{btcaddress="bc1qtest",workername="unnamed"}} {:.0}"#,
+            10.0 * TWO32
         )));
         assert!(
             exposition
