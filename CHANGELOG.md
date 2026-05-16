@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Fix user and worker shares_valid_total Prometheus counter overflow.
+  The TWO32 multiplication used saturating_mul on u64, capping at
+  u64::MAX for users with accumulated difficulty above ~4.29 billion.
+  Switched to f64 arithmetic which handles the full range correctly.
+
 ## [v0.10.13] - 2026-05-15
 
 ### Changed
