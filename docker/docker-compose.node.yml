@@ -11,19 +11,15 @@
 #
 #   # To stop an additional node:
 #   docker compose -f docker-compose.node.yml -p node2 down
+#
+# Note: p2poolv2 uses host networking (see docker-compose.p2poolv2.yml).
+# All nodes share the same host ports - ensure port variables don't conflict.
 
 services:
   p2poolv2:
     extends:
       file: docker-compose.p2poolv2.yml
       service: p2poolv2
-    networks:
-      - p2poolv2_network
 
 volumes:
   p2poolv2_data:
-
-networks:
-  p2poolv2_network:
-    external: true
-    name: p2poolv2_p2poolv2_network
