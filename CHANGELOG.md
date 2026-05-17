@@ -7,12 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
+## [v0.10.15] - 2026-05-17
 
-- Fix user and worker `shares_valid_total` Prometheus counter overflow.
-  The TWO32 multiplication used saturating_mul on u64, capping at
-  u64::MAX for users with accumulated difficulty above ~4.29 billion.
-  Switched to f64 arithmetic which handles the full range correctly.
+### Fixed
 
 - Fix worker stats reset on reconnect. We used to replace existing
   worker entries, resetting `shares_valid_total` to zero. Changed to
@@ -21,6 +18,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add grace period for stats persistence. Inactive workers are kept
   for 6 hours and users for 3 days before being removed from stats,
   allowing reconnections to preserve accumulated history.
+
+## [v0.10.14] - 2026-05-16
+
+### Fixed
+
+- Fix user and worker `shares_valid_total` Prometheus counter overflow.
+  The TWO32 multiplication used saturating_mul on u64, capping at
+  u64::MAX for users with accumulated difficulty above ~4.29 billion.
+  Switched to f64 arithmetic which handles the full range correctly.
 
 ## [v0.10.13] - 2026-05-15
 
@@ -512,7 +518,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 We used tags like hydrapool.v0.x.0 and we didn't keep a changelog.
 
-[Unreleased]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.12...HEAD
+[Unreleased]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.15...HEAD
+[v0.10.15]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.14...v0.10.15
+[v0.10.14]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.13...v0.10.14
+[v0.10.13]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.12...v0.10.13
 [v0.10.12]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.11...v0.10.12
 [v0.10.11]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.10...v0.10.11
 [v0.10.10]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.9...v0.10.10
