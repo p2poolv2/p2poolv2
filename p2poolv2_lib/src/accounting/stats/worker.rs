@@ -28,6 +28,9 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Workers inactive for longer than this are removed from stats.
+pub const WORKER_EXPIRY_SECS: u64 = 6 * 60 * 60;
+
 /// Worker record, captures username, id, and hashrate stats
 #[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Worker {
@@ -47,6 +50,16 @@ impl Worker {
     /// Create a new worker record for a new signing up worker.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Returns true if worker should be removed from stats.
+    /// A worker is removed if it never submitted a share, or if it is inactive
+    /// and its last share was more than 6 hours ago.
+    pub fn should_remove(&self, current_time: u64) -> bool {
+        if self.last_share_at == 0 {
+            return true;
+        }
+        !self.active && current_time.saturating_sub(self.last_share_at) > WORKER_EXPIRY_SECS
     }
 
     /// Record a share submission for the worker, updating stats accordingly.
@@ -109,5 +122,28 @@ mod tests {
         assert_eq!(worker.shares_valid_total, 3500);
         assert_eq!(worker.best_share, 2200);
         assert_eq!(worker.best_share_ever, 2200);
+    }
+
+    #[test]
+    fn test_should_remove() {
+        let base_time = 1_000_000u64;
+
+        // Worker that never submitted a share should be removed
+        let fresh_worker = Worker::default();
+        assert!(fresh_worker.should_remove(base_time));
+
+        // Active worker should not be removed
+        let mut active_worker = Worker::default();
+        active_worker.record_share(1000, 1100, base_time);
+        assert!(!active_worker.should_remove(base_time + WORKER_EXPIRY_SECS + 1));
+
+        // Inactive worker within grace period should not be removed
+        let mut recent_inactive = Worker::default();
+        recent_inactive.record_share(1000, 1100, base_time);
+        recent_inactive.active = false;
+        assert!(!recent_inactive.should_remove(base_time + WORKER_EXPIRY_SECS - 1));
+
+        // Inactive worker past grace period should be removed
+        assert!(recent_inactive.should_remove(base_time + WORKER_EXPIRY_SECS + 1));
     }
 }
