@@ -227,13 +227,18 @@ impl MetricsActor {
     }
 
     /// Increment worker counts - called after worker has authorised successfully.
+    /// Uses entry().or_default() to preserve existing worker stats on reconnect.
     fn worker_authorized(&mut self, btcaddress: String, workername: String) {
-        self.metrics
+        let worker = self
+            .metrics
             .users
             .entry(btcaddress)
             .or_default()
             .workers
-            .insert(workername, Worker::default());
+            .entry(workername)
+            .or_default();
+        worker.active = true;
+        worker.best_share = 0;
     }
 
     /// Decrement pool wide worker counts, if worker found as authorised. Unauthorised workers are not counted.
@@ -743,5 +748,105 @@ mod tests {
         assert_eq!(user_b.shares_valid_total, 30);
         assert_eq!(user_b.best_share, 33);
         assert!(user_b.workers.contains_key("workerB1"));
+    }
+
+    #[tokio::test]
+    async fn test_worker_reauthorize_preserves_stats() {
+        let log_dir = tempfile::tempdir().unwrap();
+        let handle = start_metrics(log_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
+
+        let _ = handle
+            .increment_worker_count("miner1".to_string(), "rig1".to_string())
+            .await;
+
+        let _ = handle
+            .record_share_accepted(
+                SimplePplnsShare {
+                    user_id: 1,
+                    difficulty: 1000,
+                    btcaddress: Some("miner1".to_string()),
+                    workername: Some("rig1".to_string()),
+                    n_time: 1000,
+                    job_id: "job1".to_string(),
+                    extranonce2: "extra1".to_string(),
+                    nonce: "nonce1".to_string(),
+                },
+                5500,
+            )
+            .await;
+
+        let _ = handle
+            .record_share_accepted(
+                SimplePplnsShare {
+                    user_id: 1,
+                    difficulty: 1000,
+                    btcaddress: Some("miner1".to_string()),
+                    workername: Some("rig1".to_string()),
+                    n_time: 1001,
+                    job_id: "job2".to_string(),
+                    extranonce2: "extra2".to_string(),
+                    nonce: "nonce2".to_string(),
+                },
+                3200,
+            )
+            .await;
+
+        let metrics = handle.get_metrics().await;
+        let worker = metrics
+            .users
+            .get("miner1")
+            .unwrap()
+            .workers
+            .get("rig1")
+            .unwrap();
+        assert_eq!(worker.shares_valid_total, 2000);
+        assert_eq!(worker.best_share, 5500);
+        assert_eq!(worker.best_share_ever, 5500);
+
+        // Worker disconnects
+        let _ = handle
+            .decrement_worker_count(Some("miner1".to_string()), "rig1".to_string())
+            .await;
+
+        // Worker reconnects - re-authorizes with same name
+        let _ = handle
+            .increment_worker_count("miner1".to_string(), "rig1".to_string())
+            .await;
+
+        // Stats should be preserved, best_share reset for new session
+        let metrics = handle.get_metrics().await;
+        let user = metrics.users.get("miner1").unwrap();
+        let worker = user.workers.get("rig1").unwrap();
+        assert_eq!(worker.shares_valid_total, 2000);
+        assert_eq!(worker.best_share, 0);
+        assert_eq!(worker.best_share_ever, 5500);
+        assert!(worker.active);
+
+        // New shares accumulate on top of existing stats
+        let _ = handle
+            .record_share_accepted(
+                SimplePplnsShare {
+                    user_id: 1,
+                    difficulty: 1000,
+                    btcaddress: Some("miner1".to_string()),
+                    workername: Some("rig1".to_string()),
+                    n_time: 2000,
+                    job_id: "job3".to_string(),
+                    extranonce2: "extra3".to_string(),
+                    nonce: "nonce3".to_string(),
+                },
+                4100,
+            )
+            .await;
+
+        let metrics = handle.get_metrics().await;
+        let user = metrics.users.get("miner1").unwrap();
+        let worker = user.workers.get("rig1").unwrap();
+        assert_eq!(worker.shares_valid_total, 3000);
+        assert_eq!(user.shares_valid_total, 3000);
+        assert_eq!(worker.best_share, 4100);
+        assert_eq!(worker.best_share_ever, 5500);
     }
 }
