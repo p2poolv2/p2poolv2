@@ -618,7 +618,7 @@ mod tests {
         );
         assert_eq!(reloaded.accepted_total, metrics.accepted_total);
         assert_eq!(reloaded.rejected_total, metrics.rejected_total);
-        // Inactive workers/users are filtered out when saving to JSON
+        // Users that never submitted a share are filtered out when saving to JSON
         assert!(!reloaded.users.contains_key("user4"));
         // Active user1 with worker1 should be present
         assert!(reloaded.users.contains_key("user1"));

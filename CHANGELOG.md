@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   worker entries, resetting `shares_valid_total` to zero. Changed to
   preserve accumulated stats across reconnections.
 
+- Add grace period for stats persistence. Inactive workers are kept
+  for 6 hours and users for 3 days before being removed from stats,
+  allowing reconnections to preserve accumulated history.
+
 ## [v0.10.13] - 2026-05-15
 
 ### Changed

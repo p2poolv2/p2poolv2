@@ -34,6 +34,9 @@ use std::collections::HashMap;
 
 const INITIAL_WORKER_MAP_CAPACITY: usize = 10;
 
+/// Users with no active workers and no shares for longer than this are removed.
+pub const USER_EXPIRY_SECS: u64 = 3 * 24 * 60 * 60;
+
 /// User record, captures username, id, and hashrate stats
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct User {
@@ -74,6 +77,17 @@ impl User {
         self.workers
             .iter()
             .filter(|(_, w)| w.active && w.shares_valid_total > 0)
+    }
+
+    /// Returns true if user should be removed from stats.
+    /// A user is removed if they never submitted a share, or if all workers are
+    /// inactive and the user's last share was more than 3 days ago.
+    pub fn should_remove(&self, current_time: u64) -> bool {
+        if self.last_share_at == 0 {
+            return true;
+        }
+        let all_workers_inactive = self.workers.values().all(|w| !w.active);
+        all_workers_inactive && current_time.saturating_sub(self.last_share_at) > USER_EXPIRY_SECS
     }
 
     /// Get a mutable reference to a worker by name, if it exists.
@@ -207,5 +221,28 @@ mod tests {
         let worker_mut = user.get_worker_mut("worker1").unwrap();
         worker_mut.shares_valid_total = 42;
         assert_eq!(user.workers.get("worker1").unwrap().shares_valid_total, 42);
+    }
+
+    #[test]
+    fn test_should_remove() {
+        let base_time = 1_000_000u64;
+
+        // User that never submitted a share should be removed
+        let fresh_user = User::default();
+        assert!(fresh_user.should_remove(base_time));
+
+        // User with an active worker should not be removed
+        let mut active_user = User::default();
+        active_user.record_share("rig1", 1000, 1100, base_time);
+        assert!(!active_user.should_remove(base_time + USER_EXPIRY_SECS + 1));
+
+        // User with inactive worker within grace period should not be removed
+        let mut recent_user = User::default();
+        recent_user.record_share("rig1", 1000, 1100, base_time);
+        recent_user.workers.get_mut("rig1").unwrap().active = false;
+        assert!(!recent_user.should_remove(base_time + USER_EXPIRY_SECS - 1));
+
+        // User with inactive worker past grace period should be removed
+        assert!(recent_user.should_remove(base_time + USER_EXPIRY_SECS + 1));
     }
 }

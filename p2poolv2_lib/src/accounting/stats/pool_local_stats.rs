@@ -36,20 +36,33 @@ use tracing::error;
 
 const POOL_STATS_DIR: &str = "pool";
 
-/// Returns true if a worker should be included in filtered output.
-fn is_active_worker(worker: &Worker) -> bool {
-    worker.active && worker.shares_valid_total > 0
+/// Returns true if a worker should be saved to disk.
+/// Keeps workers that have not expired (active or within the 6-hour grace period).
+fn should_save_worker(worker: &Worker, current_time: u64) -> bool {
+    worker.shares_valid_total > 0 && !worker.should_remove(current_time)
 }
 
-/// Wrapper for `&HashMap<String, Worker>` that serializes only active workers with shares.
+/// Wrapper for `&HashMap<String, Worker>` that serializes only non-expired workers.
 /// Avoids allocating a filtered copy by filtering during serialization.
-struct FilteredWorkers<'a>(&'a HashMap<String, Worker>);
+struct FilteredWorkers<'a> {
+    workers: &'a HashMap<String, Worker>,
+    current_time: u64,
+}
 
 impl Serialize for FilteredWorkers<'_> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let count = self.0.values().filter(|w| is_active_worker(w)).count();
+        let current_time = self.current_time;
+        let count = self
+            .workers
+            .values()
+            .filter(|w| should_save_worker(w, current_time))
+            .count();
         let mut map = serializer.serialize_map(Some(count))?;
-        for (name, worker) in self.0.iter().filter(|(_, w)| is_active_worker(w)) {
+        for (name, worker) in self
+            .workers
+            .iter()
+            .filter(|(_, w)| should_save_worker(w, current_time))
+        {
             map.serialize_entry(name, worker)?;
         }
         map.end()
@@ -57,70 +70,96 @@ impl Serialize for FilteredWorkers<'_> {
 }
 
 /// Wrapper for `&User` that uses `FilteredWorkers` for the workers field.
-struct FilteredUser<'a>(&'a User);
+struct FilteredUser<'a> {
+    user: &'a User,
+    current_time: u64,
+}
 
 impl Serialize for FilteredUser<'_> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut state = serializer.serialize_struct("User", 5)?;
-        state.serialize_field("last_share_at", &self.0.last_share_at)?;
-        state.serialize_field("shares_valid_total", &self.0.shares_valid_total)?;
-        state.serialize_field("workers", &FilteredWorkers(&self.0.workers))?;
-        state.serialize_field("best_share", &self.0.best_share)?;
-        state.serialize_field("best_share_ever", &self.0.best_share_ever)?;
+        state.serialize_field("last_share_at", &self.user.last_share_at)?;
+        state.serialize_field("shares_valid_total", &self.user.shares_valid_total)?;
+        state.serialize_field(
+            "workers",
+            &FilteredWorkers {
+                workers: &self.user.workers,
+                current_time: self.current_time,
+            },
+        )?;
+        state.serialize_field("best_share", &self.user.best_share)?;
+        state.serialize_field("best_share_ever", &self.user.best_share_ever)?;
         state.end()
     }
 }
 
-/// Wrapper for `&HashMap<String, User>` that serializes only users with active workers.
+/// Wrapper for `&HashMap<String, User>` that serializes only non-expired users.
 /// Uses `FilteredUser` for each user to filter workers during serialization.
-struct FilteredUsers<'a>(&'a HashMap<String, User>);
+struct FilteredUsers<'a> {
+    users: &'a HashMap<String, User>,
+    current_time: u64,
+}
 
 impl Serialize for FilteredUsers<'_> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let active_users: Vec<_> = self
-            .0
+        let current_time = self.current_time;
+        let kept_users: Vec<_> = self
+            .users
             .iter()
-            .filter(|(_, u)| u.workers.values().any(is_active_worker))
+            .filter(|(_, u)| !u.should_remove(current_time))
             .collect();
-        let mut map = serializer.serialize_map(Some(active_users.len()))?;
-        for (name, user) in active_users {
-            map.serialize_entry(name, &FilteredUser(user))?;
+        let mut map = serializer.serialize_map(Some(kept_users.len()))?;
+        for (name, user) in kept_users {
+            map.serialize_entry(name, &FilteredUser { user, current_time })?;
         }
         map.end()
     }
 }
 
-/// Wrapper for `&PoolMetrics` that filters inactive users/workers during serialization.
+/// Wrapper for `&PoolMetrics` that filters expired users/workers during serialization.
 /// Zero intermediate allocations - iterates once and writes directly to serializer.
-struct FilteredPoolMetrics<'a>(&'a PoolMetrics);
+struct FilteredPoolMetrics<'a> {
+    metrics: &'a PoolMetrics,
+    current_time: u64,
+}
 
 impl Serialize for FilteredPoolMetrics<'_> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut state = serializer.serialize_struct("PoolMetrics", 9)?;
-        state.serialize_field("start_time", &self.0.start_time)?;
-        state.serialize_field("lastupdate", &self.0.lastupdate)?;
-        state.serialize_field("accepted_total", &self.0.accepted_total)?;
+        state.serialize_field("start_time", &self.metrics.start_time)?;
+        state.serialize_field("lastupdate", &self.metrics.lastupdate)?;
+        state.serialize_field("accepted_total", &self.metrics.accepted_total)?;
         state.serialize_field(
             "accepted_difficulty_total",
-            &self.0.accepted_difficulty_total,
+            &self.metrics.accepted_difficulty_total,
         )?;
-        state.serialize_field("rejected_total", &self.0.rejected_total)?;
-        state.serialize_field("best_share", &self.0.best_share)?;
-        state.serialize_field("best_share_ever", &self.0.best_share_ever)?;
-        state.serialize_field("users", &FilteredUsers(&self.0.users))?;
-        state.serialize_field("pool_difficulty", &self.0.pool_difficulty)?;
+        state.serialize_field("rejected_total", &self.metrics.rejected_total)?;
+        state.serialize_field("best_share", &self.metrics.best_share)?;
+        state.serialize_field("best_share_ever", &self.metrics.best_share_ever)?;
+        state.serialize_field(
+            "users",
+            &FilteredUsers {
+                users: &self.metrics.users,
+                current_time: self.current_time,
+            },
+        )?;
+        state.serialize_field("pool_difficulty", &self.metrics.pool_difficulty)?;
         state.end()
     }
 }
 
-/// Save pool stats to log dir
-/// Use fs::rename to ensure atomic write
-/// Only saves active workers with shares and users with at least one such worker.
+/// Save pool stats to log dir.
+/// Use fs::rename to ensure atomic write.
+/// Saves workers within their 6-hour grace period and users within their 3-day grace period.
 ///
 /// Uses custom serialization wrappers to filter during the serialize pass,
 /// avoiding intermediate allocations. With thousands of workers, this writes
 /// directly to the serializer without cloning any data structures.
 pub fn save_pool_local_stats(pool_metrics: &PoolMetrics, log_dir: &str) -> std::io::Result<()> {
+    let current_time = std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
     let stats_dir = Path::new(log_dir).join(POOL_STATS_DIR);
     if let Err(e) = create_dir_all(&stats_dir) {
         error!("Error creating directory {e}");
@@ -129,8 +168,11 @@ pub fn save_pool_local_stats(pool_metrics: &PoolMetrics, log_dir: &str) -> std::
     let path = stats_dir.join("pool_stats.json");
     let tmp_path = stats_dir.join("pool_stats.json.tmp");
 
-    let serialized = serde_json::to_string_pretty(&FilteredPoolMetrics(pool_metrics))
-        .map_err(|_| std::io::Error::other("JSON serialization failed"))?;
+    let serialized = serde_json::to_string_pretty(&FilteredPoolMetrics {
+        metrics: pool_metrics,
+        current_time,
+    })
+    .map_err(|_| std::io::Error::other("JSON serialization failed"))?;
 
     if !serialized.is_empty() {
         let mut file = File::create(&tmp_path)?;
