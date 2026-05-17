@@ -15,6 +15,8 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::accounting::stats::metrics::PoolMetrics;
+use std::time::SystemTime;
+
 const TWO32: f64 = (1u64 << 32) as f64;
 
 impl PoolMetrics {
@@ -76,17 +78,27 @@ impl PoolMetrics {
     fn get_worker_expositions(&self) -> String {
         let mut output = String::new();
 
-        // Collect active users once to avoid repeated filter evaluation
+        let current_time = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        // Collect non-expired users with non-expired active workers
         let active_users: Vec<_> = self
             .users
             .iter()
-            .filter(|(_, u)| u.any_active_workers())
+            .filter(|(_, u)| {
+                !u.should_remove(current_time)
+                    && u.active_workers()
+                        .any(|(_, w)| !w.should_remove(current_time))
+            })
             .collect();
 
+        // Collect non-expired users with any shares
         let some_shares_users: Vec<_> = self
             .users
             .iter()
-            .filter(|(_, u)| u.shares_valid_total > 0)
+            .filter(|(_, u)| !u.should_remove(current_time) && u.shares_valid_total > 0)
             .collect();
 
         // User metrics with btcaddress label
@@ -106,7 +118,10 @@ impl PoolMetrics {
             .push_str("# HELP worker_shares_valid_total Total valid shares submitted by worker\n");
         output.push_str("# TYPE worker_shares_valid_total counter\n");
         for (btcaddress, user) in &active_users {
-            for (workername, worker) in user.active_workers() {
+            for (workername, worker) in user
+                .active_workers()
+                .filter(|(_, w)| !w.should_remove(current_time))
+            {
                 let display_name = if workername.is_empty() {
                     "unnamed"
                 } else {
@@ -125,7 +140,10 @@ impl PoolMetrics {
         output.push_str("# HELP worker_best_share Best share difficulty for this session\n");
         output.push_str("# TYPE worker_best_share gauge\n");
         for (btcaddress, user) in &active_users {
-            for (workername, worker) in user.active_workers() {
+            for (workername, worker) in user
+                .active_workers()
+                .filter(|(_, w)| !w.should_remove(current_time))
+            {
                 let display_name = if workername.is_empty() {
                     "unnamed"
                 } else {
@@ -144,7 +162,10 @@ impl PoolMetrics {
         );
         output.push_str("# TYPE worker_best_share_ever gauge\n");
         for (btcaddress, user) in &active_users {
-            for (workername, worker) in user.active_workers() {
+            for (workername, worker) in user
+                .active_workers()
+                .filter(|(_, w)| !w.should_remove(current_time))
+            {
                 let display_name = if workername.is_empty() {
                     "unnamed"
                 } else {
@@ -162,7 +183,10 @@ impl PoolMetrics {
             .push_str("# HELP worker_last_share_at Last share submission time in Unix timestamp\n");
         output.push_str("# TYPE worker_last_share_at gauge\n");
         for (btcaddress, user) in &active_users {
-            for (workername, worker) in user.active_workers() {
+            for (workername, worker) in user
+                .active_workers()
+                .filter(|(_, w)| !w.should_remove(current_time))
+            {
                 let display_name = if workername.is_empty() {
                     "unnamed"
                 } else {
@@ -185,6 +209,14 @@ mod tests {
     use super::*;
     use crate::accounting::stats::user::User;
     use std::collections::HashMap;
+    use std::time::SystemTime;
+
+    fn now() -> u64 {
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+    }
 
     #[test]
     fn test_get_exposition_format() {
@@ -221,10 +253,11 @@ mod tests {
     fn test_get_worker_expositions() {
         use crate::accounting::stats::worker::Worker;
 
+        let recent = now();
         let mut users = HashMap::new();
 
         let mut user1 = User {
-            last_share_at: 1234567890,
+            last_share_at: recent,
             shares_valid_total: 42,
             best_share: 1000,
             best_share_ever: 2000,
@@ -232,7 +265,7 @@ mod tests {
         };
 
         let worker1 = Worker {
-            last_share_at: 1234567891,
+            last_share_at: recent,
             shares_valid_total: 20,
             active: true,
             best_share: 800,
@@ -240,7 +273,7 @@ mod tests {
         };
 
         let worker2 = Worker {
-            last_share_at: 1234567892,
+            last_share_at: recent,
             shares_valid_total: 22,
             active: false,
             best_share: 600,
@@ -306,13 +339,15 @@ mod tests {
 
         assert!(exposition.contains("# HELP worker_last_share_at"));
         assert!(exposition.contains("# TYPE worker_last_share_at gauge"));
-        assert!(exposition.contains(
-            "worker_last_share_at{btcaddress=\"bc1quser1\",workername=\"worker1\"} 1234567891"
-        ));
+        assert!(exposition.contains(&format!(
+            "worker_last_share_at{{btcaddress=\"bc1quser1\",workername=\"worker1\"}} {}",
+            recent
+        )));
         // Inactive worker2 should NOT be present
-        assert!(!exposition.contains(
-            "worker_last_share_at{btcaddress=\"bc1quser1\",workername=\"worker2\"} 1234567892"
-        ));
+        assert!(!exposition.contains(&format!(
+            "worker_last_share_at{{btcaddress=\"bc1quser1\",workername=\"worker2\"}} {}",
+            recent
+        )));
 
         // Verify no p2pool_ prefix
         assert!(!exposition.contains("p2pool_"));
@@ -322,10 +357,11 @@ mod tests {
     fn test_empty_workername_becomes_unnamed() {
         use crate::accounting::stats::worker::Worker;
 
+        let recent = now();
         let mut users = HashMap::new();
 
         let mut user1 = User {
-            last_share_at: 1234567890,
+            last_share_at: recent,
             shares_valid_total: 10,
             best_share: 500,
             best_share_ever: 500,
@@ -333,7 +369,7 @@ mod tests {
         };
 
         let worker_with_empty_name = Worker {
-            last_share_at: 1234567891,
+            last_share_at: recent,
             shares_valid_total: 10,
             active: true,
             best_share: 500,
@@ -371,8 +407,9 @@ mod tests {
                 r#"worker_best_share_ever{btcaddress="bc1qtest",workername="unnamed"} 500"#
             )
         );
-        assert!(exposition.contains(
-            r#"worker_last_share_at{btcaddress="bc1qtest",workername="unnamed"} 1234567891"#
-        ));
+        assert!(exposition.contains(&format!(
+            r#"worker_last_share_at{{btcaddress="bc1qtest",workername="unnamed"}} {}"#,
+            recent
+        )));
     }
 }

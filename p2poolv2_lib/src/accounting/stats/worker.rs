@@ -53,13 +53,13 @@ impl Worker {
     }
 
     /// Returns true if worker should be removed from stats.
-    /// A worker is removed if it never submitted a share, or if it is inactive
-    /// and its last share was more than 6 hours ago.
+    /// A worker is removed if it never submitted a share, or if its last share
+    /// was more than 6 hours ago regardless of connection state.
     pub fn should_remove(&self, current_time: u64) -> bool {
         if self.last_share_at == 0 {
             return true;
         }
-        !self.active && current_time.saturating_sub(self.last_share_at) > WORKER_EXPIRY_SECS
+        current_time.saturating_sub(self.last_share_at) > WORKER_EXPIRY_SECS
     }
 
     /// Record a share submission for the worker, updating stats accordingly.
@@ -132,10 +132,13 @@ mod tests {
         let fresh_worker = Worker::default();
         assert!(fresh_worker.should_remove(base_time));
 
-        // Active worker should not be removed
-        let mut active_worker = Worker::default();
-        active_worker.record_share(1000, 1100, base_time);
-        assert!(!active_worker.should_remove(base_time + WORKER_EXPIRY_SECS + 1));
+        // Worker with recent share should not be removed
+        let mut recent_worker = Worker::default();
+        recent_worker.record_share(1000, 1100, base_time);
+        assert!(!recent_worker.should_remove(base_time + WORKER_EXPIRY_SECS - 1));
+
+        // Worker past grace period should be removed even if still active
+        assert!(recent_worker.should_remove(base_time + WORKER_EXPIRY_SECS + 1));
 
         // Inactive worker within grace period should not be removed
         let mut recent_inactive = Worker::default();
