@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.10.15] - 2026-05-19
+
+### Fixed
+
+- Gracefully handle bad submit responses from broken ASICs
+
 ## [v0.10.15] - 2026-05-17
 
 ### Fixed
