@@ -23,7 +23,7 @@ use axum::{
     http::StatusCode,
     middleware::{self, Next},
     response::Response,
-    routing::get,
+    routing::{delete, get, post},
 };
 use chrono::DateTime;
 use p2poolv2_lib::monitoring_events::MonitoringEventSender;
@@ -116,6 +116,9 @@ fn build_router(app_state: Arc<AppState>, app_config: AppConfig) -> Router {
             "/share_headers",
             get(endpoints::share_headers::share_headers),
         )
+        .route("/blocked_ips", get(get_blocked_ips))
+        .route("/blocked_ips", post(block_ip))
+        .route("/blocked_ips", delete(unblock_ip))
         .layer(middleware::from_fn_with_state(
             app_state.clone(),
             auth_middleware,
@@ -234,28 +237,71 @@ async fn metrics(State(state): State<Arc<AppState>>) -> String {
 
 /// Response type for the /peers endpoint.
 ///
-/// Reuses the shared PeerResponse from the lib crate but with a
-/// default Connected status since the REST endpoint only lists
-/// currently connected peers.
-use p2poolv2_lib::monitoring_events::{PeerResponse, PeerStatus};
+use p2poolv2_lib::node::connection_tracker::PeerInfoResponse;
 
-/// Returns the list of currently connected peers.
-async fn peers(State(state): State<Arc<AppState>>) -> Result<Json<Vec<PeerResponse>>, ApiError> {
-    let peer_ids = state
+/// Returns enriched info for all connected peers including IP, direction,
+/// and connection duration.
+async fn peers(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<PeerInfoResponse>>, ApiError> {
+    let peer_infos = state
         .node_handle
-        .get_peers()
+        .get_peer_infos()
         .await
-        .map_err(|error| ApiError::ServerError(format!("Failed to get peers: {error}")))?;
+        .map_err(|error| ApiError::ServerError(format!("Failed to get peer infos: {error}")))?;
+    Ok(Json(peer_infos))
+}
 
-    let peers: Vec<PeerResponse> = peer_ids
-        .into_iter()
-        .map(|peer_id| PeerResponse {
-            peer_id: peer_id.to_string(),
-            status: PeerStatus::Connected,
-        })
-        .collect();
+/// Request body for block/unblock IP endpoints.
+#[derive(Deserialize)]
+struct BlockIpRequest {
+    ip: String,
+}
 
-    Ok(Json(peers))
+/// List all blocked IPs.
+async fn get_blocked_ips(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<String>>, ApiError> {
+    let ips =
+        state.node_handle.get_blocked_ips().await.map_err(|error| {
+            ApiError::ServerError(format!("Failed to get blocked IPs: {error}"))
+        })?;
+    let ip_strings: Vec<String> = ips.iter().map(|ip| ip.to_string()).collect();
+    Ok(Json(ip_strings))
+}
+
+/// Add an IP to the runtime blocklist.
+async fn block_ip(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<BlockIpRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let ip: std::net::IpAddr = body
+        .ip
+        .parse()
+        .map_err(|error| ApiError::BadRequest(format!("Invalid IP address: {error}")))?;
+    state
+        .node_handle
+        .block_ip(ip)
+        .await
+        .map_err(|error| ApiError::ServerError(format!("Failed to block IP: {error}")))?;
+    Ok(Json(serde_json::json!({"blocked": body.ip})))
+}
+
+/// Remove an IP from the runtime blocklist.
+async fn unblock_ip(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<BlockIpRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let ip: std::net::IpAddr = body
+        .ip
+        .parse()
+        .map_err(|error| ApiError::BadRequest(format!("Invalid IP address: {error}")))?;
+    state
+        .node_handle
+        .unblock_ip(ip)
+        .await
+        .map_err(|error| ApiError::ServerError(format!("Failed to unblock IP: {error}")))?;
+    Ok(Json(serde_json::json!({"unblocked": body.ip})))
 }
 
 /// Returns PPLNS shares with optional time filtering and limit.

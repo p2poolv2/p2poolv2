@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 pub mod api_client;
+pub mod blocked_ips;
 pub mod candidates;
 pub mod chain_info;
 pub mod dag;
@@ -120,6 +121,18 @@ pub enum Commands {
     },
     /// Show connected peers by querying the running node's API
     PeersInfo,
+    /// List blocked IPs
+    BlockedIps,
+    /// Block an IP address at runtime
+    BlockIp {
+        /// IP address to block
+        ip: String,
+    },
+    /// Unblock an IP address at runtime
+    UnblockIp {
+        /// IP address to unblock
+        ip: String,
+    },
     /// Generate API authentication credentials (salt, password, HMAC)
     GenAuth {
         /// Username for API authentication
@@ -140,6 +153,9 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
         }
         Some(
             Commands::PeersInfo
+            | Commands::BlockedIps
+            | Commands::BlockIp { .. }
+            | Commands::UnblockIp { .. }
             | Commands::Info
             | Commands::PplnsShares { .. }
             | Commands::Shares { .. }
@@ -152,9 +168,15 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
                 let store = commands::db_query::open_store(db_path)?;
 
                 match &cli.command {
-                    Some(Commands::PeersInfo) => {
+                    Some(
+                        Commands::PeersInfo
+                        | Commands::BlockedIps
+                        | Commands::BlockIp { .. }
+                        | Commands::UnblockIp { .. },
+                    ) => {
                         return Err(
-                            "peers-info requires a running node; cannot use with --db-path".into(),
+                            "This command requires a running node; cannot use with --db-path"
+                                .into(),
                         );
                     }
                     Some(Commands::Info) => {
@@ -200,6 +222,15 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
                 match &cli.command {
                     Some(Commands::PeersInfo) => {
                         commands::peers_info::execute(&config.api).await?;
+                    }
+                    Some(Commands::BlockedIps) => {
+                        commands::blocked_ips::list(&config.api).await?;
+                    }
+                    Some(Commands::BlockIp { ip }) => {
+                        commands::blocked_ips::block(&config.api, ip).await?;
+                    }
+                    Some(Commands::UnblockIp { ip }) => {
+                        commands::blocked_ips::unblock(&config.api, ip).await?;
                     }
                     Some(Commands::Info) => {
                         commands::chain_info::execute(&config.api).await?;

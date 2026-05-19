@@ -15,7 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 pub mod behaviour;
-pub(crate) mod connection_tracker;
+pub mod connection_tracker;
 pub mod emission_worker;
 pub mod organise_worker;
 pub mod peer_reconnector;
