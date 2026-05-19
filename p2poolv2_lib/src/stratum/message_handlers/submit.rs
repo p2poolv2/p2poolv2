@@ -152,12 +152,14 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs();
+    // params[2] (extranonce2) and params[4] (nonce) are guaranteed present
+    // because validate_bitcoin_difficulty already validated them above.
     let extranonce2 = message.params[2]
         .as_ref()
-        .ok_or_else(|| Error::InvalidParams("Missing extranonce2".into()))?;
+        .expect("validated by validate_bitcoin_difficulty");
     let nonce = message.params[4]
         .as_ref()
-        .ok_or_else(|| Error::InvalidParams("Missing nonce".into()))?;
+        .expect("validated by validate_bitcoin_difficulty");
     let stratum_share = SimplePplnsShare::new(
         session.user_id.unwrap(),
         current_difficulty,
@@ -1408,5 +1410,62 @@ mod handle_submit_tests {
             err.message,
             "Invalid parameters provided: Missing version bits"
         );
+    }
+
+    #[tokio::test]
+    async fn test_handle_submit_unauthorized_returns_error() {
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        session.subscribed = true;
+        // user_id is None -- simulates a session where authorize partially
+        // failed (username set but register_user errored)
+        assert!(session.user_id.is_none());
+
+        let submit = SimpleRequest::new_submit(
+            1,
+            "worker".to_string(),
+            "1".to_string(),
+            "00000000".to_string(),
+            "504e86ed".to_string(),
+            "e9695791".to_string(),
+        );
+        let tracker_handle = start_tracker_actor();
+        let (emissions_tx, _emissions_rx) = mpsc::channel(10);
+        let (notify_tx, _notify_rx) = mpsc::channel(10);
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let (_mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
+
+        let ctx = StratumContext {
+            notify_tx,
+            tracker_handle: tracker_handle.clone(),
+            bitcoindrpc_client: BitcoindRpcClient::new(
+                &bitcoinrpc_config.url,
+                &bitcoinrpc_config.username,
+                &bitcoinrpc_config.password,
+            )
+            .unwrap(),
+            start_difficulty: 1,
+            minimum_difficulty: 1,
+            maximum_difficulty: None,
+            ignore_difficulty: false,
+            validate_addresses: true,
+            emissions_tx,
+            network: bitcoin::network::Network::Regtest,
+            metrics: metrics_handle,
+            chain_store_handle,
+        };
+
+        let messages = handle_submit(submit, &mut session, ctx).await.unwrap();
+        let response = match &messages[..] {
+            [Message::Response(r)] => r,
+            _ => panic!("expected Response"),
+        };
+        assert_eq!(response.result, None);
+        let err = response.error.as_ref().unwrap();
+        assert_eq!(err.code, 24, "should be UnauthorizedWorker (code 24)");
+        assert_eq!(err.message, "Not authorized");
     }
 }
