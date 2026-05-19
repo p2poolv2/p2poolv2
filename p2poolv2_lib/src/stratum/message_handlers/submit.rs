@@ -61,6 +61,12 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
             StratumErrorCode::NotSubscribed,
         ))]);
     }
+    if session.user_id.is_none() {
+        return Ok(vec![Message::Response(
+            Response::new_error(message.id, StratumErrorCode::UnauthorizedWorker)
+                .with_message("Not authorized".to_string()),
+        )]);
+    }
     if message.params.len() < 5 {
         return Err(Error::InvalidParams("Missing parameters".into()));
     }
@@ -146,6 +152,12 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs();
+    let extranonce2 = message.params[2]
+        .as_ref()
+        .ok_or_else(|| Error::InvalidParams("Missing extranonce2".into()))?;
+    let nonce = message.params[4]
+        .as_ref()
+        .ok_or_else(|| Error::InvalidParams("Missing nonce".into()))?;
     let stratum_share = SimplePplnsShare::new(
         session.user_id.unwrap(),
         current_difficulty,
@@ -153,12 +165,11 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
         session.workername.clone().unwrap_or_default(),
         timestamp,
         id.to_string(),
-        message.params[2].as_ref().unwrap().to_string(),
-        message.params[4].as_ref().unwrap().to_string(),
+        extranonce2.to_string(),
+        nonce.to_string(),
     );
 
-    let enonce2_hex = message.params[2].as_ref().unwrap();
-    let extranonce = Extranonce::from_enonce_hex(&session.enonce1_hex, enonce2_hex)
+    let extranonce = Extranonce::from_enonce_hex(&session.enonce1_hex, extranonce2)
         .map_err(|error| Error::SubmitFailure(format!("Failed to build extranonce: {error}")))?;
 
     stratum_context
