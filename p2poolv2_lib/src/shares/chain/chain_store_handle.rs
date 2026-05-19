@@ -688,8 +688,13 @@ impl ChainStoreHandle {
 
     /// Promote candidates to confirmed.
     /// Returns the confirmed chain height after organising, if changed.
-    pub async fn organise_block(&self) -> Result<Option<u32>, StoreError> {
-        let height = self.store_handle.organise_block().await?;
+    /// When promoted_header is provided, the block can be confirmed
+    /// directly if it extends the confirmed tip.
+    pub async fn organise_block(
+        &self,
+        promoted_header: Option<ShareHeader>,
+    ) -> Result<Option<u32>, StoreError> {
+        let height = self.store_handle.organise_block(promoted_header).await?;
         debug!("Organised block at confirmed height {height:?}");
         Ok(height)
     }
@@ -705,8 +710,8 @@ impl ChainStoreHandle {
     /// the next promote_block call will pick up.
     pub async fn promote_block(&self, header: ShareHeader) -> Result<Option<u32>, StoreError> {
         let blockhash = header.block_hash();
-        self.organise_header(header).await?;
-        let height = self.organise_block().await?;
+        self.organise_header(header.clone()).await?;
+        let height = self.organise_block(Some(header)).await?;
         info!("Promoted block {blockhash} to confirmed height {height:?}");
         Ok(height)
     }
@@ -800,7 +805,7 @@ mockall::mock! {
         pub fn get_btcaddresses_for_user_ids(&self, user_ids: &[u64]) -> Result<Vec<(u64, String)>, StoreError>;
         pub async fn init_or_setup_genesis(&self, genesis_block: ShareBlock) -> Result<(), StoreError>;
         pub async fn organise_header(&self, header: ShareHeader) -> Result<Option<u32>, StoreError>;
-        pub async fn organise_block(&self) -> Result<Option<u32>, StoreError>;
+        pub async fn organise_block(&self, promoted_header: Option<ShareHeader>) -> Result<Option<u32>, StoreError>;
         pub async fn promote_block(&self, header: ShareHeader) -> Result<Option<u32>, StoreError>;
         pub async fn add_share_block(&self, share: ShareBlock) -> Result<(), StoreError>;
         pub async fn add_share_block_and_organise_header(&self, share: ShareBlock) -> Result<Option<u32>, StoreError>;
@@ -918,7 +923,7 @@ mod tests {
                 .organise_header(share.header.clone())
                 .await
                 .unwrap();
-            chain_handle.organise_block().await.unwrap();
+            chain_handle.organise_block(None).await.unwrap();
             prev_hash = share.block_hash();
             shares.push(share);
         }
@@ -985,7 +990,7 @@ mod tests {
                 .organise_header(share.header.clone())
                 .await
                 .unwrap();
-            chain_handle.organise_block().await.unwrap();
+            chain_handle.organise_block(None).await.unwrap();
             prev_hash = share.block_hash();
             shares.push(share);
         }
@@ -1054,7 +1059,7 @@ mod tests {
                 .organise_header(share.header.clone())
                 .await
                 .unwrap();
-            chain_handle.organise_block().await.unwrap();
+            chain_handle.organise_block(None).await.unwrap();
             prev_hash = share.block_hash();
             shares.push(share);
         }
@@ -1170,7 +1175,7 @@ mod tests {
             .organise_header(share_a.header.clone())
             .await
             .unwrap();
-        chain_handle.organise_block().await.unwrap();
+        chain_handle.organise_block(None).await.unwrap();
 
         let share_b = TestShareBlockBuilder::new()
             .prev_share_blockhash(share_a.block_hash().to_string())
@@ -1182,7 +1187,7 @@ mod tests {
             .organise_header(share_b.header.clone())
             .await
             .unwrap();
-        chain_handle.organise_block().await.unwrap();
+        chain_handle.organise_block(None).await.unwrap();
 
         // Store an uncle at height 1 (same height as share_a) via the
         // underlying Store, which puts it in the BlockHeight CF without
