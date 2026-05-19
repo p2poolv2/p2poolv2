@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 pub mod behaviour;
+pub(crate) mod connection_tracker;
 pub mod emission_worker;
 pub mod organise_worker;
 pub mod peer_reconnector;
@@ -52,7 +53,9 @@ use libp2p::{
     kad::{Event as KademliaEvent, QueryResult},
     swarm::SwarmEvent,
 };
+use std::collections::HashSet;
 use std::error::Error;
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -90,6 +93,8 @@ pub enum SwarmSend<C> {
     Disconnect(PeerId),
 }
 
+use connection_tracker::{ConnectionAction, ConnectionTracker};
+
 /// Node is the main struct that represents the node
 struct Node {
     swarm: Swarm<P2PoolBehaviour>,
@@ -100,8 +105,7 @@ struct Node {
     config: Config,
     monitoring_event_sender: MonitoringEventSender,
     peer_reconnector: peer_reconnector::PeerReconnector,
-    /// Tracks Multiaddrs of currently connected outbound peers for reconnection logic
-    connected_dial_addresses: Vec<Multiaddr>,
+    connection_tracker: ConnectionTracker,
 }
 
 impl Node {
@@ -212,6 +216,24 @@ impl Node {
 
         let peer_reconnector = peer_reconnector::PeerReconnector::new(&config.network.dial_peers);
 
+        let blocked_ips: HashSet<IpAddr> = config
+            .network
+            .blocked_ips
+            .iter()
+            .filter_map(|ip_str| {
+                ip_str
+                    .parse::<IpAddr>()
+                    .map_err(|error| {
+                        warn!("Invalid blocked IP '{}' in config: {}", ip_str, error);
+                    })
+                    .ok()
+            })
+            .collect();
+
+        if !blocked_ips.is_empty() {
+            info!("Loaded {} blocked IPs from config", blocked_ips.len());
+        }
+
         Ok(Self {
             swarm,
             swarm_tx,
@@ -221,7 +243,7 @@ impl Node {
             config,
             monitoring_event_sender,
             peer_reconnector,
-            connected_dial_addresses: Vec::new(),
+            connection_tracker: ConnectionTracker::new(blocked_ips),
         })
     }
 
@@ -253,7 +275,7 @@ impl Node {
     fn attempt_reconnections(&mut self) {
         let addresses = self
             .peer_reconnector
-            .addresses_to_reconnect(&self.connected_dial_addresses);
+            .addresses_to_reconnect(&self.connection_tracker.connected_dial_addresses);
         for address in addresses {
             match self.swarm.dial(address.clone()) {
                 Ok(_) => {
@@ -306,31 +328,19 @@ impl Node {
             SwarmEvent::ConnectionEstablished {
                 peer_id, endpoint, ..
             } => {
-                match &endpoint {
-                    libp2p::core::ConnectedPoint::Dialer { address, .. } => {
-                        self.peer_reconnector.record_dial_success(address);
-                        if !self.connected_dial_addresses.contains(address) {
-                            self.connected_dial_addresses.push(address.clone());
-                        }
-                        if let Err(error) = send_handshake(
-                            peer_id,
-                            self.chain_store_handle.clone(),
-                            self.swarm_tx.clone(),
-                        )
-                        .await
-                        {
-                            error!(
-                                "Failed to send handshake to outbound peer {}: {}",
-                                peer_id, error
-                            );
-                        } else {
-                            debug!(
-                                "Outbound connection established, handshake sent to peer: {}",
-                                peer_id
-                            );
-                        }
+                if let libp2p::core::ConnectedPoint::Dialer { ref address, .. } = endpoint {
+                    self.peer_reconnector.record_dial_success(address);
+                }
+
+                match self
+                    .connection_tracker
+                    .handle_established(peer_id, &endpoint)
+                {
+                    ConnectionAction::Block => {
+                        let _ = self.swarm.disconnect_peer_id(peer_id);
+                        return Ok(());
                     }
-                    libp2p::core::ConnectedPoint::Listener { .. } => {
+                    ConnectionAction::Accept(ref peer_info) => {
                         if let Err(error) = send_handshake(
                             peer_id,
                             self.chain_store_handle.clone(),
@@ -338,18 +348,16 @@ impl Node {
                         )
                         .await
                         {
-                            error!(
-                                "Failed to send handshake to inbound peer {}: {}",
-                                peer_id, error
-                            );
+                            error!("Failed to send handshake to peer {}: {}", peer_id, error);
                         } else {
                             debug!(
-                                "Inbound connection established, handshake sent to peer: {}",
-                                peer_id
+                                "{:?} connection established, handshake sent to peer: {}",
+                                peer_info.direction, peer_id
                             );
                         }
                     }
                 }
+
                 self.request_response_handler.add_peer(peer_id);
                 let _ = self
                     .monitoring_event_sender
@@ -363,9 +371,7 @@ impl Node {
                 peer_id, endpoint, ..
             } => {
                 info!("Disconnected from peer: {peer_id}");
-                if let libp2p::core::ConnectedPoint::Dialer { ref address, .. } = endpoint {
-                    self.connected_dial_addresses.retain(|addr| addr != address);
-                }
+                self.connection_tracker.handle_closed(&peer_id, &endpoint);
                 self.swarm.behaviour_mut().remove_peer(&peer_id);
                 self.request_response_handler.remove_peer(&peer_id).await;
                 let _ = self
@@ -546,6 +552,7 @@ mod tests {
             max_transaction_per_second: 10,
             max_requests_per_second: 1,
             dial_timeout_secs: 2,
+            blocked_ips: vec![],
         };
         network_config.dial_peers = vec![unreachable_peer];
         network_config.dial_timeout_secs = 2;
