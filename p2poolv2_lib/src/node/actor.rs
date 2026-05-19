@@ -215,6 +215,8 @@ impl NodeHandle {
     /// Returns the handle and the string representations of the generated peer IDs
     /// so callers can assert on expected values without depending on libp2p directly.
     pub fn new_for_test_with_peer_count(count: usize) -> (Self, Vec<String>) {
+        use crate::node::connection_tracker::{ConnectionDirection, PeerInfoResponse};
+
         let peer_ids: Vec<libp2p::PeerId> = (0..count)
             .map(|_| {
                 libp2p::identity::Keypair::generate_ed25519()
@@ -223,6 +225,16 @@ impl NodeHandle {
             })
             .collect();
         let peer_id_strings: Vec<String> = peer_ids.iter().map(|id| id.to_string()).collect();
+        let peer_infos: Vec<PeerInfoResponse> = peer_ids
+            .iter()
+            .map(|peer_id| PeerInfoResponse {
+                peer_id: peer_id.to_string(),
+                ip: Some("127.0.0.1".to_string()),
+                address: "/ip4/127.0.0.1/tcp/46884".to_string(),
+                direction: ConnectionDirection::Outbound,
+                connected_secs: 0,
+            })
+            .collect();
         let (command_tx, mut command_rx) = mpsc::channel::<Command>(32);
         tokio::spawn(async move {
             while let Some(command) = command_rx.recv().await {
@@ -241,7 +253,7 @@ impl NodeHandle {
                         let _ = reply.send(Ok(()));
                     }
                     Command::GetPeerInfos(reply) => {
-                        let _ = reply.send(Vec::new());
+                        let _ = reply.send(peer_infos.clone());
                     }
                     Command::BlockIp(_, reply) => {
                         let _ = reply.send(());

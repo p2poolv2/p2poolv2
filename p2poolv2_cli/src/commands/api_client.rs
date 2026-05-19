@@ -69,7 +69,6 @@ impl ApiClient {
         Ok(response.text().await?)
     }
 
-    /// Wrapper around get returning parsed JSON respons.
     /// Perform an authenticated GET request and deserialize the JSON response.
     pub async fn get_json<T: serde::de::DeserializeOwned>(
         &self,
@@ -78,6 +77,58 @@ impl ApiClient {
         let body = self.get(path).await?;
         let parsed: T = serde_json::from_str(&body)?;
         Ok(parsed)
+    }
+
+    /// Perform an authenticated POST request with a JSON body and
+    /// return the parsed JSON response.
+    pub async fn post_json(
+        &self,
+        path: &str,
+        body: &serde_json::Value,
+    ) -> Result<serde_json::Value, Box<dyn Error>> {
+        let response = self.send_json(reqwest::Method::POST, path, body).await?;
+        Ok(serde_json::from_str(&response)?)
+    }
+
+    /// Perform an authenticated DELETE request with a JSON body and
+    /// return the parsed JSON response.
+    pub async fn delete_json(
+        &self,
+        path: &str,
+        body: &serde_json::Value,
+    ) -> Result<serde_json::Value, Box<dyn Error>> {
+        let response = self.send_json(reqwest::Method::DELETE, path, body).await?;
+        Ok(serde_json::from_str(&response)?)
+    }
+
+    /// Send a request with a JSON body using the given HTTP method.
+    async fn send_json(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        body: &serde_json::Value,
+    ) -> Result<String, Box<dyn Error>> {
+        let url = format!("{}{}", self.base_url, path);
+        let mut request = self.client.request(method, &url).json(body);
+
+        if let Some(header_value) = &self.auth_header {
+            request = request.header("Authorization", header_value.clone());
+        }
+
+        let response = request.send().await.map_err(|error| {
+            format!("Failed to connect to API at {url}: {error}. Is the node running?")
+        })?;
+
+        if !response.status().is_success() {
+            return Err(format!(
+                "API returned status {}: {}",
+                response.status(),
+                response.text().await.unwrap_or_default()
+            )
+            .into());
+        }
+
+        Ok(response.text().await?)
     }
 }
 
