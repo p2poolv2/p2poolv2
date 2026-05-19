@@ -14,45 +14,48 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use super::{Chain, Height, Store};
+use super::{Chain, Height, Store, TopResult};
+use crate::shares::share_block::ShareHeader;
 use crate::store::writer::StoreError;
 use tracing::debug;
 
 impl Store {
     /// Promote candidates to confirmed if conditions are met.
     ///
-    /// Reads the candidate and confirmed chain state from committed RocksDB
-    /// state and checks whether the candidate chain should extend or reorg
-    /// the confirmed chain. Does not touch the candidate chain.
+    /// When `promoted_header` is provided and it directly extends the
+    /// confirmed tip, the block is confirmed immediately without
+    /// consulting the candidate chain. This prevents the node from
+    /// getting stuck when the candidate chain is on a fork whose blocks
+    /// lack block data.
     ///
-    /// Only candidates whose full block data has been downloaded are
-    /// eligible for promotion. The candidate list is truncated at the
-    /// first block missing block data so the confirmed chain never
-    /// advances past an incomplete block.
+    /// Otherwise falls back to the candidate chain: reads candidate and
+    /// confirmed state, then extends or reorgs the confirmed chain from
+    /// candidates whose block data is available.
     ///
     /// Returns the new confirmed height if it changed, or None if unchanged.
     pub(crate) fn organise_block(
         &self,
+        promoted_header: Option<&ShareHeader>,
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<Option<Height>, StoreError> {
         let top_confirmed = self.get_top_confirmed().map_err(|_| {
             StoreError::Database("organise_block called without a genesis block".into())
         })?;
 
-        let Ok(top_candidate) = self.get_top_candidate() else {
-            return Ok(None); // no new blocks organised
+        let candidates = if let Some(header) = promoted_header {
+            self.build_direct_candidates(header, &top_confirmed)
+        } else {
+            Vec::new()
         };
 
-        debug!(
-            "Organise block with top_confirmed {:?}, top_candidate {:?}",
-            top_confirmed, top_candidate
-        );
-
-        let all_candidates = self.get_candidates(top_confirmed.height + 1, top_candidate.height)?;
-        let candidates = self.contiguous_candidates_with_block_data(&all_candidates);
+        let candidates = if candidates.is_empty() {
+            self.find_promotable_candidates(&top_confirmed)?
+        } else {
+            candidates
+        };
 
         if candidates.is_empty() {
-            return Ok(None); // no new blocks organised
+            return Ok(None);
         }
 
         let promotable_height = candidates.last().unwrap().0;
@@ -66,6 +69,59 @@ impl Store {
         }
 
         Ok(None)
+    }
+
+    /// Find the contiguous prefix of candidates with block data that
+    /// are eligible for promotion to confirmed.
+    ///
+    /// Returns an empty vec when no candidate chain exists or when the
+    /// first candidate lacks block data.
+    fn find_promotable_candidates(&self, top_confirmed: &TopResult) -> Result<Chain, StoreError> {
+        let Ok(top_candidate) = self.get_top_candidate() else {
+            return Ok(Vec::new());
+        };
+
+        debug!(
+            "Finding promotable candidates: top_confirmed {:?}, top_candidate {:?}",
+            top_confirmed, top_candidate
+        );
+
+        let all_candidates = self.get_candidates(top_confirmed.height + 1, top_candidate.height)?;
+        Ok(self.contiguous_candidates_with_block_data(&all_candidates))
+    }
+
+    /// Build a single-element candidates vec from the promoted block
+    /// if it directly extends the confirmed tip.
+    ///
+    /// Returns an empty vec when the promoted block is not a child of
+    /// the confirmed tip or its metadata is not ready. This allows the
+    /// caller to fall through to the normal candidate search.
+    fn build_direct_candidates(
+        &self,
+        promoted_header: &ShareHeader,
+        top_confirmed: &TopResult,
+    ) -> Chain {
+        if promoted_header.prev_share_blockhash != top_confirmed.hash {
+            return Vec::new();
+        }
+
+        let blockhash = promoted_header.block_hash();
+        let Ok(metadata) = self.get_block_metadata(&blockhash) else {
+            return Vec::new();
+        };
+        let Some(expected_height) = metadata.expected_height else {
+            return Vec::new();
+        };
+
+        if expected_height != top_confirmed.height + 1 {
+            return Vec::new();
+        }
+
+        debug!(
+            "Direct confirmed extension: block {blockhash} at height {expected_height} \
+             extends confirmed tip"
+        );
+        vec![(expected_height, blockhash)]
     }
 
     /// Return the contiguous prefix of candidates that have full block
@@ -119,7 +175,7 @@ mod tests {
         // Now confirmed == candidate tip. Calling organise_block again
         // must return None since there is nothing new to promote.
         let mut batch = Store::get_write_batch();
-        let result = store.organise_block(&mut batch).unwrap();
+        let result = store.organise_block(None, &mut batch).unwrap();
         assert_eq!(
             result, None,
             "organise_block should return None when confirmed has caught up to candidates"
@@ -142,7 +198,7 @@ mod tests {
         assert!(store.get_top_candidate().is_err());
 
         let mut batch = Store::get_write_batch();
-        let result = store.organise_block(&mut batch).unwrap();
+        let result = store.organise_block(None, &mut batch).unwrap();
         assert_eq!(
             result, None,
             "organise_block should return None when no candidate chain exists"
@@ -883,7 +939,7 @@ mod tests {
 
         // organise_block should not promote since first candidate has no block data
         let mut batch = Store::get_write_batch();
-        let result = store.organise_block(&mut batch).unwrap();
+        let result = store.organise_block(None, &mut batch).unwrap();
         assert_eq!(
             result, None,
             "organise_block should not promote candidates without block data"
@@ -937,7 +993,7 @@ mod tests {
 
         // organise_block should promote only share1 and share2
         let mut batch = Store::get_write_batch();
-        let result = store.organise_block(&mut batch).unwrap();
+        let result = store.organise_block(None, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         assert_eq!(result, Some(2));
@@ -999,5 +1055,92 @@ mod tests {
         );
         assert_eq!(store.get_top_confirmed_height().unwrap(), 2);
         assert!(store.get_confirmed_at_height(3).is_err());
+    }
+
+    /// Direct confirmed extension bypasses a stuck candidate chain.
+    ///
+    /// Scenario
+    /// - genesis -> share1(h:1) confirmed
+    /// - Candidate chain on a different fork (header-only, no block data)
+    /// - Local block at h:2 with parent = share1 (confirmed tip), with block data
+    /// - organise_block with promoted_header = local block
+    /// - Confirmed extends to h:2 with the local block
+    #[test]
+    fn test_direct_confirmed_extension_bypasses_stuck_candidates() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // share1: confirmed at h:1
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        store.push_to_confirmed_chain(&share1).unwrap();
+        assert_eq!(store.get_top_confirmed_height().unwrap(), 1);
+
+        // fork_share: different child of genesis, candidate at h:1 on a
+        // different fork. Push header only (no block data) to simulate
+        // a peer's fork with headers but no bodies.
+        let fork_share = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695799)
+            .build();
+        store.push_to_candidate_chain(&fork_share).unwrap();
+
+        // fork_share2: extends the fork to h:2 (header only, no block data)
+        let fork_share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(fork_share.block_hash().to_string())
+            .nonce(0xe9695800)
+            .build();
+        store.push_to_candidate_chain(&fork_share2).unwrap();
+
+        // Candidate tip is now on the fork at h:2 with no block data
+        assert_eq!(store.get_top_candidate_height().ok(), Some(2));
+        assert!(!store.share_block_exists(&fork_share.block_hash()));
+
+        // local_block: child of share1 (confirmed tip), WITH block data.
+        // This simulates a locally mined block.
+        let local_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(0xe9695801)
+            .build();
+        // Store block data
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&local_block, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+        // Initialise metadata via organise_header
+        let mut batch = Store::get_write_batch();
+        store
+            .organise_header(&local_block.header, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // organise_block without promoted_header returns None (candidates
+        // stuck on fork with no block data)
+        let mut batch = Store::get_write_batch();
+        let result = store.organise_block(None, &mut batch).unwrap();
+        assert_eq!(
+            result, None,
+            "Without promoted_header, candidates are stuck"
+        );
+
+        // organise_block WITH promoted_header should directly extend confirmed
+        let mut batch = Store::get_write_batch();
+        let result = store
+            .organise_block(Some(&local_block.header), &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert_eq!(result, Some(2));
+        assert_eq!(store.get_top_confirmed_height().unwrap(), 2);
+        assert_eq!(
+            store.get_confirmed_at_height(2).unwrap(),
+            local_block.block_hash()
+        );
     }
 }
