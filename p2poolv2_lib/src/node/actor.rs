@@ -133,6 +133,42 @@ impl NodeHandle {
             .await;
         rx.await.unwrap_or_default()
     }
+
+    /// Get enriched info for all connected peers.
+    pub async fn get_peer_infos(
+        &self,
+    ) -> Result<Vec<crate::node::connection_tracker::PeerInfoResponse>, Box<dyn Error + Send + Sync>>
+    {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx.send(Command::GetPeerInfos(tx)).await?;
+        Ok(rx.await?)
+    }
+
+    /// Add an IP to the runtime blocklist.
+    pub async fn block_ip(&self, ip: std::net::IpAddr) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx.send(Command::BlockIp(ip, tx)).await?;
+        Ok(rx.await?)
+    }
+
+    /// Remove an IP from the runtime blocklist.
+    pub async fn unblock_ip(
+        &self,
+        ip: std::net::IpAddr,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx.send(Command::UnblockIp(ip, tx)).await?;
+        Ok(rx.await?)
+    }
+
+    /// List all blocked IPs.
+    pub async fn get_blocked_ips(
+        &self,
+    ) -> Result<Vec<std::net::IpAddr>, Box<dyn Error + Send + Sync>> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx.send(Command::GetBlockedIps(tx)).await?;
+        Ok(rx.await?)
+    }
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -155,6 +191,18 @@ impl NodeHandle {
                     }
                     Command::SendToPeer(_, _, reply) => {
                         let _ = reply.send(Ok(()));
+                    }
+                    Command::GetPeerInfos(reply) => {
+                        let _ = reply.send(Vec::new());
+                    }
+                    Command::BlockIp(_, reply) => {
+                        let _ = reply.send(());
+                    }
+                    Command::UnblockIp(_, reply) => {
+                        let _ = reply.send(());
+                    }
+                    Command::GetBlockedIps(reply) => {
+                        let _ = reply.send(Vec::new());
                     }
                 }
             }
@@ -191,6 +239,18 @@ impl NodeHandle {
                     }
                     Command::SendToPeer(_, _, reply) => {
                         let _ = reply.send(Ok(()));
+                    }
+                    Command::GetPeerInfos(reply) => {
+                        let _ = reply.send(Vec::new());
+                    }
+                    Command::BlockIp(_, reply) => {
+                        let _ = reply.send(());
+                    }
+                    Command::UnblockIp(_, reply) => {
+                        let _ = reply.send(());
+                    }
+                    Command::GetBlockedIps(reply) => {
+                        let _ = reply.send(Vec::new());
                     }
                 }
             }
@@ -475,6 +535,28 @@ impl NodeActor {
                             let result = self.node.handle_get_pplns_shares(query);
                             if tx.send(result).is_err() {
                                 error!("Failed to send GetPplnsShares response - receiver dropped");
+                            }
+                        },
+                        Some(Command::GetPeerInfos(tx)) => {
+                            let infos = self.node.connection_tracker.get_peer_infos();
+                            if tx.send(infos).is_err() {
+                                error!("Failed to send GetPeerInfos response - receiver dropped");
+                            }
+                        },
+                        Some(Command::BlockIp(ip, tx)) => {
+                            info!("Blocking IP {ip} via runtime command");
+                            self.node.connection_tracker.block_ip(ip);
+                            let _ = tx.send(());
+                        },
+                        Some(Command::UnblockIp(ip, tx)) => {
+                            info!("Unblocking IP {ip} via runtime command");
+                            self.node.connection_tracker.unblock_ip(ip);
+                            let _ = tx.send(());
+                        },
+                        Some(Command::GetBlockedIps(tx)) => {
+                            let ips = self.node.connection_tracker.get_blocked_ips();
+                            if tx.send(ips).is_err() {
+                                error!("Failed to send GetBlockedIps response - receiver dropped");
                             }
                         },
                         None => {
