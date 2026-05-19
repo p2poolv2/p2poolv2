@@ -268,7 +268,7 @@ async fn test_three_nodes_share_sync() {
             .organise_header(share_block.header.clone())
             .await
             .unwrap();
-        chain_store_handle1.organise_block().await.unwrap();
+        chain_store_handle1.organise_block(None).await.unwrap();
     }
 
     // Verify node 1 has all shares

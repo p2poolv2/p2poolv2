@@ -323,10 +323,18 @@ impl StoreHandle {
 
     /// Promote candidates to confirmed.
     /// Returns the confirmed chain height after organising, if changed.
-    pub async fn organise_block(&self) -> Result<Option<u32>, StoreError> {
+    /// When promoted_header is provided, the block can be confirmed
+    /// directly if it extends the confirmed tip.
+    pub async fn organise_block(
+        &self,
+        promoted_header: Option<ShareHeader>,
+    ) -> Result<Option<u32>, StoreError> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.write_tx
-            .send(WriteCommand::OrganiseBlock { reply: reply_tx })
+            .send(WriteCommand::OrganiseBlock {
+                promoted_header,
+                reply: reply_tx,
+            })
             .map_err(|_| StoreError::ChannelClosed)?;
         reply_rx.await.map_err(|_| StoreError::ChannelClosed)?
     }
@@ -384,7 +392,7 @@ mockall::mock! {
 
         // Serialized writes (async)
         pub async fn organise_header(&self, header: ShareHeader) -> Result<Option<u32>, StoreError>;
-        pub async fn organise_block(&self) -> Result<Option<u32>, StoreError>;
+        pub async fn organise_block(&self, promoted_header: Option<ShareHeader>) -> Result<Option<u32>, StoreError>;
         pub async fn add_share_block(&self, share: ShareBlock) -> Result<(), StoreError>;
         pub async fn add_share_block_and_organise_header(&self, share: ShareBlock) -> Result<Option<u32>, StoreError>;
         pub async fn setup_genesis(&self, genesis: ShareBlock) -> Result<(), StoreError>;
