@@ -262,6 +262,10 @@ pub struct NetworkConfig {
     pub max_transaction_per_second: u32,
     pub max_requests_per_second: u64,
     pub dial_timeout_secs: u64,
+    /// IP addresses to block from connecting. Connections from these IPs
+    /// are immediately disconnected.
+    #[serde(default)]
+    pub blocked_ips: Vec<String>,
 }
 
 impl Default for NetworkConfig {
@@ -281,6 +285,7 @@ impl Default for NetworkConfig {
             max_transaction_per_second: 100,
             max_requests_per_second: 100,
             dial_timeout_secs: 30,
+            blocked_ips: vec![],
         }
     }
 }
