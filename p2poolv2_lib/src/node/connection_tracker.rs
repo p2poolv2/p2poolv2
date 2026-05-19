@@ -137,6 +137,21 @@ impl ConnectionTracker {
         self.connected_peers.remove(peer_id);
     }
 
+    /// Add an IP to the blocklist.
+    pub(crate) fn block_ip(&mut self, ip: IpAddr) {
+        self.blocked_ips.insert(ip);
+    }
+
+    /// Remove an IP from the blocklist.
+    pub(crate) fn unblock_ip(&mut self, ip: IpAddr) {
+        self.blocked_ips.remove(&ip);
+    }
+
+    /// Return all blocked IPs.
+    pub(crate) fn get_blocked_ips(&self) -> Vec<IpAddr> {
+        self.blocked_ips.iter().copied().collect()
+    }
+
     /// Build a list of connected peer info responses.
     pub(crate) fn get_peer_infos(&self) -> Vec<PeerInfoResponse> {
         let now = Instant::now();
