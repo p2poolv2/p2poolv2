@@ -15,8 +15,10 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::accounting::payout::simple_pplns::SimplePplnsShare;
+use crate::node::connection_tracker::PeerInfoResponse;
 use crate::node::messages::Message;
 use std::error::Error;
+use std::net::IpAddr;
 use tokio::sync::oneshot;
 
 /// Struct for queruying the PPLNS shares from the node
@@ -49,4 +51,12 @@ pub enum Command {
     Shutdown(oneshot::Sender<()>),
     /// Get PPLNS shares from the node with optional filtering
     GetPplnsShares(GetPplnsShareQuery, oneshot::Sender<Vec<SimplePplnsShare>>),
+    /// Get enriched info for all connected peers
+    GetPeerInfos(oneshot::Sender<Vec<PeerInfoResponse>>),
+    /// Add an IP to the runtime blocklist
+    BlockIp(IpAddr, oneshot::Sender<()>),
+    /// Remove an IP from the runtime blocklist
+    UnblockIp(IpAddr, oneshot::Sender<()>),
+    /// List all blocked IPs
+    GetBlockedIps(oneshot::Sender<Vec<IpAddr>>),
 }
