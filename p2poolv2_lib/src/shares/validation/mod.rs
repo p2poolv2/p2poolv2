@@ -126,7 +126,6 @@ pub trait ShareValidator {
         &self,
         share: &ShareBlock,
         chain_store_handle: &ChainStoreHandle,
-        pplns_window: Arc<RwLock<PplnsWindow>>,
     ) -> Result<(), ValidationError>;
 
     /// Validate uncles: count within MAX_UNCLES, no duplicates, each exists
@@ -160,6 +159,7 @@ pub trait ShareValidator {
         &self,
         share: &ShareBlock,
         chain_store_handle: &ChainStoreHandle,
+        pplns_window: Arc<RwLock<PplnsWindow>>,
     ) -> Result<(), ValidationError>;
 
     /// Validate a share header meets minimum pool difficulty without requiring parent.
@@ -800,7 +800,6 @@ impl ShareValidator for DefaultShareValidator {
         &self,
         share: &ShareBlock,
         chain_store_handle: &ChainStoreHandle,
-        pplns_window: Arc<RwLock<PplnsWindow>>,
     ) -> Result<(), ValidationError> {
         // When a hole in the chain is filled, schedule_dependents
         // re-schedules children that were already validated but could
@@ -818,7 +817,6 @@ impl ShareValidator for DefaultShareValidator {
         self.validate_uncles(share, chain_store_handle)?;
         self.validate_block_size(share)?;
         self.validate_share_coinbase(share)?;
-        self.validate_bitcoin_coinbase(share, chain_store_handle, pplns_window)?;
         self.validate_merkle_root(share)?;
         self.validate_share_witness_commitment(share)?;
         self.validate_transaction_count(share)?;
@@ -917,8 +915,10 @@ impl ShareValidator for DefaultShareValidator {
         &self,
         share: &ShareBlock,
         chain_store_handle: &ChainStoreHandle,
+        pplns_window: Arc<RwLock<PplnsWindow>>,
     ) -> Result<(), ValidationError> {
         self.validate_timestamp(share, chain_store_handle, self.time_provider.as_ref())?;
+        self.validate_bitcoin_coinbase(share, chain_store_handle, pplns_window)?;
         self.validate_prevouts(share, chain_store_handle)
     }
 }
@@ -1045,7 +1045,6 @@ mockall::mock! {
             &self,
             share: &ShareBlock,
             chain_store_handle: &ChainStoreHandle,
-            pplns_window: Arc<RwLock<PplnsWindow>>,
         ) -> Result<(), ValidationError>;
 
         fn validate_uncles(
@@ -1065,6 +1064,7 @@ mockall::mock! {
             &self,
             share: &ShareBlock,
             chain_store_handle: &ChainStoreHandle,
+            pplns_window: Arc<RwLock<PplnsWindow>>,
         ) -> Result<(), ValidationError>;
 
         fn validate_header_minimum_difficulty(
@@ -1457,20 +1457,9 @@ mod tests {
             .expect_setup_share_for_chain()
             .returning(Ok);
 
-        let pplns_window = {
-            let mut mock_window = PplnsWindow::default();
-            mock_window
-                .expect_network()
-                .return_const(bitcoin::Network::Regtest);
-            mock_window
-                .expect_get_distribution_from_start_hash()
-                .returning(|_, _, _| Some(HashMap::from([(make_test_address(1), 100)])));
-            Arc::new(RwLock::new(mock_window))
-        };
         let validator =
             DefaultShareValidator::new(PoolDifficulty::default(), 1, b"P2Poolv2".to_vec());
-        let result =
-            validator.validate_share_block(&share_block, &chain_store_handle, pplns_window);
+        let result = validator.validate_share_block(&share_block, &chain_store_handle);
 
         assert!(result.is_ok(), "Expected Ok, got: {:?}", result.err());
     }
@@ -1486,18 +1475,7 @@ mod tests {
             .expect_has_status()
             .returning(|_, _| true);
 
-        let pplns_window = {
-            let mut mock_window = PplnsWindow::default();
-            mock_window
-                .expect_network()
-                .return_const(bitcoin::Network::Regtest);
-            mock_window
-                .expect_get_distribution_from_start_hash()
-                .returning(|_, _, _| Some(HashMap::new()));
-            Arc::new(RwLock::new(mock_window))
-        };
-        let result =
-            validator().validate_share_block(&share_block, &chain_store_handle, pplns_window);
+        let result = validator().validate_share_block(&share_block, &chain_store_handle);
         assert!(
             result.is_ok(),
             "Expected Ok for BlockValid status, got: {:?}",

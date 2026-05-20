@@ -202,10 +202,11 @@ impl OrganiseWorker {
         let blockhash = share_block.block_hash();
         debug!("Organising block: {blockhash:?}");
 
-        if let Err(validation_error) = self
-            .share_validator
-            .validate_with_chain_context(share_block, &self.chain_store_handle)
-        {
+        if let Err(validation_error) = self.share_validator.validate_with_chain_context(
+            share_block,
+            &self.chain_store_handle,
+            Arc::clone(&self.pplns_window),
+        ) {
             error!("Chain-context validation failed for {blockhash}: {validation_error}");
             return Ok(None);
         }
@@ -424,7 +425,7 @@ mod tests {
         let mut mock_validator = MockDefaultShareValidator::new();
         mock_validator
             .expect_validate_with_chain_context()
-            .returning(|_, _| Ok(()));
+            .returning(|_, _, _| Ok(()));
         Arc::new(mock_validator)
     }
 
@@ -541,7 +542,7 @@ mod tests {
         let mut mock_validator = MockDefaultShareValidator::new();
         mock_validator
             .expect_validate_with_chain_context()
-            .returning(|_, _| Err(ValidationError::new("rejected for test")));
+            .returning(|_, _, _| Err(ValidationError::new("rejected for test")));
         let share_validator: Arc<dyn ShareValidator + Send + Sync> = Arc::new(mock_validator);
 
         let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
