@@ -719,6 +719,9 @@ mod tests {
             .expect_organise_header()
             .returning(|_| Ok(None));
         chain_store_handle
+            .expect_find_fork_point_height()
+            .returning(|_| Ok(Some(0)));
+        chain_store_handle
             .expect_get_candidate_blocks_missing_data()
             .returning(|_| Ok(Vec::new()));
         setup_header_chain_validation_mocks(&mut chain_store_handle);

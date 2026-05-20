@@ -528,6 +528,25 @@ impl ChainStoreHandle {
         self.store_handle.get_missing_blockhashes(blockhashes)
     }
 
+    /// Find the height where a block's ancestry meets the confirmed chain.
+    ///
+    /// Walks backwards from `blockhash` following parent links until
+    /// reaching a confirmed block. Returns that confirmed block's height.
+    /// Returns None if the ancestry does not reach the confirmed chain
+    /// (e.g. missing headers).
+    pub fn find_fork_point_height(&self, blockhash: &BlockHash) -> Result<Option<u32>, StoreError> {
+        let store = self.store_handle.store();
+        let branch = store.get_branch_to_chain(blockhash, |hash| store.is_confirmed(hash))?;
+        let Some(branch) = branch else {
+            return Ok(None);
+        };
+        let Some(confirmed_ancestor) = branch.front() else {
+            return Ok(None);
+        };
+        let metadata = store.get_block_metadata(confirmed_ancestor)?;
+        Ok(metadata.expected_height)
+    }
+
     /// Returns blockhashes on the candidate chain that do not yet have
     /// full block data (status is not BlockValid or Confirmed).
     ///
@@ -795,6 +814,7 @@ mockall::mock! {
         pub fn get_share_dag(&self, from_height: u32, to_height: u32) -> Result<ShareDag, StoreError>;
         pub fn get_missing_blockhashes(&self, blockhashes: &[BlockHash]) -> Vec<BlockHash>;
         pub fn get_candidate_blocks_missing_data(&self, min_scan_height: Option<u32>) -> Result<Vec<BlockHash>, StoreError>;
+        pub fn find_fork_point_height(&self, blockhash: &BlockHash) -> Result<Option<u32>, StoreError>;
         pub fn get_depth(&self, blockhash: &BlockHash) -> Option<usize>;
         pub fn get_pplns_shares_filtered(&self, limit: Option<usize>, start_time: Option<u64>, end_time: Option<u64>) -> Vec<SimplePplnsShare>;
         pub fn get_confirmed_at_height(&self, height: u32) -> Result<BlockHash, StoreError>;
@@ -823,6 +843,8 @@ mod tests {
     use crate::test_utils::{
         TestShareBlockBuilder, genesis_for_tests, setup_test_chain_store_handle,
     };
+    use bitcoin::BlockHash;
+    use bitcoin::hashes::Hash;
 
     #[tokio::test]
     async fn test_chain_store_handle_creation() {
@@ -1232,5 +1254,101 @@ mod tests {
         // Heights 2, 1, 0 -- all confirmed
         assert_eq!(locator.len(), 3);
         assert_eq!(locator[1], share_a.block_hash());
+    }
+
+    /// find_fork_point_height walks from a fork block back to the
+    /// confirmed chain and returns the confirmed ancestor's height.
+    ///
+    /// Chain: genesis(h:0) -> A(h:1) -> B(h:2) -> C(h:3)  [confirmed]
+    /// Fork:                  A(h:1) -> D(h:2) -> E(h:3)   [header only]
+    ///
+    /// find_fork_point_height(E) should return height 1 (A is the
+    /// confirmed ancestor where the fork meets the confirmed chain).
+    #[tokio::test]
+    async fn test_find_fork_point_height_returns_confirmed_ancestor_height() {
+        let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let genesis = genesis_for_tests();
+
+        chain_handle
+            .init_or_setup_genesis(genesis.clone())
+            .await
+            .unwrap();
+
+        // Build confirmed chain: genesis -> A -> B -> C
+        let mut prev_hash = genesis.block_hash();
+        let mut confirmed_shares = Vec::with_capacity(3);
+        for index in 0..3 {
+            let share = TestShareBlockBuilder::new()
+                .prev_share_blockhash(prev_hash.to_string())
+                .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+                .nonce(index)
+                .work(2)
+                .build();
+            chain_handle.add_share_block(share.clone()).await.unwrap();
+            chain_handle
+                .organise_header(share.header.clone())
+                .await
+                .unwrap();
+            chain_handle.organise_block(None).await.unwrap();
+            prev_hash = share.block_hash();
+            confirmed_shares.push(share);
+        }
+
+        // Build fork: A(h:1) -> D(h:2) -> E(h:3), header only
+        let share_a_hash = confirmed_shares[0].block_hash();
+        let fork_d = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_a_hash.to_string())
+            .nonce(100)
+            .work(1)
+            .build();
+        chain_handle
+            .store_handle()
+            .store()
+            .store_with_valid_metadata(&fork_d);
+
+        let fork_e = TestShareBlockBuilder::new()
+            .prev_share_blockhash(fork_d.block_hash().to_string())
+            .nonce(101)
+            .work(1)
+            .build();
+        chain_handle
+            .store_handle()
+            .store()
+            .store_with_valid_metadata(&fork_e);
+
+        // Fork point for E should be A's height (1)
+        let fork_height = chain_handle
+            .find_fork_point_height(&fork_e.block_hash())
+            .unwrap();
+        assert_eq!(fork_height, Some(1));
+
+        // Fork point for D should also be A's height (1)
+        let fork_height_d = chain_handle
+            .find_fork_point_height(&fork_d.block_hash())
+            .unwrap();
+        assert_eq!(fork_height_d, Some(1));
+
+        // Fork point for a confirmed block (C) should be its own height (3)
+        let confirmed_height = chain_handle
+            .find_fork_point_height(&confirmed_shares[2].block_hash())
+            .unwrap();
+        assert_eq!(confirmed_height, Some(3));
+    }
+
+    /// find_fork_point_height returns None when the blockhash is
+    /// not in the store (ancestry cannot be walked).
+    #[tokio::test]
+    async fn test_find_fork_point_height_returns_none_for_unknown_block() {
+        let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let genesis = genesis_for_tests();
+
+        chain_handle
+            .init_or_setup_genesis(genesis.clone())
+            .await
+            .unwrap();
+
+        let unknown_hash = BlockHash::all_zeros();
+        let result = chain_handle.find_fork_point_height(&unknown_hash).unwrap();
+        assert_eq!(result, None);
     }
 }

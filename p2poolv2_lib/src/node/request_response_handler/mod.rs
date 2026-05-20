@@ -372,6 +372,9 @@ mod tests {
             let mut cloned = ChainStoreHandle::default();
             cloned.expect_organise_header().returning(|_| Ok(None));
             cloned
+                .expect_find_fork_point_height()
+                .returning(|_| Ok(Some(0)));
+            cloned
                 .expect_get_candidate_blocks_missing_data()
                 .returning(|_| Ok(Vec::new()));
             crate::test_utils::setup_header_chain_validation_mocks(&mut cloned);
