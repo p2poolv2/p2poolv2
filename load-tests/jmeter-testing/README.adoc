@@ -179,23 +179,15 @@ node server.js
 
 We test two build variants to measure the impact of CPU-specific optimizations.
 
-===== Default build (portable):
+===== Default build:
 
 [,shell]
 ----
 cargo build --workspace --release
+# or
+just build-release
 ./target/release/p2poolv2 --config=config-load-test.toml
 ----
-
-===== Native build (CPU-optimized):
-
-[,shell]
-----
-RUSTFLAGS='-C target-cpu=native' cargo build --workspace --release
-./target/release/p2poolv2 --config=config-load-test.toml
-----
-
-This can also be built using `just build-release` which sets the native flag automatically.
 
 ==== CKPool Stratum Server
 
