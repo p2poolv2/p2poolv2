@@ -22,11 +22,6 @@
 //! `OrganiseEvent::Block` and `SwarmSend::Inv` events. Runs in a dedicated
 //! tokio task, decoupled from the P2P message handler hot path.
 
-#[cfg(test)]
-#[mockall_double::double]
-use crate::accounting::payout::sharechain_pplns::PplnsWindow;
-#[cfg(not(test))]
-use crate::accounting::payout::sharechain_pplns::PplnsWindow;
 use crate::node::SwarmSend;
 use crate::node::messages::Message;
 use crate::node::organise_worker::{OrganiseEvent, OrganiseSender};
@@ -45,7 +40,7 @@ use crate::utils::cpu::available_cpus;
 use bitcoin::BlockHash;
 use libp2p::request_response::ResponseChannel;
 use std::fmt;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use tokio::sync::{Semaphore, mpsc};
 use tracing::{debug, error, info};
 
@@ -100,7 +95,6 @@ pub struct ValidationWorker {
     organise_tx: OrganiseSender,
     swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
     semaphore: Arc<Semaphore>,
-    pplns_window: Arc<RwLock<PplnsWindow>>,
     difficulty_multiplier: u128,
     pool_signature: Vec<u8>,
     pool_difficulty: PoolDifficulty,
@@ -113,7 +107,6 @@ impl ValidationWorker {
         chain_store_handle: ChainStoreHandle,
         organise_tx: OrganiseSender,
         swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
-        pplns_window: Arc<RwLock<PplnsWindow>>,
         difficulty_multiplier: u128,
         pool_signature: Vec<u8>,
         pool_difficulty: PoolDifficulty,
@@ -124,7 +117,6 @@ impl ValidationWorker {
             organise_tx,
             swarm_tx,
             semaphore: Arc::new(Semaphore::new(available_cpus())),
-            pplns_window,
             difficulty_multiplier,
             pool_signature,
             pool_difficulty,
@@ -160,7 +152,6 @@ impl ValidationWorker {
                     let organise_tx = self.organise_tx.clone();
                     let swarm_tx = self.swarm_tx.clone();
                     let validator = Arc::clone(&share_validator);
-                    let pplns_window = Arc::clone(&self.pplns_window);
 
                     tokio::spawn(async move {
                         let _permit = permit;
@@ -170,7 +161,6 @@ impl ValidationWorker {
                             chain_store_handle,
                             organise_tx,
                             swarm_tx,
-                            pplns_window,
                         )
                         .await;
                     });
@@ -194,7 +184,6 @@ async fn validate_and_emit(
     chain_store_handle: ChainStoreHandle,
     organise_tx: OrganiseSender,
     swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
-    pplns_window: Arc<RwLock<PplnsWindow>>,
 ) {
     let share_block = match chain_store_handle.get_share(&block_hash) {
         Some(share_block) => share_block,
@@ -205,7 +194,7 @@ async fn validate_and_emit(
     };
 
     if let Err(validation_error) =
-        share_validator.validate_share_block(&share_block, &chain_store_handle, pplns_window)
+        share_validator.validate_share_block(&share_block, &chain_store_handle)
     {
         error!("Share block {block_hash} validation failed: {validation_error}");
         return;
@@ -230,7 +219,7 @@ mod tests {
     use crate::node::organise_worker;
     use crate::shares::chain::chain_store_handle::MockChainStoreHandle;
     use crate::test_utils::TestShareBlockBuilder;
-    use std::collections::HashMap;
+
     use std::time::Duration;
 
     #[tokio::test]
@@ -260,16 +249,6 @@ mod tests {
             mock_chain_handle,
             organise_tx,
             swarm_tx,
-            {
-                let mut mock_window = PplnsWindow::default();
-                mock_window
-                    .expect_network()
-                    .return_const(bitcoin::Network::Signet);
-                mock_window
-                    .expect_get_distribution_from_start_hash()
-                    .returning(|_, _, _| Some(HashMap::new()));
-                Arc::new(RwLock::new(mock_window))
-            },
             1,
             b"P2Poolv2".to_vec(),
             PoolDifficulty::default(),
@@ -318,16 +297,6 @@ mod tests {
             mock_chain_handle,
             organise_tx,
             swarm_tx,
-            {
-                let mut mock_window = PplnsWindow::default();
-                mock_window
-                    .expect_network()
-                    .return_const(bitcoin::Network::Signet);
-                mock_window
-                    .expect_get_distribution_from_start_hash()
-                    .returning(|_, _, _| Some(HashMap::new()));
-                Arc::new(RwLock::new(mock_window))
-            },
             1,
             b"P2Poolv2".to_vec(),
             PoolDifficulty::default(),
@@ -352,15 +321,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_validation_worker_skips_missing_block() {
-        let _pplns_new_ctx = PplnsWindow::new_context();
-        _pplns_new_ctx.expect().returning(|_network| {
-            let mut mock = PplnsWindow::default();
-            mock.expect_network().return_const(bitcoin::Network::Signet);
-            mock.expect_get_distribution_from_start_hash()
-                .returning(|_, _, _| Some(HashMap::new()));
-            mock
-        });
-
         let (validation_tx, validation_rx) = create_validation_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
 
@@ -380,16 +340,6 @@ mod tests {
             mock_chain_handle,
             organise_tx,
             swarm_tx,
-            {
-                let mut mock_window = PplnsWindow::default();
-                mock_window
-                    .expect_network()
-                    .return_const(bitcoin::Network::Signet);
-                mock_window
-                    .expect_get_distribution_from_start_hash()
-                    .returning(|_, _, _| Some(HashMap::new()));
-                Arc::new(RwLock::new(mock_window))
-            },
             1,
             b"P2Poolv2".to_vec(),
             PoolDifficulty::default(),
@@ -421,15 +371,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_validation_worker_skips_invalid_block() {
-        let _pplns_new_ctx = PplnsWindow::new_context();
-        _pplns_new_ctx.expect().returning(|_network| {
-            let mut mock = PplnsWindow::default();
-            mock.expect_network().return_const(bitcoin::Network::Signet);
-            mock.expect_get_distribution_from_start_hash()
-                .returning(|_, _, _| Some(HashMap::new()));
-            mock
-        });
-
         let (validation_tx, validation_rx) = create_validation_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
 
@@ -466,16 +407,6 @@ mod tests {
             mock_chain_handle,
             organise_tx,
             swarm_tx,
-            {
-                let mut mock_window = PplnsWindow::default();
-                mock_window
-                    .expect_network()
-                    .return_const(bitcoin::Network::Signet);
-                mock_window
-                    .expect_get_distribution_from_start_hash()
-                    .returning(|_, _, _| Some(HashMap::new()));
-                Arc::new(RwLock::new(mock_window))
-            },
             1,
             b"P2Poolv2".to_vec(),
             PoolDifficulty::default(),

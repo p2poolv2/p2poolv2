@@ -379,7 +379,6 @@ impl NodeActor {
             chain_store_handle.clone(),
             organise_tx.clone(),
             node.swarm_tx.clone(),
-            pplns_window,
             difficulty_multiplier,
             pool_signature,
             pool_difficulty.clone(),
