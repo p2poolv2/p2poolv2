@@ -40,7 +40,7 @@ use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
 use tokio::sync::mpsc;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 /// Depth to go back when retrying getheaders after missing parents/uncles.
 const DEEP_LOCATOR_DEPTH: u32 = 100;
@@ -195,15 +195,8 @@ pub async fn handle_share_headers<C: Send + Sync>(
 
     // No new headers, start fetching any block data for received headers
     if share_headers.is_empty() {
-        return trigger_or_request(
-            peer_id,
-            &share_headers,
-            &chain_store_handle,
-            &swarm_tx,
-            &block_fetcher_handle,
-            None,
-        )
-        .await;
+        return trigger_block_fetch(peer_id, &chain_store_handle, &block_fetcher_handle, None)
+            .await;
     }
 
     // Phase 1: Validate the header chain in memory
@@ -231,23 +224,15 @@ pub async fn handle_share_headers<C: Send + Sync>(
         chain_store_handle.organise_header(header.clone()).await?;
     }
 
-    // The batch is sorted by increasing height, so the first header
-    // is the lowest. Use its height as min_scan_height so
-    // trigger_block_fetch can find fork blocks at or below the
-    // confirmed tip.
     let first_blockhash = share_headers[0].block_hash();
-    let min_organised_height = chain_store_handle
-        .get_block_metadata(&first_blockhash)
-        .ok()
-        .and_then(|metadata| metadata.expected_height);
 
     trigger_or_request(
         peer_id,
         &share_headers,
+        &first_blockhash,
         &chain_store_handle,
         &swarm_tx,
         &block_fetcher_handle,
-        min_organised_height,
     )
     .await
 }
@@ -478,17 +463,26 @@ fn validate_cumulative_work(
 async fn trigger_or_request<C: Send + Sync>(
     peer_id: libp2p::PeerId,
     share_headers: &[ShareHeader],
+    first_blockhash: &BlockHash,
     chain_store_handle: &ChainStoreHandle,
     swarm_tx: &mpsc::Sender<SwarmSend<C>>,
     block_fetcher_handle: &BlockFetcherHandle,
-    min_organised_height: Option<u32>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     if share_headers.len() < MAX_HEADERS_IN_RESPONSE {
+        let scan_start_height = chain_store_handle
+            .find_fork_point_height(first_blockhash)
+            .unwrap_or_else(|error| {
+                warn!(
+                    "Failed to find fork point for {}: {}",
+                    first_blockhash, error
+                );
+                None
+            });
         trigger_block_fetch(
             peer_id,
             chain_store_handle,
             block_fetcher_handle,
-            min_organised_height,
+            scan_start_height,
         )
         .await
     } else {
@@ -499,18 +493,18 @@ async fn trigger_or_request<C: Send + Sync>(
 /// Header sync is complete -- query for candidate blocks missing full
 /// block data and send them to the block fetcher for download.
 ///
-/// When `min_organised_height` is provided, the scan extends down to
+/// When `scan_start_height` is provided, the scan extends down to
 /// that height so fork blocks at or below the confirmed tip are
 /// included in the fetch request.
 async fn trigger_block_fetch(
     peer_id: libp2p::PeerId,
     chain_store_handle: &ChainStoreHandle,
     block_fetcher_handle: &BlockFetcherHandle,
-    min_organised_height: Option<u32>,
+    scan_start_height: Option<u32>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     debug!("Header sync complete, triggering block fetch for missing data");
     let missing_blockhashes =
-        chain_store_handle.get_candidate_blocks_missing_data(min_organised_height)?;
+        chain_store_handle.get_candidate_blocks_missing_data(scan_start_height)?;
     if !missing_blockhashes.is_empty() {
         debug!(
             "Requesting {} blocks from block fetcher",
@@ -641,6 +635,9 @@ mod tests {
             .expect_organise_header()
             .returning(|_| Ok(None));
         chain_store_handle
+            .expect_find_fork_point_height()
+            .returning(|_| Ok(Some(0)));
+        chain_store_handle
             .expect_get_candidate_blocks_missing_data()
             .returning(|_| Ok(Vec::new()));
         setup_chain_validation_mocks(&mut chain_store_handle);
@@ -759,6 +756,9 @@ mod tests {
         chain_store_handle
             .expect_organise_header()
             .returning(|_| Ok(None));
+        chain_store_handle
+            .expect_find_fork_point_height()
+            .returning(|_| Ok(Some(0)));
 
         let missing_hash = bitcoin::BlockHash::all_zeros();
         let expected_hashes = vec![missing_hash];
