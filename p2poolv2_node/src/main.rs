@@ -41,7 +41,7 @@ use tracing::{error, info, trace};
 use crate::signal::{ShutdownReason, setup_signal_handler};
 
 mod background_tasks;
-mod bitcoin_node;
+mod preflight;
 mod signal;
 
 /// Interval in seconds to poll for new block templates since the last zmq event signal
@@ -144,7 +144,7 @@ async fn main() -> ExitCode {
     };
     info!("Latest tip {} at height {}", tip, height);
 
-    if let Err(error) = bitcoin_node::ensure_ibd_done(&config.bitcoinrpc).await {
+    if let Err(error) = preflight::ensure_bitcoin_node_synced(&config.bitcoinrpc).await {
         error!("Bitcoin node still in IBD: {error}");
         return ExitCode::FAILURE;
     }

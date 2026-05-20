@@ -15,10 +15,8 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use bitcoindrpc::{BitcoinRpcConfig, BitcoindRpcClient};
-use std::process::exit;
-use tracing::error;
 
-pub async fn ensure_ibd_done(
+pub async fn ensure_bitcoin_node_synced(
     bitcoinrpc_config: &BitcoinRpcConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let bitcoind = BitcoindRpcClient::new(
@@ -30,8 +28,7 @@ pub async fn ensure_ibd_done(
     let is_in_ibd = bitcoind.getblockchaininfo().await?.initial_block_download;
 
     if is_in_ibd {
-        error!("Bitcoin node still in initial block download. Shutting down");
-        exit(1);
+        return Err("Bitcoin node still in initial block download".into());
     }
 
     Ok(())
@@ -65,7 +62,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ensure_ibd_done_returns_ok_when_not_in_ibd() {
+    async fn ensure_bitcoin_node_synced_returns_ok_when_not_in_ibd() {
         let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
 
         Mock::given(method("POST"))
@@ -85,7 +82,38 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let result = ensure_ibd_done(&bitcoinrpc_config).await;
-        assert!(result.is_ok(), "ensure_ibd_done returned an error");
+        let result = ensure_bitcoin_node_synced(&bitcoinrpc_config).await;
+        assert!(
+            result.is_ok(),
+            "ensure_bitcoin_node_synced returned an error"
+        );
+    }
+
+    #[tokio::test]
+    async fn ensure_bitcoin_node_synced_returns_err_when_in_ibd() {
+        let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(header("Authorization", test_auth_header().as_str()))
+            .and(body_partial_json(serde_json::json!({
+                "method": "getblockchaininfo",
+                "params": [],
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": {
+                    "initialblockdownload": true,
+                },
+                "error": null,
+                "id": 0
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let result = ensure_bitcoin_node_synced(&bitcoinrpc_config).await;
+        assert!(
+            result.is_err(),
+            "ensure_bitcoin_node_synced should return error when in IBD"
+        );
     }
 }
