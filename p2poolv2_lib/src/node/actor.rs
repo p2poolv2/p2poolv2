@@ -27,7 +27,6 @@ use crate::monitoring_events::MonitoringEventSender;
 use crate::node::Node;
 use crate::node::SwarmSend;
 use crate::node::emission_worker::EmissionWorker;
-#[cfg(test)]
 use crate::node::messages::Message;
 use crate::node::organise_worker::{OrganiseError, OrganiseSender};
 use crate::node::organise_worker::{OrganiseWorker, create_organise_channel};
@@ -446,6 +445,9 @@ impl NodeActor {
                 buf = self.node.swarm_rx.recv() => {
                     match buf {
                         Some(SwarmSend::Request(peer_id, msg)) => {
+                            if matches!(msg, Message::GetShareHeaders(_, _)) {
+                                sync_retry_interval.reset();
+                            }
                             let msg_type = msg.message_type();
                             let request_id = self
                                 .node
