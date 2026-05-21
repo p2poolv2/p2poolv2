@@ -268,8 +268,10 @@ impl Store {
             Err(_) => return Ok(blockhashes),
         };
 
-        for height in start_height..=top_confirmed_height {
-            let raw_hashes = self.get_blockhashes_for_height(height);
+        let height_entries =
+            self.get_blockhashes_for_height_range(start_height, top_confirmed_height);
+
+        for (_height, raw_hashes) in height_entries {
             let mut hashes_at_height: Vec<BlockHash> = self
                 .get_block_metadata_batch(&raw_hashes)
                 .into_iter()
