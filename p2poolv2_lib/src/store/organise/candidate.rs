@@ -28,7 +28,7 @@ use bitcoin::{
 };
 use tracing::debug;
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 
 use super::{Chain, Height, TopResult, height_to_key_with_suffix};
 
@@ -282,23 +282,29 @@ impl Store {
         scan_start: u32,
         candidate_height: u32,
     ) -> (Vec<BlockHash>, Vec<BlockHash>) {
-        let height_range = (candidate_height - scan_start + 1) as usize;
-        let mut all_blockhashes = Vec::with_capacity(height_range);
-        let mut missing = Vec::with_capacity(height_range);
+        let height_entries = self.get_blockhashes_for_height_range(scan_start, candidate_height);
 
-        let mut height = scan_start;
-        while height <= candidate_height {
-            let blockhashes = self.get_blockhashes_for_height(height);
-            for blockhash in blockhashes {
-                all_blockhashes.push(blockhash);
-                if !self.share_block_exists(&blockhash)
-                    && !self.is_block_valid_or_confirmed(&blockhash)
-                {
-                    missing.push(blockhash);
-                }
-            }
-            height += 1;
+        let total_blocks: usize = height_entries.iter().map(|(_, hashes)| hashes.len()).sum();
+        let mut all_blockhashes = Vec::with_capacity(total_blocks);
+        for (_, blockhashes) in &height_entries {
+            all_blockhashes.extend(blockhashes);
         }
+
+        let metadata_results = self.get_block_metadata_batch(&all_blockhashes);
+        let already_valid: HashSet<BlockHash> = metadata_results
+            .into_iter()
+            .filter(|(_, metadata)| {
+                metadata.status == Status::BlockValid || metadata.status == Status::Confirmed
+            })
+            .map(|(blockhash, _)| blockhash)
+            .collect();
+
+        let candidates_to_check: Vec<BlockHash> = all_blockhashes
+            .iter()
+            .filter(|hash| !already_valid.contains(*hash))
+            .copied()
+            .collect();
+        let missing = self.missing_share_blocks(&candidates_to_check);
 
         (all_blockhashes, missing)
     }

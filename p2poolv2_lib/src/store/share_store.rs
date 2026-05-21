@@ -167,6 +167,8 @@ impl Store {
     /// Checks the BlockTxids CF for the txids key, since txids are
     /// written as part of add_share_block and their presence indicates
     /// the full block data has been stored.
+    ///
+    /// TODO: Replace this with a has_block field in metadata. Will require migration, so pending till we add migration support. See `missing_share_blocks`.
     pub fn share_block_exists(&self, blockhash: &BlockHash) -> bool {
         let block_txids_cf = self.db.cf_handle(&ColumnFamily::BlockTxids).unwrap();
         let mut key = consensus::serialize(blockhash);
@@ -176,6 +178,31 @@ impl Store {
             .ok()
             .flatten()
             .is_some()
+    }
+
+    /// Return blockhashes from the input that do NOT have block data in
+    /// the store. Uses a single `multi_get_cf` on the BlockTxids CF.
+    ///
+    /// TODO: Replace this with a has_block field in metadata. Will require migration, so pending till we add migration support. See `share_block_exists`.
+    pub fn missing_share_blocks(&self, blockhashes: &[BlockHash]) -> Vec<BlockHash> {
+        let block_txids_cf = self.db.cf_handle(&ColumnFamily::BlockTxids).unwrap();
+        let keys: Vec<_> = blockhashes
+            .iter()
+            .map(|hash| {
+                let mut key = consensus::serialize(hash);
+                key.extend_from_slice(b"_txids");
+                (&block_txids_cf, key)
+            })
+            .collect();
+        let results = self.db.multi_get_cf(keys);
+
+        let mut missing = Vec::new();
+        for (blockhash, result) in blockhashes.iter().zip(results.into_iter()) {
+            if !matches!(result, Ok(Some(_))) {
+                missing.push(*blockhash);
+            }
+        }
+        missing
     }
 
     /// Get a share from the store by reconstructing it from the Header CF
@@ -309,6 +336,53 @@ impl Store {
             Ok(Some(blockhashes)) => encode::deserialize(&blockhashes).unwrap_or_default(),
             Ok(None) | Err(_) => vec![],
         }
+    }
+
+    /// Get all blockhashes for a range of heights in a single iterator pass.
+    ///
+    /// Uses a RocksDB range iterator on the BlockHeight CF instead of
+    /// per-height point reads. Returns (height, blockhashes) pairs sorted
+    /// by height. Heights with no entries are omitted.
+    pub fn get_blockhashes_for_height_range(
+        &self,
+        from_height: u32,
+        to_height: u32,
+    ) -> Vec<(u32, Vec<BlockHash>)> {
+        if from_height > to_height {
+            return Vec::new();
+        }
+
+        let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
+
+        let mut lower_key = b"h:".to_vec();
+        lower_key.extend_from_slice(&from_height.to_be_bytes());
+
+        let mut upper_key = b"h:".to_vec();
+        upper_key.extend_from_slice(&(to_height + 1).to_be_bytes());
+
+        let mut read_opts = rocksdb::ReadOptions::default();
+        read_opts.set_iterate_lower_bound(lower_key.clone());
+        read_opts.set_iterate_upper_bound(upper_key);
+
+        let iter = self.db.iterator_cf_opt(
+            &block_height_cf,
+            read_opts,
+            rocksdb::IteratorMode::From(&lower_key, rocksdb::Direction::Forward),
+        );
+
+        let capacity = (to_height - from_height + 1) as usize;
+        let mut results = Vec::with_capacity(capacity);
+
+        for item in iter.flatten() {
+            let (key, value) = item;
+            let height = u32::from_be_bytes(key[2..6].try_into().unwrap());
+            let blockhashes: Vec<BlockHash> = encode::deserialize(&value).unwrap_or_default();
+            if !blockhashes.is_empty() {
+                results.push((height, blockhashes));
+            }
+        }
+
+        results
     }
 
     /// Get the shares for a specific height
@@ -909,5 +983,158 @@ mod tests {
         let result_b_first =
             store.first_existing_share_header(&[block_b.block_hash(), block_a.block_hash()]);
         assert_eq!(result_b_first, Some(block_b.block_hash()));
+    }
+
+    #[test]
+    fn test_missing_share_blocks_returns_all_when_none_stored() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let block_a = TestShareBlockBuilder::new().nonce(1).build();
+        let block_b = TestShareBlockBuilder::new().nonce(2).build();
+        let hashes = vec![block_a.block_hash(), block_b.block_hash()];
+
+        let missing = store.missing_share_blocks(&hashes);
+        assert_eq!(missing.len(), 2);
+        assert_eq!(missing, hashes);
+    }
+
+    #[test]
+    fn test_missing_share_blocks_excludes_stored_blocks() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let block_a = TestShareBlockBuilder::new().nonce(1).build();
+        let block_b = TestShareBlockBuilder::new().nonce(2).build();
+
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&block_a, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let hashes = vec![block_a.block_hash(), block_b.block_hash()];
+        let missing = store.missing_share_blocks(&hashes);
+        assert_eq!(missing, vec![block_b.block_hash()]);
+    }
+
+    #[test]
+    fn test_missing_share_blocks_returns_empty_when_all_stored() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let block_a = TestShareBlockBuilder::new().nonce(1).build();
+        let block_b = TestShareBlockBuilder::new().nonce(2).build();
+
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&block_a, &mut batch).unwrap();
+        store.add_share_block(&block_b, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let hashes = vec![block_a.block_hash(), block_b.block_hash()];
+        let missing = store.missing_share_blocks(&hashes);
+        assert!(missing.is_empty());
+    }
+
+    #[test]
+    fn test_missing_share_blocks_empty_input() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let missing = store.missing_share_blocks(&[]);
+        assert!(missing.is_empty());
+    }
+
+    #[test]
+    fn test_get_blockhashes_for_height_range_returns_all_heights() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let block_a = TestShareBlockBuilder::new().nonce(1).build();
+        let block_b = TestShareBlockBuilder::new().nonce(2).build();
+        let block_c = TestShareBlockBuilder::new().nonce(3).build();
+
+        let mut batch = Store::get_write_batch();
+        store
+            .set_height_to_blockhash(&block_a.block_hash(), 10, &mut batch)
+            .unwrap();
+        store
+            .set_height_to_blockhash(&block_b.block_hash(), 11, &mut batch)
+            .unwrap();
+        store
+            .set_height_to_blockhash(&block_c.block_hash(), 12, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let results = store.get_blockhashes_for_height_range(10, 12);
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0], (10, vec![block_a.block_hash()]));
+        assert_eq!(results[1], (11, vec![block_b.block_hash()]));
+        assert_eq!(results[2], (12, vec![block_c.block_hash()]));
+    }
+
+    #[test]
+    fn test_get_blockhashes_for_height_range_multiple_blocks_per_height() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let block_a = TestShareBlockBuilder::new().nonce(1).build();
+        let block_b = TestShareBlockBuilder::new().nonce(2).build();
+
+        let mut batch = Store::get_write_batch();
+        store
+            .set_height_to_blockhash(&block_a.block_hash(), 5, &mut batch)
+            .unwrap();
+        store
+            .set_height_to_blockhash(&block_b.block_hash(), 5, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let results = store.get_blockhashes_for_height_range(5, 5);
+        assert_eq!(results.len(), 1);
+        let (height, blockhashes) = &results[0];
+        assert_eq!(*height, 5);
+        assert_eq!(blockhashes.len(), 2);
+        assert!(blockhashes.contains(&block_a.block_hash()));
+        assert!(blockhashes.contains(&block_b.block_hash()));
+    }
+
+    #[test]
+    fn test_get_blockhashes_for_height_range_empty_when_reversed() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let results = store.get_blockhashes_for_height_range(10, 5);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_get_blockhashes_for_height_range_skips_empty_heights() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let block_a = TestShareBlockBuilder::new().nonce(1).build();
+        let block_b = TestShareBlockBuilder::new().nonce(2).build();
+
+        let mut batch = Store::get_write_batch();
+        store
+            .set_height_to_blockhash(&block_a.block_hash(), 10, &mut batch)
+            .unwrap();
+        store
+            .set_height_to_blockhash(&block_b.block_hash(), 15, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let results = store.get_blockhashes_for_height_range(10, 15);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].0, 10);
+        assert_eq!(results[1].0, 15);
+    }
+
+    #[test]
+    fn test_get_blockhashes_for_height_range_no_entries() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let results = store.get_blockhashes_for_height_range(100, 200);
+        assert!(results.is_empty());
     }
 }
