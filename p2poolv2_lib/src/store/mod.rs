@@ -17,7 +17,7 @@
 use crate::shares::share_block::ShareBlock;
 use crate::store::block_tx_metadata::{BlockMetadata, Status};
 use crate::store::column_families::ColumnFamily;
-use crate::store::dag_store::MAX_UNCLES_DEPTH;
+use crate::store::dag_store::{MAX_BLOCKS_PER_HEIGHT, MAX_UNCLES_DEPTH};
 use bitcoin::consensus::{Encodable, encode};
 use bitcoin::{BlockHash, Work};
 use rocksdb::{ColumnFamilyDescriptor, DB, Options as RocksDbOptions};
@@ -268,10 +268,13 @@ impl Store {
             Err(_) => return Ok(blockhashes),
         };
 
-        let height_entries =
-            self.get_blockhashes_for_height_range(start_height, top_confirmed_height);
+        let end_height = std::cmp::min(
+            start_height.saturating_add(limit as u32),
+            top_confirmed_height,
+        );
+        let height_entries = self.get_blockhashes_for_height_range(start_height, end_height);
 
-        for (_height, raw_hashes) in height_entries {
+        for (height, raw_hashes) in height_entries {
             let mut hashes_at_height: Vec<BlockHash> = self
                 .get_block_metadata_batch(&raw_hashes)
                 .into_iter()
@@ -281,6 +284,7 @@ impl Store {
                 .map(|(hash, _)| hash)
                 .collect();
             hashes_at_height.sort();
+            hashes_at_height.truncate(MAX_BLOCKS_PER_HEIGHT);
 
             let found_stop = hashes_at_height.contains(stop_blockhash);
             blockhashes.extend(hashes_at_height);

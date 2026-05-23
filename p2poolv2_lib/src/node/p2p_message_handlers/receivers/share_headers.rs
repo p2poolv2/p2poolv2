@@ -33,6 +33,7 @@ use crate::shares::share_block::{
 };
 use crate::shares::validation::ShareValidator;
 use crate::store::block_tx_metadata::BlockMetadata;
+use crate::store::dag_store::MAX_BLOCKS_PER_HEIGHT;
 use crate::store::writer::StoreError;
 use bitcoin::hashes::Hash;
 use bitcoin::{BlockHash, CompactTarget, Target, Work};
@@ -71,6 +72,10 @@ enum HeaderSyncError {
         expected: u32,
     },
     InsufficientWork,
+    DenseHeight {
+        height: u32,
+        count: usize,
+    },
     Other(Box<dyn Error + Send + Sync>),
 }
 
@@ -142,6 +147,12 @@ impl fmt::Display for HeaderSyncError {
             HeaderSyncError::InsufficientWork => {
                 write!(formatter, "Cumulative chain work below minimum")
             }
+            HeaderSyncError::DenseHeight { height, count } => {
+                write!(
+                    formatter,
+                    "Height {height} has {count} blocks, exceeds MAX_BLOCKS_PER_HEIGHT"
+                )
+            }
             HeaderSyncError::Other(error) => write!(formatter, "{error}"),
         }
     }
@@ -192,6 +203,17 @@ pub async fn handle_share_headers<C: Send + Sync>(
     share_validator: &(dyn ShareValidator + Send + Sync),
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     debug!("Received {} ShareHeaders", share_headers.len());
+    if !share_headers.is_empty() {
+        let first = &share_headers[0];
+        let last = share_headers.last().unwrap();
+        debug!(
+            "ShareHeaders batch: first={} (parent={}), last={} (parent={})",
+            first.block_hash(),
+            first.prev_share_blockhash,
+            last.block_hash(),
+            last.prev_share_blockhash,
+        );
+    }
 
     // No new headers, start fetching any block data for received headers
     if share_headers.is_empty() {
@@ -215,6 +237,10 @@ pub async fn handle_share_headers<C: Send + Sync>(
             );
             send_getheaders(peer_id, chain_store_handle, swarm_tx, depth).await?;
             return Ok(());
+        }
+        if matches!(sync_error, HeaderSyncError::DenseHeight { .. }) {
+            error!("Disconnecting peer {peer_id}: {sync_error}");
+            let _ = swarm_tx.send(SwarmSend::Disconnect(peer_id)).await;
         }
         return Err(sync_error.into());
     }
@@ -334,6 +360,7 @@ fn validate_dag_connectivity_and_difficulty(
     let mut cumulative_work = Work::from_hex("0x00").unwrap();
     let mut time_height_cache: HashMap<BlockHash, (u32, u32)> =
         HashMap::with_capacity(share_headers.len() + 1);
+    let mut blocks_per_height: HashMap<u32, usize> = HashMap::with_capacity(64);
 
     for header in share_headers {
         share_validator.validate_header_minimum_difficulty(header)?;
@@ -361,13 +388,35 @@ fn validate_dag_connectivity_and_difficulty(
             });
         }
 
+        let header_height = parent_height + 1;
+        check_dense_height(&mut blocks_per_height, header_height)?;
+
         let header_hash = header.block_hash();
-        time_height_cache.insert(header_hash, (header.time, parent_height + 1));
+        time_height_cache.insert(header_hash, (header.time, header_height));
         known_hashes.insert(header_hash);
         cumulative_work = cumulative_work + header.get_work();
     }
 
     Ok((known_hashes, cumulative_work))
+}
+
+/// Reject batches where a single height has too many blocks.
+///
+/// In normal operation a height has at most a few blocks (confirmed +
+/// uncles). A dense height indicates a misbehaving or attacking peer.
+fn check_dense_height(
+    blocks_per_height: &mut HashMap<u32, usize>,
+    height: u32,
+) -> Result<(), HeaderSyncError> {
+    let count = blocks_per_height.entry(height).or_insert(0);
+    *count += 1;
+    if *count > MAX_BLOCKS_PER_HEIGHT {
+        return Err(HeaderSyncError::DenseHeight {
+            height,
+            count: *count,
+        });
+    }
+    Ok(())
 }
 
 /// Verify every uncle hash declared by any header in the batch exists
@@ -537,11 +586,13 @@ async fn request_next_headers<C: Send + Sync>(
     share_headers: &[ShareHeader],
     swarm_tx: &mpsc::Sender<SwarmSend<C>>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    debug!("Requesting more share headers");
     let stop_block_hash = BlockHash::all_zeros();
     let last_block_hash = share_headers.last().unwrap().block_hash();
+    debug!(
+        "Requesting more share headers, locator={last_block_hash}, batch_size={}",
+        share_headers.len(),
+    );
     let getheaders_request = Message::GetShareHeaders(vec![last_block_hash], stop_block_hash);
-    debug!("Sending getheaders {getheaders_request}");
     if let Err(send_error) = swarm_tx
         .send(SwarmSend::Request(peer_id, getheaders_request))
         .await
