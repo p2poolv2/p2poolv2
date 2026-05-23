@@ -29,7 +29,7 @@ Query the RocksDB database directly without a running node. Pass
 p2poolv2_cli --db-path /path/to/store.db <command>
 ```
 
-All commands except `peers-info` work in this mode.
+All commands except `peers` work in this mode.
 
 ## Commands
 
@@ -93,13 +93,32 @@ p2poolv2_cli pplns-shares --limit 50
 p2poolv2_cli pplns-shares --limit 100 --start-time 1700000000 --end-time 1700100000
 ```
 
-### peers-info
+### peers
 
-List connected peers.
+Peer management commands. Requires a running node (`--config`).
 
 ```sh
-p2poolv2_cli peers-info
+p2poolv2_cli peers info              # list connected peers
+p2poolv2_cli peers blocked           # list blocked IPs
+p2poolv2_cli peers block 1.2.3.4     # block an IP address
+p2poolv2_cli peers unblock 1.2.3.4   # unblock an IP address
 ```
+
+### db
+
+Database maintenance commands. Requires `--db-path` and the node must
+be stopped (RocksDB does not support concurrent access).
+
+```sh
+p2poolv2_cli --db-path /path/to/store.db db cleanup-dense-heights
+```
+
+#### cleanup-dense-heights
+
+Walk the height index and invalidate excess HeaderValid blocks at
+heights with more than 20 blocks. Retains Confirmed, Candidate, and
+BlockValid blocks, plus HeaderValid blocks that are referenced as
+uncles by other blocks.
 
 ### gen-auth
 
@@ -181,6 +200,6 @@ p2poolv2_cli candidates --num 20 \
 ### Peer IDs as a plain list
 
 ```sh
-p2poolv2_cli peers-info \
+p2poolv2_cli peers info \
   | jq -r '.[].peer_id'
 ```
