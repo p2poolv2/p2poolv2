@@ -19,6 +19,7 @@ pub mod blocked_ips;
 pub mod candidates;
 pub mod chain_info;
 pub mod dag;
+pub mod db;
 pub mod db_query;
 pub mod gen_auth;
 pub mod peers_info;
@@ -133,6 +134,11 @@ pub enum Commands {
         /// IP address to unblock
         ip: String,
     },
+    /// Database maintenance commands (requires --db-path, node must be stopped)
+    Db {
+        #[command(subcommand)]
+        command: DbCommands,
+    },
     /// Generate API authentication credentials (salt, password, HMAC)
     GenAuth {
         /// Username for API authentication
@@ -140,6 +146,12 @@ pub enum Commands {
         /// Password (leave empty to auto-generate, or use "-" to prompt)
         password: Option<String>,
     },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum DbCommands {
+    /// Clean up dense heights by invalidating excess HeaderValid blocks
+    CleanupDenseHeights,
 }
 
 pub async fn run() -> Result<(), Box<dyn Error>> {
@@ -150,6 +162,13 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
     match &cli.command {
         Some(Commands::GenAuth { username, password }) => {
             commands::gen_auth::execute(username.clone(), password.clone())?;
+        }
+        Some(Commands::Db { command }) => {
+            let db_path = cli
+                .db_path
+                .as_ref()
+                .ok_or("--db-path required for db commands")?;
+            commands::db::execute(command, db_path)?;
         }
         Some(
             Commands::PeersInfo

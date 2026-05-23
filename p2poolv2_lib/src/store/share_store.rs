@@ -419,7 +419,7 @@ impl Store {
     /// Batch-fetch block metadata for the given blockhashes.
     ///
     /// Deduplicates the input so each blockhash is looked up at most once.
-    pub(crate) fn get_block_metadata_batch(
+    pub fn get_block_metadata_batch(
         &self,
         blockhashes: &[BlockHash],
     ) -> Vec<(BlockHash, BlockMetadata)> {
@@ -459,7 +459,7 @@ impl Store {
     }
 
     /// Update block metadata for a blockhash
-    pub(crate) fn update_block_metadata(
+    pub fn update_block_metadata(
         &self,
         blockhash: &BlockHash,
         metadata: &BlockMetadata,
