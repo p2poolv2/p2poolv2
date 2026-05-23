@@ -29,6 +29,13 @@ use tracing::debug;
 /// Max depth to look for uncles when building new share blocks
 pub const MAX_UNCLES_DEPTH: u8 = 3;
 
+/// Maximum number of blocks included per height in getheaders responses.
+///
+/// In normal operation a height has at most 3-5 blocks. Even during
+/// network partitions, each side extends its own chain at different
+/// heights. Exceeding this cap indicates either a bug or an attack.
+pub const MAX_BLOCKS_PER_HEIGHT: usize = 20;
+
 /// Single confirmed share and its uncles.
 #[derive(Clone, Debug, Serialize)]
 pub struct ShareInfo {
