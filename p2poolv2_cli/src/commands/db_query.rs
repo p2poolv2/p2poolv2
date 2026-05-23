@@ -35,7 +35,6 @@ pub fn open_store(db_path: &str) -> Result<Store, Box<dyn Error>> {
         .map_err(|error| format!("Failed to open database at {db_path}: {error}").into())
 }
 
-
 /// Query chain info directly from the store.
 pub fn info(store: &Store) -> Result<(), Box<dyn Error>> {
     let genesis_blockhash = store.get_genesis_blockhash().map(|h| h.to_string());
