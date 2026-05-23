@@ -22,6 +22,7 @@ pub mod dag;
 pub mod db;
 pub mod db_query;
 pub mod gen_auth;
+pub mod peers;
 pub mod peers_info;
 pub mod pplns_shares;
 pub mod share;
@@ -120,19 +121,10 @@ pub enum Commands {
         #[arg(short, long, default_value = "false")]
         dot: bool,
     },
-    /// Show connected peers by querying the running node's API
-    PeersInfo,
-    /// List blocked IPs
-    BlockedIps,
-    /// Block an IP address at runtime
-    BlockIp {
-        /// IP address to block
-        ip: String,
-    },
-    /// Unblock an IP address at runtime
-    UnblockIp {
-        /// IP address to unblock
-        ip: String,
+    /// Peer management commands (requires running node with --config)
+    Peers {
+        #[command(subcommand)]
+        command: PeersCommands,
     },
     /// Database maintenance commands (requires --db-path, node must be stopped)
     Db {
@@ -154,6 +146,24 @@ pub enum DbCommands {
     CleanupDenseHeights,
 }
 
+#[derive(Subcommand, Debug)]
+pub enum PeersCommands {
+    /// Show connected peers
+    Info,
+    /// List blocked IPs
+    Blocked,
+    /// Block an IP address at runtime
+    Block {
+        /// IP address to block
+        ip: String,
+    },
+    /// Unblock an IP address at runtime
+    Unblock {
+        /// IP address to unblock
+        ip: String,
+    },
+}
+
 pub async fn run() -> Result<(), Box<dyn Error>> {
     tracing_subscriber::fmt::init();
 
@@ -170,12 +180,16 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
                 .ok_or("--db-path required for db commands")?;
             commands::db::execute(command, db_path)?;
         }
+        Some(Commands::Peers { command }) => {
+            let config_path = cli
+                .config
+                .as_ref()
+                .ok_or("Config file required for peers commands. Use --config")?;
+            let config = Config::load(config_path)?;
+            commands::peers::execute(command, &config.api).await?;
+        }
         Some(
-            Commands::PeersInfo
-            | Commands::BlockedIps
-            | Commands::BlockIp { .. }
-            | Commands::UnblockIp { .. }
-            | Commands::Info
+            Commands::Info
             | Commands::PplnsShares { .. }
             | Commands::Shares { .. }
             | Commands::Candidates { .. }
@@ -187,17 +201,6 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
                 let store = commands::db_query::open_store(db_path)?;
 
                 match &cli.command {
-                    Some(
-                        Commands::PeersInfo
-                        | Commands::BlockedIps
-                        | Commands::BlockIp { .. }
-                        | Commands::UnblockIp { .. },
-                    ) => {
-                        return Err(
-                            "This command requires a running node; cannot use with --db-path"
-                                .into(),
-                        );
-                    }
                     Some(Commands::Info) => {
                         commands::db_query::info(&store)?;
                     }
@@ -239,18 +242,6 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
                 let config = Config::load(config_path)?;
 
                 match &cli.command {
-                    Some(Commands::PeersInfo) => {
-                        commands::peers_info::execute(&config.api).await?;
-                    }
-                    Some(Commands::BlockedIps) => {
-                        commands::blocked_ips::list(&config.api).await?;
-                    }
-                    Some(Commands::BlockIp { ip }) => {
-                        commands::blocked_ips::block(&config.api, ip).await?;
-                    }
-                    Some(Commands::UnblockIp { ip }) => {
-                        commands::blocked_ips::unblock(&config.api, ip).await?;
-                    }
                     Some(Commands::Info) => {
                         commands::chain_info::execute(&config.api).await?;
                     }
