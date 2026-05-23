@@ -42,7 +42,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{debug, error, warn};
 
-const MAX_HEADERS_IN_RESPONSE: usize = 2000;
+const MAX_HEADERS_IN_RESPONSE: usize = 1500;
 
 /// The Tower service that processes inbound P2P requests.
 pub async fn handle_request<C: Send + Sync, T: TimeProvider + Send + Sync>(
