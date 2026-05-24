@@ -20,6 +20,7 @@ pub mod dag;
 pub mod share;
 pub mod share_headers;
 pub mod shares;
+pub mod transaction;
 
 /// Maximum number of candidates and shares that can be requested in a single query.
 pub(crate) const MAX_NUM_SHARES_IN_RESPONSE: u32 = 100;

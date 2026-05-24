@@ -27,6 +27,7 @@ pub mod peers_info;
 pub mod pplns_shares;
 pub mod share;
 pub mod shares;
+pub mod transactions;
 
 use crate::commands;
 use clap::{ArgGroup, Parser, Subcommand};
@@ -126,6 +127,11 @@ pub enum Commands {
         #[command(subcommand)]
         command: PeersCommands,
     },
+    /// Transaction queries
+    Transactions {
+        #[command(subcommand)]
+        command: TransactionsCommands,
+    },
     /// Database maintenance commands (requires --db-path, node must be stopped)
     Db {
         #[command(subcommand)]
@@ -144,6 +150,18 @@ pub enum Commands {
 pub enum DbCommands {
     /// Clean up dense heights by invalidating excess HeaderValid blocks
     CleanupDenseHeights,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum TransactionsCommands {
+    /// Get a transaction by txid
+    Get {
+        /// Transaction hash
+        txid: String,
+        /// Output raw hex instead of JSON
+        #[arg(long, default_value = "false")]
+        raw: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -194,7 +212,8 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
             | Commands::Shares { .. }
             | Commands::Candidates { .. }
             | Commands::Share { .. }
-            | Commands::Dag { .. },
+            | Commands::Dag { .. }
+            | Commands::Transactions { .. },
         ) => {
             if let Some(db_path) = &cli.db_path {
                 // Direct database query mode (offline, no running node required)
@@ -230,6 +249,9 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
                     }
                     Some(Commands::Dag { to, num, dot }) => {
                         commands::db_query::dag(&store, *to, *num, *dot)?;
+                    }
+                    Some(Commands::Transactions { command }) => {
+                        commands::transactions::execute_db(&store, command)?;
                     }
                     _ => unreachable!(),
                 }
@@ -282,6 +304,9 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
                     }
                     Some(Commands::Dag { to, num, dot: _ }) => {
                         commands::dag::execute(&config.api, *to, *num).await?;
+                    }
+                    Some(Commands::Transactions { command }) => {
+                        commands::transactions::execute_api(&config.api, command).await?;
                     }
                     _ => unreachable!(),
                 }
