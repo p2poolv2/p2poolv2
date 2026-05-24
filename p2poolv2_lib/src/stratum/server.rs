@@ -188,6 +188,36 @@ impl StratumServerBuilder {
     }
 }
 
+/// Wait for the share chain to become current before accepting miners.
+///
+/// Returns true when the chain is current, false if shutdown was
+/// received while waiting.
+async fn wait_for_chain_sync(
+    chain_store_handle: &ChainStoreHandle,
+    shutdown_rx: &mut oneshot::Receiver<()>,
+) -> bool {
+    const CHAIN_CURRENT_TIMEOUT: u64 = 1; // seconds
+    if chain_store_handle.is_current() {
+        return true;
+    }
+    info!("Share chain is not current, waiting before accepting stratum connections...");
+    loop {
+        tokio::select! {
+            _ = &mut *shutdown_rx => {
+                info!("Shutdown signal received while waiting for chain sync");
+                return false;
+            }
+            _ = tokio::time::sleep(std::time::Duration::from_secs(CHAIN_CURRENT_TIMEOUT)) => {
+                if chain_store_handle.is_current() {
+                    info!("Share chain is current, accepting stratum connections");
+                    return true;
+                }
+                debug!("Share chain still syncing, continuing to wait...");
+            }
+        }
+    }
+}
+
 impl StratumServer {
     /// Start the Stratum server, accepting connections and spawning handlers.
     pub async fn start(
@@ -221,6 +251,10 @@ impl StratumServer {
                 return Err(Box::new(e));
             }
         };
+
+        if !wait_for_chain_sync(&self.chain_store_handle, &mut self.shutdown_rx).await {
+            return Ok(());
+        }
 
         let max_connections = self.max_connections.unwrap_or_else(default_max_connections);
         info!("Stratum server max connections: {}", max_connections);
@@ -598,7 +632,7 @@ mod stratum_server_tests {
     use crate::stratum::messages::SimpleRequest;
     use crate::stratum::server;
     use crate::stratum::work::tracker::start_tracker_actor;
-    use crate::test_utils::setup_test_chain_store_handle;
+    use crate::test_utils::{TestShareBlockBuilder, setup_test_chain_store_handle};
     use crate::utils::time_provider::TestTimeProvider;
     use bitcoindrpc::test_utils::setup_mock_bitcoin_rpc;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -618,6 +652,15 @@ mod stratum_server_tests {
             .unwrap();
         let tracker_handle = start_tracker_actor();
         let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as u32;
+        let genesis = TestShareBlockBuilder::new().time(now).build();
+        chain_store_handle
+            .init_or_setup_genesis(genesis)
+            .await
+            .unwrap();
 
         let mut server = StratumServerBuilder::default()
             .hostname("127.0.0.1".to_string())
@@ -1897,6 +1940,15 @@ mod stratum_server_tests {
             .unwrap();
         let tracker_handle = start_tracker_actor();
         let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as u32;
+        let genesis = TestShareBlockBuilder::new().time(now).build();
+        chain_store_handle
+            .init_or_setup_genesis(genesis)
+            .await
+            .unwrap();
 
         // Keep shutdown_tx alive so the connection task does not exit immediately
         let (keep_alive_tx, _keep_alive_rx) = mpsc::channel::<oneshot::Sender<()>>(10);
