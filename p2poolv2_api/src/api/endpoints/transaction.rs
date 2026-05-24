@@ -78,7 +78,10 @@ pub async fn transaction(
             txid: txid.to_string(),
             hex,
         };
-        Ok(Json(serde_json::to_value(output).unwrap()))
+        let value = serde_json::to_value(output).map_err(|error| {
+            ApiError::ServerError(format!("Failed to serialize response: {error}"))
+        })?;
+        Ok(Json(value))
     } else {
         let inputs: Vec<InputOutput> = tx
             .input
@@ -109,7 +112,10 @@ pub async fn transaction(
             inputs,
             outputs,
         };
-        Ok(Json(serde_json::to_value(output).unwrap()))
+        let value = serde_json::to_value(output).map_err(|error| {
+            ApiError::ServerError(format!("Failed to serialize response: {error}"))
+        })?;
+        Ok(Json(value))
     }
 }
 
