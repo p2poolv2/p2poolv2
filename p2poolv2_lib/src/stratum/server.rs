@@ -256,15 +256,6 @@ impl StratumServer {
             ))
         })?;
 
-        let bind_address = format!("{}:{}", self.hostname, self.port);
-        let listener = match TcpListener::bind(&bind_address).await {
-            Ok(listener) => listener,
-            Err(e) => {
-                error!("Failed to bind to {}: {}", bind_address, e);
-                return Err(Box::new(e));
-            }
-        };
-
         if !wait_for_chain_sync(
             &self.chain_store_handle,
             &mut self.shutdown_rx,
@@ -274,6 +265,15 @@ impl StratumServer {
         {
             return Ok(());
         }
+
+        let bind_address = format!("{}:{}", self.hostname, self.port);
+        let listener = match TcpListener::bind(&bind_address).await {
+            Ok(listener) => listener,
+            Err(e) => {
+                error!("Failed to bind to {}: {}", bind_address, e);
+                return Err(Box::new(e));
+            }
+        };
 
         let max_connections = self.max_connections.unwrap_or_else(default_max_connections);
         info!("Stratum server max connections: {}", max_connections);
