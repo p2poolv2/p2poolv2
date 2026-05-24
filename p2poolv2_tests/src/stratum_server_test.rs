@@ -26,7 +26,7 @@ use p2poolv2_lib::stratum::{
     work::{notify, tracker::start_tracker_actor},
 };
 #[cfg(test)]
-use p2poolv2_lib::test_utils::setup_test_chain_store_handle;
+use p2poolv2_lib::test_utils::{TestShareBlockBuilder, setup_test_chain_store_handle};
 #[cfg(test)]
 use std::net::SocketAddr;
 #[cfg(test)]
@@ -64,6 +64,15 @@ async fn test_stratum_server_subscribe() {
         .unwrap();
 
     let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as u32;
+    let genesis = TestShareBlockBuilder::new().time(now).build();
+    chain_store_handle
+        .init_or_setup_genesis(genesis)
+        .await
+        .unwrap();
 
     let mut server = StratumServerBuilder::default()
         .shutdown_rx(shutdown_rx)
