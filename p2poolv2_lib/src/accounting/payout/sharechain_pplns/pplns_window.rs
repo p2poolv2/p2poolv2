@@ -28,6 +28,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ConfirmedHeaderResult;
 use crate::shares::share_block::ShareHeader;
+use crate::store::block_tx_metadata::Status;
 use bitcoin::Address;
 use bitcoin::BlockHash;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -686,7 +687,8 @@ impl PplnsWindow {
             return Ok(HashMap::new());
         }
 
-        let uncle_headers = chain_store_handle.get_share_headers(uncle_hashes)?;
+        let filtered_hashes = non_confirmed_uncle_hashes(chain_store_handle, uncle_hashes);
+        let uncle_headers = chain_store_handle.get_share_headers(&filtered_hashes)?;
         let mut uncle_lookup = HashMap::with_capacity(uncle_headers.len());
         for (blockhash, header) in uncle_headers {
             let difficulty = header.get_difficulty(self.network);
@@ -695,6 +697,23 @@ impl PplnsWindow {
         }
         Ok(uncle_lookup)
     }
+}
+
+/// Return uncle hashes that are not on the confirmed chain.
+///
+/// A block on the confirmed chain must not also be counted as an uncle
+/// in PPLNS, otherwise its difficulty would be paid out twice. Uses a
+/// single batch metadata lookup to filter them out.
+fn non_confirmed_uncle_hashes(
+    chain_store_handle: &ChainStoreHandle,
+    uncle_hashes: &[BlockHash],
+) -> Vec<BlockHash> {
+    chain_store_handle
+        .get_block_metadata_batch(uncle_hashes)
+        .into_iter()
+        .filter(|(_, metadata)| metadata.status != Status::Confirmed)
+        .map(|(blockhash, _)| blockhash)
+        .collect()
 }
 
 /// Collect unique uncle blockhashes from confirmed headers for batch fetching.

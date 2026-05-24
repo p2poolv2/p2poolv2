@@ -289,6 +289,21 @@ mod tests {
                 status: Status::Confirmed,
             })
         });
+        mock.expect_get_block_metadata_batch().returning(|hashes| {
+            hashes
+                .iter()
+                .map(|hash| {
+                    (
+                        *hash,
+                        BlockMetadata {
+                            expected_height: Some(0),
+                            chain_work: Work::from_le_bytes([0u8; 32]),
+                            status: Status::BlockValid,
+                        },
+                    )
+                })
+                .collect()
+        });
         mock.expect_get_confirmed_headers_in_range()
             .returning(move |_, _| Ok(confirmed_headers.clone()));
         mock.expect_get_share_headers()
@@ -369,6 +384,21 @@ mod tests {
                 chain_work: Work::from_le_bytes([0u8; 32]),
                 status: Status::Confirmed,
             })
+        });
+        mock.expect_get_block_metadata_batch().returning(|hashes| {
+            hashes
+                .iter()
+                .map(|hash| {
+                    (
+                        *hash,
+                        BlockMetadata {
+                            expected_height: Some(0),
+                            chain_work: Work::from_le_bytes([0u8; 32]),
+                            status: Status::BlockValid,
+                        },
+                    )
+                })
+                .collect()
         });
         mock.expect_get_confirmed_headers_in_range()
             .returning(move |_, _| Ok(confirmed_headers.clone()));
@@ -577,6 +607,21 @@ mod tests {
                 chain_work: Work::from_le_bytes([0u8; 32]),
                 status: Status::Confirmed,
             })
+        });
+        mock.expect_get_block_metadata_batch().returning(|hashes| {
+            hashes
+                .iter()
+                .map(|hash| {
+                    (
+                        *hash,
+                        BlockMetadata {
+                            expected_height: Some(0),
+                            chain_work: Work::from_le_bytes([0u8; 32]),
+                            status: Status::BlockValid,
+                        },
+                    )
+                })
+                .collect()
         });
         mock.expect_get_confirmed_headers_in_range()
             .returning(move |_, _| Ok(confirmed_headers.clone()));
