@@ -56,6 +56,7 @@ pub struct StratumServer {
     pub network: bitcoin::Network,
     pub version_mask: i32,
     pub max_connections: Option<u32>,
+    pub wait_for_chain_sync: bool,
     shutdown_rx: oneshot::Receiver<()>,
     connections_handle: ClientConnectionsHandle,
     emissions_tx: EmissionSender,
@@ -75,6 +76,7 @@ pub struct StratumServerBuilder {
     network: Option<bitcoin::Network>,
     version_mask: Option<i32>,
     max_connections: Option<Option<u32>>,
+    wait_for_chain_sync: Option<bool>,
     shutdown_rx: Option<oneshot::Receiver<()>>,
     connections_handle: Option<ClientConnectionsHandle>,
     emissions_tx: Option<EmissionSender>,
@@ -133,6 +135,11 @@ impl StratumServerBuilder {
         self
     }
 
+    pub fn wait_for_chain_sync(mut self, wait_for_chain_sync: bool) -> Self {
+        self.wait_for_chain_sync = Some(wait_for_chain_sync);
+        self
+    }
+
     pub fn shutdown_rx(mut self, shutdown_rx: oneshot::Receiver<()>) -> Self {
         self.shutdown_rx = Some(shutdown_rx);
         self
@@ -181,6 +188,7 @@ impl StratumServerBuilder {
                 .ok_or("connections_handle is required")?,
             emissions_tx: self.emissions_tx.ok_or("shares_tx is required")?,
             max_connections: self.max_connections.unwrap_or(None),
+            wait_for_chain_sync: self.wait_for_chain_sync.unwrap_or(true),
             chain_store_handle: self
                 .chain_store_handle
                 .ok_or("chain store handle is required")?,
@@ -195,8 +203,13 @@ impl StratumServerBuilder {
 async fn wait_for_chain_sync(
     chain_store_handle: &ChainStoreHandle,
     shutdown_rx: &mut oneshot::Receiver<()>,
+    enabled: bool,
 ) -> bool {
     const CHAIN_CURRENT_TIMEOUT: u64 = 1; // seconds
+    if !enabled {
+        info!("Do not wait for chain sync, accepting stratum connections immediately");
+        return true;
+    }
     if chain_store_handle.is_current() {
         return true;
     }
@@ -252,7 +265,13 @@ impl StratumServer {
             }
         };
 
-        if !wait_for_chain_sync(&self.chain_store_handle, &mut self.shutdown_rx).await {
+        if !wait_for_chain_sync(
+            &self.chain_store_handle,
+            &mut self.shutdown_rx,
+            self.wait_for_chain_sync,
+        )
+        .await
+        {
             return Ok(());
         }
 
