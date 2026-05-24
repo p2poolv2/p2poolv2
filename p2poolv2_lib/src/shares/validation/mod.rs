@@ -847,11 +847,6 @@ impl ShareValidator for DefaultShareValidator {
                     "Uncle {uncle} not found in store"
                 )));
             };
-            if chain_store_handle.has_status(uncle, Status::Confirmed) {
-                return Err(ValidationError::new(format!(
-                    "Uncle {uncle} is on confirmed chain"
-                )));
-            }
         }
         Ok(())
     }
@@ -1309,13 +1304,10 @@ mod tests {
         let uncle2 = TestShareBlockBuilder::new().miner_pubkey(PUBKEY_2G).build();
         let uncle3 = TestShareBlockBuilder::new().miner_pubkey(PUBKEY_3G).build();
 
-        // All uncles exist and are not confirmed
+        // All uncles exist in the store
         chain_store_handle
             .expect_share_block_exists()
             .returning(|_| true);
-        chain_store_handle
-            .expect_has_status()
-            .returning(|_, _| false);
 
         let valid_share = TestShareBlockBuilder::new()
             .uncles(vec![
@@ -1397,35 +1389,6 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("not found in store")
-        );
-    }
-
-    #[tokio::test]
-    async fn test_validate_uncles_on_confirmed_chain() {
-        let mut chain_store_handle = ChainStoreHandle::default();
-
-        let uncle1 = TestShareBlockBuilder::new().miner_pubkey(PUBKEY_G).build();
-
-        // Uncle exists but is on the confirmed chain
-        chain_store_handle
-            .expect_share_block_exists()
-            .returning(|_| true);
-        chain_store_handle
-            .expect_has_status()
-            .returning(|_, _| true);
-
-        let invalid_share = TestShareBlockBuilder::new()
-            .uncles(vec![uncle1.block_hash()])
-            .miner_pubkey(PUBKEY_G)
-            .build();
-
-        let result = validator().validate_uncles(&invalid_share, &chain_store_handle);
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("on confirmed chain")
         );
     }
 
