@@ -358,7 +358,7 @@ impl Store {
         lower_key.extend_from_slice(&from_height.to_be_bytes());
 
         let mut upper_key = b"h:".to_vec();
-        upper_key.extend_from_slice(&(to_height + 1).to_be_bytes());
+        upper_key.extend_from_slice(&to_height.saturating_add(1).to_be_bytes());
 
         let mut read_opts = rocksdb::ReadOptions::default();
         read_opts.set_iterate_lower_bound(lower_key.clone());

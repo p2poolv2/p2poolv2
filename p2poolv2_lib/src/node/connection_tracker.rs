@@ -97,9 +97,6 @@ impl ConnectionTracker {
     ) -> ConnectionAction {
         let (address, direction) = match endpoint {
             ConnectedPoint::Dialer { address, .. } => {
-                if !self.connected_dial_addresses.contains(address) {
-                    self.connected_dial_addresses.push(address.clone());
-                }
                 (address.clone(), ConnectionDirection::Outbound)
             }
             ConnectedPoint::Listener { send_back_addr, .. } => {
@@ -116,6 +113,12 @@ impl ConnectionTracker {
                     peer_id, peer_ip
                 );
                 return ConnectionAction::Block;
+            }
+        }
+
+        if let ConnectedPoint::Dialer { address, .. } = endpoint {
+            if !self.connected_dial_addresses.contains(address) {
+                self.connected_dial_addresses.push(address.clone());
             }
         }
 
@@ -331,6 +334,25 @@ mod tests {
         assert_eq!(
             extract_ip_from_multiaddr(&addr),
             Some("::1".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn test_blocked_outbound_does_not_leave_stale_dial_address() {
+        let blocked: HashSet<IpAddr> = ["1.2.3.4"]
+            .iter()
+            .filter_map(|ip| ip.parse().ok())
+            .collect();
+        let mut tracker = ConnectionTracker::new(blocked);
+        let peer_id = PeerId::random();
+        let endpoint = make_dialer_endpoint("/ip4/1.2.3.4/tcp/46884");
+
+        let action = tracker.handle_established(peer_id, &endpoint);
+        assert!(matches!(action, ConnectionAction::Block));
+        assert_eq!(
+            tracker.connected_dial_addresses.len(),
+            0,
+            "blocked outbound should not leave a stale dial address"
         );
     }
 
