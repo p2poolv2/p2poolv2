@@ -100,6 +100,10 @@ pub struct StratumConfig<State = Raw> {
     pub pool_signature: Option<String>,
     /// Maximum concurrent stratum connections. Default: 90% of OS fd limit.
     pub max_connections: Option<u32>,
+    /// Wait for the share chain to be current before accepting stratum
+    /// connections. Set to false when bootstrapping a new network.
+    #[serde(default = "default_wait_for_chain_sync")]
+    pub wait_for_chain_sync: bool,
 
     // Parsed addresses - only available when State = Parsed
     #[serde(skip)]
@@ -169,6 +173,7 @@ impl StratumConfig<Raw> {
             ignore_difficulty: self.ignore_difficulty,
             pool_signature: self.pool_signature,
             max_connections: self.max_connections,
+            wait_for_chain_sync: self.wait_for_chain_sync,
             bootstrap_address_parsed: Some(bootstrap_address_parsed),
             donation_address_parsed,
             fee_address_parsed,
@@ -220,6 +225,7 @@ impl StratumConfig<Raw> {
             ignore_difficulty: None,
             pool_signature: None,
             max_connections: None,
+            wait_for_chain_sync: true,
             bootstrap_address_parsed: None,
             donation_address_parsed: None,
             fee_address_parsed: None,
@@ -299,6 +305,10 @@ pub struct StoreConfig {
     /// Time-to-live for PPLNS shares (in days)
     #[serde(default = "default_pplns_ttl_days")]
     pub pplns_ttl_days: u64,
+}
+
+fn default_wait_for_chain_sync() -> bool {
+    true
 }
 
 fn default_background_task_frequency_hours() -> u64 {
