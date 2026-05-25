@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use super::{Chain, Height, Store, TopResult};
+use crate::node::request_response_handler::block_fetcher::FETCH_BATCH_SIZE;
 use crate::store::writer::StoreError;
 use tracing::debug;
 
@@ -34,9 +35,16 @@ impl Store {
     /// Returns the new confirmed height if it changed, or None if unchanged.
     /// Promote candidates to confirmed if conditions are met.
     ///
-    /// Reads candidate and confirmed state, then extends or reorgs the
-    /// confirmed chain from candidates whose block data (and uncle
-    /// data) is available.
+    /// First tries the candidate chain: reads candidate and confirmed
+    /// state, then extends or reorgs the confirmed chain from
+    /// candidates whose block data (and uncle data) is available.
+    ///
+    /// When no candidate blocks can be promoted (e.g. the candidate
+    /// chain is on a fork whose block data is missing), falls back to
+    /// confirming any block at `confirmed_height + 1` that is a child
+    /// of the confirmed tip and has all block and uncle data available.
+    /// This allows locally mined blocks to advance the confirmed chain
+    /// even when the candidate chain is stuck.
     ///
     /// Returns the new confirmed height if it changed, or None if unchanged.
     pub(crate) fn organise_block(
@@ -49,18 +57,54 @@ impl Store {
 
         let candidates = self.find_promotable_candidates(&top_confirmed)?;
 
-        if candidates.is_empty() {
-            return Ok(None);
+        if !candidates.is_empty() {
+            let promotable_height = candidates.last().unwrap().0;
+
+            if self.should_extend_confirmed(
+                &candidates,
+                top_confirmed.height,
+                top_confirmed.hash,
+            )? {
+                return self.extend_confirmed(promotable_height, &candidates, batch);
+            }
+
+            if self.should_reorg_confirmed(&top_confirmed, &candidates) {
+                return self.reorg_confirmed(&top_confirmed, &candidates, batch);
+            }
         }
 
-        let promotable_height = candidates.last().unwrap().0;
+        self.try_fallback_confirmation(&top_confirmed, batch)
+    }
 
-        if self.should_extend_confirmed(&candidates, top_confirmed.height, top_confirmed.hash)? {
-            return self.extend_confirmed(promotable_height, &candidates, batch);
-        }
+    /// Fallback: when no candidate chain blocks can be promoted, look
+    /// for any block at the next height that is a child of the
+    /// confirmed tip with all block and uncle data available.
+    fn try_fallback_confirmation(
+        &self,
+        top_confirmed: &TopResult,
+        batch: &mut rocksdb::WriteBatch,
+    ) -> Result<Option<Height>, StoreError> {
+        let next_height = top_confirmed.height + 1;
+        let height_entries = self.get_blockhashes_for_height_range(next_height, next_height);
 
-        if self.should_reorg_confirmed(&top_confirmed, &candidates) {
-            return self.reorg_confirmed(&top_confirmed, &candidates, batch);
+        for (_, blockhashes) in &height_entries {
+            for blockhash in blockhashes {
+                let Some(header) = self.get_share_header(blockhash)? else {
+                    continue;
+                };
+                if header.prev_share_blockhash != top_confirmed.hash {
+                    continue;
+                }
+                if !self.all_block_and_uncle_data_available(&[*blockhash]) {
+                    continue;
+                }
+                debug!(
+                    "Fallback confirmation: block {blockhash} at height {next_height} \
+                     extends confirmed tip"
+                );
+                let candidates = vec![(next_height, *blockhash)];
+                return self.extend_confirmed(next_height, &candidates, batch);
+            }
         }
 
         Ok(None)
@@ -81,7 +125,9 @@ impl Store {
             top_confirmed, top_candidate
         );
 
-        let all_candidates = self.get_candidates(top_confirmed.height + 1, top_candidate.height)?;
+        let scan_limit = top_confirmed.height + 1 + FETCH_BATCH_SIZE as u32;
+        let scan_end = std::cmp::min(scan_limit, top_candidate.height);
+        let all_candidates = self.get_candidates(top_confirmed.height + 1, scan_end)?;
         Ok(self.contiguous_candidates_with_block_data(&all_candidates))
     }
 
@@ -1080,6 +1126,87 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         // Now organise_block confirms from the candidate chain
+        let mut batch = Store::get_write_batch();
+        let result = store.organise_block(&mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert_eq!(result, Some(2));
+        assert_eq!(store.get_top_confirmed_height().unwrap(), 2);
+        assert_eq!(
+            store.get_confirmed_at_height(2).unwrap(),
+            local_block.block_hash()
+        );
+    }
+
+    /// Fallback confirmation when candidate chain is stuck on a fork
+    /// whose block data is missing and the local block cannot reorg
+    /// the candidate chain (equal cumulative work).
+    ///
+    /// Scenario:
+    /// - genesis -> share1(h:1) confirmed
+    /// - Candidate chain on a fork at h:1 (header only, no block data)
+    ///   with a second fork block at h:2 (header only) keeping the
+    ///   candidate tip ahead
+    /// - Local block at h:2, parent = share1, WITH block data
+    /// - Local block has equal cumulative work so cannot reorg candidates
+    /// - organise_block falls back to confirming the local block
+    #[test]
+    fn test_fallback_confirms_block_when_candidate_chain_stuck() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // share1: confirmed at h:1
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        store.push_to_confirmed_chain(&share1).unwrap();
+        assert_eq!(store.get_top_confirmed_height().unwrap(), 1);
+
+        // fork_share: different child of genesis on a competing fork.
+        // Header only, no block data.
+        let fork_share = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695799)
+            .build();
+        store.push_to_candidate_chain(&fork_share).unwrap();
+
+        // fork_share2: extends fork to h:2 (header only, no block data).
+        // This keeps the candidate tip ahead of confirmed.
+        let fork_share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(fork_share.block_hash().to_string())
+            .nonce(0xe9695800)
+            .build();
+        store.push_to_candidate_chain(&fork_share2).unwrap();
+        assert_eq!(store.get_top_candidate_height().ok(), Some(2));
+
+        // local_block: child of share1 (confirmed tip), WITH block data.
+        // It has equal cumulative work to fork_share at the same height,
+        // so organise_header cannot reorg the candidate chain.
+        let local_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(0xe9695801)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&local_block, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+        let mut batch = Store::get_write_batch();
+        store
+            .organise_header(&local_block.header, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Candidate chain still on the fork (local block could not reorg)
+        assert!(!store.share_block_exists(&fork_share.block_hash()));
+
+        // organise_block: candidate chain has no block data at h:1,
+        // so find_promotable_candidates returns empty. Fallback finds
+        // local_block at h:2 with parent = confirmed tip and confirms it.
         let mut batch = Store::get_write_batch();
         let result = store.organise_block(&mut batch).unwrap();
         store.commit_batch(batch).unwrap();

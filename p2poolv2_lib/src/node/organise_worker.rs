@@ -177,6 +177,18 @@ impl OrganiseWorker {
     ) -> Result<(), OrganiseError> {
         if let Some(parent_height) = self.should_buffer_block(&share_block) {
             self.buffer_block(parent_height, share_block);
+            // The buffered block is too far ahead to promote, but the
+            // candidate chain may have reorged since the last
+            // organise_block call. The block at confirmed_tip + 1 on
+            // the candidate chain might already have its body stored
+            // (e.g. it failed context-free validation but was stored
+            // by the block receiver). Try to advance the confirmed
+            // chain from the candidate chain, then drain any buffered
+            // blocks that become processable.
+            if let Ok(Some(_)) = self.chain_store_handle.organise_block().await {
+                self.update_pplns_window();
+                self.drain_pending_blocks().await?;
+            }
             return Ok(());
         }
 
@@ -754,6 +766,9 @@ mod tests {
             .expect_get_tip_height()
             .returning(|| Ok(Some(5)));
         mock_chain_handle.expect_promote_block().never();
+        mock_chain_handle
+            .expect_organise_block()
+            .returning(|| Ok(None));
 
         let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
@@ -866,6 +881,9 @@ mod tests {
             });
 
         mock_chain_handle
+            .expect_organise_block()
+            .returning(|| Ok(None));
+        mock_chain_handle
             .expect_promote_block()
             .returning(|_| Ok(Some(100)));
         mock_chain_handle
@@ -960,6 +978,9 @@ mod tests {
                 promote_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 Ok(Some(10))
             });
+        mock_chain_handle
+            .expect_organise_block()
+            .returning(|| Ok(None));
         mock_chain_handle
             .expect_get_candidate_tip_height()
             .returning(|| Ok(Some(10)));
