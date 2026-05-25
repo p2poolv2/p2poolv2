@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.11.0] - 2026-05-25
+
+### Fixed
+
+- Fix confirmed chain divergence during sync. Blocks are now confirmed
+  strictly in candidate chain order instead of by block body arrival
+  order. The candidate chain resolves historical forks via cumulative
+  work (ASERT breaks equal-work ties at the next height through
+  different parent timestamps), and the confirmed chain follows it.
+  Previously, `build_direct_candidates` confirmed whichever block body
+  arrived first at each height, which could diverge from the peer's
+  confirmed chain, causing PPLNS distribution mismatches and merkle
+  root validation failures.
+
+- Add uncle body availability check before block confirmation. Both
+  `should_extend_confirmed` and `reorg_confirmed` now verify that all
+  uncle bodies referenced by candidate blocks are available in the
+  store before promoting them. This prevents missing uncle data in the
+  PPLNS window which caused incorrect payout distributions.
+
+- Add fallback confirmation path. When the candidate chain cannot be
+  advanced (e.g. stuck on a fork with missing block data), any block
+  at confirmed_height + 1 that is a child of the confirmed tip with
+  all block and uncle data available can be confirmed. This allows
+  locally mined blocks to advance the confirmed chain.
+
+- Trigger confirmed chain advancement when blocks are buffered by the
+  organise worker. After a candidate chain reorg, the block at
+  `confirmed_tip + 1` may already have its body stored but no
+  OrganiseEvent was sent for it. The organise worker now calls
+  organise_block when buffering blocks to pick up such blocks.
+
+- Downgrade uncle-on-confirmed-chain validation log from error to
+  debug. This validation failure is expected during sync when the
+  confirmed chain has not yet settled and is harmless because the
+  block body is still stored and confirmed via the candidate chain
+  path.
+
+- Cap the candidate chain scan in `find_promotable_candidates` to
+  `FETCH_BATCH_SIZE` entries beyond the confirmed tip. Previously
+  scanned the entire gap to the candidate tip (up to 50k+ entries),
+  causing ~25ms delays per call during sync.
+
 ## [v0.10.15] - 2026-05-19
 
 ### Fixed
