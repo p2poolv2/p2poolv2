@@ -392,7 +392,7 @@ impl Store {
         self.add_share_block(share, &mut batch)?;
         self.commit_batch(batch)?;
         let mut batch = Store::get_write_batch();
-        let result = self.organise_block(None, &mut batch)?;
+        let result = self.organise_block(&mut batch)?;
         self.commit_batch(batch)?;
         Ok(result)
     }

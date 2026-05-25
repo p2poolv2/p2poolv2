@@ -139,10 +139,8 @@ pub enum WriteCommand {
 
     /// Promote candidates to confirmed.
     /// Returns the confirmed chain height after organising, if changed.
-    /// When promoted_header is provided, the block can be confirmed
-    /// directly if it extends the confirmed tip, bypassing stuck candidates.
+    /// Confirms blocks strictly from the candidate chain order.
     OrganiseBlock {
-        promoted_header: Option<ShareHeader>,
         reply: oneshot::Sender<Result<Option<u32>, StoreError>>,
     },
 }
@@ -267,18 +265,12 @@ impl StoreWriter {
                 let _ = reply.send(result);
             }
 
-            WriteCommand::OrganiseBlock {
-                promoted_header,
-                reply,
-            } => {
+            WriteCommand::OrganiseBlock { reply } => {
                 let mut batch = Store::get_write_batch();
-                let result = self
-                    .store
-                    .organise_block(promoted_header.as_ref(), &mut batch)
-                    .and_then(|height| {
-                        self.store.commit_batch(batch).map_err(StoreError::from)?;
-                        Ok(height)
-                    });
+                let result = self.store.organise_block(&mut batch).and_then(|height| {
+                    self.store.commit_batch(batch).map_err(StoreError::from)?;
+                    Ok(height)
+                });
                 let _ = reply.send(result);
             }
         }

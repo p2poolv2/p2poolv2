@@ -196,7 +196,12 @@ async fn validate_and_emit(
     if let Err(validation_error) =
         share_validator.validate_share_block(&share_block, &chain_store_handle)
     {
-        error!("Share block {block_hash} validation failed: {validation_error}");
+        let error_message = validation_error.to_string();
+        if error_message.contains("is on confirmed chain") {
+            debug!("Share block {block_hash} validation: {error_message}");
+        } else {
+            error!("Share block {block_hash} validation failed: {error_message}");
+        }
         return;
     }
 

@@ -31,6 +31,30 @@ const CONFIRMED_SUFFIX: &str = ":f";
 const TOP_CONFIRMED_KEY: &str = "meta:top_confirmed_height";
 
 impl Store {
+    /// Check that every block in the list has its body stored and that
+    /// all uncles referenced by each block also have their bodies stored.
+    ///
+    /// Returns false (with a debug log) on the first missing block body
+    /// or uncle body. Used by both `should_extend_confirmed` and
+    /// `reorg_confirmed` to ensure PPLNS can resolve all uncle data
+    /// before a block is promoted.
+    fn all_block_and_uncle_data_available(&self, blockhashes: &[BlockHash]) -> bool {
+        for blockhash in blockhashes {
+            if !self.share_block_exists(blockhash) {
+                debug!("Block {blockhash} missing block data");
+                return false;
+            }
+            if let Ok(Some(header)) = self.get_share_header(blockhash) {
+                for uncle in &header.uncles {
+                    if !self.share_block_exists(uncle) {
+                        debug!("Uncle {uncle} of block {blockhash} missing block data");
+                        return false;
+                    }
+                }
+            }
+        }
+        true
+    }
     /// Check if the candidate chain should reorg the confirmed chain.
     ///
     /// Returns true when the last candidate has more cumulative work
@@ -105,12 +129,11 @@ impl Store {
             StoreError::NotFound("Empty branch returned from get_branch_to_chain.".into())
         })?;
 
-        // Do not reorg if any block in the fork branch lacks block data
-        for to_confirm in &fork_branch {
-            if !self.share_block_exists(to_confirm) {
-                debug!("Reorg skipped: block {} missing block data", to_confirm);
-                return Ok(None);
-            }
+        // Do not reorg if any block or its uncles lack block data
+        let fork_hashes: Vec<BlockHash> = fork_branch.iter().copied().collect();
+        if !self.all_block_and_uncle_data_available(&fork_hashes) {
+            debug!("Reorg skipped: block or uncle missing block data");
+            return Ok(None);
         }
 
         let reorged_out_chain = self.get_confirmed_chain(fork_point, Some(top_confirmed))?;
@@ -311,9 +334,11 @@ impl Store {
 
     /// Check if the confirmed chain can be extended by the local candidate chain.
     ///
-    /// Accepts the effective candidate chain built locally (avoiding stale
-    /// reads from the DB within the same WriteBatch).
-    /// Returns true if the first candidate is a child of the top confirmed.
+    /// Returns true when the first candidate is a child of the top
+    /// confirmed AND all candidates (plus their uncles) have block
+    /// body data available in the store. The uncle check ensures the
+    /// PPLNS window can resolve all uncle entries when computing
+    /// payout distributions.
     pub(super) fn should_extend_confirmed(
         &self,
         candidates: &Chain,
@@ -338,11 +363,14 @@ impl Store {
 
         debug!("First candidate header {:?}", first_candidate_header);
 
-        // First candidate must be a child of top confirmed
-        Ok(
-            first_candidate_header.prev_share_blockhash == top_confirmed_hash
-                && top_confirmed_height + 1 == candidates[0].0,
-        )
+        if first_candidate_header.prev_share_blockhash != top_confirmed_hash
+            || top_confirmed_height + 1 != candidates[0].0
+        {
+            return Ok(false);
+        }
+
+        let candidate_hashes: Vec<BlockHash> = candidates.iter().map(|(_, hash)| *hash).collect();
+        Ok(self.all_block_and_uncle_data_available(&candidate_hashes))
     }
 
     /// Promote candidates to confirmed.
