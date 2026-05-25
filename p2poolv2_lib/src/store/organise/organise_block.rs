@@ -22,31 +22,20 @@ use tracing::debug;
 impl Store {
     /// Promote candidates to confirmed if conditions are met.
     ///
-    /// When `promoted_header` is provided and it directly extends the
-    /// confirmed tip, the block is confirmed immediately without
-    /// consulting the candidate chain. This prevents the node from
-    /// getting stuck when the candidate chain is on a fork whose blocks
-    /// lack block data.
-    ///
-    /// Otherwise falls back to the candidate chain: reads candidate and
-    /// confirmed state, then extends or reorgs the confirmed chain from
-    /// candidates whose block data is available.
-    ///
-    /// Returns the new confirmed height if it changed, or None if unchanged.
-    /// Promote candidates to confirmed if conditions are met.
-    ///
-    /// First tries the candidate chain: reads candidate and confirmed
-    /// state, then extends or reorgs the confirmed chain from
-    /// candidates whose block data (and uncle data) is available.
+    /// Strictly follows the candidate chain order: finds the
+    /// contiguous prefix of candidates (from confirmed tip + 1) that
+    /// have block and uncle data available, then extends or reorgs
+    /// the confirmed chain accordingly.
     ///
     /// When no candidate blocks can be promoted (e.g. the candidate
     /// chain is on a fork whose block data is missing), falls back to
-    /// confirming any block at `confirmed_height + 1` that is a child
-    /// of the confirmed tip and has all block and uncle data available.
-    /// This allows locally mined blocks to advance the confirmed chain
-    /// even when the candidate chain is stuck.
+    /// confirming any block at confirmed_height + 1 that is a child
+    /// of the confirmed tip and has all block and uncle data
+    /// available. This allows locally mined blocks to advance the
+    /// confirmed chain even when the candidate chain is stuck.
     ///
-    /// Returns the new confirmed height if it changed, or None if unchanged.
+    /// Returns the new confirmed height if it changed, or None if
+    /// unchanged.
     pub(crate) fn organise_block(
         &self,
         batch: &mut rocksdb::WriteBatch,

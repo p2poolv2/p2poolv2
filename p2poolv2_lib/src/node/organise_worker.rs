@@ -185,9 +185,20 @@ impl OrganiseWorker {
             // by the block receiver). Try to advance the confirmed
             // chain from the candidate chain, then drain any buffered
             // blocks that become processable.
-            if let Ok(Some(_)) = self.chain_store_handle.organise_block().await {
-                self.update_pplns_window();
-                self.drain_pending_blocks().await?;
+            match self.chain_store_handle.organise_block().await {
+                Ok(Some(_)) => {
+                    self.update_pplns_window();
+                    self.drain_pending_blocks().await?;
+                }
+                Ok(None) => {}
+                Err(StoreError::ChannelClosed) => {
+                    return Err(OrganiseError {
+                        message: "Store writer channel closed".to_string(),
+                    });
+                }
+                Err(error) => {
+                    error!("Error advancing confirmed from buffer trigger: {error}");
+                }
             }
             return Ok(());
         }
