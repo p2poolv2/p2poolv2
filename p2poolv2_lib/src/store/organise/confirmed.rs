@@ -38,7 +38,7 @@ impl Store {
     /// or uncle body. Used by both `should_extend_confirmed` and
     /// `reorg_confirmed` to ensure PPLNS can resolve all uncle data
     /// before a block is promoted.
-    fn all_block_and_uncle_data_available(&self, blockhashes: &[BlockHash]) -> bool {
+    pub(super) fn all_block_and_uncle_data_available(&self, blockhashes: &[BlockHash]) -> bool {
         for blockhash in blockhashes {
             if !self.share_block_exists(blockhash) {
                 debug!("Block {blockhash} missing block data");

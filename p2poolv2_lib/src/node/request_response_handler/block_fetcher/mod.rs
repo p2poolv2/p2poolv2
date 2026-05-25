@@ -55,7 +55,7 @@ const BLOCK_FETCHER_CHANNEL_CAPACITY: usize = 8192;
 /// queue at a time. The next batch is loaded only after the current
 /// batch is fully dispatched and all responses have been received,
 /// bounding memory in the downstream block receiver.
-const FETCH_BATCH_SIZE: usize = 1000;
+pub(crate) const FETCH_BATCH_SIZE: usize = 1000;
 
 /// A blockhash queued for fetching, with an optional preferred peer
 /// that is known to have the block body (the inv/headers source).
