@@ -1,4 +1,4 @@
-set unstable := true
+set unstable
 
 dev_config := "." / "config-dev.toml"
 default_config := "." / "config.toml"
@@ -55,7 +55,7 @@ build package="":
 
 # Build a release version of all packages and binaries in the workspace
 build-release:
-    RUSTFLAGS='-C target-cpu=native' cargo build --workspace --release
+    cargo build --workspace --release
 
 run-release config=target_config:
     cargo run --release --package p2poolv2_node -- --config={{ config }}

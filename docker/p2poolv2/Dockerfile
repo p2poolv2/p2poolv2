@@ -42,7 +42,6 @@ COPY --parents p2poolv2_lib/ .
 COPY --parents p2poolv2_api/ .
 
 ENV RUST_LOG=info
-ENV RUSTFLAGS='-C target-cpu=native'
 
 # Build and install
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
@@ -76,6 +75,10 @@ COPY config-docker.sample.toml /etc/p2poolv2/config.toml
 # Set up dashboard
 COPY p2poolv2_api/static /var/www/dashboard
 ENV P2POOL_STATIC_DIR=/var/www/dashboard
+
+LABEL org.opencontainers.image.source=https://github.com/p2poolv2/p2poolv2
+LABEL org.opencontainers.image.description="P2Poolv2 is a peer-to-peer Bitcoin mining pool where miners coordinate directly and verify their rewards without centralized operators."
+LABEL org.opencontainers.image.licenses=GPL-3.0
 
 # TODO: add non-root user
 
