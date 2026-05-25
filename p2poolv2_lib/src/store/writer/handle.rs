@@ -323,7 +323,9 @@ impl StoreHandle {
 
     /// Promote candidates to confirmed.
     /// Returns the confirmed chain height after organising, if changed.
-    /// Confirms blocks strictly from the candidate chain order.
+    /// Prefers the candidate chain order. Falls back to any child of
+    /// the confirmed tip with full block and uncle data when no
+    /// candidate blocks can be promoted.
     pub async fn organise_block(&self) -> Result<Option<u32>, StoreError> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.write_tx

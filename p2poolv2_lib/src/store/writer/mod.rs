@@ -139,7 +139,9 @@ pub enum WriteCommand {
 
     /// Promote candidates to confirmed.
     /// Returns the confirmed chain height after organising, if changed.
-    /// Confirms blocks strictly from the candidate chain order.
+    /// Prefers the candidate chain order. Falls back to any child of
+    /// the confirmed tip with full block and uncle data when no
+    /// candidate blocks can be promoted.
     OrganiseBlock {
         reply: oneshot::Sender<Result<Option<u32>, StoreError>>,
     },
