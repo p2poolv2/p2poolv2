@@ -22,6 +22,7 @@ pub mod dag;
 pub mod db;
 pub mod db_query;
 pub mod gen_auth;
+pub mod gen_genesis;
 pub mod peers;
 pub mod peers_info;
 pub mod pplns_shares;
@@ -144,6 +145,16 @@ pub enum Commands {
         /// Password (leave empty to auto-generate, or use "-" to prompt)
         password: Option<String>,
     },
+    /// Sub command to generate a valid genesis ShareBlock
+    GenGenesis {
+        /// Miner public key as hex string
+        #[arg(short = 'p', alias = "pk")]
+        miner_pk: Option<String>,
+
+        /// Bitcoin network (p2pool sharechain will match this)
+        #[arg(long, short)]
+        network: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -182,7 +193,7 @@ pub enum PeersCommands {
     },
 }
 
-pub async fn run() -> Result<(), Box<dyn Error>> {
+pub async fn run() -> std::result::Result<(), Box<dyn Error>> {
     tracing_subscriber::fmt::init();
 
     let cli = Cli::parse();
@@ -195,24 +206,26 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
             let db_path = cli
                 .db_path
                 .as_ref()
-                .ok_or("--db-path required for db commands")?;
+                .ok_or("--db-path is required for db commands")?;
             commands::db::execute(command, db_path)?;
         }
         Some(Commands::Peers { command }) => {
             let config_path = cli
                 .config
                 .as_ref()
-                .ok_or("Config file required for peers commands. Use --config")?;
-            let config = Config::load(config_path)?;
+                .ok_or("Config file is required for peers commands. Use --config")?;
+            let config = Config::load(config_path)
+                .map_err(|e| format!("Failed to load config from {config_path}: {e}"))?;
             commands::peers::execute(command, &config.api).await?;
         }
         Some(
             Commands::Info
-            | Commands::PplnsShares { .. }
-            | Commands::Shares { .. }
             | Commands::Candidates { .. }
-            | Commands::Share { .. }
             | Commands::Dag { .. }
+            | Commands::GenGenesis { .. }
+            | Commands::PplnsShares { .. }
+            | Commands::Share { .. }
+            | Commands::Shares { .. }
             | Commands::Transactions { .. },
         ) => {
             if let Some(db_path) = &cli.db_path {
@@ -260,8 +273,9 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
                 let config_path = cli
                     .config
                     .as_ref()
-                    .ok_or("Config file required for this command. Use --config or --db-path")?;
-                let config = Config::load(config_path)?;
+                    .ok_or("Config file is required for this command. Use --config or --db-path")?;
+                let config = Config::load(config_path)
+                    .map_err(|e| format!("Failed to load config from {config_path}: {e}"))?;
 
                 match &cli.command {
                     Some(Commands::Info) => {
@@ -307,6 +321,9 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
                     }
                     Some(Commands::Transactions { command }) => {
                         commands::transactions::execute_api(&config.api, command).await?;
+                    }
+                    Some(Commands::GenGenesis { miner_pk, network }) => {
+                        gen_genesis::execute(&config, miner_pk.clone(), network).await?
                     }
                     _ => unreachable!(),
                 }

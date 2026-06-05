@@ -19,13 +19,14 @@ path = "src/lib.rs"
 
 [dependencies]
 p2poolv2_lib = { workspace = true }
-bitcoin = { workspace = true }
+bitcoindrpc = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 clap = { workspace = true }
 config = { workspace = true }
 serde = { workspace = true }
+bitcoin = { workspace = true }
 rand = "0.8"
 hex = { workspace = true }
 base64 = { workspace = true }
@@ -40,4 +41,3 @@ chrono = { workspace = true }
 wiremock = "0.6.2"
 tokio = { version = "1.0", features = ["full", "test-util"] }
 tempfile = { workspace = true }
-

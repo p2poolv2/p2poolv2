@@ -346,7 +346,7 @@ impl ShareBlock {
     ///
     /// Uses network to create coinbase transaction for miner that
     /// mined genesis block. This is a NUMPS miner pubkey.
-    fn build_genesis(
+    pub fn build_genesis(
         genesis_data: &genesis::GenesisData,
         network: bitcoin::Network,
     ) -> Result<Self, Box<dyn Error + Send + Sync>> {
@@ -368,7 +368,7 @@ impl ShareBlock {
                 .unwrap()
                 .into();
 
-        let block_hex = hex::decode(genesis_data.bitcoin_block_hex).unwrap();
+        let block_hex = hex::decode(genesis_data.bitcoin_block_hex.clone()).unwrap();
         // panic here, as if the genesis block is bad, we bail at the start of the process
         let bitcoin_block: bitcoin::Block = match bitcoin::consensus::deserialize(&block_hex) {
             Ok(block) => block,

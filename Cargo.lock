@@ -3246,6 +3246,7 @@ version = "0.12.0"
 dependencies = [
  "base64",
  "bitcoin",
+ "bitcoindrpc",
  "chrono",
  "clap",
  "config",

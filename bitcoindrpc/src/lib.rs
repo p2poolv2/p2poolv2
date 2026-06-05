@@ -16,7 +16,8 @@
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use bitcoin::consensus::encode::serialize_hex;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::{Map, json};
 use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
@@ -336,6 +337,28 @@ impl BitcoindRpcClient {
         // Make the RPC request - submitblock returns null on success, or error string on failure
         let result: serde_json::Value = self.request("submitblock", params).await?;
         Ok(result.to_string())
+    }
+
+    /// Gets the best blockhash
+    pub async fn getbestblockhash(&self) -> Result<String, BitcoindRpcError> {
+        let result: serde_json::Value = self.request("getbestblockhash", vec![]).await?;
+        Ok(result.to_string().trim_matches('"').to_string())
+    }
+
+    /// Gets the block data as a hex-encoded string for a given block hash
+    pub async fn getblock(&self, bitcoin_blockhash: &str) -> Result<String, BitcoindRpcError> {
+        let params: Vec<serde_json::Value> = vec![json!(bitcoin_blockhash.to_string()), json!(0)];
+        let result: serde_json::Value = self.request("getblock", params).await?;
+        Ok(result.to_string())
+    }
+
+    pub async fn getblockstats(
+        &self,
+        bitcoin_blockhash: &str,
+    ) -> Result<serde_json::Value, BitcoindRpcError> {
+        let params: Vec<serde_json::Value> = vec![json!(bitcoin_blockhash.to_string())];
+        let result: serde_json::Value = self.request("getblockstats", params).await?;
+        Ok(result)
     }
 }
 

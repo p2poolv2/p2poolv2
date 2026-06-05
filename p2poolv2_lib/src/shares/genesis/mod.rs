@@ -27,61 +27,35 @@ use std::error::Error;
 pub struct GenesisData {
     /// The public key hex string used to derive the miner's bitcoin
     /// address for the genesis share block coinbase
-    pub public_key: &'static str,
+    pub public_key: String,
     /// The bitcoin block in hex for the share
-    pub bitcoin_block_hex: &'static str,
+    pub bitcoin_block_hex: String,
     /// Bitcoin header height
     pub bitcoin_height: u64,
     /// Unix timestamp for the genesis share block
     pub timestamp: u32,
 }
 
-const SIGNET_GENESIS_DATA: GenesisData = GenesisData {
-    public_key: "02ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d",
-    // for bitcoin blockhash 00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6
-    // bitcoin_header_hex: "0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a008f4d5fae77031e8ad22203",
-    bitcoin_block_hex: include!("signet.rs"),
-    bitcoin_height: 0,
-    timestamp: 1776855600,
-};
-
-const TESTNET4_GENESIS_DATA: GenesisData = GenesisData {
-    public_key: "02ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d",
-    // for bitcoin blockhash 00000000000000013c0a1f4152b458118ed666282e6235d744bf2a5d66ecf022
-    bitcoin_block_hex: include!("testnet4.rs"),
-    bitcoin_height: 130754,
-    timestamp: 1778097600,
-};
-
-// Using the following JSON data for the genesis block
-const MAINNET_GENESIS_DATA: GenesisData = GenesisData {
-    public_key: "02ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d",
-    // for header hash 00000000000adb0f8eff963322f447aed003a1861009009b7bcab355bbc8e54d. Mining on previousblockhash 000000000000000000011c80ec9a34567d2c612781b2d7b98c30f689e13c7ad1 height 920526
-    // header in hex "00a06f239cf5fe7a514fd6f9e64d77cd2345cf225ee3fe9b75bf00000000000000000000923435bf0a5f91886f7f94ade677752a526dec905eef07d181893faf15113a75b039fb6821eb01173c0137da"
-    bitcoin_block_hex: include!("main.rs"),
-    bitcoin_height: 920527,
-    timestamp: 1776855600,
-};
-
-// Regtest genesis: anchors the share chain on a local regtest bitcoind.
-// The bitcoin block is regtest height 0; it is only a fixed starting
-// point and need not match the connected node's tip.
-const REGTEST_GENESIS_DATA: GenesisData = GenesisData {
-    public_key: "02ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d",
-    bitcoin_block_hex: include!("regtest.rs"),
-    bitcoin_height: 0,
-    timestamp: 1776855600,
-};
+/// Default miner public key.
+pub const DEFAULT_MINER_PK: &str =
+    "02ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d";
 
 /// Get the genesis data for a given network
 pub fn genesis_data(network: bitcoin::Network) -> Result<GenesisData, Box<dyn Error>> {
-    match network {
-        bitcoin::Network::Signet => Ok(SIGNET_GENESIS_DATA),
-        bitcoin::Network::Testnet4 => Ok(TESTNET4_GENESIS_DATA),
-        bitcoin::Network::Bitcoin => Ok(MAINNET_GENESIS_DATA),
-        bitcoin::Network::Regtest => Ok(REGTEST_GENESIS_DATA),
-        _ => Err("Unsupported network".into()),
-    }
+    let (timestamp, bitcoin_height, bitcoin_block_hex) = match network {
+        bitcoin::Network::Bitcoin => (1776855600, 0, include_str!("main.rs").into()),
+        bitcoin::Network::Signet => (1776855600, 0, include_str!("signet.rs").into()),
+        bitcoin::Network::Testnet4 => (1778097600, 130754, include_str!("testnet4.rs").into()),
+        bitcoin::Network::Regtest => (1776855600, 0, include_str!("regtest.rs").into()),
+        _ => return Err("Unsupported network".into()),
+    };
+
+    Ok(GenesisData {
+        public_key: DEFAULT_MINER_PK.into(),
+        timestamp,
+        bitcoin_block_hex,
+        bitcoin_height,
+    })
 }
 
 #[cfg(test)]
