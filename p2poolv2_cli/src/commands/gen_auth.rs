@@ -35,12 +35,12 @@ fn generate_password() -> String {
 }
 
 /// Execute the gen-auth command
-pub fn execute(username: String, password: Option<String>) -> Result<(), Box<dyn Error>> {
+pub fn execute(username: &String, password: &Option<String>) -> Result<(), Box<dyn Error>> {
     // Determine password (generate, prompt, or use provided)
     let password = match password {
         None => generate_password(),
-        Some(ref p) if p == "-" => rpassword::prompt_password("Enter password: ")?,
-        Some(p) => p,
+        Some(p) if p == "-" => rpassword::prompt_password("Enter password: ")?,
+        Some(p) => p.clone(),
     };
 
     // Generate salt
@@ -88,14 +88,14 @@ mod tests {
     #[test]
     fn test_execute_with_auto_generated_password() {
         // Smoke test: execute should not fail with auto-generated password
-        let result = execute("testuser".to_string(), None);
+        let result = execute(&"testuser".to_string(), &None);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_execute_with_custom_password() {
         // Smoke test: execute should not fail with custom password
-        let result = execute("testuser".to_string(), Some("mypassword123".to_string()));
+        let result = execute(&"testuser".to_string(), &Some("mypassword123".to_string()));
         assert!(result.is_ok());
     }
 }
