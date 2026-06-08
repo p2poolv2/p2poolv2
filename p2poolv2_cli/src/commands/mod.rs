@@ -35,7 +35,7 @@ use clap::{ArgGroup, Parser, Subcommand};
 use p2poolv2_lib::config::Config;
 use std::error::Error;
 
-/// P2Pool v2 CLI utility
+/// P2Poolv2 CLI utility
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 pub struct Cli {
@@ -234,6 +234,7 @@ pub async fn run() -> std::result::Result<(), Box<dyn Error>> {
             Commands::Info
             | Commands::Candidates { .. }
             | Commands::Dag { .. }
+            | Commands::Peers { .. }
             | Commands::Gen { .. }
             | Commands::PplnsShares { .. }
             | Commands::Share { .. }
@@ -292,6 +293,9 @@ pub async fn run() -> std::result::Result<(), Box<dyn Error>> {
                 match &cli.command {
                     Some(Commands::Info) => {
                         commands::chain_info::execute(&config.api).await?;
+                    }
+                    Some(Commands::Peers { command }) => {
+                        commands::peers::execute(command, &config.api).await?;
                     }
                     Some(Commands::PplnsShares {
                         limit,
