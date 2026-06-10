@@ -53,6 +53,27 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::{Arc, RwLock};
 
+/// Proof-of-work gate: does `hash` meet `target`?
+///
+/// This is the single choke point for PoW verification on the share-validation
+/// path. Under the `sim` feature it is a no-op that always returns `true`: the
+/// no-PoW load test emits structurally valid shares whose nonce satisfies no
+/// target, so every PoW comparison here must be skipped (ASERT, propagation,
+/// organise, PPLNS and payout stay real — only this authentication check is
+/// stubbed). The `sim` feature must never be enabled in a release build.
+/// See docs/simulation/load-test-plan.md.
+#[cfg(feature = "sim")]
+#[inline]
+fn pow_meets(_target: Target, _hash: BlockHash) -> bool {
+    true
+}
+
+#[cfg(not(feature = "sim"))]
+#[inline]
+fn pow_meets(target: Target, hash: BlockHash) -> bool {
+    target.is_met_by(hash)
+}
+
 /// Validation error wrapping a descriptive message string.
 #[derive(Debug)]
 pub struct ValidationError(String);
@@ -757,7 +778,7 @@ impl ShareValidator for DefaultShareValidator {
             )));
         }
 
-        if !target.is_met_by(bitcoin_block_hash) {
+        if !pow_meets(target, bitcoin_block_hash) {
             return Err(ValidationError::new(format!(
                 "Bitcoin block hash {bitcoin_block_hash} does not meet share target {target}"
             )));
@@ -787,7 +808,7 @@ impl ShareValidator for DefaultShareValidator {
         }
 
         let bitcoin_block_hash = share_header.bitcoin_header.block_hash();
-        if !declared_target.is_met_by(bitcoin_block_hash) {
+        if !pow_meets(declared_target, bitcoin_block_hash) {
             return Err(ValidationError::new(format!(
                 "Bitcoin block hash {bitcoin_block_hash} does not meet declared target {declared_target}"
             )));
@@ -1528,6 +1549,8 @@ mod tests {
         );
     }
 
+    // Asserts PoW rejection, which the `sim` feature deliberately disables.
+    #[cfg(not(feature = "sim"))]
     #[test]
     fn test_validate_share_header_fails_for_insufficient_work() {
         let mut chain_store_handle = ChainStoreHandle::default();
@@ -3105,6 +3128,8 @@ mod tests {
         );
     }
 
+    // Asserts PoW rejection, which the `sim` feature deliberately disables.
+    #[cfg(not(feature = "sim"))]
     #[test]
     fn test_validate_header_minimum_difficulty_rejects_invalid_pow() {
         let mut header = TestShareBlockBuilder::new().build().header;
