@@ -29,6 +29,8 @@ use p2poolv2_lib::store::writer::{StoreHandle, StoreWriter, write_channel};
 use p2poolv2_lib::stratum::client_connections::start_connections_handler;
 use p2poolv2_lib::stratum::emission::Emission;
 use p2poolv2_lib::stratum::server::StratumServerBuilder;
+#[cfg(feature = "sim")]
+use p2poolv2_lib::sim::emitter::SimEmitter;
 use p2poolv2_lib::stratum::work::gbt::start_gbt;
 use p2poolv2_lib::stratum::work::notify::start_notify;
 use p2poolv2_lib::stratum::work::tracker::start_tracker_actor;
@@ -95,6 +97,25 @@ async fn main() -> ExitCode {
     };
 
     info!("Running on {} network", &config.stratum.network);
+
+    // Set sim process-globals early — before any PoolDifficulty::build (the
+    // ASERT anchor is read there) and before the first share. No-op in prod.
+    // See docs/simulation/load-test-plan.md.
+    #[cfg(feature = "sim")]
+    if let Some(sim_cfg) = config.sim.as_ref() {
+        if sim_cfg.enabled {
+            p2poolv2_lib::sim::set_propagation_delay_ms(sim_cfg.propagation_delay_ms.unwrap_or(0));
+            p2poolv2_lib::sim::set_pplns_window_shares(
+                sim_cfg.pplns_window_shares.unwrap_or(sim_cfg.block_to_share_ratio),
+            );
+            if let Some(anchor) = sim_cfg.asert_anchor_time {
+                p2poolv2_lib::sim::set_asert_anchor_time(anchor);
+            }
+            if let Some(hps) = sim_cfg.network_hashrate {
+                p2poolv2_lib::sim::set_network_hashrate(hps);
+            }
+        }
+    }
 
     let exit_sender = tokio::sync::watch::Sender::new(ShutdownReason::None);
 
@@ -230,6 +251,55 @@ async fn main() -> ExitCode {
 
     let (emissions_tx, emissions_rx) =
         tokio::sync::mpsc::channel::<Emission>(STRATUM_SHARES_BUFFER_SIZE);
+
+    // No-PoW load-test emitter. Only present under the `sim` feature; spawned
+    // here while emissions_tx, template_rx and stratum_config are still owned.
+    // See docs/simulation/load-test-plan.md. MUST NEVER run in production.
+    #[cfg(feature = "sim")]
+    if let Some(sim_cfg) = config.sim.clone() {
+        if sim_cfg.enabled {
+            let sim_emissions_tx = emissions_tx.clone();
+            let sim_template_rx = template_rx.clone();
+            let sim_network = stratum_config.network;
+            match sim_cfg
+                .miner_address
+                .parse::<bitcoin::Address<bitcoin::address::NetworkUnchecked>>()
+                .map_err(|e| e.to_string())
+                .and_then(|a| a.require_network(sim_network).map_err(|e| e.to_string()))
+            {
+                Ok(miner_address) => {
+                    // (sim process-globals were set earlier, before node setup)
+                    match bitcoindrpc::BitcoindRpcClient::new(
+                        &config.bitcoinrpc.url,
+                        &config.bitcoinrpc.username,
+                        &config.bitcoinrpc.password,
+                    ) {
+                        Ok(sim_rpc) => {
+                            let emitter = SimEmitter::new(
+                                sim_emissions_tx,
+                                sim_template_rx,
+                                miner_address,
+                                sim_cfg,
+                                sim_rpc,
+                            );
+                            let mut sim_exit_rx = exit_sender.subscribe();
+                            tokio::spawn(async move {
+                                tokio::select! {
+                                    _ = emitter.run() => {}
+                                    _ = sim_exit_rx.wait_for(|r| *r != ShutdownReason::None) => {
+                                        info!("Sim emitter shutting down");
+                                    }
+                                }
+                            });
+                            info!("Sim emitter spawned");
+                        }
+                        Err(e) => error!("Failed to build sim bitcoind rpc client: {e}"),
+                    }
+                }
+                Err(e) => error!("Invalid sim miner_address, not starting sim emitter: {e}"),
+            }
+        }
+    }
 
     let metrics_handle = match metrics::start_metrics(config.logging.stats_dir.clone()).await {
         Ok(handle) => handle,
