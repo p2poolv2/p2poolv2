@@ -332,8 +332,9 @@ impl ShareBlock {
         assert!(
             network == bitcoin::Network::Signet
                 || network == bitcoin::Network::Bitcoin
-                || network == bitcoin::Network::Testnet4,
-            "Network Testnet and Regtest not yet supported"
+                || network == bitcoin::Network::Testnet4
+                || network == bitcoin::Network::Regtest,
+            "Network Testnet not yet supported"
         );
         let genesis_data = genesis::genesis_data(network).unwrap();
         ShareBlock::build_genesis(&genesis_data, network)
