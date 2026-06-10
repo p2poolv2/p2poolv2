@@ -63,12 +63,23 @@ const MAINNET_GENESIS_DATA: GenesisData = GenesisData {
     timestamp: 1776855600,
 };
 
+// Regtest genesis: anchors the share chain on a local regtest bitcoind.
+// The bitcoin block is regtest height 0; it is only a fixed starting
+// point and need not match the connected node's tip.
+const REGTEST_GENESIS_DATA: GenesisData = GenesisData {
+    public_key: "02ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d",
+    bitcoin_block_hex: include!("regtest.rs"),
+    bitcoin_height: 0,
+    timestamp: 1776855600,
+};
+
 /// Get the genesis data for a given network
 pub fn genesis_data(network: bitcoin::Network) -> Result<GenesisData, Box<dyn Error>> {
     match network {
         bitcoin::Network::Signet => Ok(SIGNET_GENESIS_DATA),
         bitcoin::Network::Testnet4 => Ok(TESTNET4_GENESIS_DATA),
         bitcoin::Network::Bitcoin => Ok(MAINNET_GENESIS_DATA),
+        bitcoin::Network::Regtest => Ok(REGTEST_GENESIS_DATA),
         _ => Err("Unsupported network".into()),
     }
 }
