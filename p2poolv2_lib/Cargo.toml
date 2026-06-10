@@ -15,6 +15,11 @@ rust-version.workspace = true
 [features]
 hydrapool-pplns-accounting = []
 test-utils = ["dep:rand", "dep:tempfile", "p2poolv2_config/test-utils"]
+# No-PoW load-test simulation. Stubs out proof-of-work verification on the
+# share-validation path and disables auto block-submission so synthetic shares
+# can be emitted without hashing. MUST NEVER be enabled in a release build.
+# See docs/simulation/load-test-plan.md.
+sim = ["dep:rand"]
 
 [dependencies]
 # Optional test utilities dependencies
