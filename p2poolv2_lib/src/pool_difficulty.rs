@@ -162,6 +162,29 @@ pub(crate) fn asert_calculate_target(
     result_target.to_compact_lossy()
 }
 
+/// The compact target whose pool difficulty is the steady state for a given
+/// total network hashrate: `D* = hashrate · IDEAL_BLOCK_TIME / 2^32` is the
+/// difficulty at which that hashrate produces one share per target interval.
+///
+/// Sim only: used to anchor the share chain at ~the difficulty ASERT would
+/// settle to, so it starts already regulated instead of climbing from the easy
+/// clamp for ~15-20 min (the half-life). Computed by scaling the clamp target
+/// by `d_clamp / D*` (target ∝ 1/difficulty), which inverts `difficulty_float`
+/// exactly via a known reference target rather than guessing its constant.
+/// Returns the clamp unchanged when the hashrate is too low to exceed the floor.
+#[cfg(feature = "sim")]
+pub fn anchor_target_for_network_hashrate(hashrate_hps: f64) -> CompactTarget {
+    let clamp = CompactTarget::from_consensus(MAX_TARGET_CONSENSUS);
+    let d_star = (hashrate_hps * IDEAL_BLOCK_TIME as f64 / 4_294_967_296.0).max(1.0);
+    let d_clamp = Target::from_compact(clamp).difficulty_float();
+    if d_star <= d_clamp {
+        return clamp;
+    }
+    let clamp_wide = target_to_u512(Target::from_compact(clamp));
+    let scaled = clamp_wide * U512::from(d_clamp.round() as u128) / U512::from(d_star.round() as u128);
+    u512_to_target(scaled).to_compact_lossy()
+}
+
 // ---------------------------------------------------------------------------
 // PoolDifficulty -- public API
 // ---------------------------------------------------------------------------
