@@ -34,19 +34,17 @@ async fn main() -> ExitCode {
     let config = match Config::load(&args.config) {
         Ok(config) => config,
         Err(err) => {
-            error!("Failed to load config: {err}");
+            eprintln!("Failed to load config: {err}");
             return ExitCode::FAILURE;
         }
     };
 
     // Hold guards to keep non-blocking writers alive
     let _guards = match setup_logging(&config.logging) {
-        Ok(guards) => {
-            info!("Logging set up successfully");
-            guards
-        }
-        Err(e) => {
-            error!("Failed to set up logging: {e}");
+        Ok(guards) => guards,
+        Err(err) => {
+            // no logger yet
+            eprintln!("Failed to load config: {err}");
             return ExitCode::FAILURE;
         }
     };
