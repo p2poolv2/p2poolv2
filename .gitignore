@@ -17,6 +17,9 @@ tools/log_dashboard/last_processed.txt
 config.toml
 config-dev.toml
 
+# Local-only sim runbook (not for commit yet)
+docs/simulation/RUNBOOK-local.md
+
 spec/**/*pdf
 spec/**/*dvi
 spec/**/*tex
@@ -32,3 +35,5 @@ spec/**/states
 .idea/
 
 perf.data
+# matplotlib venv for sim plotting
+load-tests/sim/.venv/
