@@ -639,7 +639,25 @@ impl DefaultShareValidator {
             .expect("PPLNS window lock poisoned on write");
 
         let bitcoin_difficulty = share.header.bitcoin_header.difficulty(window.network());
+        #[cfg(not(feature = "sim"))]
         let total_difficulty = bitcoin_difficulty.saturating_mul(self.difficulty_multiplier);
+        // Sim: mirror the notify build-side. When a PPLNS window size N is
+        // configured, the window spans ~N shares via (share pool difficulty × N)
+        // instead of collapsing to one share on regtest's trivial bitcoin
+        // difficulty. share.header bits is the same pool target the build-side
+        // used. Falls back to the production formula when N is unset.
+        #[cfg(feature = "sim")]
+        let total_difficulty = {
+            let window_shares = crate::sim::pplns_window_shares();
+            if window_shares == 0 {
+                bitcoin_difficulty.saturating_mul(self.difficulty_multiplier)
+            } else {
+                share
+                    .header
+                    .get_difficulty(window.network())
+                    .saturating_mul(window_shares as u128)
+            }
+        };
 
         let address_difficulty_map = window
             .get_distribution_from_start_hash(

@@ -377,14 +377,49 @@ impl ShareBlock {
             }
         };
 
+        // The genesis time is the ASERT anchor (via PoolDifficulty::build). The
+        // fixed regtest genesis is dated in the past, so on regtest the chain is
+        // permanently behind schedule and ASERT stays floored at the easy clamp
+        // (the chain races). Under sim, override the genesis time to a shared
+        // ~launch time so ASERT regulates around the target rate. 0 = unset →
+        // the fixed timestamp. MUST be identical across nodes (same genesis
+        // hash). See docs/simulation/load-test-plan.md.
+        #[cfg(not(feature = "sim"))]
+        let genesis_time = genesis_data.timestamp;
+        #[cfg(feature = "sim")]
+        let genesis_time = {
+            let sim_t = crate::sim::asert_anchor_time();
+            if sim_t == 0 {
+                genesis_data.timestamp
+            } else {
+                sim_t as u32
+            }
+        };
+
+        // Genesis bits = the ASERT anchor target. Under sim, anchor at the
+        // steady-state difficulty for the configured total network hashrate so
+        // the chain starts regulated (paired with the launch-time genesis above);
+        // 0 = unset → the fixed target. Shared across nodes → same genesis hash.
+        #[cfg(not(feature = "sim"))]
+        let genesis_bits = CompactTarget::from_consensus(0x1b4188f5);
+        #[cfg(feature = "sim")]
+        let genesis_bits = {
+            let hps = crate::sim::network_hashrate();
+            if hps == 0 {
+                CompactTarget::from_consensus(0x1b4188f5)
+            } else {
+                crate::pool_difficulty::anchor_target_for_network_hashrate(hps as f64)
+            }
+        };
+
         let header = ShareHeader {
             prev_share_blockhash: BlockHash::all_zeros(),
             uncles: vec![],
             miner_bitcoin_address: btcaddress,
             bitcoin_header: bitcoin_block.header,
             merkle_root,
-            time: genesis_data.timestamp,
-            bits: CompactTarget::from_consensus(0x1b4188f5),
+            time: genesis_time,
+            bits: genesis_bits,
             donation_address: None,
             donation: None,
             fee_address: None,
