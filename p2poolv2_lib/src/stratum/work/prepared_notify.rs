@@ -79,6 +79,16 @@ pub struct PreparedNotifyParams {
     merkle_branches: Vec<bitcoin::TxMerkleNode>,
 }
 
+impl PreparedNotifyParams {
+    /// The ASERT-computed pool target for shares built on these params.
+    ///
+    /// Used by the sim emitter to pace its closed-loop emission rate.
+    #[cfg(feature = "sim")]
+    pub fn bits(&self) -> bitcoin::CompactTarget {
+        self.bits
+    }
+}
+
 /// Serialize the merkle branches array as a JSON array string.
 fn serialize_merkle_branches_json(branches: &[String]) -> String {
     let mut result = String::with_capacity(branches.len() * 68);
