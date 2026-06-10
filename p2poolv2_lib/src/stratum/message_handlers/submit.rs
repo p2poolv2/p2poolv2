@@ -118,6 +118,13 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
         ))]);
     }
 
+    // Under the `sim` feature, never auto-submit a bitcoin block from a stratum
+    // share: on regtest a random header meets the bitcoin target ~50% of the
+    // time, so this would spam spurious block submissions and (via the
+    // confirmation -> re-notify loop) distort the measured uncle rate. Real
+    // block-finds in the load test go only through the statistical block-find
+    // path. See docs/simulation/load-test-plan.md.
+    #[cfg(not(feature = "sim"))]
     if validation_result.meets_bitcoin_difficulty {
         // Submit block asap - decode transactions only for this rare case
         let block = build_full_block(
@@ -243,8 +250,9 @@ pub async fn submit_block(block: &Block, bitcoindrpc_client: &BitcoindRpcClient)
 }
 
 /// Build full block from header, coinbase and blocktemplate
-/// Only called for the rare case of finding a bitcoin block
-fn build_full_block(
+/// Only called for the rare case of finding a bitcoin block (real auto-submit
+/// in non-sim builds; the sim statistical block-find under `sim`).
+pub(crate) fn build_full_block(
     header: Header,
     coinbase: bitcoin::Transaction,
     blocktemplate: &BlockTemplate,
