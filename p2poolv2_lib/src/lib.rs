@@ -25,6 +25,8 @@ pub mod node;
 pub mod pool_difficulty;
 pub mod service;
 pub mod shares;
+#[cfg(feature = "sim")]
+pub mod sim;
 pub mod store;
 pub mod stratum;
 pub mod utils;
