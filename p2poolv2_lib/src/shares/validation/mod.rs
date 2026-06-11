@@ -55,12 +55,10 @@ use std::sync::{Arc, RwLock};
 
 /// Proof-of-work gate: does `hash` meet `target`?
 ///
-/// This is the single choke point for PoW verification on the share-validation
-/// path. Under the `sim` feature it is a no-op that always returns `true`: the
+/// Under the `sim` feature it is a no-op that always returns `true`: the
 /// no-PoW load test emits structurally valid shares whose nonce satisfies no
-/// target, so every PoW comparison here must be skipped (ASERT, propagation,
-/// organise, PPLNS and payout stay real — only this authentication check is
-/// stubbed). The `sim` feature must never be enabled in a release build.
+/// target, so every PoW comparison here must be skipped.
+// The `sim` feature must never be enabled in a release build.
 /// See docs/simulation/load-test-plan.md.
 #[cfg(feature = "sim")]
 #[inline]
@@ -641,7 +639,7 @@ impl DefaultShareValidator {
         let bitcoin_difficulty = share.header.bitcoin_header.difficulty(window.network());
         #[cfg(not(feature = "sim"))]
         let total_difficulty = bitcoin_difficulty.saturating_mul(self.difficulty_multiplier);
-        // Sim: mirror the notify build-side. When a PPLNS window size N is
+        // Sim: When a PPLNS window size N is
         // configured, the window spans ~N shares via (share pool difficulty × N)
         // instead of collapsing to one share on regtest's trivial bitcoin
         // difficulty. share.header bits is the same pool target the build-side

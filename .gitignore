@@ -17,8 +17,6 @@ tools/log_dashboard/last_processed.txt
 config.toml
 config-dev.toml
 
-# Local-only sim runbook (not for commit yet)
-docs/simulation/RUNBOOK-local.md
 
 spec/**/*pdf
 spec/**/*dvi

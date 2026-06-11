@@ -77,6 +77,7 @@ pub fn sample_exponential_secs<R: Rng + ?Sized>(mean_secs: f64, rng: &mut R) -> 
 /// Per-share probability that a share is also a bitcoin block.
 ///
 /// `0` ratio (or 1-in-0) is treated as "never find a block".
+// Small naming note: block_to_share_ratio is 10:1 if there is 1 block per 10 shares.
 pub fn block_find_probability(block_to_share_ratio: u64) -> f64 {
     if block_to_share_ratio == 0 {
         0.0
