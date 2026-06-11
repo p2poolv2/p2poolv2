@@ -83,33 +83,27 @@ impl EmissionWorker {
                     {
                         error!("Failed to send block to organise worker: {e}");
                     }
-                    // Announce block to peers via inventory message.
+                    // Announce the block to peers. Under sim, optionally delay
+                    // the announcement to model network latency.
                     let block_hash = share_block.block_hash();
-                    // Under sim, optionally delay the announcement to model
-                    // network latency (widens the uncle window). Spawned so the
-                    // emission loop is not stalled. Compiled out in non-sim.
                     #[cfg(feature = "sim")]
-                    {
-                        let delay = crate::sim::propagation_delay_jittered();
-                        if delay.is_zero() {
-                            if let Err(e) = self.swarm_tx.send(SwarmSend::Inv(block_hash)).await {
-                                error!("Failed to queue inv for block {block_hash}: {e}");
-                            }
-                        } else {
-                            let swarm_tx = self.swarm_tx.clone();
-                            tokio::spawn(async move {
-                                tokio::time::sleep(delay).await;
-                                if let Err(e) = swarm_tx.send(SwarmSend::Inv(block_hash)).await {
-                                    error!(
-                                        "Failed to queue delayed inv for block {block_hash}: {e}"
-                                    );
-                                }
-                            });
-                        }
-                    }
+                    let delay = crate::sim::propagation_delay_jittered();
                     #[cfg(not(feature = "sim"))]
-                    if let Err(e) = self.swarm_tx.send(SwarmSend::Inv(block_hash)).await {
-                        error!("Failed to queue inv for block {block_hash}: {e}");
+                    let delay = std::time::Duration::ZERO;
+
+                    let swarm_tx = self.swarm_tx.clone();
+                    let announce = async move {
+                        if let Err(e) = swarm_tx.send(SwarmSend::Inv(block_hash)).await {
+                            error!("Failed to queue inv for block {block_hash}: {e}");
+                        }
+                    };
+                    if delay.is_zero() {
+                        announce.await;
+                    } else {
+                        tokio::spawn(async move {
+                            tokio::time::sleep(delay).await;
+                            announce.await;
+                        });
                     }
                 }
                 Ok(None) => {
