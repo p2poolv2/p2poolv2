@@ -598,7 +598,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 We used tags like hydrapool.v0.x.0 and we didn't keep a changelog.
 
-[Unreleased]: https://github.com/p2poolv2/p2poolv2/compare/v0.11.2...HEAD
+[Unreleased]: https://github.com/p2poolv2/p2poolv2/compare/v0.12.0...HEAD
+[v0.12.0]: https://github.com/p2poolv2/p2poolv2/compare/v0.11.2...v0.12.0
 [v0.11.2]: https://github.com/p2poolv2/p2poolv2/compare/v0.11.0...v0.11.2
 [v0.11.0]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.15...v0.11.0
 [v0.10.15]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.14...v0.10.15
