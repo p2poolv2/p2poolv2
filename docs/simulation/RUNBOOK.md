@@ -140,16 +140,27 @@ It builds release, generates one config per node under `/tmp/p2pool-sim/`
 ./load-tests/sim/observe.sh
 ```
 
-Read the table:
-- **peers = 19** on every node → full mesh formed.
-- **tip_h** all equal (or split across the latest 1–2 heights) → converged. A
+`observe.sh` is a *live* snapshot — tip height/hash and convergence come from the
+logs (load-immune), peer count from the API. Read the table:
+- **tip_h** all equal (or split across the latest 1–2 heights) → converging. A
   snapshot often straddles two heights because the tip is advancing; that's
   normal, not a partition.
-- **distinct tips: 1** (or 2 transiently) and **alive: 20/20**.
-- bottom line shows `error-lines=0`.
+- **distinct tips: 1** → one shared chain. **alive: 20/20**, **peers > 0**.
 
-Re-run `observe.sh` a few times — heights should climb together. This proves
-synthetic shares propagate and validate across 20 independent processes.
+For the authoritative numbers — convergence, share rate, ASERT difficulty,
+emission∝hashrate, uncles, block-finds, rejections — run the **log-based**
+summary. It reads only the logs, so it's load-immune and is the source of truth
+(safe to run during or after the run):
+
+```sh
+./load-tests/sim/metrics.sh
+```
+
+> **Logs vs API.** Measure *outcomes* from the logs (`metrics.sh`, `plot-metrics.sh`):
+> they record what each node actually committed and don't perturb the run. Use the
+> HTTP API (`observe.sh`, `curl :7600/...`) only for *live* watching and current
+> peer state — it's advisory and can time out while a node is busy, so never treat
+> an API non-response as "diverged."
 
 Leave it running for the next test, or stop with:
 
@@ -271,11 +282,12 @@ grep "sim block-find"  /tmp/p2pool-sim/node-*.log | wc -l       # block-finds
 grep -iE "error|panic" /tmp/p2pool-sim/node-*.log | grep -v median   # problems
 ```
 
-Useful API calls (node 0):
+Useful API calls (node 0) — **live/advisory only** (can time out under load; for
+results use the log greps above or `metrics.sh`):
 
 ```sh
-curl -s :7600/chain_info | jq            # tip/candidate heights, total work
-curl -s :7600/peers | jq length          # peer count
+curl -s :7600/peers | jq length          # peer count (live state — API is right here)
+curl -s :7600/chain_info | jq            # tip/candidate heights (prefer logs for convergence)
 ```
 
 ---
