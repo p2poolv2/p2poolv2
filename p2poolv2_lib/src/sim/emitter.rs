@@ -46,9 +46,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
 use tracing::{debug, info, warn};
 
-/// Any individual sleep not allowed to be above this; we just crash.
-const MAX_SLEEP_SECS: f64 = 7200.0;
-
 /// A synthetic share emitter modeling a single miner.
 pub struct SimEmitter {
     emissions_tx: EmissionSender,
@@ -120,7 +117,6 @@ impl SimEmitter {
             let difficulty = difficulty_from_bits(prepared.bits());
             let mean = mean_share_interval_secs(difficulty, self.config.hashrate);
             let secs = sample_exponential_secs(mean, &mut rng);
-            assert!(secs <= MAX_SLEEP_SECS, "sim emitter: {secs:.0}s sleep — misconfigured hashrate?");
             tokio::time::sleep(Duration::from_secs_f64(secs.max(0.0))).await;
 
             // Build a synthetic share for the latest template (re-read in case
