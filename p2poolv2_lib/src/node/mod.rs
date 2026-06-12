@@ -433,9 +433,9 @@ impl Node {
                         .kademlia
                         .add_address(&peer_id, addr.clone());
                 }
-                // Also add our observed address to Kademlia so other peers can reach us
+                // Note, we don't advertise observed_addr: its port is our
+                // ephemeral outbound source port, not a listen port.
                 debug!("Peer {} observed us as {}", peer_id, info.observed_addr);
-                self.swarm.add_external_address(info.observed_addr);
                 if let Err(e) = self.swarm.behaviour_mut().kademlia.bootstrap() {
                     warn!("Failed to bootstrap Kademlia: {}", e);
                 } else {
