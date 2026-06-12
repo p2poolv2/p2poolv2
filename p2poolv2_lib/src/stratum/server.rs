@@ -475,6 +475,10 @@ where
     monitor.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     monitor.tick().await;
 
+    // In Hydrapool mode pass None so share_commitment is not built,
+    // which skips the ASERT pool difficulty check on share submission.
+    let is_hydrapool = ctx.mode == PoolMode::Hydrapool;
+
     // Process each line as it arrives
     loop {
         // After authorization, send the first notify from the current template
@@ -483,11 +487,13 @@ where
             // Clone inside a block to ensure the watch Ref guard is dropped before await
             let prepared_template = { template_rx.borrow_and_update().clone() };
             if let Some(prepared) = prepared_template {
-                match build_notify_from_prepared(
-                    &prepared,
-                    session.parsed_address.as_ref(),
-                    &ctx.tracker_handle,
-                ) {
+                let commitment_address = if is_hydrapool {
+                    None
+                } else {
+                    session.parsed_address.as_ref()
+                };
+                match build_notify_from_prepared(&prepared, commitment_address, &ctx.tracker_handle)
+                {
                     Ok(notify_json) => {
                         debug!("Sending first notify after authorize");
                         if let Err(e) = writer
@@ -530,7 +536,12 @@ where
                 if session.username.is_none() {
                     // Not yet authorized, skip building notify
                 } else if let Some(prepared) = prepared_template {
-                    match build_notify_from_prepared(&prepared, session.parsed_address.as_ref(), &ctx.tracker_handle) {
+                    let commitment_address = if is_hydrapool {
+                        None
+                    } else {
+                        session.parsed_address.as_ref()
+                    };
+                    match build_notify_from_prepared(&prepared, commitment_address, &ctx.tracker_handle) {
                         Ok(notify_json) => {
                             debug!("Send notify in reponse to new template");
                             if let Err(e) = writer.write_all(format!("{notify_json}\n").as_bytes()).await {
