@@ -276,7 +276,6 @@ mod handle_submit_tests {
     use crate::stratum::difficulty_adjuster::{DifficultyAdjuster, MockDifficultyAdjusterTrait};
     use crate::stratum::messages::Id;
     use crate::stratum::messages::SetDifficultyNotification;
-    use crate::stratum::server::PoolMode;
     use crate::stratum::session::Session;
     use crate::stratum::work::gbt::build_merkle_branches_for_template;
     use crate::stratum::work::tracker::start_tracker_actor;
