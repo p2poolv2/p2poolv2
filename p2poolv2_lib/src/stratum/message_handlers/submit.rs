@@ -270,6 +270,7 @@ mod handle_submit_tests {
     use crate::stratum::difficulty_adjuster::{DifficultyAdjuster, MockDifficultyAdjusterTrait};
     use crate::stratum::messages::Id;
     use crate::stratum::messages::SetDifficultyNotification;
+    use crate::stratum::server::PoolMode;
     use crate::stratum::session::Session;
     use crate::stratum::work::gbt::build_merkle_branches_for_template;
     use crate::stratum::work::tracker::start_tracker_actor;
@@ -354,6 +355,7 @@ mod handle_submit_tests {
             network: bitcoin::network::Network::Signet,
             metrics: metrics_handle.clone(),
             chain_store_handle,
+            mode: PoolMode::P2poolv2,
         };
 
         let message = handle_submit(submit, &mut session, ctx).await.unwrap();
@@ -448,6 +450,7 @@ mod handle_submit_tests {
             network: bitcoin::network::Network::Signet,
             metrics: metrics_handle.clone(),
             chain_store_handle,
+            mode: PoolMode::P2poolv2,
         };
 
         let response = handle_submit(submit, &mut session, ctx).await.unwrap();
@@ -542,6 +545,7 @@ mod handle_submit_tests {
             network: bitcoin::network::Network::Signet,
             metrics: metrics_handle.clone(),
             chain_store_handle,
+            mode: PoolMode::P2poolv2,
         };
 
         let response = handle_submit(submit, &mut session, ctx).await.unwrap();
@@ -634,6 +638,7 @@ mod handle_submit_tests {
             network: bitcoin::network::Network::Signet,
             metrics: metrics_handle.clone(),
             chain_store_handle,
+            mode: PoolMode::P2poolv2,
         };
 
         let message = handle_submit(submit, &mut session, ctx).await.unwrap();
@@ -702,6 +707,7 @@ mod handle_submit_tests {
             network: bitcoin::network::Network::Signet,
             metrics: metrics_handle.clone(),
             chain_store_handle,
+            mode: PoolMode::P2poolv2,
         };
 
         let message = handle_submit(submit, &mut session, ctx).await.unwrap();
@@ -778,6 +784,7 @@ mod handle_submit_tests {
             network: bitcoin::network::Network::Signet,
             metrics: metrics_handle.clone(),
             chain_store_handle,
+            mode: PoolMode::P2poolv2,
         };
 
         let message = handle_submit(submit, &mut session, ctx).await.unwrap();
@@ -870,6 +877,7 @@ mod handle_submit_tests {
             network: bitcoin::network::Network::Signet,
             metrics: metrics_handle.clone(),
             chain_store_handle: chain_store_handle.clone(),
+            mode: PoolMode::P2poolv2,
         };
 
         let message = handle_submit(submit.clone(), &mut session, ctx)
@@ -906,6 +914,7 @@ mod handle_submit_tests {
             network: bitcoin::network::Network::Signet,
             metrics: metrics_handle.clone(),
             chain_store_handle,
+            mode: PoolMode::P2poolv2,
         };
 
         let message2 = handle_submit(submit, &mut session, ctx2).await.unwrap();
@@ -988,6 +997,7 @@ mod handle_submit_tests {
             network: bitcoin::network::Network::Signet,
             metrics: metrics_handle.clone(),
             chain_store_handle,
+            mode: PoolMode::P2poolv2,
         };
 
         let message = handle_submit(submit, &mut session, ctx).await.unwrap();
@@ -1056,6 +1066,7 @@ mod handle_submit_tests {
             network: bitcoin::network::Network::Regtest,
             metrics: metrics_handle,
             chain_store_handle,
+            mode: PoolMode::P2poolv2,
         };
 
         let messages = handle_submit(submit, &mut session, ctx).await.unwrap();
@@ -1136,6 +1147,7 @@ mod handle_submit_tests {
             network: bitcoin::network::Network::Signet,
             metrics: metrics_handle,
             chain_store_handle,
+            mode: PoolMode::P2poolv2,
         };
 
         // Verify the inserted job is properly registered
@@ -1233,6 +1245,7 @@ mod handle_submit_tests {
             network: bitcoin::network::Network::Regtest,
             metrics: metrics_handle,
             chain_store_handle,
+            mode: PoolMode::P2poolv2,
         };
 
         let messages = handle_submit(submit, &mut session, ctx).await.unwrap();
@@ -1314,6 +1327,7 @@ mod handle_submit_tests {
             network: bitcoin::network::Network::Regtest,
             metrics: metrics_handle,
             chain_store_handle,
+            mode: PoolMode::P2poolv2,
         };
 
         let messages = handle_submit(submit, &mut session, ctx).await.unwrap();
@@ -1396,6 +1410,7 @@ mod handle_submit_tests {
             network: bitcoin::network::Network::Regtest,
             metrics: metrics_handle,
             chain_store_handle,
+            mode: PoolMode::P2poolv2,
         };
 
         let messages = handle_submit(submit, &mut session, ctx).await.unwrap();
@@ -1456,6 +1471,7 @@ mod handle_submit_tests {
             network: bitcoin::network::Network::Regtest,
             metrics: metrics_handle,
             chain_store_handle,
+            mode: PoolMode::P2poolv2,
         };
 
         let messages = handle_submit(submit, &mut session, ctx).await.unwrap();

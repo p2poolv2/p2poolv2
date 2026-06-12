@@ -266,6 +266,7 @@ async fn main() -> ExitCode {
             .max_connections(stratum_config.max_connections)
             .wait_for_chain_sync(stratum_config.wait_for_chain_sync)
             .chain_store_handle(chain_store_handle_for_stratum)
+            .mode(stratum_config.mode)
             .build()
             .await
             .unwrap();

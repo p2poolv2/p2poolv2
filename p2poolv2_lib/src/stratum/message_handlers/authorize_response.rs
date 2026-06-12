@@ -154,6 +154,7 @@ mod tests {
     use crate::accounting::stats::metrics;
     use crate::stratum::difficulty_adjuster::DifficultyAdjuster;
     use crate::stratum::messages::Id;
+    use crate::stratum::server::PoolMode;
     use crate::stratum::server::StratumContext;
     use crate::stratum::work::tracker::start_tracker_actor;
     use crate::test_utils::setup_test_chain_store_handle;
@@ -198,6 +199,7 @@ mod tests {
             network: bitcoin::network::Network::Testnet,
             metrics: metrics_handle,
             chain_store_handle,
+            mode: PoolMode::P2poolv2,
         };
 
         // Execute
@@ -296,6 +298,7 @@ mod tests {
             network: bitcoin::network::Network::Testnet,
             metrics: metrics_handle,
             chain_store_handle,
+            mode: PoolMode::P2poolv2,
         };
 
         // Execute
@@ -433,6 +436,7 @@ mod tests {
             network: bitcoin::network::Network::Testnet,
             metrics: metrics_handle,
             chain_store_handle,
+            mode: PoolMode::P2poolv2,
         };
 
         // Execute
@@ -529,6 +533,7 @@ mod tests {
             network: bitcoin::network::Network::Testnet,
             metrics: metrics_handle,
             chain_store_handle,
+            mode: PoolMode::P2poolv2,
         };
 
         let messages = handle_authorize(request, &mut session, ctx).await.unwrap();
@@ -586,6 +591,7 @@ mod tests {
             network: bitcoin::network::Network::Testnet,
             metrics: metrics_handle,
             chain_store_handle,
+            mode: PoolMode::P2poolv2,
         };
 
         let messages = handle_authorize(request, &mut session, ctx).await.unwrap();
@@ -645,6 +651,7 @@ mod tests {
             network: bitcoin::network::Network::Testnet,
             metrics: metrics_handle,
             chain_store_handle,
+            mode: PoolMode::P2poolv2,
         };
 
         // Execute
@@ -708,6 +715,7 @@ mod tests {
             network: bitcoin::network::Network::Testnet,
             metrics: metrics_handle,
             chain_store_handle,
+            mode: PoolMode::P2poolv2,
         };
 
         let result = handle_authorize(request, &mut session, ctx).await;
