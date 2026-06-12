@@ -475,8 +475,8 @@ where
     monitor.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     monitor.tick().await;
 
-    // In Hydrapool mode pass None so the commitment hash is not
-    // embedded in the coinbase, saving bytes in coinbase.
+    // In Hydrapool mode pass None as commitment address as we don't
+    // need it.
     let is_hydrapool = ctx.mode == PoolMode::Hydrapool;
 
     // Process each line as it arrives
