@@ -23,6 +23,8 @@ use payout_distribution::PayoutDistribution;
 use sharechain_pplns::pplns_window::PplnsWindow;
 use std::sync::{Arc, RwLock};
 
+const DEFAULT_SIMPLE_PPLNS_STEP_SIZE_SECONDS: u64 = 86_400;
+
 /// Build the payout implementation and shared PPLNS window for the
 /// given pool mode.
 ///
@@ -31,7 +33,8 @@ use std::sync::{Arc, RwLock};
 ///
 /// In Hydrapool mode the simple PPLNS payout reads shares directly
 /// from rocksdb. The returned window is an empty placeholder that
-/// satisfies the NodeHandle interface but is not used for payouts.
+/// satisfies the NodeHandle interface but is not used for simple
+/// pplns payouts.
 pub fn build_payout_for_mode(
     mode: PoolMode,
     network: bitcoin::Network,
@@ -43,7 +46,7 @@ pub fn build_payout_for_mode(
             (Box::new(payout), window)
         }
         PoolMode::Hydrapool => {
-            let payout = simple_pplns::payout::Payout::new(86400);
+            let payout = simple_pplns::payout::Payout::new(DEFAULT_SIMPLE_PPLNS_STEP_SIZE_SECONDS);
             let window = Arc::new(RwLock::new(PplnsWindow::new(network)));
             (Box::new(payout), window)
         }
