@@ -176,8 +176,12 @@ done
 ./load-tests/sim/stop-swarm.sh
 ```
 
-`observe.sh`'s `node 0:` line reports `uncle-rate`. Expect roughly:
-`0 ms → ~0%`, `200 ms → ~35%`, `750 ms → ~50%` — monotonic, saturating.
+`observe.sh`'s `node 0:` line reports `uncle-rate`. At the regulated 10s interval
+uncle rate ≈ latency/10s (e.g. 750 ms → ~7%), but a 45s read is only ~4 blocks —
+too noisy to trust. For a real number in ~5 min add `IDEAL_BLOCK_TIME=1` (10× more
+blocks, latency auto-scales), e.g.
+`IDEAL_BLOCK_TIME=1 LATENCY_MS=1500 RATIO=20 ./load-tests/sim/run-swarm.sh 20`
+→ ~12% (≈50 min-equivalent). Knob in §9.
 
 Under the hood it greps the `sim-uncle:` log lines:
 
@@ -284,6 +288,7 @@ curl -s :7600/peers | jq length          # peer count
 |---|---|---|
 | `RATIO` | 10000 | shares per block-find (lower = more blocks) |
 | `LATENCY_MS` | 0 | per-node outbound announce delay (raise for uncles) |
+| `IDEAL_BLOCK_TIME` | 10 | share interval (s); lower = time-compressed, more blocks/min for faster data (auto-scales `LATENCY_MS`); floor ~1s |
 | `WINDOW_SHARES` | = `RATIO` | PPLNS payout window in shares (how many miners appear in a coinbase) |
 | `HASHRATE` | 1.0e12 | modeled per-node hashrate (higher = faster shares) |
 | `DISTINCT_ADDR` | 1 | each node gets its own payout address via the wallet |

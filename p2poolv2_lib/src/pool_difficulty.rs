@@ -40,6 +40,37 @@ const IDEAL_BLOCK_TIME: u32 = 10;
 /// (or slow) as expected over this period.
 const HALFLIFE: u32 = 600;
 
+/// Effective ideal block time: a sim override (for time-compressed runs) or the
+/// production constant.
+#[cfg(not(feature = "sim"))]
+#[inline]
+fn ideal_block_time() -> u32 {
+    IDEAL_BLOCK_TIME
+}
+#[cfg(feature = "sim")]
+#[inline]
+fn ideal_block_time() -> u32 {
+    match crate::sim::ideal_block_time_secs() {
+        0 => IDEAL_BLOCK_TIME,
+        s => s,
+    }
+}
+
+/// Effective ASERT half-life. Under sim it scales with the ideal block time so
+/// that HALFLIFE/IDEAL_BLOCK_TIME stays constant — ASERT's per-block dynamics
+/// are then identical under time compression (the controller doesn't know the
+/// clock is sped up).
+#[cfg(not(feature = "sim"))]
+#[inline]
+fn half_life() -> u32 {
+    HALFLIFE
+}
+#[cfg(feature = "sim")]
+#[inline]
+fn half_life() -> u32 {
+    (HALFLIFE as u64 * ideal_block_time() as u64 / IDEAL_BLOCK_TIME as u64) as u32
+}
+
 /// Maximum (easiest) target as a consensus u32. This is the regtest maximum and
 /// serves as the ceiling for the share chain target. Stored as u32 because
 /// `CompactTarget::from_consensus` is not a const fn.
@@ -175,7 +206,7 @@ pub(crate) fn asert_calculate_target(
 #[cfg(feature = "sim")]
 pub fn anchor_target_for_network_hashrate(hashrate_hps: f64) -> CompactTarget {
     let clamp = CompactTarget::from_consensus(MAX_TARGET_CONSENSUS);
-    let d_star = (hashrate_hps * IDEAL_BLOCK_TIME as f64 / 4_294_967_296.0).max(1.0);
+    let d_star = (hashrate_hps * ideal_block_time() as f64 / 4_294_967_296.0).max(1.0);
     let d_clamp = Target::from_compact(clamp).difficulty_float();
     if d_star <= d_clamp {
         return clamp;
@@ -278,8 +309,8 @@ impl PoolDifficulty {
             self.anchor_target,
             time_delta,
             height_delta,
-            HALFLIFE,
-            IDEAL_BLOCK_TIME,
+            half_life(),
+            ideal_block_time(),
         )
     }
 

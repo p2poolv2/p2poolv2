@@ -57,6 +57,11 @@ HASHRATE_DIST="${HASHRATE_DIST:-zipf}"
 ZIPF_ALPHA="${ZIPF_ALPHA:-1.0}"
 RATIO="${RATIO:-10000}"
 LATENCY_MS="${LATENCY_MS:-0}"
+# Time-compression: shorter share interval = more blocks/min for faster data.
+# Scale the latency base by the same factor so uncle rate (latency/interval) is
+# preserved; LATENCY_MS is thus given in 10s-interval terms.
+IDEAL_BLOCK_TIME="${IDEAL_BLOCK_TIME:-10}"
+LATENCY_MS=$(awk -v l="$LATENCY_MS" -v t="$IDEAL_BLOCK_TIME" 'BEGIN{printf "%.0f", l*t/10}')
 LATENCY_DIST="${LATENCY_DIST:-spread}"
 DIST_SEED="${DIST_SEED:-42}"
 WINDOW_SHARES="${WINDOW_SHARES:-$RATIO}"
@@ -240,6 +245,7 @@ propagation_delay_ms = $node_latency
 pplns_window_shares = $WINDOW_SHARES
 asert_anchor_time = $ASERT_ANCHOR
 network_hashrate = $NETWORK_HASHRATE
+ideal_block_time_secs = $IDEAL_BLOCK_TIME
 EOF
 
   "$BIN" --config "$cfg" > "$log" 2>&1 &

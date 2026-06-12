@@ -457,6 +457,11 @@ pub struct SimConfig {
     /// hence the genesis hash). Omit to keep the fixed genesis target.
     #[serde(default)]
     pub network_hashrate: Option<u64>,
+    /// Sim-only override of the ASERT ideal block time (seconds). Smaller =
+    /// more blocks per minute (time-compressed runs for faster data). MUST be
+    /// identical across nodes (ASERT consensus). Omit for the default 10s.
+    #[serde(default)]
+    pub ideal_block_time_secs: Option<u32>,
 }
 
 /// Config for p2poolv2 nodes

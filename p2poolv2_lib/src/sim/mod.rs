@@ -31,7 +31,7 @@ pub mod emitter;
 pub mod share;
 pub mod timing;
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::Duration;
 
 /// Artificial outbound-announcement delay, in milliseconds, shared process-wide.
@@ -127,4 +127,20 @@ pub fn set_network_hashrate(hps: u64) {
 /// The total network hashrate (hashes/sec); 0 = unset.
 pub fn network_hashrate() -> u64 {
     NETWORK_HASHRATE.load(Ordering::Relaxed)
+}
+
+/// ASERT ideal block time override (seconds), shared process-wide. Lets a sim
+/// run compress the share interval (more blocks/min) for faster data. `0` =
+/// unset → the production constant. MUST match across nodes (ASERT consensus).
+static IDEAL_BLOCK_TIME_SECS: AtomicU32 = AtomicU32::new(0);
+
+/// Set the ideal block time override (seconds). Call once at startup, before
+/// `PoolDifficulty::build` and `build_genesis`.
+pub fn set_ideal_block_time_secs(secs: u32) {
+    IDEAL_BLOCK_TIME_SECS.store(secs, Ordering::Relaxed);
+}
+
+/// The ideal block time override (seconds); 0 = unset / use the constant.
+pub fn ideal_block_time_secs() -> u32 {
+    IDEAL_BLOCK_TIME_SECS.load(Ordering::Relaxed)
 }
