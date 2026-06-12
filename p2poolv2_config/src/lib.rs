@@ -821,4 +821,25 @@ mod tests {
         assert!(parsed.donation_address_parsed.is_none());
         assert!(parsed.fee_address_parsed.is_none());
     }
+
+    #[test]
+    fn test_pool_mode_defaults_to_p2poolv2_when_absent() {
+        let config = Config::load("../config.sample.toml").unwrap();
+        assert_eq!(config.stratum.mode, PoolMode::P2poolv2);
+    }
+
+    #[test]
+    fn test_pool_mode_defaults_to_p2poolv2_in_test_helper() {
+        let config = StratumConfig::<Raw>::new_for_test_default();
+        assert_eq!(config.mode, PoolMode::P2poolv2);
+    }
+
+    #[test]
+    fn test_pool_mode_survives_parse() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.mode = PoolMode::Hydrapool;
+        let parsed = config.parse().unwrap();
+        assert_eq!(parsed.mode, PoolMode::Hydrapool);
+    }
+
 }
