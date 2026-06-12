@@ -155,7 +155,8 @@ try:
     with open(os.path.join(RUN_DIR, "node-0.toml")) as f:
         for line in f:
             for k in ("block_to_share_ratio", "propagation_delay_ms",
-                      "pplns_window_shares", "network_hashrate"):
+                      "pplns_window_shares", "network_hashrate",
+                      "ideal_block_time_secs"):
                 if line.strip().startswith(k + " "):
                     params[k] = line.split("=")[1].strip()
 except FileNotFoundError:
@@ -164,11 +165,14 @@ title = (f"sim swarm  N={N}  ratio=1:{params.get('block_to_share_ratio','?')}  "
          f"window={params.get('pplns_window_shares','?')}  "
          f"latency(node0)={params.get('propagation_delay_ms','?')}ms  "
          f"span={span:.0f}s")
+# Target share rate = 1 / ideal_block_time (sim override, else the production 10s).
+ibt = float(params.get("ideal_block_time_secs") or 10)
+tgt_rate = 1.0 / (ibt if ibt > 0 else 10)
 
 fig, ax = plt.subplots(5, 1, figsize=(11, 15))
 ax[0].plot(xs, share_rate, marker=".", alpha=0.25, color="C0", label="binned")
 ax[0].plot(pt, cum_rate_y, color="C0", lw=2, label="cumulative avg")
-ax[0].axhline(0.1, ls="--", color="gray", label="0.1/s target")
+ax[0].axhline(tgt_rate, ls="--", color="gray", label=f"{tgt_rate:.3g}/s target")
 ax[0].set_ylabel("share rate /s")
 ax[0].legend(loc="upper right", fontsize=8)
 ax[0].set_title(title, fontsize=10)

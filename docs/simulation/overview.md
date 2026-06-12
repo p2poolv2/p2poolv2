@@ -120,8 +120,9 @@ store) and a `dial_peers` topology (each dials `DIAL_FANOUT` earlier nodes).
 
 ```sh
 load-tests/sim/run-swarm.sh 20     # build (release) + launch 20 nodes
-load-tests/sim/observe.sh          # per-node tip height, peers, convergence, uncle rate
-load-tests/sim/metrics.sh          # text: emission∝hashrate, ASERT trajectory, rate
+load-tests/sim/observe.sh          # LIVE snapshot: tip/convergence (logs), peer count (API)
+load-tests/sim/metrics.sh          # authoritative LOG-based summary: convergence, rate,
+                                   # difficulty, emission∝hashrate, uncles, block-finds
 load-tests/sim/plot-metrics.sh     # PNG time-series (share rate, difficulty, uncle rate,
                                    # block-finds, hashrate bars) → RUN_DIR/metrics.png
 load-tests/sim/stop-swarm.sh       # stop all (incl. orphans matching this RUN_DIR)

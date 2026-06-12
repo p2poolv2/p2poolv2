@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
-# Snapshot a running sim swarm: per-node tip height, tip hash, candidate
-# height and peer count, plus convergence / error / uncle summaries.
+# Live snapshot of a running sim swarm: per-node tip height/hash (from logs —
+# load-immune), peer count (from the API — live state), and convergence.
+# For the authoritative, comprehensive post-run summary, use metrics.sh.
 #
 # Usage: load-tests/sim/observe.sh
 # Env:   RUN_DIR (default /tmp/p2pool-sim), BASE_API (default 7600)
@@ -20,36 +21,34 @@ fi
 N=$(ls "$RUN_DIR"/node-*.toml 2>/dev/null | wc -l | tr -d ' ')
 if [ "$N" -eq 0 ]; then echo "No node configs in $RUN_DIR." >&2; exit 1; fi
 
-printf "%-5s %-7s %-12s %-10s %-6s %-6s\n" "node" "tip_h" "tip_hash" "cand_h" "peers" "alive"
+printf "%-5s %-7s %-12s %-8s %-6s\n" "node" "tip_h" "tip_hash" "peers" "alive"
 echo "-------------------------------------------------------------"
 
 declare -a tips=()
 max_h=-1
 alive_total=0
 for i in $(seq 0 $((N - 1))); do
-  api_port=$((BASE_API + i))
-  info=$(curl -s -m 2 "http://127.0.0.1:$api_port/chain_info" 2>/dev/null || echo "")
-  peers_json=$(curl -s -m 2 "http://127.0.0.1:$api_port/peers" 2>/dev/null || echo "")
+  # tip height/hash from the LOG — load-immune and authoritative for convergence
+  # (the HTTP API can time out while a node is busy). peer count is live state,
+  # so the API is the natural, advisory source.
+  last=$(grep "to confirmed height Some" "$RUN_DIR/node-$i.log" 2>/dev/null | tail -1)
+  tip_h=$(echo "$last" | grep -oE "Some\([0-9]+\)" | grep -oE "[0-9]+"); tip_h="${tip_h:--1}"
+  tip_hash=$(echo "$last" | sed -nE 's/.*Promoted block ([0-9a-f]{16,}).*/\1/p' | cut -c1-12)
+  tip_hash="${tip_hash:--}"
 
-  pid=$(sed -n "$((i + 1))p" "$RUN_DIR/pids.txt" 2>/dev/null || echo "")
-  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then alive="yes"; alive_total=$((alive_total + 1)); else alive="NO"; fi
-
-  if [ -n "$info" ] && echo "$info" | jq -e . >/dev/null 2>&1; then
-    tip_h=$(echo "$info" | jq -r '.chain_tip_height // -1')
-    tip_hash=$(echo "$info" | jq -r '.chain_tip_blockhash // "?"' | cut -c1-12)
-    cand_h=$(echo "$info" | jq -r '.top_candidate_height // -1')
-  else
-    tip_h="-"; tip_hash="(no api)"; cand_h="-"
-  fi
+  peers_json=$(curl -s -m 2 "http://127.0.0.1:$((BASE_API + i))/peers" 2>/dev/null || echo "")
   if [ -n "$peers_json" ] && echo "$peers_json" | jq -e . >/dev/null 2>&1; then
     peers=$(echo "$peers_json" | jq 'length')
   else
     peers="-"
   fi
 
-  printf "%-5s %-7s %-12s %-10s %-6s %-6s\n" "$i" "$tip_h" "$tip_hash" "$cand_h" "$peers" "$alive"
+  pid=$(sed -n "$((i + 1))p" "$RUN_DIR/pids.txt" 2>/dev/null || echo "")
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then alive="yes"; alive_total=$((alive_total + 1)); else alive="NO"; fi
 
-  if [ "$tip_h" != "-" ] && [ "$tip_h" -ge 0 ] 2>/dev/null; then
+  printf "%-5s %-7s %-12s %-8s %-6s\n" "$i" "$tip_h" "$tip_hash" "$peers" "$alive"
+
+  if [ "$tip_h" -ge 0 ] 2>/dev/null; then
     tips+=("$tip_hash@$tip_h")
     if [ "$tip_h" -gt "$max_h" ]; then max_h="$tip_h"; fi
   fi
