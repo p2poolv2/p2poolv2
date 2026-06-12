@@ -133,7 +133,8 @@ env: `RUN_DIR`, `BASE_P2P`/`BASE_STRATUM`/`BASE_API`, `RPC_*`, `ZMQ`,
 `RATIO`, `WINDOW_SHARES`, `LATENCY_MS` + `LATENCY_DIST`(equal|spread),
 `ASERT_ANCHOR` (shared anchor, default launch time), `NETWORK_HASHRATE` (shared,
 default `N*HASHRATE`; anchors genesis at the steady-state difficulty so there's
-no ASERT warmup), `DIST_SEED`, `DISTINCT_ADDR`,
+no ASERT warmup), `IDEAL_BLOCK_TIME` (default 10s; lower = time-compressed run —
+more blocks/min for faster data, auto-scales `LATENCY_MS`), `DIST_SEED`, `DISTINCT_ADDR`,
 `POOL_SIGNATURE` (must match across nodes), `DIAL_FANOUT`, `PROFILE`. Convergence
 shows as `distinct tips: 1` (a snapshot may straddle the latest 1–2 heights while
 the frontier propagates). Run release; always `stop-swarm.sh` before relaunching
