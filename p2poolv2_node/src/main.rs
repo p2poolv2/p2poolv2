@@ -114,6 +114,9 @@ async fn main() -> ExitCode {
             if let Some(hps) = sim_cfg.network_hashrate {
                 p2poolv2_lib::sim::set_network_hashrate(hps);
             }
+            if let Some(t) = sim_cfg.ideal_block_time_secs {
+                p2poolv2_lib::sim::set_ideal_block_time_secs(t);
+            }
         }
     }
 
