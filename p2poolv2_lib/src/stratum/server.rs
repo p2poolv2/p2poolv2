@@ -475,8 +475,8 @@ where
     monitor.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     monitor.tick().await;
 
-    // In Hydrapool mode pass None so share_commitment is not built,
-    // which skips the ASERT pool difficulty check on share submission.
+    // In Hydrapool mode pass None so the commitment hash is not
+    // embedded in the coinbase, saving bytes in coinbase.
     let is_hydrapool = ctx.mode == PoolMode::Hydrapool;
 
     // Process each line as it arrives

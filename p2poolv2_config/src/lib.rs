@@ -841,5 +841,4 @@ mod tests {
         let parsed = config.parse().unwrap();
         assert_eq!(parsed.mode, PoolMode::Hydrapool);
     }
-
 }
