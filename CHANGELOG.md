@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.12.0] - 2026-06-12
+
+### Changed
+
+- PPLNS payout implementation is selected based on pool mode from
+  stratum config. Simple PPLNS uses shares stored in rocksdb for
+  hydrapool standalone PPLNS mode. Sharechain PPLNS uses shares from
+  rocksdb stored for the chain DAG.
+
 ## [v0.11.2] - 2026-06-12
 
 ### Fixed
