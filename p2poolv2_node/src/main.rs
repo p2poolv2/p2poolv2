@@ -16,7 +16,7 @@
 
 use clap::Parser;
 use p2poolv2_api::start_api_server;
-use p2poolv2_lib::accounting::payout::sharechain_pplns::Payout;
+use p2poolv2_lib::accounting::payout::build_payout_for_mode;
 use p2poolv2_lib::accounting::stats::metrics;
 use p2poolv2_lib::config::Config;
 use p2poolv2_lib::logging::setup_logging;
@@ -207,8 +207,8 @@ async fn main() -> ExitCode {
         PoolDifficulty::build(&chain_store_handle).expect("Failed to build pool difficulty");
 
     let cloned_stratum_config = stratum_config.clone();
-    let payout = Payout::new(cloned_stratum_config.network);
-    let shared_pplns_window = payout.shared_pplns_window();
+    let (payout, shared_pplns_window) =
+        build_payout_for_mode(stratum_config.mode, cloned_stratum_config.network);
     let exit_sender_notify = exit_sender.clone();
     let exit_receiver_notify = exit_sender.subscribe();
     tokio::spawn(async move {
@@ -218,7 +218,7 @@ async fn main() -> ExitCode {
             template_tx,
             chain_store_handle_for_notify,
             &cloned_stratum_config,
-            Box::new(payout),
+            payout,
             pool_difficulty_for_notify,
         )
         .await;
