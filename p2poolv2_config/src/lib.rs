@@ -51,6 +51,28 @@ pub fn parse_address(address: &str, network: Network) -> Result<Address, ConfigE
 /// Max length for pool signature P2Poolv2 + 8 more bytes for users to add
 const MAX_POOL_SIGNATURE_LENGTH: usize = 16;
 
+/// Pool operating mode.
+///
+/// P2Poolv2 mode runs the full share chain with ASERT difficulty and
+/// P2P networking.  Hydrapool mode runs a standalone PPLNS pool where
+/// the share chain ASERT difficulty is not enforced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PoolMode {
+    /// Full P2Poolv2 share chain mode (default)
+    #[serde(alias = "P2Poolv2", alias = "p2poolv2")]
+    P2poolv2,
+    /// Standalone PPLNS pool mode
+    #[serde(alias = "Hydrapool", alias = "hydrapool")]
+    Hydrapool,
+}
+
+impl Default for PoolMode {
+    fn default() -> Self {
+        PoolMode::P2poolv2
+    }
+}
+
 /// Marker type for raw (unparsed) StratumConfig state
 #[derive(Debug, Clone, Default)]
 pub struct Raw;
@@ -104,6 +126,9 @@ pub struct StratumConfig<State = Raw> {
     /// connections. Set to false when bootstrapping a new network.
     #[serde(default = "default_wait_for_chain_sync")]
     pub wait_for_chain_sync: bool,
+    /// Pool operating mode. Defaults to P2Poolv2 when not specified.
+    #[serde(default)]
+    pub mode: PoolMode,
 
     // Parsed addresses - only available when State = Parsed
     #[serde(skip)]
@@ -174,6 +199,7 @@ impl StratumConfig<Raw> {
             pool_signature: self.pool_signature,
             max_connections: self.max_connections,
             wait_for_chain_sync: self.wait_for_chain_sync,
+            mode: self.mode,
             bootstrap_address_parsed: Some(bootstrap_address_parsed),
             donation_address_parsed,
             fee_address_parsed,
@@ -226,6 +252,7 @@ impl StratumConfig<Raw> {
             pool_signature: None,
             max_connections: None,
             wait_for_chain_sync: true,
+            mode: PoolMode::default(),
             bootstrap_address_parsed: None,
             donation_address_parsed: None,
             fee_address_parsed: None,

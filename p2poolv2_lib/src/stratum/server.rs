@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::accounting::stats::metrics;
+pub use crate::config::PoolMode;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::stratum::client_connections::ClientConnectionsHandle;
@@ -57,6 +58,7 @@ pub struct StratumServer {
     pub version_mask: i32,
     pub max_connections: Option<u32>,
     pub wait_for_chain_sync: bool,
+    pub mode: PoolMode,
     shutdown_rx: oneshot::Receiver<()>,
     connections_handle: ClientConnectionsHandle,
     emissions_tx: EmissionSender,
@@ -82,6 +84,7 @@ pub struct StratumServerBuilder {
     emissions_tx: Option<EmissionSender>,
     zmqpubhashblock: Option<String>,
     chain_store_handle: Option<ChainStoreHandle>,
+    mode: Option<PoolMode>,
 }
 
 impl StratumServerBuilder {
@@ -165,6 +168,11 @@ impl StratumServerBuilder {
         self
     }
 
+    pub fn mode(mut self, mode: PoolMode) -> Self {
+        self.mode = Some(mode);
+        self
+    }
+
     pub async fn build(self) -> Result<StratumServer, Box<dyn std::error::Error + Send + Sync>> {
         Ok(StratumServer {
             hostname: self.hostname.ok_or("hostname is required")?,
@@ -189,6 +197,7 @@ impl StratumServerBuilder {
             emissions_tx: self.emissions_tx.ok_or("shares_tx is required")?,
             max_connections: self.max_connections.unwrap_or(None),
             wait_for_chain_sync: self.wait_for_chain_sync.unwrap_or(true),
+            mode: self.mode.unwrap_or_default(),
             chain_store_handle: self
                 .chain_store_handle
                 .ok_or("chain store handle is required")?,
@@ -310,6 +319,7 @@ impl StratumServer {
                                         network: self.network,
                                         metrics: metrics.clone(),
                                         chain_store_handle: self.chain_store_handle.clone(),
+                                        mode: self.mode,
                                     };
                                     accept_connection(
                                         stream,
@@ -422,6 +432,7 @@ pub(crate) struct StratumContext {
     pub network: bitcoin::network::Network,
     pub metrics: metrics::MetricsHandle,
     pub chain_store_handle: ChainStoreHandle,
+    pub mode: PoolMode,
 }
 
 /// Handles a single connection to the Stratum server.  This function
@@ -775,6 +786,7 @@ mod stratum_server_tests {
             emissions_tx,
             network: bitcoin::network::Network::Regtest,
             chain_store_handle,
+            mode: PoolMode::P2poolv2,
         };
 
         // Run the handler
@@ -897,6 +909,7 @@ mod stratum_server_tests {
             emissions_tx,
             network: bitcoin::network::Network::Regtest,
             chain_store_handle,
+            mode: PoolMode::P2poolv2,
         };
 
         // Run the handler
@@ -980,6 +993,7 @@ mod stratum_server_tests {
             metrics: metrics_handle,
             network: bitcoin::network::Network::Regtest,
             chain_store_handle,
+            mode: PoolMode::P2poolv2,
         };
 
         // Run the handler
@@ -1061,6 +1075,7 @@ mod stratum_server_tests {
             network: bitcoin::network::Network::Regtest,
             metrics: metrics_handle,
             chain_store_handle,
+            mode: PoolMode::P2poolv2,
         };
 
         // Run the handler
@@ -1162,6 +1177,7 @@ mod stratum_server_tests {
             network: bitcoin::network::Network::Testnet,
             metrics: metrics_handle,
             chain_store_handle,
+            mode: PoolMode::P2poolv2,
         };
 
         // Spawn the handler in a separate task
@@ -1282,6 +1298,7 @@ mod stratum_server_tests {
             network: bitcoin::network::Network::Regtest,
             metrics: metrics_handle,
             chain_store_handle,
+            mode: PoolMode::P2poolv2,
         };
 
         // Spawn the handler in a separate task
@@ -1392,6 +1409,7 @@ mod stratum_server_tests {
                 emissions_tx,
                 network: bitcoin::network::Network::Regtest,
                 chain_store_handle,
+                mode: PoolMode::P2poolv2,
             };
 
             // wait for subscribe/authorize messages
@@ -1474,6 +1492,7 @@ mod stratum_server_tests {
                 emissions_tx,
                 network: bitcoin::network::Network::Signet,
                 chain_store_handle,
+                mode: PoolMode::P2poolv2,
             };
 
             let subscribe_message =
@@ -1614,6 +1633,7 @@ mod stratum_server_tests {
             emissions_tx,
             network: bitcoin::network::Network::Testnet,
             chain_store_handle,
+            mode: PoolMode::P2poolv2,
         };
 
         // Pre-load a template before starting handle_connection
@@ -1743,6 +1763,7 @@ mod stratum_server_tests {
             emissions_tx,
             network: bitcoin::network::Network::Testnet,
             chain_store_handle,
+            mode: PoolMode::P2poolv2,
         };
 
         // Start with no template - will send one after authorization
@@ -1882,6 +1903,7 @@ mod stratum_server_tests {
             emissions_tx,
             network: bitcoin::network::Network::Regtest,
             chain_store_handle,
+            mode: PoolMode::P2poolv2,
         };
 
         let (template_tx, template_rx) = watch::channel(None);
