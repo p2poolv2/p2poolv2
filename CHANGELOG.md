@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.11.2] - 2026-06-12
+
+### Fixed
+
+- Fix high-hashrate miners causing 90%+ rejection rate for
+  low-hashrate miners in Hydrapool (standalone PPLNS) mode. The share
+  chain ASERT difficulty acts as a global floor for all shares. When a
+  powerful miner (e.g. Antminer S21 at 200TH) joined a pool of
+  NerdAxe miners (~30TH total), ASERT raised the pool difficulty to
+  match the combined hashrate, making it impossible for low-hashrate
+  miners to produce shares meeting the pool target. In Hydrapool mode
+  the ASERT pool difficulty check on submitted shares is now skipped,
+  so per-worker vardiff is the sole difficulty control.
+
+### Added
+
+- Pool operating mode config field (`mode` in `[stratum]` section).
+  Defaults to `p2poolv2` (full share chain with ASERT enforcement).
+  Set to `hydrapool` for standalone PPLNS pools where the ASERT pool
+  difficulty check is skipped and the share commitment is omitted from
+  the coinbase to save space.
+
 ## [v0.11.0] - 2026-05-25
 
 ### Fixed
@@ -567,7 +589,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 We used tags like hydrapool.v0.x.0 and we didn't keep a changelog.
 
-[Unreleased]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.15...HEAD
+[Unreleased]: https://github.com/p2poolv2/p2poolv2/compare/v0.11.2...HEAD
+[v0.11.2]: https://github.com/p2poolv2/p2poolv2/compare/v0.11.0...v0.11.2
+[v0.11.0]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.15...v0.11.0
 [v0.10.15]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.14...v0.10.15
 [v0.10.14]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.13...v0.10.14
 [v0.10.13]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.12...v0.10.13
