@@ -67,5 +67,6 @@ pub fn default_test_config() -> Config {
             auth_password: None,
             cors_allowed: false,
         },
+        sim: None,
     }
 }

@@ -405,6 +405,65 @@ impl std::fmt::Debug for ApiConfig {
     }
 }
 
+/// Configuration for the no-PoW load-test simulation.
+///
+/// Only acted upon when a binary is built with the `sim` cargo feature; the
+/// field is always present in `Config` so non-sim builds parse the same config
+/// files without error.
+/// See docs/simulation/load-test-plan.md.
+#[derive(Debug, Deserialize, Clone)]
+pub struct SimConfig {
+    /// Master switch for this node's sim emitter / statistical block-find.
+    #[serde(default)]
+    pub enabled: bool,
+    /// This node's payout identity (bitcoin address); should be distinct per node.
+    pub miner_address: String,
+    /// Modeled hashrate Hᵢ in hashes/sec; sets the emission rate.
+    pub hashrate: f64,
+    /// Expected number of shares per bitcoin block (global; same on all nodes).
+    pub block_to_share_ratio: u64,
+    /// Per-node RNG seed for reproducible emission/block-find. Should differ per
+    /// node so timelines decorrelate; omit for a nondeterministic seed. A cheap
+    /// RNG is fine — this is a simulation, not entropy that guards funds.
+    #[serde(default)]
+    pub seed: Option<u64>,
+    /// Artificial delay (milliseconds) applied to this node's outbound share
+    /// announcements, modeling network latency. Over loopback, propagation is
+    /// otherwise near-instant and the chain stays linear; a non-zero delay
+    /// widens the window for concurrent emission, so uncles appear and uncle
+    /// rate tracks this value. Default 0 (no delay).
+    #[serde(default)]
+    pub propagation_delay_ms: Option<u64>,
+    /// Number of shares the PPLNS payout window should span. On regtest the
+    /// bitcoin difficulty is trivial, which would collapse the window to one
+    /// share; this makes the payout span ~N recent shares (mainnet-like), so
+    /// the coinbase becomes a real multi-miner distribution. Defaults to
+    /// `block_to_share_ratio` when omitted.
+    #[serde(default)]
+    pub pplns_window_shares: Option<u64>,
+    /// Unix time (seconds) to use as the ASERT difficulty anchor instead of the
+    /// genesis timestamp. The fixed regtest genesis is dated in the past, so the
+    /// share chain is permanently "behind schedule" and ASERT stays floored at
+    /// the easy clamp (the chain races, never reaching a steady rate). Setting
+    /// this to ~launch time lets ASERT regulate around the 10s target. MUST be
+    /// identical across all nodes (the harness writes one shared value) or their
+    /// ASERT targets diverge and shares are rejected.
+    #[serde(default)]
+    pub asert_anchor_time: Option<u64>,
+    /// Total network hashrate (hashes/sec) = sum over all nodes. Used to anchor
+    /// the genesis difficulty at the steady-state value (`hashrate · 10s / 2^32`)
+    /// so the chain starts regulated instead of climbing from the easy clamp for
+    /// ~15-20 min. MUST be identical across nodes (it sets the genesis target,
+    /// hence the genesis hash). Omit to keep the fixed genesis target.
+    #[serde(default)]
+    pub network_hashrate: Option<u64>,
+    /// Sim-only override of the ASERT ideal block time (seconds). Smaller =
+    /// more blocks per minute (time-compressed runs for faster data). MUST be
+    /// identical across nodes (ASERT consensus). Omit for the default 10s.
+    #[serde(default)]
+    pub ideal_block_time_secs: Option<u32>,
+}
+
 /// Config for p2poolv2 nodes
 ///
 /// The network config switches to defaults if not provided. This is
@@ -419,6 +478,10 @@ pub struct Config {
     pub bitcoinrpc: BitcoinRpcConfig,
     pub logging: LoggingConfig,
     pub api: ApiConfig,
+    /// No-PoW load-test simulation config (only acted on under the `sim`
+    /// feature). See docs/simulation/load-test-plan.md.
+    #[serde(default)]
+    pub sim: Option<SimConfig>,
 }
 
 #[allow(dead_code)]
