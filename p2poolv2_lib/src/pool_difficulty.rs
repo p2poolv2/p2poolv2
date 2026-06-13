@@ -212,7 +212,8 @@ pub fn anchor_target_for_network_hashrate(hashrate_hps: f64) -> CompactTarget {
         return clamp;
     }
     let clamp_wide = target_to_u512(Target::from_compact(clamp));
-    let scaled = clamp_wide * U512::from(d_clamp.round() as u128) / U512::from(d_star.round() as u128);
+    let scaled =
+        clamp_wide * U512::from(d_clamp.round() as u128) / U512::from(d_star.round() as u128);
     u512_to_target(scaled).to_compact_lossy()
 }
 
