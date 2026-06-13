@@ -141,7 +141,9 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(42);
         let mean = 10.0;
         let n = 200_000;
-        let sum: f64 = (0..n).map(|_| sample_exponential_secs(mean, &mut rng)).sum();
+        let sum: f64 = (0..n)
+            .map(|_| sample_exponential_secs(mean, &mut rng))
+            .sum();
         let observed = sum / n as f64;
         // Exponential has mean == `mean`; allow 3% tolerance for 200k samples.
         assert!(
@@ -154,7 +156,10 @@ mod tests {
     fn exponential_degenerate_inputs() {
         let mut rng = StdRng::seed_from_u64(7);
         assert_eq!(sample_exponential_secs(0.0, &mut rng), 0.0);
-        assert_eq!(sample_exponential_secs(f64::INFINITY, &mut rng), f64::INFINITY);
+        assert_eq!(
+            sample_exponential_secs(f64::INFINITY, &mut rng),
+            f64::INFINITY
+        );
     }
 
     #[test]

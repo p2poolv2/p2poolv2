@@ -24,13 +24,13 @@ use p2poolv2_lib::node::actor::NodeHandle;
 use p2poolv2_lib::pool_difficulty::PoolDifficulty;
 use p2poolv2_lib::shares::chain::chain_store_handle::ChainStoreHandle;
 use p2poolv2_lib::shares::share_block::ShareBlock;
+#[cfg(feature = "sim")]
+use p2poolv2_lib::sim::emitter::SimEmitter;
 use p2poolv2_lib::store::Store;
 use p2poolv2_lib::store::writer::{StoreHandle, StoreWriter, write_channel};
 use p2poolv2_lib::stratum::client_connections::start_connections_handler;
 use p2poolv2_lib::stratum::emission::Emission;
 use p2poolv2_lib::stratum::server::StratumServerBuilder;
-#[cfg(feature = "sim")]
-use p2poolv2_lib::sim::emitter::SimEmitter;
 use p2poolv2_lib::stratum::work::gbt::start_gbt;
 use p2poolv2_lib::stratum::work::notify::start_notify;
 use p2poolv2_lib::stratum::work::tracker::start_tracker_actor;
@@ -106,7 +106,9 @@ async fn main() -> ExitCode {
         if sim_cfg.enabled {
             p2poolv2_lib::sim::set_propagation_delay_ms(sim_cfg.propagation_delay_ms.unwrap_or(0));
             p2poolv2_lib::sim::set_pplns_window_shares(
-                sim_cfg.pplns_window_shares.unwrap_or(sim_cfg.block_to_share_ratio),
+                sim_cfg
+                    .pplns_window_shares
+                    .unwrap_or(sim_cfg.block_to_share_ratio),
             );
             if let Some(anchor) = sim_cfg.asert_anchor_time {
                 p2poolv2_lib::sim::set_asert_anchor_time(anchor);
