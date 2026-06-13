@@ -174,9 +174,8 @@ mod tests {
     const POOL_SIGNATURE: &[u8] = b"sim_pool";
 
     fn test_template() -> BlockTemplate {
-        let data = include_str!(
-            "../../../p2poolv2_tests/test_data/gbt/regtest/ckpool/one-txn/gbt.json"
-        );
+        let data =
+            include_str!("../../../p2poolv2_tests/test_data/gbt/regtest/ckpool/one-txn/gbt.json");
         serde_json::from_str(data).expect("parse BlockTemplate")
     }
 

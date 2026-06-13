@@ -409,7 +409,7 @@ impl std::fmt::Debug for ApiConfig {
 ///
 /// Only acted upon when a binary is built with the `sim` cargo feature; the
 /// field is always present in `Config` so non-sim builds parse the same config
-/// files without error. 
+/// files without error.
 /// See docs/simulation/load-test-plan.md.
 #[derive(Debug, Deserialize, Clone)]
 pub struct SimConfig {
