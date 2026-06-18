@@ -25,7 +25,7 @@ pub mod background_tasks;
 pub mod preflight;
 pub mod signal;
 
-use p2poolv2_api::start_api_server;
+use p2poolv2_api::{start_api_server, start_btcrpc_server};
 use p2poolv2_lib::accounting::payout::build_payout_for_mode;
 use p2poolv2_lib::accounting::stats::metrics;
 use p2poolv2_lib::config::Config;
@@ -82,6 +82,7 @@ pub struct NodeRunner {
     node_handle: NodeHandle,
     stratum_shutdown_tx: tokio::sync::oneshot::Sender<()>,
     api_shutdown_tx: tokio::sync::oneshot::Sender<()>,
+    btcrpc_shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
     metrics_handle: metrics::MetricsHandle,
     stats_dir: String,
 }
@@ -95,6 +96,7 @@ impl NodeRunner {
         let node_handle = self.node_handle;
         let stratum_shutdown_tx = self.stratum_shutdown_tx;
         let api_shutdown_tx = self.api_shutdown_tx;
+        let btcrpc_shutdown_tx = self.btcrpc_shutdown_tx;
         let metrics_handle = self.metrics_handle;
         let stats_dir = self.stats_dir;
 
@@ -116,6 +118,9 @@ impl NodeRunner {
 
             let _ = stratum_shutdown_tx.send(());
             let _ = api_shutdown_tx.send(());
+            if let Some(tx) = btcrpc_shutdown_tx {
+                let _ = tx.send(());
+            }
             let _ = exit_sender.send(reason);
             reason
         };
@@ -401,6 +406,21 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
         config.api.hostname, config.api.port
     );
 
+    let btcrpc_shutdown_tx = if config.bitcoin_rpc_api.enabled {
+        match start_btcrpc_server(config.bitcoin_rpc_api.clone(), &config.bitcoinrpc).await {
+            Ok((tx, port)) => {
+                info!("Bitcoin Core RPC proxy started on port {port}");
+                Some(tx)
+            }
+            Err(e) => {
+                error!("Error starting Bitcoin Core RPC proxy: {e}");
+                return Err(ExitCode::FAILURE);
+            }
+        }
+    } else {
+        None
+    };
+
     let handles = NodeHandles {
         emissions_tx: emissions_tx_for_handles,
         template_rx: template_rx_for_handles,
@@ -414,6 +434,7 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
         node_handle,
         stratum_shutdown_tx,
         api_shutdown_tx,
+        btcrpc_shutdown_tx,
         metrics_handle,
         stats_dir: config.logging.stats_dir.clone(),
     };

@@ -115,6 +115,13 @@ pub struct GetBlockchainInfo {
     pub initial_block_download: bool,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct EstimateSmartFeeResult {
+    pub feerate: Option<f64>,
+    pub errors: Option<Vec<String>>,
+    pub blocks: u32,
+}
+
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct BitcoindRpcClient {
@@ -336,6 +343,175 @@ impl BitcoindRpcClient {
         // Make the RPC request - submitblock returns null on success, or error string on failure
         let result: serde_json::Value = self.request("submitblock", params).await?;
         Ok(result.to_string())
+    }
+
+    // --- Chain ---
+
+    pub async fn getbestblockhash(&self) -> Result<String, BitcoindRpcError> {
+        self.request("getbestblockhash", vec![]).await
+    }
+
+    pub async fn getblock(
+        &self,
+        blockhash: &str,
+        verbosity: Option<u32>,
+    ) -> Result<serde_json::Value, BitcoindRpcError> {
+        let mut params = vec![serde_json::Value::String(blockhash.to_string())];
+        if let Some(v) = verbosity {
+            params.push(serde_json::Value::Number(v.into()));
+        }
+        self.request("getblock", params).await
+    }
+
+    pub async fn getblockcount(&self) -> Result<u64, BitcoindRpcError> {
+        self.request("getblockcount", vec![]).await
+    }
+
+    pub async fn getblockfilter(
+        &self,
+        blockhash: &str,
+        filtertype: Option<&str>,
+    ) -> Result<serde_json::Value, BitcoindRpcError> {
+        let mut params = vec![serde_json::Value::String(blockhash.to_string())];
+        if let Some(ft) = filtertype {
+            params.push(serde_json::Value::String(ft.to_string()));
+        }
+        self.request("getblockfilter", params).await
+    }
+
+    pub async fn getblockhash(&self, height: u64) -> Result<String, BitcoindRpcError> {
+        let params = vec![serde_json::Value::Number(height.into())];
+        self.request("getblockhash", params).await
+    }
+
+    pub async fn getblockheader(
+        &self,
+        blockhash: &str,
+        verbose: Option<bool>,
+    ) -> Result<serde_json::Value, BitcoindRpcError> {
+        let mut params = vec![serde_json::Value::String(blockhash.to_string())];
+        if let Some(v) = verbose {
+            params.push(serde_json::Value::Bool(v));
+        }
+        self.request("getblockheader", params).await
+    }
+
+    // --- Mempool ---
+
+    pub async fn getmempoolentry(&self, txid: &str) -> Result<serde_json::Value, BitcoindRpcError> {
+        let params = vec![serde_json::Value::String(txid.to_string())];
+        self.request("getmempoolentry", params).await
+    }
+
+    pub async fn getnetworkinfo(&self) -> Result<serde_json::Value, BitcoindRpcError> {
+        self.request("getnetworkinfo", vec![]).await
+    }
+
+    pub async fn getrawmempool(
+        &self,
+        verbose: Option<bool>,
+        mempool_sequence: Option<bool>,
+    ) -> Result<serde_json::Value, BitcoindRpcError> {
+        let mut params: Vec<serde_json::Value> = vec![];
+        match (verbose, mempool_sequence) {
+            (None, None) => {}
+            (Some(v), None) => params.push(serde_json::Value::Bool(v)),
+            (v, Some(ms)) => {
+                params.push(serde_json::Value::Bool(v.unwrap_or(false)));
+                params.push(serde_json::Value::Bool(ms));
+            }
+        }
+        self.request("getrawmempool", params).await
+    }
+
+    pub async fn getrawtransaction(
+        &self,
+        txid: &str,
+        verbose: Option<bool>,
+        blockhash: Option<&str>,
+    ) -> Result<serde_json::Value, BitcoindRpcError> {
+        let mut params = vec![serde_json::Value::String(txid.to_string())];
+        match (verbose, blockhash) {
+            (None, None) => {}
+            (Some(v), None) => params.push(serde_json::Value::Bool(v)),
+            (v, Some(bh)) => {
+                params.push(serde_json::Value::Bool(v.unwrap_or(false)));
+                params.push(serde_json::Value::String(bh.to_string()));
+            }
+        }
+        self.request("getrawtransaction", params).await
+    }
+
+    pub async fn gettxout(
+        &self,
+        txid: &str,
+        n: u32,
+        include_mempool: Option<bool>,
+    ) -> Result<serde_json::Value, BitcoindRpcError> {
+        let mut params = vec![
+            serde_json::Value::String(txid.to_string()),
+            serde_json::Value::Number(n.into()),
+        ];
+        if let Some(im) = include_mempool {
+            params.push(serde_json::Value::Bool(im));
+        }
+        self.request("gettxout", params).await
+    }
+
+    // --- Fees / broadcast / validation ---
+
+    pub async fn estimatesmartfee(
+        &self,
+        conf_target: u32,
+        estimate_mode: Option<&str>,
+    ) -> Result<EstimateSmartFeeResult, BitcoindRpcError> {
+        let mut params = vec![serde_json::Value::Number(conf_target.into())];
+        if let Some(mode) = estimate_mode {
+            params.push(serde_json::Value::String(mode.to_string()));
+        }
+        self.request("estimatesmartfee", params).await
+    }
+
+    pub async fn sendrawtransaction(
+        &self,
+        hexstring: &str,
+        maxfeerate: Option<f64>,
+    ) -> Result<String, BitcoindRpcError> {
+        let mut params = vec![serde_json::Value::String(hexstring.to_string())];
+        if let Some(rate) = maxfeerate {
+            let num = serde_json::Number::from_f64(rate)
+                .ok_or_else(|| BitcoindRpcError::Other("Invalid maxfeerate value".to_string()))?;
+            params.push(serde_json::Value::Number(num));
+        }
+        self.request("sendrawtransaction", params).await
+    }
+
+    pub async fn testmempoolaccept(
+        &self,
+        rawtxs: Vec<String>,
+        maxfeerate: Option<f64>,
+    ) -> Result<serde_json::Value, BitcoindRpcError> {
+        let txs_array: Vec<serde_json::Value> =
+            rawtxs.into_iter().map(serde_json::Value::String).collect();
+        let mut params = vec![serde_json::Value::Array(txs_array)];
+        if let Some(rate) = maxfeerate {
+            let num = serde_json::Number::from_f64(rate)
+                .ok_or_else(|| BitcoindRpcError::Other("Invalid maxfeerate value".to_string()))?;
+            params.push(serde_json::Value::Number(num));
+        }
+        self.request("testmempoolaccept", params).await
+    }
+
+    // --- Decode (proxy-friendly hex version) ---
+
+    /// Proxy-friendly decoderawtransaction: takes a raw hex string and returns the
+    /// full JSON representation from bitcoind unchanged.
+    pub async fn decoderawtransaction_hex(
+        &self,
+        hexstring: &str,
+    ) -> Result<serde_json::Value, BitcoindRpcError> {
+        let params = vec![serde_json::Value::String(hexstring.to_string())];
+        self.request("decoderawtransaction", params).await
     }
 }
 
@@ -715,6 +891,471 @@ mod tests {
         assert!(result.is_ok());
         let result_value = serde_json::from_str::<serde_json::Value>(&result.unwrap()).unwrap();
         assert_eq!(result_value.get("height").unwrap(), 1000000);
+    }
+
+    #[tokio::test]
+    async fn test_getbestblockhash() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(header("Authorization", "Basic cDJwb29sOnAycG9vbA=="))
+            .and(body_json(serde_json::json!({
+                "method": "getbestblockhash",
+                "params": [],
+                "id": 0
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": "000000000000000000012abc",
+                "error": null,
+                "id": 0
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
+        let result = client.getbestblockhash().await.unwrap();
+        assert_eq!(result, "000000000000000000012abc");
+    }
+
+    #[tokio::test]
+    async fn test_getblock() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(header("Authorization", "Basic cDJwb29sOnAycG9vbA=="))
+            .and(body_json(serde_json::json!({
+                "method": "getblock",
+                "params": ["000000000000000000012abc", 1],
+                "id": 0
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": {
+                    "hash": "000000000000000000012abc",
+                    "height": 800000,
+                    "tx": ["txid1"]
+                },
+                "error": null,
+                "id": 0
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
+        let result = client
+            .getblock("000000000000000000012abc", Some(1))
+            .await
+            .unwrap();
+        assert_eq!(result["height"], 800000);
+    }
+
+    #[tokio::test]
+    async fn test_getblockcount() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(header("Authorization", "Basic cDJwb29sOnAycG9vbA=="))
+            .and(body_json(serde_json::json!({
+                "method": "getblockcount",
+                "params": [],
+                "id": 0
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": 800000,
+                "error": null,
+                "id": 0
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
+        let result = client.getblockcount().await.unwrap();
+        assert_eq!(result, 800000);
+    }
+
+    #[tokio::test]
+    async fn test_getblockfilter() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(header("Authorization", "Basic cDJwb29sOnAycG9vbA=="))
+            .and(body_json(serde_json::json!({
+                "method": "getblockfilter",
+                "params": ["000000000000000000012abc"],
+                "id": 0
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": {
+                    "filter": "aabbcc",
+                    "header": "ddeeff"
+                },
+                "error": null,
+                "id": 0
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
+        let result = client
+            .getblockfilter("000000000000000000012abc", None)
+            .await
+            .unwrap();
+        assert!(result["filter"].is_string());
+        assert!(result["header"].is_string());
+    }
+
+    #[tokio::test]
+    async fn test_getblockhash() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(header("Authorization", "Basic cDJwb29sOnAycG9vbA=="))
+            .and(body_json(serde_json::json!({
+                "method": "getblockhash",
+                "params": [800000],
+                "id": 0
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": "000000000000000000012abc",
+                "error": null,
+                "id": 0
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
+        let result = client.getblockhash(800000).await.unwrap();
+        assert_eq!(result, "000000000000000000012abc");
+    }
+
+    #[tokio::test]
+    async fn test_getblockheader() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(header("Authorization", "Basic cDJwb29sOnAycG9vbA=="))
+            .and(body_json(serde_json::json!({
+                "method": "getblockheader",
+                "params": ["000000000000000000012abc", true],
+                "id": 0
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": {
+                    "hash": "000000000000000000012abc",
+                    "height": 800000,
+                    "nTx": 3000
+                },
+                "error": null,
+                "id": 0
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
+        let result = client
+            .getblockheader("000000000000000000012abc", Some(true))
+            .await
+            .unwrap();
+        assert_eq!(result["height"], 800000);
+    }
+
+    #[tokio::test]
+    async fn test_getmempoolentry() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(header("Authorization", "Basic cDJwb29sOnAycG9vbA=="))
+            .and(body_json(serde_json::json!({
+                "method": "getmempoolentry",
+                "params": ["deadbeefdeadbeef"],
+                "id": 0
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": {
+                    "fees": { "base": 0.00001 },
+                    "size": 250
+                },
+                "error": null,
+                "id": 0
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
+        let result = client.getmempoolentry("deadbeefdeadbeef").await.unwrap();
+        assert!(result["fees"].is_object());
+    }
+
+    #[tokio::test]
+    async fn test_getnetworkinfo() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(header("Authorization", "Basic cDJwb29sOnAycG9vbA=="))
+            .and(body_json(serde_json::json!({
+                "method": "getnetworkinfo",
+                "params": [],
+                "id": 0
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": {
+                    "version": 270000,
+                    "subversion": "/Satoshi:27.0.0/",
+                    "connections": 8
+                },
+                "error": null,
+                "id": 0
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
+        let result = client.getnetworkinfo().await.unwrap();
+        assert_eq!(result["version"], 270000);
+    }
+
+    #[tokio::test]
+    async fn test_getrawmempool() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(header("Authorization", "Basic cDJwb29sOnAycG9vbA=="))
+            .and(body_json(serde_json::json!({
+                "method": "getrawmempool",
+                "params": [],
+                "id": 0
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": ["txid1", "txid2"],
+                "error": null,
+                "id": 0
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
+        let result = client.getrawmempool(None, None).await.unwrap();
+        assert!(result.is_array());
+        assert_eq!(result.as_array().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_getrawtransaction() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(header("Authorization", "Basic cDJwb29sOnAycG9vbA=="))
+            .and(body_json(serde_json::json!({
+                "method": "getrawtransaction",
+                "params": ["deadbeefdeadbeef", true],
+                "id": 0
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": {
+                    "txid": "deadbeefdeadbeef",
+                    "vin": [],
+                    "vout": []
+                },
+                "error": null,
+                "id": 0
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
+        let result = client
+            .getrawtransaction("deadbeefdeadbeef", Some(true), None)
+            .await
+            .unwrap();
+        assert_eq!(result["txid"], "deadbeefdeadbeef");
+    }
+
+    #[tokio::test]
+    async fn test_gettxout() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(header("Authorization", "Basic cDJwb29sOnAycG9vbA=="))
+            .and(body_json(serde_json::json!({
+                "method": "gettxout",
+                "params": ["deadbeefdeadbeef", 0],
+                "id": 0
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": {
+                    "value": 0.5,
+                    "confirmations": 100
+                },
+                "error": null,
+                "id": 0
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
+        let result = client.gettxout("deadbeefdeadbeef", 0, None).await.unwrap();
+        assert_eq!(result["confirmations"], 100);
+    }
+
+    #[tokio::test]
+    async fn test_estimatesmartfee() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(header("Authorization", "Basic cDJwb29sOnAycG9vbA=="))
+            .and(body_json(serde_json::json!({
+                "method": "estimatesmartfee",
+                "params": [6],
+                "id": 0
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": {
+                    "feerate": 0.00005,
+                    "blocks": 6
+                },
+                "error": null,
+                "id": 0
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
+        let result = client.estimatesmartfee(6, None).await.unwrap();
+        assert_eq!(result.feerate, Some(0.00005));
+        assert_eq!(result.blocks, 6);
+    }
+
+    #[tokio::test]
+    async fn test_sendrawtransaction() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(header("Authorization", "Basic cDJwb29sOnAycG9vbA=="))
+            .and(body_json(serde_json::json!({
+                "method": "sendrawtransaction",
+                "params": ["0100000000"],
+                "id": 0
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": "deadbeefdeadbeef",
+                "error": null,
+                "id": 0
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
+        let result = client.sendrawtransaction("0100000000", None).await.unwrap();
+        assert_eq!(result, "deadbeefdeadbeef");
+    }
+
+    #[tokio::test]
+    async fn test_testmempoolaccept() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(header("Authorization", "Basic cDJwb29sOnAycG9vbA=="))
+            .and(body_json(serde_json::json!({
+                "method": "testmempoolaccept",
+                "params": [["0100000000"]],
+                "id": 0
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": [
+                    { "txid": "deadbeef", "allowed": true }
+                ],
+                "error": null,
+                "id": 0
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
+        let result = client
+            .testmempoolaccept(vec!["0100000000".to_string()], None)
+            .await
+            .unwrap();
+        let arr = result.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["allowed"], true);
+    }
+
+    #[tokio::test]
+    async fn test_decoderawtransaction_hex() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(header("Authorization", "Basic cDJwb29sOnAycG9vbA=="))
+            .and(body_json(serde_json::json!({
+                "method": "decoderawtransaction",
+                "params": ["0100000000"],
+                "id": 0
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": {
+                    "txid": "deadbeef",
+                    "vin": [],
+                    "vout": []
+                },
+                "error": null,
+                "id": 0
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
+        let result = client.decoderawtransaction_hex("0100000000").await.unwrap();
+        assert_eq!(result["txid"], "deadbeef");
+    }
+
+    #[tokio::test]
+    async fn test_rpc_error_code_and_message_preserved() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(header("Authorization", "Basic cDJwb29sOnAycG9vbA=="))
+            .and(body_json(serde_json::json!({
+                "method": "getmempoolentry",
+                "params": ["unknowntxid"],
+                "id": 0
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": null,
+                "error": {
+                    "code": -5,
+                    "message": "Transaction not in mempool"
+                },
+                "id": 0
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
+        let result = client.getmempoolentry("unknowntxid").await;
+
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            BitcoindRpcError::RpcError { code, message } => {
+                assert_eq!(code, -5);
+                assert_eq!(message, "Transaction not in mempool");
+            }
+            other => panic!("Expected RpcError, got {other:?}"),
+        }
     }
 
     #[tokio::test]

@@ -14,6 +14,22 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-pub mod api;
-pub use api::server::start_api_server;
-pub use api::server::start_btcrpc_server;
+use crate::api::btcrpc::{
+    auth::btcrpc_auth_middleware,
+    handler::{BtcRpcState, btcrpc_handler},
+};
+use axum::{Router, middleware, routing::post};
+use std::sync::Arc;
+
+pub(crate) fn build_btcrpc_router(state: Arc<BtcRpcState>) -> Router {
+    // v1: single POST / endpoint for all chain/mempool/fees/decode RPCs.
+    // Extension point: add .route("/wallet/{name}", post(wallet_handler)) here
+    // for v2 per-wallet routing without restructuring this router.
+    Router::new()
+        .route("/", post(btcrpc_handler))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            btcrpc_auth_middleware,
+        ))
+        .with_state(state)
+}

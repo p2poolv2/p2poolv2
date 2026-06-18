@@ -7,7 +7,34 @@ we will add more here.
 
 List of supported calls:
 
+Chain & mempool:
+
+. getbestblockhash
+. getblock
+. getblockchaininfo
+. getblockcount
+. getblockfilter
+. getblockhash
+. getblockheader
+. getmempoolentry
+. getnetworkinfo
+. getrawmempool
+. getrawtransaction
+. gettxout
+
+Fees / broadcast / validation:
+
+. estimatesmartfee
+. sendrawtransaction
+. testmempoolaccept
+
+Decode:
+
+. decoderawtransaction
+. decoderawtransaction_hex (proxy-friendly hex-string version)
+
+Internal use:
+
 . getdifficulty
 . getblocktemplate
-. decoderawtransaction
 . submitblock

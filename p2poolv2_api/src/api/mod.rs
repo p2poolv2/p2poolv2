@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 mod auth;
+pub mod btcrpc;
 pub mod endpoints;
 pub mod error;
 pub mod server;

@@ -543,6 +543,65 @@ pub struct SimConfig {
     pub ideal_block_time_secs: Option<u32>,
 }
 
+/// Config for the Bitcoin Core compatible JSON-RPC proxy endpoint.
+#[derive(Deserialize, Clone)]
+pub struct BitcoinRpcApiConfig {
+    /// Enable the proxy endpoint (default: false)
+    #[serde(default)]
+    pub enabled: bool,
+    /// Bind host for the proxy listener
+    #[serde(default = "default_btcrpc_host")]
+    pub host: String,
+    /// Bind port for the proxy listener
+    #[serde(default = "default_btcrpc_port")]
+    pub port: u16,
+    /// Username clients must supply via HTTP Basic Auth
+    pub rpcuser: Option<String>,
+    /// Password clients must supply via HTTP Basic Auth
+    pub rpcpassword: Option<String>,
+    /// Maximum requests allowed in a single JSON-RPC batch (default: 20)
+    #[serde(default = "default_btcrpc_max_batch_size")]
+    pub max_batch_size: usize,
+}
+
+impl std::fmt::Debug for BitcoinRpcApiConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BitcoinRpcApiConfig")
+            .field("enabled", &self.enabled)
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("rpcuser", &self.rpcuser)
+            .field("rpcpassword", &"[redacted]")
+            .field("max_batch_size", &self.max_batch_size)
+            .finish()
+    }
+}
+
+impl Default for BitcoinRpcApiConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            host: default_btcrpc_host(),
+            port: default_btcrpc_port(),
+            rpcuser: None,
+            rpcpassword: None,
+            max_batch_size: default_btcrpc_max_batch_size(),
+        }
+    }
+}
+
+fn default_btcrpc_host() -> String {
+    "127.0.0.1".to_string()
+}
+
+fn default_btcrpc_port() -> u16 {
+    18332
+}
+
+fn default_btcrpc_max_batch_size() -> usize {
+    20
+}
+
 /// Config for p2poolv2 nodes
 ///
 /// The network config switches to defaults if not provided. This is
@@ -557,6 +616,8 @@ pub struct Config {
     pub bitcoinrpc: BitcoinRpcConfig,
     pub logging: LoggingConfig,
     pub api: ApiConfig,
+    #[serde(default)]
+    pub bitcoin_rpc_api: BitcoinRpcApiConfig,
 }
 
 #[allow(dead_code)]

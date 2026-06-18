@@ -14,6 +14,10 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-pub mod api;
-pub use api::server::start_api_server;
-pub use api::server::start_btcrpc_server;
+pub(crate) mod auth;
+pub(crate) mod error;
+pub(crate) mod handler;
+pub(crate) mod router;
+
+pub(crate) use handler::BtcRpcState;
+pub(crate) use router::build_btcrpc_router;

@@ -78,6 +78,26 @@ url = "http://127.0.0.1:38332"
 username = "p2pool"
 password = "p2pool"
 
+# Bitcoin Core compatible JSON-RPC proxy — disabled by default.
+# When enabled, p2poolv2 exposes a second listener that forwards a subset of
+# Bitcoin Core RPC methods to the upstream bitcoind node.  Mining software that
+# speaks Bitcoin Core JSON-RPC (e.g. some monitoring tools) can point at this
+# address instead of bitcoind directly.
+#
+# Required bitcoin.conf settings on the upstream node:
+#   rpcallowip=127.0.0.1
+#   rpcbind=127.0.0.1
+#   rpcuser=<user>
+#   rpcpassword=<password>
+[bitcoin_rpc_api]
+# enabled = false
+# host = "127.0.0.1"
+# port = 18332
+# rpcuser = "p2pool"
+# rpcpassword = "p2pool"
+# Maximum number of RPC calls allowed in a single batch request (default: 20)
+# max_batch_size = 20
+
 [logging]
 # Specify a file path for the log file, if no log file is specified, console logging will be used
 file = "./logs/p2pool.log"
