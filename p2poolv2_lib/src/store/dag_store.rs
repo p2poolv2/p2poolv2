@@ -438,12 +438,17 @@ impl Store {
             .flatten();
 
         // Only keep the non-confirmed blocks that are not used as
-        // uncles already and that are not the chain tip (parent).
+        // uncles already, are not the chain tip (parent), and have
+        // their block body stored. The body check prevents selecting
+        // header-only blocks (received via header sync without a
+        // body) as uncles, which would create shares that reference
+        // uncle data no node can serve.
         let mut uncles_with_work: Vec<(BlockHash, Work)> = children
             .filter(|blockhash| {
                 *blockhash != chain_tip
                     && !self.is_confirmed(blockhash)
                     && !self.is_already_uncle(blockhash)
+                    && self.share_block_exists(blockhash)
             })
             .filter_map(|blockhash| {
                 self.get_block_metadata(&blockhash)
@@ -2739,6 +2744,45 @@ mod tests {
         let uncles = store.find_uncles().unwrap();
         assert_eq!(uncles.len(), 1);
         assert!(uncles.contains(&uncle1.block_hash()));
+    }
+
+    #[test]
+    fn test_find_uncles_excludes_header_only_blocks_without_body() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Build chain:
+        //   share0 (confirmed)
+        //   /    \
+        // share1  uncle_no_body (header only, no block body)
+        // (confirmed)
+
+        let share0 = TestShareBlockBuilder::new().nonce(0).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&share0, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share0.block_hash().to_string())
+            .nonce(1)
+            .build();
+        let uncle_no_body = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share0.block_hash().to_string())
+            .nonce(100)
+            .build();
+
+        // Store uncle with header and metadata only, no block body
+        store.create_valid_metadata_only(&uncle_no_body);
+        assert!(!store.share_block_exists(&uncle_no_body.block_hash()));
+
+        store.push_to_confirmed_chain(&share1).unwrap();
+
+        // find_uncles should NOT include the header-only uncle
+        let uncles = store.find_uncles().unwrap();
+        assert!(
+            uncles.is_empty(),
+            "Header-only uncle without block body should not be selected"
+        );
     }
 
     #[test]
