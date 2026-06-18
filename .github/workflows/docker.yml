@@ -154,6 +154,9 @@ jobs:
           TAGS_DH: ${{ steps.tags.outputs.tags_dh }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           IMAGE_SHA: ${{ env.IMAGE_TAG }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          CLEANUP_TEMP_TAGS: ${{ vars.CLEANUP_TEMP_TAGS || 'true' }}
 
       - name: Cleanup temp tags
         if: success() || failure()
