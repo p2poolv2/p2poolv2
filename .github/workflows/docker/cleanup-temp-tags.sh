@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Requires GITHUB_TOKEN for gh cli
+
 if [[ "${CLEANUP_TEMP_TAGS:-true}" == "false" || "${CLEANUP_TEMP_TAGS:-true}" == "0" ]]; then
   echo "CLEANUP_TEMP_TAGS=${CLEANUP_TEMP_TAGS}, skipping cleanup"
   exit 0
