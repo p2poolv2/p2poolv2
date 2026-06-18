@@ -2,9 +2,10 @@
 # docker-compose.node.yml. Do not run this file directly.
 #
 # IMPORTANT: p2poolv2 uses host networking (network_mode: host) because Docker's
-# bridge NAT breaks inbound P2P connections.
-# This is a temporary workaround until proper libp2p hole punching (DCUtR, Relay,
-# AutoNAT) is implemented. Host networking only works on Linux.
+# bridge NAT adds an extra NAT layer that breaks inbound P2P connections without
+# additional port forwarding or libp2p configuration for the Docker bridge.
+# Host networking sidesteps this by binding directly to host interfaces.
+# This only works on Linux.
 #
 # With host networking:
 #   - p2poolv2 binds directly to host ports (no port mapping)
