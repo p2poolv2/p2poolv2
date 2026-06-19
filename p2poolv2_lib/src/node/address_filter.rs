@@ -19,7 +19,8 @@ use libp2p::multiaddr::Protocol;
 
 /// Returns true if an IPv4 address is globally routable.
 /// Rejects loopback, private (RFC 1918), link-local, unspecified,
-/// broadcast, documentation, and shared address space ranges.
+/// broadcast, documentation, shared address space, multicast,
+/// reserved, and benchmarking ranges.
 fn is_ipv4_global(ip: &std::net::Ipv4Addr) -> bool {
     let octets = ip.octets();
     let first = octets[0];
@@ -55,13 +56,26 @@ fn is_ipv4_global(ip: &std::net::Ipv4Addr) -> bool {
     if first == 100 && (second & 0xC0) == 64 {
         return false;
     }
+    // Multicast (224.0.0.0/4)
+    if first >= 224 && first <= 239 {
+        return false;
+    }
+    // Reserved for future use (240.0.0.0/4, excluding broadcast)
+    if first >= 240 {
+        return false;
+    }
+    // Benchmarking (198.18.0.0/15)
+    if first == 198 && (second == 18 || second == 19) {
+        return false;
+    }
     true
 }
 
 /// Returns true if an IPv6 address is globally routable.
-/// Rejects loopback, unspecified, link-local, and unique local addresses.
+/// Rejects loopback, unspecified, link-local, unique local,
+/// documentation, discard-only, and IPv4-mapped/compatible ranges.
 fn is_ipv6_global(ip: &std::net::Ipv6Addr) -> bool {
-    if ip.is_loopback() || ip.is_unspecified() {
+    if ip.is_loopback() || ip.is_unspecified() || ip.is_multicast() {
         return false;
     }
     let segments = ip.segments();
@@ -71,6 +85,23 @@ fn is_ipv6_global(ip: &std::net::Ipv6Addr) -> bool {
     }
     // Unique local (fc00::/7)
     if (segments[0] & 0xFE00) == 0xFC00 {
+        return false;
+    }
+    // Documentation (2001:db8::/32)
+    if segments[0] == 0x2001 && segments[1] == 0x0DB8 {
+        return false;
+    }
+    // Discard-only (100::/64, RFC 6666)
+    if segments[0] == 0x0100 && segments[1] == 0 && segments[2] == 0 && segments[3] == 0 {
+        return false;
+    }
+    // IPv4-mapped (::ffff:0:0/96) and IPv4-compatible (deprecated, ::/96)
+    if segments[0] == 0
+        && segments[1] == 0
+        && segments[2] == 0
+        && segments[3] == 0
+        && segments[4] == 0
+    {
         return false;
     }
     true
@@ -90,12 +121,22 @@ pub fn is_routable_multiaddr(address: &Multiaddr) -> bool {
 }
 
 /// Extracts the TCP port from a multiaddr string (e.g. "/ip4/0.0.0.0/tcp/6884").
-/// Returns None if the string is not a valid multiaddr or has no TCP component.
+/// Returns None if the string is not a valid multiaddr, has no TCP component,
+/// or the port is 0 (ephemeral).
 pub fn extract_listen_port(listen_address: &str) -> Option<u16> {
     let multiaddr: Multiaddr = listen_address.parse().ok()?;
-    for protocol in multiaddr.iter() {
+    extract_tcp_port(&multiaddr)
+}
+
+/// Extracts a non-zero TCP port from a parsed multiaddr.
+/// Returns None if no TCP component is present or the port is 0.
+pub fn extract_tcp_port(address: &Multiaddr) -> Option<u16> {
+    for protocol in address.iter() {
         if let Protocol::Tcp(port) = protocol {
-            return Some(port);
+            if port > 0 {
+                return Some(port);
+            }
+            return None;
         }
     }
     None
@@ -184,6 +225,24 @@ mod tests {
     }
 
     #[test]
+    fn test_rejects_ipv6_documentation() {
+        let addr: Multiaddr = "/ip6/2001:db8::1/tcp/6884".parse().unwrap();
+        assert!(!is_routable_multiaddr(&addr));
+    }
+
+    #[test]
+    fn test_rejects_ipv6_discard_only() {
+        let addr: Multiaddr = "/ip6/100::1/tcp/6884".parse().unwrap();
+        assert!(!is_routable_multiaddr(&addr));
+    }
+
+    #[test]
+    fn test_rejects_ipv4_mapped_ipv6() {
+        let addr: Multiaddr = "/ip6/::ffff:192.0.2.1/tcp/6884".parse().unwrap();
+        assert!(!is_routable_multiaddr(&addr));
+    }
+
+    #[test]
     fn test_accepts_public_ipv4() {
         let addr: Multiaddr = "/ip4/8.8.8.8/tcp/6884".parse().unwrap();
         assert!(is_routable_multiaddr(&addr));
@@ -214,6 +273,24 @@ mod tests {
     }
 
     #[test]
+    fn test_rejects_multicast() {
+        let addr: Multiaddr = "/ip4/224.0.0.1/tcp/6884".parse().unwrap();
+        assert!(!is_routable_multiaddr(&addr));
+    }
+
+    #[test]
+    fn test_rejects_reserved() {
+        let addr: Multiaddr = "/ip4/240.0.0.1/tcp/6884".parse().unwrap();
+        assert!(!is_routable_multiaddr(&addr));
+    }
+
+    #[test]
+    fn test_rejects_benchmarking() {
+        let addr: Multiaddr = "/ip4/198.18.0.1/tcp/6884".parse().unwrap();
+        assert!(!is_routable_multiaddr(&addr));
+    }
+
+    #[test]
     fn test_extract_listen_port_from_valid_multiaddr() {
         assert_eq!(extract_listen_port("/ip4/0.0.0.0/tcp/6884"), Some(6884));
     }
@@ -231,6 +308,23 @@ mod tests {
     #[test]
     fn test_extract_listen_port_returns_none_for_invalid() {
         assert_eq!(extract_listen_port("not-a-multiaddr"), None);
+    }
+
+    #[test]
+    fn test_extract_listen_port_returns_none_for_ephemeral() {
+        assert_eq!(extract_listen_port("/ip4/0.0.0.0/tcp/0"), None);
+    }
+
+    #[test]
+    fn test_extract_tcp_port_from_resolved_address() {
+        let addr: Multiaddr = "/ip4/127.0.0.1/tcp/45678".parse().unwrap();
+        assert_eq!(extract_tcp_port(&addr), Some(45678));
+    }
+
+    #[test]
+    fn test_extract_tcp_port_returns_none_for_zero() {
+        let addr: Multiaddr = "/ip4/127.0.0.1/tcp/0".parse().unwrap();
+        assert_eq!(extract_tcp_port(&addr), None);
     }
 
     #[test]
