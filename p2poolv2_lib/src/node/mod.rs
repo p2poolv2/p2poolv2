@@ -111,6 +111,8 @@ struct Node {
     external_address_confirmed: bool,
     /// Cached TCP listen port extracted from config
     listen_port: Option<u16>,
+    /// Whether kademlia bootstrap has been triggered at least once
+    has_bootstrapped_kad: bool,
 }
 
 impl Node {
@@ -273,6 +275,7 @@ impl Node {
             connection_tracker: ConnectionTracker::new(blocked_ips),
             external_address_confirmed,
             listen_port,
+            has_bootstrapped_kad: false,
         })
     }
 
@@ -477,14 +480,26 @@ impl Node {
                     }
                 }
                 self.try_confirm_external_address(&info.observed_addr);
-                if let Err(e) = self.swarm.behaviour_mut().kademlia.bootstrap() {
-                    warn!("Failed to bootstrap Kademlia: {}", e);
-                } else {
-                    debug!("Successfully started Kademlia bootstrap");
+                if !self.has_bootstrapped_kad {
+                    self.attempt_kademlia_bootstrap();
                 }
             }
             _ => {
                 debug!("Other identify event: {:?}", event);
+            }
+        }
+    }
+
+    /// Triggers a kademlia bootstrap query to discover peers in the DHT.
+    /// Called once on first identify event and periodically thereafter.
+    fn attempt_kademlia_bootstrap(&mut self) {
+        match self.swarm.behaviour_mut().kademlia.bootstrap() {
+            Ok(_) => {
+                debug!("Started Kademlia bootstrap");
+                self.has_bootstrapped_kad = true;
+            }
+            Err(error) => {
+                warn!("Failed to bootstrap Kademlia: {error}");
             }
         }
     }

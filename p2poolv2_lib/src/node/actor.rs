@@ -440,6 +440,13 @@ impl NodeActor {
         sync_retry_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         sync_retry_interval.tick().await;
 
+        const KADEMLIA_BOOTSTRAP_INTERVAL_SECS: u64 = 300;
+        let mut kademlia_bootstrap_interval = tokio::time::interval(
+            std::time::Duration::from_secs(KADEMLIA_BOOTSTRAP_INTERVAL_SECS),
+        );
+        kademlia_bootstrap_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        kademlia_bootstrap_interval.tick().await;
+
         loop {
             tokio::select! {
                 buf = self.node.swarm_rx.recv() => {
@@ -679,6 +686,9 @@ impl NodeActor {
                             error!("Sync retry getheaders failed: {error}");
                         }
                     }
+                }
+                _ = kademlia_bootstrap_interval.tick() => {
+                    self.node.attempt_kademlia_bootstrap();
                 }
             }
         }
