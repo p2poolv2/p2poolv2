@@ -299,6 +299,11 @@ pub struct NetworkConfig {
     /// are immediately disconnected.
     #[serde(default)]
     pub blocked_ips: Vec<String>,
+    /// Optional external address override for nodes behind NAT.
+    /// If set, this address is advertised to peers via the identify protocol.
+    /// Format: Multiaddr string, e.g. "/ip4/203.0.113.1/tcp/6884"
+    #[serde(default)]
+    pub external_address: Option<String>,
 }
 
 impl Default for NetworkConfig {
@@ -319,6 +324,7 @@ impl Default for NetworkConfig {
             max_requests_per_second: 100,
             dial_timeout_secs: 30,
             blocked_ips: vec![],
+            external_address: None,
         }
     }
 }

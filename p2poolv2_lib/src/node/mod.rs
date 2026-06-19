@@ -107,6 +107,10 @@ struct Node {
     monitoring_event_sender: MonitoringEventSender,
     peer_reconnector: peer_reconnector::PeerReconnector,
     connection_tracker: ConnectionTracker,
+    /// Whether an external address has been confirmed and advertised
+    external_address_confirmed: bool,
+    /// Cached TCP listen port extracted from config
+    listen_port: Option<u16>,
 }
 
 impl Node {
@@ -157,6 +161,28 @@ impl Node {
             .build();
 
         info!("Local peer id: {}", swarm.local_peer_id());
+
+        let listen_port = address_filter::extract_listen_port(&config.network.listen_address);
+
+        let external_address_confirmed =
+            if let Some(ref external_addr_str) = config.network.external_address {
+                match external_addr_str.parse::<Multiaddr>() {
+                    Ok(external_addr) => {
+                        info!("Using configured external address: {}", external_addr);
+                        swarm.add_external_address(external_addr);
+                        true
+                    }
+                    Err(error) => {
+                        warn!(
+                            "Invalid external_address '{}' in config: {}",
+                            external_addr_str, error
+                        );
+                        false
+                    }
+                }
+            } else {
+                false
+            };
 
         if !config.network.listen_address.is_empty() {
             match config.network.listen_address.parse() {
@@ -245,6 +271,8 @@ impl Node {
             monitoring_event_sender,
             peer_reconnector,
             connection_tracker: ConnectionTracker::new(blocked_ips),
+            external_address_confirmed,
+            listen_port,
         })
     }
 
@@ -323,7 +351,14 @@ impl Node {
     ) -> Result<(), Box<dyn Error>> {
         match event {
             SwarmEvent::NewListenAddr { address, .. } => {
-                debug!("Listening on {address:?}");
+                info!("Listening on {address:?}");
+                if !self.external_address_confirmed
+                    && address_filter::is_routable_multiaddr(&address)
+                {
+                    self.swarm.add_external_address(address.clone());
+                    self.external_address_confirmed = true;
+                    info!("Added routable listen address as external: {address}");
+                }
                 Ok(())
             }
             SwarmEvent::ConnectionEstablished {
@@ -441,7 +476,7 @@ impl Node {
                         );
                     }
                 }
-                debug!("Peer {} observed us as {}", peer_id, info.observed_addr);
+                self.try_confirm_external_address(&info.observed_addr);
                 if let Err(e) = self.swarm.behaviour_mut().kademlia.bootstrap() {
                     warn!("Failed to bootstrap Kademlia: {}", e);
                 } else {
@@ -451,6 +486,30 @@ impl Node {
             _ => {
                 debug!("Other identify event: {:?}", event);
             }
+        }
+    }
+
+    /// Attempts to derive and confirm an external address from an identify
+    /// observation. Uses the observed IP combined with our listen port.
+    fn try_confirm_external_address(&mut self, observed_addr: &Multiaddr) {
+        if self.external_address_confirmed {
+            return;
+        }
+        let listen_port = match self.listen_port {
+            Some(port) => port,
+            None => {
+                debug!("No listen port configured, skipping external address detection");
+                return;
+            }
+        };
+        if let Some(external_addr) =
+            address_filter::build_external_address(observed_addr, listen_port)
+        {
+            info!("Detected external address from peer observation: {external_addr}");
+            self.swarm.add_external_address(external_addr);
+            self.external_address_confirmed = true;
+        } else {
+            debug!("Peer observed us as {observed_addr}, not usable as external address");
         }
     }
 
@@ -559,6 +618,7 @@ mod tests {
             max_requests_per_second: 1,
             dial_timeout_secs: 2,
             blocked_ips: vec![],
+            external_address: None,
         };
         network_config.dial_peers = vec![unreachable_peer];
         network_config.dial_timeout_secs = 2;

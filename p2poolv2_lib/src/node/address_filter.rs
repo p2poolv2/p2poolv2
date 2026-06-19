@@ -89,6 +89,48 @@ pub fn is_routable_multiaddr(address: &Multiaddr) -> bool {
     false
 }
 
+/// Extracts the TCP port from a multiaddr string (e.g. "/ip4/0.0.0.0/tcp/6884").
+/// Returns None if the string is not a valid multiaddr or has no TCP component.
+pub fn extract_listen_port(listen_address: &str) -> Option<u16> {
+    let multiaddr: Multiaddr = listen_address.parse().ok()?;
+    for protocol in multiaddr.iter() {
+        if let Protocol::Tcp(port) = protocol {
+            return Some(port);
+        }
+    }
+    None
+}
+
+/// Builds an external multiaddr by taking the IP from `observed_addr` and
+/// replacing the port with `listen_port`. Returns None if the observed address
+/// has no IP component or the IP is not globally routable.
+pub fn build_external_address(observed_addr: &Multiaddr, listen_port: u16) -> Option<Multiaddr> {
+    for protocol in observed_addr.iter() {
+        match protocol {
+            Protocol::Ip4(ip) => {
+                if is_ipv4_global(&ip) {
+                    let mut addr = Multiaddr::empty();
+                    addr.push(Protocol::Ip4(ip));
+                    addr.push(Protocol::Tcp(listen_port));
+                    return Some(addr);
+                }
+                return None;
+            }
+            Protocol::Ip6(ip) => {
+                if is_ipv6_global(&ip) {
+                    let mut addr = Multiaddr::empty();
+                    addr.push(Protocol::Ip6(ip));
+                    addr.push(Protocol::Tcp(listen_port));
+                    return Some(addr);
+                }
+                return None;
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,5 +211,53 @@ mod tests {
     fn test_rejects_documentation_range() {
         let addr: Multiaddr = "/ip4/192.0.2.1/tcp/6884".parse().unwrap();
         assert!(!is_routable_multiaddr(&addr));
+    }
+
+    #[test]
+    fn test_extract_listen_port_from_valid_multiaddr() {
+        assert_eq!(extract_listen_port("/ip4/0.0.0.0/tcp/6884"), Some(6884));
+    }
+
+    #[test]
+    fn test_extract_listen_port_from_ipv6() {
+        assert_eq!(extract_listen_port("/ip6/::0/tcp/9999"), Some(9999));
+    }
+
+    #[test]
+    fn test_extract_listen_port_returns_none_for_no_tcp() {
+        assert_eq!(extract_listen_port("/ip4/0.0.0.0/udp/6884"), None);
+    }
+
+    #[test]
+    fn test_extract_listen_port_returns_none_for_invalid() {
+        assert_eq!(extract_listen_port("not-a-multiaddr"), None);
+    }
+
+    #[test]
+    fn test_build_external_address_replaces_port() {
+        let observed: Multiaddr = "/ip4/8.8.8.8/tcp/54321".parse().unwrap();
+        let result = build_external_address(&observed, 6884);
+        let expected: Multiaddr = "/ip4/8.8.8.8/tcp/6884".parse().unwrap();
+        assert_eq!(result, Some(expected));
+    }
+
+    #[test]
+    fn test_build_external_address_with_ipv6() {
+        let observed: Multiaddr = "/ip6/2001:4860:4860::8888/tcp/54321".parse().unwrap();
+        let result = build_external_address(&observed, 6884);
+        let expected: Multiaddr = "/ip6/2001:4860:4860::8888/tcp/6884".parse().unwrap();
+        assert_eq!(result, Some(expected));
+    }
+
+    #[test]
+    fn test_build_external_address_rejects_private() {
+        let observed: Multiaddr = "/ip4/192.168.1.1/tcp/54321".parse().unwrap();
+        assert_eq!(build_external_address(&observed, 6884), None);
+    }
+
+    #[test]
+    fn test_build_external_address_rejects_loopback() {
+        let observed: Multiaddr = "/ip4/127.0.0.1/tcp/54321".parse().unwrap();
+        assert_eq!(build_external_address(&observed, 6884), None);
     }
 }
