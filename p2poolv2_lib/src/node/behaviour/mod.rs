@@ -65,13 +65,15 @@ impl P2PoolBehaviour {
         kad_config.set_query_timeout(tokio::time::Duration::from_secs(60));
         kad_config.set_protocol_names(vec![libp2p::StreamProtocol::new("/p2pool/kad/1.0.0")]);
 
-        let kademlia_behaviour =
+        let mut kademlia_behaviour =
             kad::Behaviour::with_config(local_key.public().to_peer_id(), store, kad_config);
+        kademlia_behaviour.set_mode(Some(kad::Mode::Server));
 
-        let identify_behaviour = identify::Behaviour::new(identify::Config::new(
-            "/p2pool/1.0.0".to_string(),
-            local_key.public(),
-        ));
+        let identify_config =
+            identify::Config::new("/p2pool/1.0.0".to_string(), local_key.public())
+                .with_agent_version(format!("p2poolv2/{}", env!("CARGO_PKG_VERSION")))
+                .with_push_listen_addr_updates(true);
+        let identify_behaviour = identify::Behaviour::new(identify_config);
 
         let limits_config = connection_limits::ConnectionLimits::default()
             .with_max_pending_incoming(Some(config.network.max_pending_incoming))
