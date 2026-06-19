@@ -61,6 +61,11 @@ pub struct StratumConfig<State = Raw> {
     pub fee_address: Option<String>,
     /// The fee basis points
     pub fee: Option<u16>,
+    /// Optional GridPool hosted-Stratum fee address. This is used by personalized
+    /// work scheduling, not as an extra coinbase output.
+    pub gridpool_fee_address: Option<String>,
+    /// Send every Nth personalized job to gridpool_fee_address as slot 0.
+    pub gridpool_fee_every_n_jobs: Option<u64>,
     /// The network can be "main", "testnet4" or "signet
     #[serde(deserialize_with = "deserialize_network")]
     pub network: bitcoin::Network,
@@ -81,6 +86,8 @@ pub struct StratumConfig<State = Raw> {
     pub(crate) donation_address_parsed: Option<Address<NetworkChecked>>,
     #[serde(skip)]
     pub(crate) fee_address_parsed: Option<Address<NetworkChecked>>,
+    #[serde(skip)]
+    pub(crate) gridpool_fee_address_parsed: Option<Address<NetworkChecked>>,
 
     #[serde(skip)]
     #[serde(default)]
@@ -121,6 +128,11 @@ impl StratumConfig<Raw> {
             .as_ref()
             .map(|addr| parse_address(addr, self.network))
             .transpose()?;
+        let gridpool_fee_address_parsed = self
+            .gridpool_fee_address
+            .as_ref()
+            .map(|addr| parse_address(addr, self.network))
+            .transpose()?;
 
         Ok(StratumConfig {
             hostname: self.hostname,
@@ -135,6 +147,8 @@ impl StratumConfig<Raw> {
             donation: self.donation,
             fee_address: self.fee_address,
             fee: self.fee,
+            gridpool_fee_address: self.gridpool_fee_address,
+            gridpool_fee_every_n_jobs: self.gridpool_fee_every_n_jobs,
             network: self.network,
             version_mask: self.version_mask,
             difficulty_multiplier: self.difficulty_multiplier,
@@ -143,6 +157,7 @@ impl StratumConfig<Raw> {
             bootstrap_address_parsed: Some(bootstrap_address_parsed),
             donation_address_parsed,
             fee_address_parsed,
+            gridpool_fee_address_parsed,
             _state: PhantomData,
             payout_file_path: self.payout_file_path,
             downstream_payout_url: self.downstream_payout_url,
@@ -168,6 +183,10 @@ impl StratumConfig<Parsed> {
     pub fn fee_address(&self) -> Option<&Address<NetworkChecked>> {
         self.fee_address_parsed.as_ref()
     }
+
+    pub fn gridpool_fee_address(&self) -> Option<&Address<NetworkChecked>> {
+        self.gridpool_fee_address_parsed.as_ref()
+    }
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -188,6 +207,8 @@ impl StratumConfig<Raw> {
             donation: None,
             fee_address: None,
             fee: None,
+            gridpool_fee_address: None,
+            gridpool_fee_every_n_jobs: None,
             network: bitcoin::Network::Signet,
             version_mask: 0x1fffe000,
             difficulty_multiplier: 1.0,
@@ -196,6 +217,7 @@ impl StratumConfig<Raw> {
             bootstrap_address_parsed: None,
             donation_address_parsed: None,
             fee_address_parsed: None,
+            gridpool_fee_address_parsed: None,
             _state: PhantomData,
             payout_file_path: None,
             downstream_payout_url: None,

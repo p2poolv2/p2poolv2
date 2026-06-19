@@ -118,8 +118,9 @@ pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
         .set_current_difficulty(ctx.start_difficulty);
     let _ = ctx
         .notify_tx
-        .send(NotifyCmd::SendToClient {
+        .send(NotifyCmd::ClientAuthorized {
             client_address: addr,
+            payout_address: session.btcaddress.clone().unwrap_or_default(),
             clean_jobs: true,
         })
         .await;
@@ -241,14 +242,16 @@ mod tests {
         );
 
         match notify_cmd.unwrap() {
-            NotifyCmd::SendToClient {
+            NotifyCmd::ClientAuthorized {
                 client_address,
+                payout_address,
                 clean_jobs,
             } => {
                 assert_eq!(client_address, SocketAddr::from(([127, 0, 0, 1], 8080)));
+                assert_eq!(payout_address, "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx");
                 assert!(clean_jobs, "Expected clean_jobs to be true");
             }
-            _ => panic!("Expected NotifyCmd::SendToClient"),
+            _ => panic!("Expected NotifyCmd::ClientAuthorized"),
         };
     }
 

@@ -32,10 +32,13 @@ use crate::stratum::messages::{Notify, NotifyParams};
 use crate::stratum::util::reverse_four_byte_chunks;
 use crate::stratum::util::to_be_hex;
 use crate::stratum::work::coinbase::parse_address;
+use bitcoin::Address;
 use bitcoin::CompressedPublicKey;
+use bitcoin::address::NetworkChecked;
 use bitcoin::script::PushBytesBuf;
 use bitcoin::transaction::Version;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::fs;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -67,10 +70,12 @@ async fn build_output_distribution(
     template: &BlockTemplate,
     store: &Arc<ChainStore>,
     config: &StratumConfig<crate::config::Parsed>,
+    slot_zero_address: Option<&Address<NetworkChecked>>,
 ) -> Vec<OutputPair> {
     // New: Try file mode if path set
     if let Some(ref path) = config.payout_file_path {
-        match load_payouts_from_file(path, template.coinbasevalue, config).await {
+        match load_payouts_from_file(path, template.coinbasevalue, config, slot_zero_address).await
+        {
             Ok(dist) => {
                 // Debug for file mode
                 for output in &dist {
@@ -142,6 +147,7 @@ async fn load_payouts_from_file(
     path: &str,
     coinbase_sats: u64,
     config: &StratumConfig<crate::config::Parsed>,
+    slot_zero_address: Option<&Address<NetworkChecked>>,
 ) -> Result<Vec<OutputPair>, Box<dyn std::error::Error>> {
     let content = fs::read_to_string(path)?;
     let json: Value = serde_json::from_str(&content)?;
@@ -196,7 +202,9 @@ async fn load_payouts_from_file(
 
     if leftover_sat > 0 {
         distribution.push(OutputPair {
-            address: config.bootstrap_address().clone(),
+            address: slot_zero_address
+                .cloned()
+                .unwrap_or_else(|| config.bootstrap_address().clone()),
             amount: bitcoin::Amount::from_sat(leftover_sat),
         });
     }
@@ -266,9 +274,14 @@ async fn build_notify_and_commitment(
     miner_pubkey: Option<CompressedPublicKey>,
     pool_signature: &[u8],
     tracker_handle: &Arc<JobTracker>,
+    slot_zero_address: Option<&str>,
 ) -> Result<(String, Option<ShareCommitment>), WorkError> {
     let job_id = tracker_handle.get_next_job_id();
-    let output_distribution = build_output_distribution(template, chain_store, config).await;
+    let slot_zero_address = slot_zero_address
+        .map(|addr| parse_address(addr, config.network))
+        .transpose()?;
+    let output_distribution =
+        build_output_distribution(template, chain_store, config, slot_zero_address.as_ref()).await;
 
     let share_commitment =
         build_share_commitment(chain_store, template, miner_pubkey).map_err(|_| WorkError {
@@ -313,6 +326,40 @@ pub enum NotifyCmd {
         client_address: SocketAddr,
         clean_jobs: bool,
     },
+    ClientAuthorized {
+        client_address: SocketAddr,
+        payout_address: String,
+        clean_jobs: bool,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct ClientMiningIdentity {
+    payout_address: String,
+}
+
+fn select_slot_zero_address(
+    identity: &ClientMiningIdentity,
+    config: &StratumConfig<crate::config::Parsed>,
+    fee_job_counters: &mut HashMap<String, u64>,
+) -> String {
+    let Some(fee_address) = config.gridpool_fee_address() else {
+        return identity.payout_address.clone();
+    };
+    let every_n = config.gridpool_fee_every_n_jobs.unwrap_or_default();
+    if every_n == 0 {
+        return identity.payout_address.clone();
+    }
+
+    let counter = fee_job_counters
+        .entry(identity.payout_address.clone())
+        .or_insert(0);
+    *counter = counter.saturating_add(1);
+    if *counter % every_n == 0 {
+        fee_address.to_string()
+    } else {
+        identity.payout_address.clone()
+    }
 }
 
 /// Start a task that listens for new block template events.
@@ -326,6 +373,8 @@ pub async fn start_notify(
     miner_pubkey: Option<CompressedPublicKey>,
 ) {
     let mut latest_template: Option<Arc<BlockTemplate>> = None;
+    let mut client_identities: HashMap<SocketAddr, ClientMiningIdentity> = HashMap::new();
+    let mut fee_job_counters: HashMap<String, u64> = HashMap::new();
     let pool_signature = match config.pool_signature {
         Some(ref sig) => sig.as_bytes(),
         None => &[],
@@ -337,27 +386,70 @@ pub async fn start_notify(
                     || latest_template.unwrap().previousblockhash != template.previousblockhash;
                 latest_template = Some(Arc::clone(&template));
 
-                let (notify_str, _share_commitment) = match build_notify_and_commitment(
-                    &template,
-                    clean_jobs,
-                    &chain_store,
-                    config,
-                    miner_pubkey,
-                    pool_signature,
-                    &tracker_handle,
-                )
-                .await
-                {
-                    Ok(serialized) => serialized,
-                    Err(e) => {
-                        tracing::error!("Failed to build notify: {}. Skipping.", e);
-                        continue;
-                    }
-                };
+                if config.payout_file_path.is_some() {
+                    for (client_address, identity) in client_identities.clone() {
+                        let slot_zero =
+                            select_slot_zero_address(&identity, config, &mut fee_job_counters);
+                        let (notify_str, _share_commitment) = match build_notify_and_commitment(
+                            &template,
+                            clean_jobs,
+                            &chain_store,
+                            config,
+                            miner_pubkey,
+                            pool_signature,
+                            &tracker_handle,
+                            Some(&slot_zero),
+                        )
+                        .await
+                        {
+                            Ok(serialized) => serialized,
+                            Err(e) => {
+                                tracing::error!(
+                                    "Failed to build personalized notify for {}: {}. Skipping.",
+                                    client_address,
+                                    e
+                                );
+                                continue;
+                            }
+                        };
 
-                connections.send_to_all(Arc::new(notify_str.clone())).await;
-                if chain_store.add_job(notify_str).is_err() {
-                    tracing::warn!("Couldn't save job when sending to all");
+                        if connections
+                            .send_to_client(client_address, Arc::new(notify_str.clone()))
+                            .await
+                        {
+                            if chain_store.add_job(notify_str).is_err() {
+                                tracing::warn!(
+                                    "Couldn't save personalized job when sending to all"
+                                );
+                            }
+                        } else {
+                            client_identities.remove(&client_address);
+                        }
+                    }
+                } else {
+                    let (notify_str, _share_commitment) = match build_notify_and_commitment(
+                        &template,
+                        clean_jobs,
+                        &chain_store,
+                        config,
+                        miner_pubkey,
+                        pool_signature,
+                        &tracker_handle,
+                        None,
+                    )
+                    .await
+                    {
+                        Ok(serialized) => serialized,
+                        Err(e) => {
+                            tracing::error!("Failed to build notify: {}. Skipping.", e);
+                            continue;
+                        }
+                    };
+
+                    connections.send_to_all(Arc::new(notify_str.clone())).await;
+                    if chain_store.add_job(notify_str).is_err() {
+                        tracing::warn!("Couldn't save job when sending to all");
+                    }
                 }
             }
             NotifyCmd::SendToClient {
@@ -381,6 +473,7 @@ pub async fn start_notify(
                     miner_pubkey,
                     pool_signature,
                     &tracker_handle,
+                    None,
                 )
                 .await
                 {
@@ -396,6 +489,55 @@ pub async fn start_notify(
                     .await;
                 if chain_store.add_job(notify_str).is_err() {
                     tracing::warn!("Couldn't save job when sending to client");
+                }
+            }
+            NotifyCmd::ClientAuthorized {
+                client_address,
+                payout_address,
+                clean_jobs,
+            } => {
+                let identity = ClientMiningIdentity { payout_address };
+                client_identities.insert(client_address, identity.clone());
+
+                let Some(template) = latest_template.as_ref() else {
+                    debug!(
+                        "No latest template available to send to newly authorized client: {}",
+                        client_address
+                    );
+                    continue;
+                };
+
+                let slot_zero = select_slot_zero_address(&identity, config, &mut fee_job_counters);
+                let (notify_str, _share_commitment) = match build_notify_and_commitment(
+                    template,
+                    clean_jobs,
+                    &chain_store,
+                    config,
+                    miner_pubkey,
+                    pool_signature,
+                    &tracker_handle,
+                    Some(&slot_zero),
+                )
+                .await
+                {
+                    Ok(serialized) => serialized,
+                    Err(e) => {
+                        tracing::error!(
+                            "Failed to build personalized notify for authorized client {}: {}. Skipping.",
+                            client_address,
+                            e
+                        );
+                        continue;
+                    }
+                };
+
+                connections
+                    .send_to_client(client_address, Arc::new(notify_str.clone()))
+                    .await;
+                if chain_store.add_job(notify_str).is_err() {
+                    tracing::warn!(
+                        "Couldn't save personalized job when sending to authorized client"
+                    );
                 }
             }
         }
@@ -419,7 +561,65 @@ mod tests {
     use std::collections::HashMap;
     use std::str::FromStr;
     use std::time::SystemTime;
+    use tempfile::NamedTempFile;
     use tokio::sync::mpsc;
+
+    #[tokio::test]
+    async fn test_file_payouts_use_personalized_slot_zero() {
+        let payout_file = NamedTempFile::new().unwrap();
+        std::fs::write(
+            payout_file.path(),
+            r#"{"payouts":[{"Address":"tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk","Value":1000}]}"#,
+        )
+        .unwrap();
+
+        let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
+        let slot_zero = parse_address(
+            "tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d",
+            stratum_config.network,
+        )
+        .unwrap();
+
+        let distribution = load_payouts_from_file(
+            payout_file.path().to_str().unwrap(),
+            3_000,
+            &stratum_config,
+            Some(&slot_zero),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(distribution.len(), 2);
+        assert_eq!(distribution[0].address, slot_zero);
+        assert_eq!(distribution[0].amount, Amount::from_sat(2_000));
+        assert_eq!(distribution[1].amount, Amount::from_sat(1_000));
+    }
+
+    #[test]
+    fn test_select_slot_zero_address_uses_every_n_fee_job() {
+        let mut raw_config = StratumConfig::new_for_test_default();
+        raw_config.gridpool_fee_address =
+            Some("tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string());
+        raw_config.gridpool_fee_every_n_jobs = Some(3);
+        let config = raw_config.parse().unwrap();
+        let identity = ClientMiningIdentity {
+            payout_address: "tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d".to_string(),
+        };
+        let mut fee_job_counters = HashMap::new();
+
+        assert_eq!(
+            select_slot_zero_address(&identity, &config, &mut fee_job_counters),
+            identity.payout_address
+        );
+        assert_eq!(
+            select_slot_zero_address(&identity, &config, &mut fee_job_counters),
+            identity.payout_address
+        );
+        assert_eq!(
+            select_slot_zero_address(&identity, &config, &mut fee_job_counters),
+            "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk"
+        );
+    }
 
     #[tokio::test]
     async fn test_build_notify_from_gbt_and_compare_to_expected() {
@@ -466,7 +666,7 @@ mod tests {
         let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
 
         let output_distribution =
-            build_output_distribution(&template, &Arc::new(store), &stratum_config).await;
+            build_output_distribution(&template, &Arc::new(store), &stratum_config, None).await;
         // Build Notify
         let notify = build_notify(&template, output_distribution, job_id, false, &[], None)
             .expect("Failed to build notify");
@@ -673,7 +873,7 @@ mod tests {
         let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
 
         let output_distribution =
-            build_output_distribution(&template, &Arc::new(store), &stratum_config).await;
+            build_output_distribution(&template, &Arc::new(store), &stratum_config, None).await;
 
         let result = build_notify(
             &template,
@@ -749,6 +949,7 @@ mod tests {
             Some(miner_pubkey),
             pool_signature,
             &tracker_handle,
+            None,
         )
         .await;
 
