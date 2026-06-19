@@ -613,13 +613,12 @@ mod tests {
     use crate::node::validation_worker::create_validation_channel;
     use bitcoindrpc::BitcoinRpcConfig;
     use futures::StreamExt;
+    use libp2p::swarm::SwarmEvent;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
     #[tokio::test]
     async fn test_node_dial_timeout_does_not_hang() {
-        use libp2p::swarm::SwarmEvent;
-
         // Use a local address that will refuse connections immediately
         let unreachable_peer = "/ip4/127.0.0.1/tcp/65535".to_string(); // Fast fail
 
@@ -738,5 +737,190 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn build_test_config(listen_address: &str, external_address: Option<String>) -> Config {
+        Config {
+            network: NetworkConfig {
+                listen_address: listen_address.to_string(),
+                dial_peers: vec![],
+                max_pending_incoming: 10,
+                max_pending_outgoing: 10,
+                max_established_incoming: 10,
+                max_established_outgoing: 10,
+                max_established_per_peer: 10,
+                max_workbase_per_second: 10,
+                max_userworkbase_per_second: 10,
+                max_miningshare_per_second: 10,
+                max_inventory_per_second: 10,
+                max_transaction_per_second: 10,
+                max_requests_per_second: 1,
+                dial_timeout_secs: 2,
+                blocked_ips: vec![],
+                external_address,
+            },
+            bitcoinrpc: BitcoinRpcConfig {
+                url: "http://localhost:8332".to_string(),
+                username: "testuser".to_string(),
+                password: "testpass".to_string(),
+            },
+            store: StoreConfig {
+                path: "test_chain.db".to_string(),
+                background_task_frequency_hours: 1,
+                pplns_ttl_days: 3,
+            },
+            stratum: StratumConfig::new_for_test_default(),
+            logging: LoggingConfig {
+                console: Some(true),
+                level: "info".to_string(),
+                file: Some("./p2pool.log".to_string()),
+                stats_dir: "./logs/stats".to_string(),
+            },
+            api: ApiConfig {
+                hostname: "127.0.0.1".to_string(),
+                port: 3000,
+                auth_user: None,
+                auth_token: None,
+                auth_password: None,
+                cors_allowed: false,
+            },
+        }
+    }
+
+    fn build_test_node(config: Config) -> Node {
+        let mut chain_store_handle = ChainStoreHandle::default();
+        chain_store_handle
+            .expect_clone()
+            .returning(ChainStoreHandle::default);
+        let (block_fetcher_tx, _block_fetcher_rx) = create_block_fetcher_channel();
+        let (validation_tx, _validation_rx) = create_validation_channel();
+        let (block_receiver_handle, _block_receiver_rx) = create_block_receiver_channel();
+        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        Node::new(
+            config,
+            chain_store_handle,
+            block_fetcher_tx,
+            validation_tx,
+            block_receiver_handle,
+            monitoring_tx,
+            Arc::new(crate::shares::validation::MockDefaultShareValidator::default()),
+        )
+        .expect("Node initialization failed")
+    }
+
+    #[tokio::test]
+    async fn test_config_external_address_is_added_to_swarm() {
+        let config = build_test_config(
+            "/ip4/127.0.0.1/tcp/0",
+            Some("/ip4/203.0.113.5/tcp/6884".to_string()),
+        );
+        let node = build_test_node(config);
+
+        let external_addrs: Vec<_> = node.swarm.external_addresses().cloned().collect();
+        let expected: libp2p::Multiaddr = "/ip4/203.0.113.5/tcp/6884".parse().unwrap();
+        assert!(
+            external_addrs.contains(&expected),
+            "Expected external address {expected} not found in {external_addrs:?}"
+        );
+        assert!(node.external_address_confirmed);
+    }
+
+    #[tokio::test]
+    async fn test_no_config_external_address_leaves_unconfirmed() {
+        let config = build_test_config("/ip4/127.0.0.1/tcp/0", None);
+        let node = build_test_node(config);
+
+        let external_addrs: Vec<_> = node.swarm.external_addresses().cloned().collect();
+        assert!(
+            external_addrs.is_empty(),
+            "Expected no external addresses, got {external_addrs:?}"
+        );
+        assert!(!node.external_address_confirmed);
+    }
+
+    #[tokio::test]
+    async fn test_try_confirm_from_routable_observation() {
+        let config = build_test_config("/ip4/127.0.0.1/tcp/0", None);
+        let mut node = build_test_node(config);
+        node.listen_port = Some(7001);
+
+        assert!(!node.external_address_confirmed);
+
+        let observed: libp2p::Multiaddr = "/ip4/93.184.216.34/tcp/54321".parse().unwrap();
+        node.try_confirm_external_address(&observed);
+
+        assert!(node.external_address_confirmed);
+        let external_addrs: Vec<_> = node.swarm.external_addresses().cloned().collect();
+        let expected: libp2p::Multiaddr = "/ip4/93.184.216.34/tcp/7001".parse().unwrap();
+        assert!(
+            external_addrs.contains(&expected),
+            "Expected external address {expected} not found in {external_addrs:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_try_confirm_ignores_private_observation() {
+        let config = build_test_config("/ip4/127.0.0.1/tcp/0", None);
+        let mut node = build_test_node(config);
+        node.listen_port = Some(7002);
+
+        let observed: libp2p::Multiaddr = "/ip4/192.168.1.1/tcp/54321".parse().unwrap();
+        node.try_confirm_external_address(&observed);
+
+        assert!(!node.external_address_confirmed);
+        let external_addrs: Vec<_> = node.swarm.external_addresses().cloned().collect();
+        assert!(
+            external_addrs.is_empty(),
+            "Expected no external addresses, got {external_addrs:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_try_confirm_noop_when_already_confirmed() {
+        let config = build_test_config(
+            "/ip4/127.0.0.1/tcp/0",
+            Some("/ip4/203.0.113.5/tcp/7003".to_string()),
+        );
+        let mut node = build_test_node(config);
+        node.listen_port = Some(7003);
+        assert!(node.external_address_confirmed);
+
+        let observed: libp2p::Multiaddr = "/ip4/198.51.100.99/tcp/54321".parse().unwrap();
+        node.try_confirm_external_address(&observed);
+
+        let external_addrs: Vec<_> = node.swarm.external_addresses().cloned().collect();
+        let should_not_exist: libp2p::Multiaddr = "/ip4/198.51.100.99/tcp/7003".parse().unwrap();
+        assert!(
+            !external_addrs.contains(&should_not_exist),
+            "Second observation should not override confirmed address"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_try_confirm_noop_when_no_listen_port() {
+        let config = build_test_config("/ip4/127.0.0.1/tcp/0", None);
+        let mut node = build_test_node(config);
+        assert!(node.listen_port.is_none());
+
+        let observed: libp2p::Multiaddr = "/ip4/198.51.100.7/tcp/54321".parse().unwrap();
+        node.try_confirm_external_address(&observed);
+
+        assert!(!node.external_address_confirmed);
+    }
+
+    #[tokio::test]
+    async fn test_new_listen_addr_resolves_ephemeral_port() {
+        let config = build_test_config("/ip4/127.0.0.1/tcp/0", None);
+        let mut node = build_test_node(config);
+        assert!(node.listen_port.is_none());
+
+        let resolved_addr: libp2p::Multiaddr = "/ip4/127.0.0.1/tcp/45678".parse().unwrap();
+        let event = SwarmEvent::NewListenAddr {
+            listener_id: libp2p::core::transport::ListenerId::next(),
+            address: resolved_addr,
+        };
+        node.handle_swarm_event(event).await.unwrap();
+
+        assert_eq!(node.listen_port, Some(45678));
     }
 }
