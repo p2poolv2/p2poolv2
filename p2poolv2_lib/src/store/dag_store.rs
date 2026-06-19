@@ -2771,8 +2771,19 @@ mod tests {
             .nonce(100)
             .build();
 
-        // Store uncle with header and metadata only, no block body
+        // Store uncle with header and metadata only, no block body.
+        // Also write the parent->child block index so find_uncles
+        // discovers it via get_children_blockhashes.
         store.create_valid_metadata_only(&uncle_no_body);
+        let mut batch = Store::get_write_batch();
+        store
+            .update_block_index(
+                &share0.block_hash(),
+                &uncle_no_body.block_hash(),
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
         assert!(!store.share_block_exists(&uncle_no_body.block_hash()));
 
         store.push_to_confirmed_chain(&share1).unwrap();
