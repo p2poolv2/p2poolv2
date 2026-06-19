@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+mod address_filter;
 pub mod behaviour;
 pub mod connection_tracker;
 pub mod emission_worker;
@@ -426,15 +427,20 @@ impl Node {
                     "Identified Peer {} with protocol version {}",
                     peer_id, info.protocol_version
                 );
-                // Add the peer's advertised addresses to Kademlia
+                // Add the peer's routable advertised addresses to Kademlia
                 for addr in info.listen_addrs {
-                    self.swarm
-                        .behaviour_mut()
-                        .kademlia
-                        .add_address(&peer_id, addr.clone());
+                    if address_filter::is_routable_multiaddr(&addr) {
+                        self.swarm
+                            .behaviour_mut()
+                            .kademlia
+                            .add_address(&peer_id, addr.clone());
+                    } else {
+                        debug!(
+                            "Skipping non-routable address {} from peer {}",
+                            addr, peer_id
+                        );
+                    }
                 }
-                // Note, we don't advertise observed_addr: its port is our
-                // ephemeral outbound source port, not a listen port.
                 debug!("Peer {} observed us as {}", peer_id, info.observed_addr);
                 if let Err(e) = self.swarm.behaviour_mut().kademlia.bootstrap() {
                     warn!("Failed to bootstrap Kademlia: {}", e);
