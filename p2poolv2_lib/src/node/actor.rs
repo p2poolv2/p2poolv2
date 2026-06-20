@@ -35,6 +35,7 @@ use crate::node::p2p_message_handlers::receivers::block_receiver::{
 };
 use crate::node::p2p_message_handlers::senders::send_block_inventory;
 use crate::node::p2p_message_handlers::senders::send_getheaders;
+use crate::node::p2p_message_handlers::senders::send_share_block_broadcast;
 use crate::node::request_response_handler::block_fetcher::{
     BlockFetcher, BlockFetcherError, create_block_fetcher_channel,
 };
@@ -488,6 +489,23 @@ impl NodeActor {
                             .await
                             {
                                 error!("Failed to relay inv for block {block_hash}: {relay_error}");
+                            }
+                        }
+                        Some(SwarmSend::BroadcastBlock(share_block)) => {
+                            let block_hash = share_block.block_hash();
+                            let connected_peers = self.node.connected_peers();
+                            let peer_knowledge = self.node
+                                .request_response_handler
+                                .peer_block_knowledge_mut();
+                            if let Err(broadcast_error) = send_share_block_broadcast(
+                                share_block,
+                                &connected_peers,
+                                peer_knowledge,
+                                self.node.swarm_tx.clone(),
+                            )
+                            .await
+                            {
+                                error!("Failed to broadcast share block {block_hash}: {broadcast_error}");
                             }
                         }
                         Some(SwarmSend::Disconnect(peer_id)) => {
