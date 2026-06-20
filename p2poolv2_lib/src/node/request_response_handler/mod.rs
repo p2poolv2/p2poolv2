@@ -172,6 +172,14 @@ impl<C: Send + Sync + 'static> RequestResponseHandler<C> {
         &self.peer_block_knowledge
     }
 
+    /// Returns a mutable reference to the peer block knowledge tracker.
+    ///
+    /// Used by the actor to record outbound block broadcasts so that
+    /// subsequent broadcast attempts for the same block are suppressed.
+    pub fn peer_block_knowledge_mut(&mut self) -> &mut PeerBlockKnowledge {
+        &mut self.peer_block_knowledge
+    }
+
     /// Spawn a per-peer service task for a newly connected peer.
     ///
     /// If a handle already exists for this peer (e.g. duplicate
