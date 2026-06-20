@@ -17,7 +17,9 @@
 pub mod getheaders;
 pub mod handshake;
 pub mod inventory;
+pub mod share_block;
 
 pub use getheaders::send_getheaders;
 pub use handshake::send_handshake;
 pub use inventory::send_block_inventory;
+pub use share_block::send_share_block_broadcast;
