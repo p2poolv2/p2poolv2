@@ -19,7 +19,7 @@
 //! Receives `ValidationEvent` values containing blockhash to validate. It reads the
 //! corresponding share block from the chain store, validates them using
 //! `shares::validation::validate_share_block`, and on success emits
-//! `OrganiseEvent::Block` and `SwarmSend::Inv` events. Runs in a dedicated
+//! `OrganiseEvent::Block` and `SwarmSend::BroadcastBlock` events. Runs in a dedicated
 //! tokio task, decoupled from the P2P message handler hot path.
 
 use crate::node::SwarmSend;
@@ -85,7 +85,7 @@ impl std::error::Error for ValidationWorkerError {}
 /// Receives `ValidationEvent` values containing block hashes, reads
 /// the share block from the chain store, validates it, and on success
 /// emits `OrganiseEvent::Block` for confirmed promotion and
-/// `SwarmSend::Inv` for inventory relay to peers.
+/// `SwarmSend::BroadcastBlock` for block relay to peers.
 ///
 /// After successful validation, the organise worker handles PPLNS
 /// updates and dependent scheduling.
@@ -207,14 +207,19 @@ async fn validate_and_emit(
 
     debug!("Share block {block_hash} validated successfully");
 
+    // Clone before moving to organise_tx, since BroadcastBlock needs the full block.
+    let share_block_for_broadcast = share_block.clone();
     if let Err(send_error) = organise_tx.send(OrganiseEvent::Block(share_block)).await {
         error!("Failed to send validated block to organise worker: {send_error}");
     }
 
-    // Relay block once context free validations are run. If later
+    // Broadcast block once context free validations are run. If later
     // the block is not confirmed, peers should have a copy anyway.
-    if let Err(send_error) = swarm_tx.send(SwarmSend::Inv(block_hash)).await {
-        error!("Failed to send inv relay for validated block {block_hash}: {send_error}");
+    if let Err(send_error) = swarm_tx
+        .send(SwarmSend::BroadcastBlock(share_block_for_broadcast))
+        .await
+    {
+        error!("Failed to send broadcast for validated block {block_hash}: {send_error}");
     }
 }
 
@@ -277,7 +282,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_validation_worker_sends_inv_on_success() {
+    async fn test_validation_worker_sends_broadcast_on_success() {
         let (validation_tx, validation_rx) = create_validation_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
 
@@ -315,10 +320,10 @@ mod tests {
             .unwrap();
 
         let swarm_event = tokio::time::timeout(Duration::from_secs(2), swarm_rx.recv()).await;
-        if let Ok(Some(SwarmSend::Inv(sent_block_hash))) = swarm_event {
-            assert_eq!(sent_block_hash, block_hash);
+        if let Ok(Some(SwarmSend::BroadcastBlock(broadcast_block))) = swarm_event {
+            assert_eq!(broadcast_block.block_hash(), block_hash);
         } else {
-            panic!("Expected SwarmSend::Inv after successful validation");
+            panic!("Expected SwarmSend::BroadcastBlock after successful validation");
         }
 
         worker_handle.abort();
