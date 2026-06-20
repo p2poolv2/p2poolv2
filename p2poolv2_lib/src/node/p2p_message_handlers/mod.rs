@@ -40,7 +40,7 @@ use receivers::share_headers::handle_share_headers;
 use std::error::Error;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{debug, error, warn};
+use tracing::{debug, error};
 
 const MAX_HEADERS_IN_RESPONSE: usize = 1500;
 
@@ -116,12 +116,24 @@ pub async fn handle_request<C: Send + Sync, T: TimeProvider + Send + Sync>(
             )
             .await
         }
-        Message::ShareBlock(_) => {
-            warn!(
-                "Ignoring unsolicited ShareBlock from peer {}; blocks should be announced via inv",
-                ctx.peer
-            );
-            Ok(())
+        Message::ShareBlock(share_block) => {
+            if let Err(err) = ctx
+                .swarm_tx
+                .send(SwarmSend::Response(ctx.response_channel, Message::Ack))
+                .await
+            {
+                error!("Failed to send ShareBlock ack to peer {}: {err}", ctx.peer);
+                return Err(format!("Failed to send ShareBlock ack: {err}").into());
+            }
+            handle_share_block(
+                share_block,
+                &ctx.chain_store_handle,
+                ctx.validation_tx,
+                &ctx.block_receiver_handle,
+                &ctx.block_fetcher_handle,
+                ctx.share_validator.as_ref(),
+            )
+            .await
         }
         other => {
             debug!("Unexpected request type {other}");
@@ -666,15 +678,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_request_share_block_ignored() {
+    async fn test_handle_request_share_block_sends_ack_and_processes() {
         let peer_id = libp2p::PeerId::random();
-        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
+        let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
         let response_channel = 1u32;
-        let chain_store_handle = ChainStoreHandle::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
         let (block_fetcher_handle, validation_tx, block_receiver_handle) = test_handles();
 
         let share_block = valid_share_block_from_fixture();
+
+        // Block already confirmed -- simplest path through handle_share_block
+        chain_store_handle
+            .expect_share_block_exists()
+            .returning(|_| true);
+        chain_store_handle
+            .expect_has_status()
+            .returning(|_, _| true);
 
         let ctx = RequestContext {
             peer: peer_id,
@@ -690,9 +710,19 @@ mod tests {
         };
 
         let result = handle_request(ctx).await;
+        assert!(result.is_ok());
+
+        let ack_message = swarm_rx.recv().await.unwrap();
+        match ack_message {
+            SwarmSend::Response(channel, Message::Ack) => {
+                assert_eq!(channel, 1u32);
+            }
+            _ => panic!("Expected SwarmSend::Response with Ack"),
+        }
+
         assert!(
-            result.is_ok(),
-            "Unsolicited ShareBlock should be ignored, not error"
+            swarm_rx.try_recv().is_err(),
+            "No additional messages expected"
         );
     }
 
