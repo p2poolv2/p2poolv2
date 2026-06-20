@@ -26,17 +26,16 @@ use tracing::debug;
 /// Broadcast a full ShareBlock to all connected peers.
 ///
 /// Peers that are already known to have the block (tracked in
-/// `peer_block_knowledge`) are skipped. Returns the list of peers
-/// that were sent the block, so the caller can record outbound
-/// knowledge.
+/// `peer_block_knowledge`) are skipped. Each recipient is recorded
+/// in `peer_block_knowledge` so that subsequent broadcasts of the
+/// same block are suppressed.
 pub async fn send_share_block_broadcast<C: Send + Sync>(
     share_block: ShareBlock,
     connected_peers: &[PeerId],
-    peer_block_knowledge: &PeerBlockKnowledge,
+    peer_block_knowledge: &mut PeerBlockKnowledge,
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
-) -> Result<Vec<PeerId>, Box<dyn Error + Send + Sync>> {
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let block_hash = share_block.block_hash();
-    let mut sent_to_peers = Vec::with_capacity(connected_peers.len());
 
     for peer_id in connected_peers {
         if peer_block_knowledge.peer_knows_block(peer_id, &block_hash) {
@@ -52,11 +51,11 @@ pub async fn send_share_block_broadcast<C: Send + Sync>(
                 .map_err(|send_error| {
                     format!("Failed to send ShareBlock to peer {peer_id}: {send_error}")
                 })?;
-            sent_to_peers.push(*peer_id);
+            peer_block_knowledge.record_block_known(peer_id, block_hash);
         }
     }
 
-    Ok(sent_to_peers)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -72,18 +71,12 @@ mod tests {
         let peer_c = PeerId::random();
         let share_block = TestShareBlockBuilder::new().build();
         let block_hash = share_block.block_hash();
-        let knowledge = PeerBlockKnowledge::default();
+        let mut knowledge = PeerBlockKnowledge::default();
 
         let connected = vec![peer_a, peer_b, peer_c];
         let result =
-            send_share_block_broadcast(share_block, &connected, &knowledge, swarm_tx).await;
+            send_share_block_broadcast(share_block, &connected, &mut knowledge, swarm_tx).await;
         assert!(result.is_ok());
-
-        let sent_to = result.unwrap();
-        assert_eq!(sent_to.len(), 3);
-        assert!(sent_to.contains(&peer_a));
-        assert!(sent_to.contains(&peer_b));
-        assert!(sent_to.contains(&peer_c));
 
         let mut received_peers = Vec::with_capacity(3);
         for _ in 0..3 {
@@ -100,8 +93,11 @@ mod tests {
         assert!(received_peers.contains(&peer_a));
         assert!(received_peers.contains(&peer_b));
         assert!(received_peers.contains(&peer_c));
-
         assert!(swarm_rx.try_recv().is_err());
+
+        assert!(knowledge.peer_knows_block(&peer_a, &block_hash));
+        assert!(knowledge.peer_knows_block(&peer_b, &block_hash));
+        assert!(knowledge.peer_knows_block(&peer_c, &block_hash));
     }
 
     #[tokio::test]
@@ -117,12 +113,8 @@ mod tests {
 
         let connected = vec![peer_a, peer_b];
         let result =
-            send_share_block_broadcast(share_block, &connected, &knowledge, swarm_tx).await;
+            send_share_block_broadcast(share_block, &connected, &mut knowledge, swarm_tx).await;
         assert!(result.is_ok());
-
-        let sent_to = result.unwrap();
-        assert_eq!(sent_to.len(), 1);
-        assert_eq!(sent_to[0], peer_b);
 
         if let Some(SwarmSend::Request(sent_peer_id, _)) = swarm_rx.recv().await {
             assert_eq!(sent_peer_id, peer_b);
@@ -131,6 +123,7 @@ mod tests {
         }
 
         assert!(swarm_rx.try_recv().is_err());
+        assert!(knowledge.peer_knows_block(&peer_b, &block_hash));
     }
 
     #[tokio::test]
@@ -147,11 +140,8 @@ mod tests {
 
         let connected = vec![peer_a, peer_b];
         let result =
-            send_share_block_broadcast(share_block, &connected, &knowledge, swarm_tx).await;
+            send_share_block_broadcast(share_block, &connected, &mut knowledge, swarm_tx).await;
         assert!(result.is_ok());
-
-        let sent_to = result.unwrap();
-        assert!(sent_to.is_empty());
         assert!(swarm_rx.try_recv().is_err());
     }
 
@@ -159,13 +149,10 @@ mod tests {
     async fn test_broadcast_no_connected_peers() {
         let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<u32>>(10);
         let share_block = TestShareBlockBuilder::new().build();
-        let knowledge = PeerBlockKnowledge::default();
+        let mut knowledge = PeerBlockKnowledge::default();
 
-        let result = send_share_block_broadcast(share_block, &[], &knowledge, swarm_tx).await;
+        let result = send_share_block_broadcast(share_block, &[], &mut knowledge, swarm_tx).await;
         assert!(result.is_ok());
-
-        let sent_to = result.unwrap();
-        assert!(sent_to.is_empty());
         assert!(swarm_rx.try_recv().is_err());
     }
 }
