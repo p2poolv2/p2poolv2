@@ -419,7 +419,7 @@ impl NodeActor {
     }
 
     async fn run(mut self) {
-        // Spawn emission worker - processes shares in separate task and enqueues SwarmSend::Inv
+        // Spawn emission worker - processes shares in separate task and enqueues SwarmSend::BroadcastBlock
         let emission_worker = EmissionWorker::new(
             self.emissions_rx,
             self.node.swarm_tx.clone(),
