@@ -83,10 +83,14 @@ impl EmissionWorker {
                     {
                         error!("Failed to send block to organise worker: {e}");
                     }
-                    // Announce block to peers via inventory message
+                    // Broadcast block directly to peers
                     let block_hash = share_block.block_hash();
-                    if let Err(e) = self.swarm_tx.send(SwarmSend::Inv(block_hash)).await {
-                        error!("Failed to queue inv for block {block_hash}: {e}");
+                    if let Err(e) = self
+                        .swarm_tx
+                        .send(SwarmSend::BroadcastBlock(share_block))
+                        .await
+                    {
+                        error!("Failed to queue broadcast for block {block_hash}: {e}");
                     }
                 }
                 Ok(None) => {
@@ -243,8 +247,8 @@ mod tests {
 
         let swarm_event = tokio::time::timeout(Duration::from_secs(2), swarm_rx.recv()).await;
         assert!(
-            matches!(swarm_event, Ok(Some(SwarmSend::Inv(_)))),
-            "Expected SwarmSend::Inv"
+            matches!(swarm_event, Ok(Some(SwarmSend::BroadcastBlock(_)))),
+            "Expected SwarmSend::BroadcastBlock"
         );
 
         worker_handle.await.unwrap();
@@ -334,8 +338,8 @@ mod tests {
             "Expected OrganiseEvent::Block from second emission"
         );
         assert!(
-            matches!(swarm_rx.try_recv(), Ok(SwarmSend::Inv(_))),
-            "Expected SwarmSend::Inv from second emission"
+            matches!(swarm_rx.try_recv(), Ok(SwarmSend::BroadcastBlock(_))),
+            "Expected SwarmSend::BroadcastBlock from second emission"
         );
 
         assert!(
