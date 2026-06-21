@@ -791,6 +791,7 @@ mod tests {
                 auth_password: None,
                 cors_allowed: false,
             },
+            sim: None,
         }
     }
 
