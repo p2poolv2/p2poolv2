@@ -85,7 +85,6 @@ impl EmissionWorker {
                     }
                     // Announce the block to peers. Under sim, optionally delay
                     // the announcement to model network latency.
-                    let block_hash = share_block.block_hash();
                     #[cfg(feature = "sim")]
                     let delay = crate::sim::propagation_delay_jittered();
                     #[cfg(not(feature = "sim"))]
@@ -93,8 +92,9 @@ impl EmissionWorker {
 
                     let swarm_tx = self.swarm_tx.clone();
                     let announce = async move {
-                        if let Err(e) = swarm_tx.send(SwarmSend::Inv(block_hash)).await {
-                            error!("Failed to queue inv for block {block_hash}: {e}");
+                        if let Err(_) = swarm_tx.send(SwarmSend::BroadcastBlock(share_block)).await
+                        {
+                            error!("Failed to broadcast share block");
                         }
                     };
                     if delay.is_zero() {
