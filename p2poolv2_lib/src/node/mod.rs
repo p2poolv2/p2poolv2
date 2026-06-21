@@ -21,6 +21,7 @@ pub mod emission_worker;
 pub mod organise_worker;
 pub mod peer_reconnector;
 pub mod request_response_handler;
+pub mod request_sender;
 pub mod validation_worker;
 pub use crate::config::Config;
 pub mod actor;
