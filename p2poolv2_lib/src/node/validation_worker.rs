@@ -175,6 +175,10 @@ impl ValidationWorker {
 /// Read a share block from the store, validate it, and emit events
 /// on success.
 ///
+/// Sends `OrganiseEvent::Block` for chain promotion. Only broadcasts
+/// to peers when the chain is current, suppressing relay of historic
+/// blocks during initial sync or catchup.
+///
 /// Duplicate validation of already-confirmed blocks is handled by
 /// `validate_share_block` which returns Ok immediately for blocks
 /// with `BlockValid` status.
@@ -207,19 +211,24 @@ async fn validate_and_emit(
 
     debug!("Share block {block_hash} validated successfully");
 
-    // Clone before moving to organise_tx, since BroadcastBlock needs the full block.
-    let share_block_for_broadcast = share_block.clone();
-    if let Err(send_error) = organise_tx.send(OrganiseEvent::Block(share_block)).await {
+    if let Err(send_error) = organise_tx
+        .send(OrganiseEvent::Block(share_block.clone()))
+        .await
+    {
         error!("Failed to send validated block to organise worker: {send_error}");
     }
 
-    // Broadcast block once context free validations are run. If later
-    // the block is not confirmed, peers should have a copy anyway.
-    if let Err(send_error) = swarm_tx
-        .send(SwarmSend::BroadcastBlock(share_block_for_broadcast))
-        .await
-    {
-        error!("Failed to send broadcast for validated block {block_hash}: {send_error}");
+    // Only broadcast when the chain is current. During initial sync or
+    // catchup, validated historic blocks should not be relayed to peers.
+    //
+    // Broadcast block after validation, if later confirmation fails,
+    // the peers should have this block anyway.
+    if chain_store_handle.is_current() {
+        if let Err(send_error) = swarm_tx.send(SwarmSend::BroadcastBlock(share_block)).await {
+            error!("Failed to send broadcast for validated block {block_hash}: {send_error}");
+        }
+    } else {
+        debug!("Skipping broadcast for {block_hash} - chain not current");
     }
 }
 
@@ -247,6 +256,7 @@ mod tests {
             .expect_get_share()
             .returning(move |_| Some(share_block_clone.clone()));
         mock_clone.expect_has_status().returning(|_, _| true);
+        mock_clone.expect_is_current().returning(|| true);
         mock_chain_handle
             .expect_clone()
             .return_once(move || mock_clone);
@@ -295,6 +305,7 @@ mod tests {
             .expect_get_share()
             .returning(move |_| Some(share_block_clone.clone()));
         mock_clone.expect_has_status().returning(|_, _| true);
+        mock_clone.expect_is_current().returning(|| true);
         mock_chain_handle
             .expect_clone()
             .return_once(move || mock_clone);
@@ -325,6 +336,63 @@ mod tests {
         } else {
             panic!("Expected SwarmSend::BroadcastBlock after successful validation");
         }
+
+        worker_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_validation_worker_skips_broadcast_when_not_current() {
+        let (validation_tx, validation_rx) = create_validation_channel();
+        let mut mock_chain_handle = MockChainStoreHandle::new();
+
+        let share_block = TestShareBlockBuilder::new().build();
+        let block_hash = share_block.block_hash();
+        let share_block_clone = share_block.clone();
+
+        let mut mock_clone = MockChainStoreHandle::new();
+        mock_clone
+            .expect_get_share()
+            .returning(move |_| Some(share_block_clone.clone()));
+        mock_clone.expect_has_status().returning(|_, _| true);
+        mock_clone.expect_is_current().returning(|| false);
+        mock_chain_handle
+            .expect_clone()
+            .return_once(move || mock_clone);
+
+        let (organise_tx, mut organise_rx) = organise_worker::create_organise_channel();
+        let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
+
+        let worker = ValidationWorker::new(
+            validation_rx,
+            mock_chain_handle,
+            organise_tx,
+            swarm_tx,
+            1,
+            b"P2Poolv2".to_vec(),
+            PoolDifficulty::default(),
+        );
+
+        let worker_handle = tokio::spawn(worker.run());
+
+        validation_tx
+            .send(ValidationEvent::ValidateBlock(block_hash))
+            .await
+            .unwrap();
+
+        // Organisation event should still be sent
+        let organise_event = tokio::time::timeout(Duration::from_secs(2), organise_rx.recv()).await;
+        if let Ok(Some(OrganiseEvent::Block(received_block))) = organise_event {
+            assert_eq!(received_block.block_hash(), block_hash);
+        } else {
+            panic!("Expected OrganiseEvent::Block even when not current");
+        }
+
+        // Broadcast should NOT be sent during sync
+        let swarm_result = tokio::time::timeout(Duration::from_millis(500), swarm_rx.recv()).await;
+        assert!(
+            swarm_result.is_err(),
+            "No SwarmSend expected when chain is not current"
+        );
 
         worker_handle.abort();
     }
