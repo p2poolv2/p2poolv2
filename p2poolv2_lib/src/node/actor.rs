@@ -479,34 +479,25 @@ impl NodeActor {
                             let peer_knowledge = self.node
                                 .request_response_handler
                                 .peer_block_knowledge();
-                            if let Err(relay_error) = send_block_inventory(
+                            send_block_inventory(
                                 block_hash,
                                 None,
                                 &connected_peers,
                                 peer_knowledge,
-                                self.node.swarm_tx.clone(),
-                            )
-                            .await
-                            {
-                                error!("Failed to relay inv for block {block_hash}: {relay_error}");
-                            }
+                                &mut self.node.swarm,
+                            );
                         }
                         Some(SwarmSend::BroadcastBlock(share_block)) => {
-                            let block_hash = share_block.block_hash();
                             let connected_peers = self.node.connected_peers();
                             let peer_knowledge = self.node
                                 .request_response_handler
                                 .peer_block_knowledge_mut();
-                            if let Err(broadcast_error) = send_share_block_broadcast(
+                            send_share_block_broadcast(
                                 share_block,
                                 &connected_peers,
                                 peer_knowledge,
-                                self.node.swarm_tx.clone(),
-                            )
-                            .await
-                            {
-                                error!("Failed to broadcast share block {block_hash}: {broadcast_error}");
-                            }
+                                &mut self.node.swarm,
+                            );
                         }
                         Some(SwarmSend::Disconnect(peer_id)) => {
                             if let Err(_e) = self.node.swarm.disconnect_peer_id(peer_id) {
