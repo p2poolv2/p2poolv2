@@ -265,7 +265,9 @@ Within a single `WriteBatch`, reads from the DB return pre-batch (committed) sta
   1. Reads the share block from the chain store
   2. Calls `validate_share_block()` which returns Ok early if the block
      already has `BlockValid` status (avoids redundant work for re-scheduled blocks)
-  3. On success: sends `OrganiseEvent::Block` and `SwarmSend::BroadcastBlock`
+  3. On success: sends `OrganiseEvent::Block` always; sends
+     `SwarmSend::BroadcastBlock` only when `is_current()` is true
+     (suppresses relay of historic blocks during initial sync)
   4. Calls `schedule_dependents()` which looks up children (via
      `get_children_blockhashes`) and nephews (via `get_nephews`) and sends
      `ValidateBlock` events back through the validation channel
