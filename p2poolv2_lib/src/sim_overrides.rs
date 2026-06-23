@@ -30,9 +30,8 @@ const IDEAL_BLOCK_TIME: u32 = 10;
 /// Production ASERT half-life constant (seconds).
 const HALFLIFE: u32 = 600;
 
-// ---------------------------------------------------------------------------
-// ideal_block_time / half_life
-// ---------------------------------------------------------------------------
+#[cfg(feature = "sim")]
+use crate::accounting::payout::sharechain_pplns::pplns_window::MAX_PPLNS_WINDOW_SHARES;
 
 #[cfg(feature = "sim")]
 static SIM_IDEAL_BLOCK_TIME: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
@@ -79,6 +78,37 @@ pub fn half_life() -> u32 {
     }
 }
 
+// ---------------------------------------------------------------------------
+// pplns_total_difficulty
+// ---------------------------------------------------------------------------
+
+/// Compute the PPLNS total difficulty threshold.
+///
+/// Production: `bitcoin_difficulty * difficulty_multiplier` -- the standard
+/// formula that sizes the payout window relative to bitcoin block difficulty.
+///
+/// Sim: `share_pool_difficulty * MAX_PPLNS_WINDOW_SHARES` -- on regtest the
+/// bitcoin difficulty is trivially 1, which collapses the window to a single
+/// share. The sim formula uses the pool target difficulty scaled by the
+/// maximum window size, giving a realistic multi-miner coinbase.
+#[inline(always)]
+pub fn pplns_total_difficulty(
+    bitcoin_difficulty: u128,
+    difficulty_multiplier: u128,
+    share_pool_difficulty: u128,
+) -> u128 {
+    #[cfg(feature = "sim")]
+    {
+        let _ = (bitcoin_difficulty, difficulty_multiplier);
+        share_pool_difficulty.saturating_mul(MAX_PPLNS_WINDOW_SHARES as u128)
+    }
+    #[cfg(not(feature = "sim"))]
+    {
+        let _ = share_pool_difficulty;
+        bitcoin_difficulty.saturating_mul(difficulty_multiplier)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -91,5 +121,11 @@ mod tests {
     #[test]
     fn test_half_life_returns_production_default() {
         assert_eq!(half_life(), 600);
+    }
+
+    #[test]
+    fn test_pplns_total_difficulty_uses_production_formula() {
+        let result = pplns_total_difficulty(1000, 2016, 500);
+        assert_eq!(result, 1000 * 2016);
     }
 }
