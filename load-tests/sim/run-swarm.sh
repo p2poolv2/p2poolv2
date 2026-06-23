@@ -90,14 +90,14 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 if [ "$PROFILE" = "release" ]; then
   PROFILE_FLAG="--release"
-  BIN="$REPO_ROOT/target/release/p2poolv2"
+  BIN="$REPO_ROOT/target/release/p2poolv2_sim"
 else
   PROFILE_FLAG=""
-  BIN="$REPO_ROOT/target/debug/p2poolv2"
+  BIN="$REPO_ROOT/target/debug/p2poolv2_sim"
 fi
 
-echo "Building p2poolv2 ($PROFILE) with --features sim ..."
-( cd "$REPO_ROOT" && cargo build -p p2poolv2_node --features sim $PROFILE_FLAG )
+echo "Building p2poolv2_sim ($PROFILE) with --features sim ..."
+( cd "$REPO_ROOT" && cargo build -p p2poolv2_sim --features sim $PROFILE_FLAG )
 
 # Sanity: regtest bitcoind reachable?
 if ! curl -s --user "$RPC_USER:$RPC_PASS" \
