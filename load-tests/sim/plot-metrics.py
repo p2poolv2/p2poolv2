@@ -160,7 +160,7 @@ try:
                     params[k] = line.split("=")[1].strip()
 except FileNotFoundError:
     pass
-title = (f"sim swarm  N={N}  ratio=1:{params.get('block_to_share_ratio','?')}  "
+title = (f"sim swarm  N={N}  shares_per_block={params.get('block_to_share_ratio','?')}  "
          f"latency(node0)={params.get('propagation_delay_ms','?')}ms  "
          f"span={span:.0f}s")
 # Target share rate = 1 / ideal_block_time (sim override, else the production 10s).
@@ -193,7 +193,7 @@ ax[2].legend(loc="upper right", fontsize=8)
 ax[3].plot(sxs, scum, drawstyle="steps-post", marker=".", color="C3")
 ax[3].set_ylabel("block-finds\n(cumulative)")
 if not subs:
-    ax[3].text(0.5, 0.5, "no block-finds in this run\n(lower RATIO or run longer)",
+    ax[3].text(0.5, 0.5, "no block-finds in this run\n(lower shares_per_block or run longer)",
                transform=ax[3].transAxes, ha="center", va="center",
                color="gray", fontsize=9)
 

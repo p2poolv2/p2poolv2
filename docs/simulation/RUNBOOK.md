@@ -191,7 +191,7 @@ done
 uncle rate ≈ latency/10s (e.g. 750 ms → ~7%), but a 45s read is only ~4 blocks —
 too noisy to trust. For a real number in ~5 min add `IDEAL_BLOCK_TIME=1` (10× more
 blocks, latency auto-scales), e.g.
-`IDEAL_BLOCK_TIME=1 LATENCY_MS=1500 RATIO=20 ./load-tests/sim/run-swarm.sh 20`
+`IDEAL_BLOCK_TIME=1 LATENCY_MS=1500 SHARES_PER_BLOCK=20 ./load-tests/sim/run-swarm.sh 20`
 → ~12% (≈50 min-equivalent). Knob in §9.
 
 Under the hood it greps the `sim-uncle:` log lines:
@@ -204,14 +204,14 @@ grep "sim-uncle:" /tmp/p2pool-sim/node-0.log | tail -3
 
 ## 6. Test D — block-finds submit real regtest blocks (Phase 3)
 
-Each emitted share is a block with probability `1/RATIO`. Lower `RATIO` to make
+Each emitted share is a block with probability `1/SHARES_PER_BLOCK`. Lower `SHARES_PER_BLOCK` to make
 this frequent and watch the **bitcoin** height climb (the sim nodes are mining
 real regtest blocks).
 
 ```sh
 ./load-tests/sim/stop-swarm.sh >/dev/null 2>&1
 echo "bitcoin height before: $(B getblockcount)"
-RATIO=20 LATENCY_MS=100 ./load-tests/sim/run-swarm.sh 20
+SHARES_PER_BLOCK=20 LATENCY_MS=100 ./load-tests/sim/run-swarm.sh 20
 sleep 40
 echo "bitcoin height after:  $(B getblockcount)"
 grep -h "sim block-find" /tmp/p2pool-sim/node-*.log | wc -l        # attempts
@@ -296,10 +296,10 @@ curl -s :7600/chain_info | jq            # tip/candidate heights (prefer logs fo
 
 | Var                                  | Default         | Meaning                                                                                                            |
 |--------------------------------------|-----------------|--------------------------------------------------------------------------------------------------------------------|
-| `RATIO`                              | 10000           | shares per block-find (lower = more blocks)                                                                        |
+| `SHARES_PER_BLOCK`                              | 10000           | shares per block-find (lower = more blocks)                                                                        |
 | `LATENCY_MS`                         | 0               | per-node outbound announce delay (raise for uncles)                                                                |
 | `IDEAL_BLOCK_TIME`                   | 10              | share interval (s); lower = time-compressed, more blocks/min for faster data (auto-scales `LATENCY_MS`); floor ~1s |
-| `WINDOW_SHARES`                      | = `RATIO`       | PPLNS payout window in shares (how many miners appear in a coinbase)                                               |
+| `WINDOW_SHARES`                      | = `SHARES_PER_BLOCK`       | PPLNS payout window in shares (how many miners appear in a coinbase)                                               |
 | `HASHRATE`                           | 1.0e12          | modeled per-node hashrate (higher = faster shares)                                                                 |
 | `DISTINCT_ADDR`                      | 1               | each node gets its own payout address via the wallet                                                               |
 | `DIAL_FANOUT`                        | 3               | how many earlier peers each node dials                                                                             |
