@@ -21,6 +21,51 @@
 # SHARES_PER_BLOCK, LATENCY_MS, IDEAL_BLOCK_TIME, etc.) are passed through as-is.
 set -euo pipefail
 
+show_help() {
+  cat <<'HELP'
+nightly.sh -- automated sim runner with pass/fail verdict
+
+Starts regtest bitcoind if needed, launches a swarm, waits for convergence,
+collects metrics, evaluates thresholds, and exits 0 (pass) or 1 (fail).
+
+Usage:
+  load-tests/sim/nightly.sh [--help]
+
+Examples:
+  ./load-tests/sim/nightly.sh                              # 20 nodes, 60s, default settings
+  NODE_COUNT=5 CONVERGENCE_WAIT_SECONDS=30 ./load-tests/sim/nightly.sh
+  IDEAL_BLOCK_TIME=1 SHARES_PER_BLOCK=100 ./load-tests/sim/nightly.sh  # time-compressed, frequent blocks
+
+Env vars (nightly-specific):
+  NODE_COUNT                 number of sim nodes           (default 20)
+  CONVERGENCE_WAIT_SECONDS   seconds to let swarm run      (default 60)
+  UNCLE_RATE_THRESHOLD       max uncle rate % to pass      (default 25)
+  BITCOIND_DATADIR           regtest data directory        (default /tmp/p2pool-regtest)
+  BITCOIND_BIN               path to bitcoind binary       (auto-detected)
+  BITCOIN_CLI_BIN            path to bitcoin-cli binary    (auto-detected)
+
+Env vars (passed through to run-swarm.sh):
+  RUN_DIR                    work dir for configs/logs     (default /tmp/p2pool-sim)
+  SHARES_PER_BLOCK           shares per block-find         (default 10000)
+  IDEAL_BLOCK_TIME           share interval in seconds     (default 10; lower = time-compressed)
+  LATENCY_MS                 per-node outbound delay ms    (default 0)
+  HASHRATE                   mean per-node hashrate        (default 1.0e12)
+  RPC_URL / RPC_USER / RPC_PASS   bitcoind RPC             (default localhost:19443 p2pool/p2pool)
+  ZMQ                        zmqpubhashblock               (default tcp://127.0.0.1:28332)
+
+Related scripts:
+  load-tests/sim/run-swarm.sh N    launch swarm for manual exploration
+  load-tests/sim/stop-swarm.sh     stop a running swarm
+  load-tests/sim/metrics.sh        show log-based metrics summary
+  load-tests/sim/plot-metrics.sh   generate metrics PNG from last run
+HELP
+  exit 0
+}
+
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+  show_help
+fi
+
 # ---------------------------------------------------------------------------
 # Defaults
 # ---------------------------------------------------------------------------
