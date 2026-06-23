@@ -32,46 +32,40 @@ There are doubtless a number of "vectors of artificiality" here but the goal is 
 ## Architecture
 
 ```
- N real p2poolv2 nodes (one host, distinct ports, dial_peers topology)
-   each node, built with --features sim:
-     ├─ real libp2p swarm, organise_worker, validation_worker, store   ← under test
-     ├─ sim emitter task (NEW): Poisson share emission,
-     │     closed-loop on ASERT difficulty × this node's modeled hashrate Hᵢ,
-     │     stamps per-share difficulty (bits) → models heterogeneous miners
-     ├─ per-share Bernoulli block-find (NEW): p = 1/block_to_share_ratio
-     │     on hit → build PPLNS coinbase + assemble regtest block + submitblock
-     └─ PoW `is_met_by` checks + auto-submit cfg-gated off (sim)
-   shared regtest bitcoind (rpcport 19443, ZMQ 28332) — executes payouts
+ N p2poolv2_sim binaries (one host, distinct ports, dial_peers topology)
+   each built with: cargo build -p p2poolv2_sim --features sim
+     +-- real libp2p swarm, organise_worker, validation_worker, store  <-- under test
+     +-- sim emitter task: Poisson share emission,
+     |     closed-loop on ASERT difficulty x this node's modeled hashrate Hi,
+     |     stamps per-share difficulty (bits) -> models heterogeneous miners
+     +-- per-share Bernoulli block-find: p = 1/block_to_share_ratio
+     |     on hit -> build PPLNS coinbase + assemble regtest block + submitblock
+     +-- PoW is_met_by checks + auto-submit cfg-gated off (sim)
+   shared regtest bitcoind (rpcport 19443, ZMQ 28332) -- executes payouts
    harness: launches N nodes + topology, scrapes metrics
    real clock; density now bounded by store/p2p/CPU-of-real-code, not hashing
 ```
 
 ## What `--features sim` changes
 
-The actual PoW verification is the `target.is_met_by(bitcoin_block_hash)`
-comparison (and `header.validate_pow`). Centralize via one helper and swap it at
-each site:
+All sim/production behavioral differences are centralized in
+`p2poolv2_lib/src/sim_overrides.rs`. The bridge functions inline to constants
+or no-ops in production builds (zero overhead). Key overrides:
 
-```rust
-// p2poolv2_lib/src/shares/validation/mod.rs (or a small sim module)
-#[cfg(feature = "sim")]
-#[inline] pub(crate) fn pow_meets(_t: bitcoin::Target, _h: bitcoin::BlockHash) -> bool { true }
-#[cfg(not(feature = "sim"))]
-#[inline] pub(crate) fn pow_meets(t: bitcoin::Target, h: bitcoin::BlockHash) -> bool { t.is_met_by(h) }
-```
+- **PoW verification**: `sim_overrides::pow_meets()` always returns true (sim)
+  vs real `target.is_met_by(hash)` (production).
+- **ASERT timing**: `sim_overrides::ideal_block_time()` and `half_life()` can
+  be overridden for time-compressed runs.
+- **Genesis anchoring**: `sim_overrides::genesis_timestamp()` and
+  `anchor_target()` anchor ASERT at launch time and steady-state difficulty.
+- **PPLNS window**: `sim_overrides::pplns_total_difficulty()` uses
+  `MAX_PPLNS_WINDOW_SHARES` for a realistic multi-miner coinbase on regtest.
+- **Propagation delay**: `sim_overrides::spawn_delayed_broadcast()` models
+  network latency with per-broadcast jitter.
+- **Auto-submit**: disabled under sim (regtest headers meet bitcoin target ~50%
+  of the time, which would spam spurious block submissions).
 
-
-
-### Auto-submit is disabled under sim
-Kind of a technical detail, but worth mentioning:
-
-- `stratum/message_handlers/submit.rs:120-128` — the `meets_bitcoin_difficulty →
-  build_full_block → submit_block` branch. Wrap in `#[cfg(not(feature = "sim"))]`.
-  Reason: on regtest the Bitcoin target ≈ 2²⁵⁵, so a *random* header meets it ~50%
-  of the time; left enabled, synthetic shares would spam spurious block
-  submissions.
-
-All test nodes must be built with `--features sim` (a synthetic share rejected by
+All sim nodes must be built with `--features sim` (a synthetic share rejected by
 a non-sim receiver would never propagate).
 
 
@@ -102,10 +96,10 @@ seed = 1                      # per-node; differ per node in multi-node runs
 ```
 
 ```sh
-cargo build -p p2poolv2_node --features sim
+cargo build -p p2poolv2_sim --features sim
 # fresh store via env override so existing dev data is untouched:
 P2POOL_STORE_PATH=/tmp/store-sim-test.db \
-  ./target/debug/p2poolv2 --config config-dev.toml
+  ./target/debug/p2poolv2_sim --config config-dev.toml
 ```
 
 Watch the log for `Promoted block … to confirmed height N` climbing.
