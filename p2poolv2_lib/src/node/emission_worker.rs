@@ -29,7 +29,9 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::handle_stratum_share::handle_stratum_share;
-use crate::stratum::emission::{Emission, EmissionReceiver};
+#[cfg(feature = "sim")]
+use crate::sim_overrides;
+use crate::stratum::emission::EmissionReceiver;
 use libp2p::request_response::ResponseChannel;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
@@ -83,27 +85,22 @@ impl EmissionWorker {
                     {
                         error!("Failed to send block to organise worker: {e}");
                     }
-                    // Announce the block to peers. Under sim, optionally delay
-                    // the announcement to model network latency.
-                    #[cfg(feature = "sim")]
-                    let delay = crate::sim::propagation_delay_jittered();
+                    // Announce the block to peers.
                     #[cfg(not(feature = "sim"))]
-                    let delay = std::time::Duration::ZERO;
-
-                    let swarm_tx = self.swarm_tx.clone();
-                    let announce = async move {
-                        if let Err(_) = swarm_tx.send(SwarmSend::BroadcastBlock(share_block)).await
+                    {
+                        if let Err(_) = self
+                            .swarm_tx
+                            .send(SwarmSend::BroadcastBlock(share_block))
+                            .await
                         {
                             error!("Failed to broadcast share block");
                         }
-                    };
-                    if delay.is_zero() {
-                        announce.await;
-                    } else {
-                        tokio::spawn(async move {
-                            tokio::time::sleep(delay).await;
-                            announce.await;
-                        });
+                    }
+                    // Under sim, optionally delay the announcement to model
+                    // network latency. All jitter logic lives in sim_overrides.
+                    #[cfg(feature = "sim")]
+                    {
+                        sim_overrides::spawn_delayed_broadcast(self.swarm_tx.clone(), share_block);
                     }
                 }
                 Ok(None) => {
@@ -125,6 +122,7 @@ mod tests {
     use crate::node::organise_worker::create_organise_channel;
     use crate::shares::extranonce::Extranonce;
     use crate::store::writer::StoreError;
+    use crate::stratum::emission::Emission;
     use crate::stratum::work::block_template::BlockTemplate;
     use crate::test_utils::{TEST_COINBASE_NSECS, create_test_commitment};
     use bitcoin::block::Header;
