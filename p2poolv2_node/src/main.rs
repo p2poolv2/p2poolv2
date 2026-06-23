@@ -26,6 +26,8 @@ use p2poolv2_lib::shares::chain::chain_store_handle::ChainStoreHandle;
 use p2poolv2_lib::shares::share_block::ShareBlock;
 #[cfg(feature = "sim")]
 use p2poolv2_lib::sim::emitter::SimEmitter;
+#[cfg(feature = "sim")]
+use p2poolv2_lib::sim_overrides;
 use p2poolv2_lib::store::Store;
 use p2poolv2_lib::store::writer::{StoreHandle, StoreWriter, write_channel};
 use p2poolv2_lib::stratum::client_connections::start_connections_handler;
@@ -98,27 +100,18 @@ async fn main() -> ExitCode {
 
     info!("Running on {} network", &config.stratum.network);
 
-    // Set sim process-globals early — before any PoolDifficulty::build (the
-    // ASERT anchor is read there) and before the first share. No-op in prod.
-    // See docs/simulation/load-test-plan.md.
+    // Initialize sim overrides early -- before PoolDifficulty::build (ASERT
+    // anchor) and before the first share. In production builds the init
+    // functions do not exist; the bridge functions return compile-time constants.
     #[cfg(feature = "sim")]
     if let Some(sim_cfg) = config.sim.as_ref() {
         if sim_cfg.enabled {
-            p2poolv2_lib::sim::set_propagation_delay_ms(sim_cfg.propagation_delay_ms.unwrap_or(0));
-            p2poolv2_lib::sim::set_pplns_window_shares(
-                sim_cfg
-                    .pplns_window_shares
-                    .unwrap_or(sim_cfg.block_to_share_ratio),
+            sim_overrides::init_ideal_block_time(sim_cfg.ideal_block_time_secs.unwrap_or(10));
+            sim_overrides::init_genesis_overrides(
+                sim_cfg.asert_anchor_time.unwrap_or(0),
+                sim_cfg.network_hashrate.unwrap_or(0),
             );
-            if let Some(anchor) = sim_cfg.asert_anchor_time {
-                p2poolv2_lib::sim::set_asert_anchor_time(anchor);
-            }
-            if let Some(hps) = sim_cfg.network_hashrate {
-                p2poolv2_lib::sim::set_network_hashrate(hps);
-            }
-            if let Some(t) = sim_cfg.ideal_block_time_secs {
-                p2poolv2_lib::sim::set_ideal_block_time_secs(t);
-            }
+            sim_overrides::init_propagation_delay(sim_cfg.propagation_delay_ms.unwrap_or(0));
         }
     }
 
