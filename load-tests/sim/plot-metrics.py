@@ -155,14 +155,12 @@ try:
     with open(os.path.join(RUN_DIR, "node-0.toml")) as f:
         for line in f:
             for k in ("block_to_share_ratio", "propagation_delay_ms",
-                      "pplns_window_shares", "network_hashrate",
-                      "ideal_block_time_secs"):
+                      "network_hashrate", "ideal_block_time_secs"):
                 if line.strip().startswith(k + " "):
                     params[k] = line.split("=")[1].strip()
 except FileNotFoundError:
     pass
 title = (f"sim swarm  N={N}  ratio=1:{params.get('block_to_share_ratio','?')}  "
-         f"window={params.get('pplns_window_shares','?')}  "
          f"latency(node0)={params.get('propagation_delay_ms','?')}ms  "
          f"span={span:.0f}s")
 # Target share rate = 1 / ideal_block_time (sim override, else the production 10s).

@@ -440,13 +440,6 @@ pub struct SimConfig {
     /// rate tracks this value. Default 0 (no delay).
     #[serde(default)]
     pub propagation_delay_ms: Option<u64>,
-    /// Number of shares the PPLNS payout window should span. On regtest the
-    /// bitcoin difficulty is trivial, which would collapse the window to one
-    /// share; this makes the payout span ~N recent shares (mainnet-like), so
-    /// the coinbase becomes a real multi-miner distribution. Defaults to
-    /// `block_to_share_ratio` when omitted.
-    #[serde(default)]
-    pub pplns_window_shares: Option<u64>,
     /// Unix time (seconds) to use as the ASERT difficulty anchor instead of the
     /// genesis timestamp. The fixed regtest genesis is dated in the past, so the
     /// share chain is permanently "behind schedule" and ASERT stays floored at
