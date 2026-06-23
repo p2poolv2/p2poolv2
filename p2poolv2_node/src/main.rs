@@ -15,54 +15,15 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use clap::Parser;
-use p2poolv2_api::start_api_server;
-use p2poolv2_lib::accounting::payout::build_payout_for_mode;
-use p2poolv2_lib::accounting::stats::metrics;
 use p2poolv2_lib::config::Config;
 use p2poolv2_lib::logging::setup_logging;
-use p2poolv2_lib::node::actor::NodeHandle;
-use p2poolv2_lib::pool_difficulty::PoolDifficulty;
-use p2poolv2_lib::shares::chain::chain_store_handle::ChainStoreHandle;
-use p2poolv2_lib::shares::share_block::ShareBlock;
 #[cfg(feature = "sim")]
 use p2poolv2_lib::sim::emitter::SimEmitter;
 #[cfg(feature = "sim")]
 use p2poolv2_lib::sim_overrides;
-use p2poolv2_lib::store::Store;
-use p2poolv2_lib::store::writer::{StoreHandle, StoreWriter, write_channel};
-use p2poolv2_lib::stratum::client_connections::start_connections_handler;
-use p2poolv2_lib::stratum::emission::Emission;
-use p2poolv2_lib::stratum::server::StratumServerBuilder;
-use p2poolv2_lib::stratum::work::gbt::start_gbt;
-use p2poolv2_lib::stratum::work::notify::start_notify;
-use p2poolv2_lib::stratum::work::tracker::start_tracker_actor;
-use p2poolv2_lib::stratum::zmq_listener::{ZmqListener, ZmqListenerTrait};
+use p2poolv2_node::signal::ShutdownReason;
 use std::process::ExitCode;
-use std::sync::Arc;
-use std::time::Duration;
-use tracing::{error, info, trace};
-
-use crate::signal::{ShutdownReason, setup_signal_handler};
-
-mod background_tasks;
-mod preflight;
-mod signal;
-
-/// Interval in seconds to poll for new block templates since the last zmq event signal
-const GBT_POLL_INTERVAL: u64 = 10; // seconds
-
-/// Maximum number of pending shares from all clients connected to stratum server
-const STRATUM_SHARES_BUFFER_SIZE: usize = 1000;
-
-/// 100% donation in bips, skip address validation
-const FULL_DONATION_BIPS: u16 = 10_000;
-
-/// Notify channel enqueues requests to send notify updates to new
-/// clients. If we have more than the notify channel capacity of
-/// pending notifications in the queue, senders are blocked unless
-/// space is available. We want to avoid this blocking for up to 1000
-/// notifications from new clients.
-const NOTIFY_CHANNEL_CAPACITY: usize = 1000;
+use tracing::{error, info};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -74,19 +35,17 @@ struct Args {
 #[tokio::main]
 async fn main() -> ExitCode {
     info!("Starting P2Poolv2...");
-    // Parse command line arguments
     let args = Args::parse();
 
-    // Load configuration
-    let config = Config::load(&args.config);
-    if config.is_err() {
-        let err = config.unwrap_err();
-        error!("Failed to load config: {err}");
-        return ExitCode::FAILURE;
-    }
-    let config = config.unwrap();
-    // Configure logging based on config
-    // hold guards to keep non-blocking writers alive
+    let config = match Config::load(&args.config) {
+        Ok(config) => config,
+        Err(err) => {
+            error!("Failed to load config: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // Hold guards to keep non-blocking writers alive
     let _guards = match setup_logging(&config.logging) {
         Ok(guards) => {
             info!("Logging set up successfully");
@@ -115,150 +74,17 @@ async fn main() -> ExitCode {
         }
     }
 
-    let exit_sender = tokio::sync::watch::Sender::new(ShutdownReason::None);
-
-    let sig_handle = setup_signal_handler(exit_sender.clone());
-
-    let genesis = ShareBlock::build_genesis_for_network(config.stratum.network).unwrap();
-    let store = Arc::new(Store::new(config.store.path.clone(), false).unwrap());
-
-    // Create StoreWriter for serialized database writes (runs on dedicated blocking thread)
-    let (write_tx, write_rx) = write_channel();
-    let store_writer = StoreWriter::new(store.clone(), write_rx);
-    // Use spawn_blocking to spawn a dedicated thread to write to
-    // rocksdb.  Rocks does support concurrent writes, however, the
-    // throughput doesn't scale linearly with threads. We still with a
-    // single thread, if we need to start another thread as scale
-    // increases, we can deal with that then.
-    let exit_sender_store = exit_sender.clone();
-    let exit_receiver_store = exit_sender.subscribe();
-    tokio::task::spawn_blocking(move || {
-        store_writer.run();
-        if *exit_receiver_store.borrow() == ShutdownReason::None {
-            tracing::error!("Store writer stopped unexpectedly");
-            let _ = exit_sender_store.send(ShutdownReason::Error);
-        }
-    });
-
-    // Create StoreHandle and ChainStoreHandle for new components
-    let store_handle = StoreHandle::new(store.clone(), write_tx);
-    let chain_store_handle = ChainStoreHandle::new(store_handle, config.stratum.network);
-
-    // Initialise chain with genesis (async)
-    if let Err(e) = chain_store_handle
-        .init_or_setup_genesis(genesis.clone())
-        .await
-    {
-        error!("Failed to initialise chain: {e}");
-        return ExitCode::FAILURE;
-    }
-
-    let Ok(tip) = chain_store_handle.get_chain_tip() else {
-        error!("No chain tip found. Exiting.");
-        return ExitCode::FAILURE;
-    };
-    let Ok(Some(height)) = chain_store_handle.get_tip_height() else {
-        error!("No chain tip found. Exiting.");
-        return ExitCode::FAILURE;
-    };
-    info!("Latest tip {} at height {}", tip, height);
-
-    if let Err(error) = preflight::ensure_bitcoin_node_synced(&config.bitcoinrpc).await {
-        error!("Bitcoin node still in IBD: {error}");
-        return ExitCode::FAILURE;
-    }
-
-    background_tasks::start_background_tasks(
-        store.clone(),
-        Duration::from_secs(
-            config.store.background_task_frequency_hours * background_tasks::SECONDS_PER_HOUR,
-        ),
-        Duration::from_secs(config.store.pplns_ttl_days * background_tasks::SECONDS_PER_DAY),
-        exit_sender.clone(),
-        exit_sender.subscribe(),
-    );
-
-    let stratum_config = config.stratum.clone().parse().unwrap();
-    let bitcoinrpc_config = config.bitcoinrpc.clone();
-
-    let (stratum_shutdown_tx, stratum_shutdown_rx) = tokio::sync::oneshot::channel();
-    let (notify_tx, notify_rx) = tokio::sync::mpsc::channel(NOTIFY_CHANNEL_CAPACITY);
-    let tracker_handle = start_tracker_actor();
-
-    let notify_tx_for_gbt = notify_tx.clone();
-    let bitcoinrpc_config_cloned = bitcoinrpc_config.clone();
-    // Setup ZMQ publisher for block notifications
-    let zmq_trigger_rx = match ZmqListener.start(&stratum_config.zmqpubhashblock) {
-        Ok(rx) => rx,
-        Err(e) => {
-            error!("Failed to set up ZMQ publisher: {e}");
-            return ExitCode::FAILURE;
-        }
+    let (handles, runner) = match p2poolv2_node::build_node(config.clone()).await {
+        Ok(result) => result,
+        Err(exit_code) => return exit_code,
     };
 
-    let exit_sender_gbt = exit_sender.clone();
-    let exit_receiver_gbt = exit_sender.subscribe();
-    tokio::spawn(async move {
-        if let Err(e) = start_gbt(
-            bitcoinrpc_config_cloned,
-            notify_tx_for_gbt,
-            GBT_POLL_INTERVAL,
-            stratum_config.network,
-            zmq_trigger_rx,
-        )
-        .await
-        {
-            if *exit_receiver_gbt.borrow() == ShutdownReason::None {
-                tracing::error!("Failed to fetch block template. Shutting down. \n {e}");
-                let _ = exit_sender_gbt.send(ShutdownReason::Error);
-            }
-        }
-    });
-
-    let connections_handle = start_connections_handler().await;
-
-    // Watch channel for broadcasting prepared templates to all connection handlers
-    let (template_tx, template_rx) = tokio::sync::watch::channel(None);
-
-    let chain_store_handle_for_notify = chain_store_handle.clone();
-
-    let pool_difficulty_for_notify =
-        PoolDifficulty::build(&chain_store_handle).expect("Failed to build pool difficulty");
-
-    let cloned_stratum_config = stratum_config.clone();
-    let (payout, shared_pplns_window) =
-        build_payout_for_mode(stratum_config.mode, cloned_stratum_config.network);
-    let exit_sender_notify = exit_sender.clone();
-    let exit_receiver_notify = exit_sender.subscribe();
-    tokio::spawn(async move {
-        info!("Starting Stratum notifier...");
-        start_notify(
-            notify_rx,
-            template_tx,
-            chain_store_handle_for_notify,
-            &cloned_stratum_config,
-            payout,
-            pool_difficulty_for_notify,
-        )
-        .await;
-        if *exit_receiver_notify.borrow() == ShutdownReason::None {
-            error!("Notifier stopped unexpectedly");
-            let _ = exit_sender_notify.send(ShutdownReason::Error);
-        }
-    });
-
-    let (emissions_tx, emissions_rx) =
-        tokio::sync::mpsc::channel::<Emission>(STRATUM_SHARES_BUFFER_SIZE);
-
-    // No-PoW load-test emitter. Only present under the `sim` feature; spawned
-    // here while emissions_tx, template_rx and stratum_config are still owned.
+    // No-PoW load-test emitter. Only present under the `sim` feature.
     // See docs/simulation/load-test-plan.md. MUST NEVER run in production.
     #[cfg(feature = "sim")]
     if let Some(sim_cfg) = config.sim.clone() {
         if sim_cfg.enabled {
-            let sim_emissions_tx = emissions_tx.clone();
-            let sim_template_rx = template_rx.clone();
-            let sim_network = stratum_config.network;
+            let sim_network = config.stratum.network;
             match sim_cfg
                 .miner_address
                 .parse::<bitcoin::Address<bitcoin::address::NetworkUnchecked>>()
@@ -266,7 +92,6 @@ async fn main() -> ExitCode {
                 .and_then(|a| a.require_network(sim_network).map_err(|e| e.to_string()))
             {
                 Ok(miner_address) => {
-                    // (sim process-globals were set earlier, before node setup)
                     match bitcoindrpc::BitcoindRpcClient::new(
                         &config.bitcoinrpc.url,
                         &config.bitcoinrpc.username,
@@ -274,13 +99,13 @@ async fn main() -> ExitCode {
                     ) {
                         Ok(sim_rpc) => {
                             let emitter = SimEmitter::new(
-                                sim_emissions_tx,
-                                sim_template_rx,
+                                handles.emissions_tx.clone(),
+                                handles.template_rx.clone(),
                                 miner_address,
                                 sim_cfg,
                                 sim_rpc,
                             );
-                            let mut sim_exit_rx = exit_sender.subscribe();
+                            let mut sim_exit_rx = handles.shutdown_tx.subscribe();
                             tokio::spawn(async move {
                                 tokio::select! {
                                     _ = emitter.run() => {}
@@ -299,167 +124,5 @@ async fn main() -> ExitCode {
         }
     }
 
-    let metrics_handle = match metrics::start_metrics(config.logging.stats_dir.clone()).await {
-        Ok(handle) => handle,
-        Err(e) => {
-            error!("Failed to start metrics: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let metrics_cloned = metrics_handle.clone();
-    let metrics_for_shutdown = metrics_handle.clone();
-    let stats_dir_for_shutdown = config.logging.stats_dir.clone();
-    let chain_store_handle_for_stratum = chain_store_handle.clone();
-    let tracker_handle_cloned = tracker_handle.clone();
-    let notify_tx_for_node = notify_tx.clone();
-    let exit_sender_stratum = exit_sender.clone();
-    let exit_receiver_stratum = exit_sender.subscribe();
-
-    tokio::spawn(async move {
-        let mut stratum_server = StratumServerBuilder::default()
-            .shutdown_rx(stratum_shutdown_rx)
-            .connections_handle(connections_handle.clone())
-            .emissions_tx(emissions_tx)
-            .hostname(stratum_config.hostname)
-            .port(stratum_config.port)
-            .start_difficulty(stratum_config.start_difficulty)
-            .minimum_difficulty(stratum_config.minimum_difficulty)
-            .maximum_difficulty(stratum_config.maximum_difficulty)
-            .ignore_difficulty(stratum_config.ignore_difficulty)
-            .validate_addresses(Some(
-                stratum_config.donation.unwrap_or_default() != FULL_DONATION_BIPS,
-            ))
-            .network(stratum_config.network)
-            .version_mask(stratum_config.version_mask)
-            .max_connections(stratum_config.max_connections)
-            .wait_for_chain_sync(stratum_config.wait_for_chain_sync)
-            .chain_store_handle(chain_store_handle_for_stratum)
-            .mode(stratum_config.mode)
-            .build()
-            .await
-            .unwrap();
-        info!("Starting Stratum server...");
-        let result = stratum_server
-            .start(
-                None,
-                notify_tx,
-                tracker_handle_cloned,
-                bitcoinrpc_config,
-                metrics_cloned,
-                template_rx,
-            )
-            .await;
-        if result.is_err() && *exit_receiver_stratum.borrow() == ShutdownReason::None {
-            error!("Failed to start Stratum server: {}", result.unwrap_err());
-            let _ = exit_sender_stratum.send(ShutdownReason::Error);
-        }
-        info!("Stratum server stopped");
-    });
-
-    let (monitoring_event_sender, _monitoring_event_receiver) =
-        p2poolv2_lib::monitoring_events::create_monitoring_event_channel();
-
-    let (node_handle, stopping_rx) = match NodeHandle::new(
-        config.clone(),
-        chain_store_handle.clone(),
-        emissions_rx,
-        metrics_handle.clone(),
-        monitoring_event_sender.clone(),
-        notify_tx_for_node,
-        shared_pplns_window,
-    )
-    .await
-    {
-        Ok(result) => result,
-        Err(e) => {
-            error!("Failed to start node: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-
-    info!("Node started");
-
-    let api_shutdown_tx = match start_api_server(
-        config.api.clone(),
-        chain_store_handle.clone(),
-        metrics_handle.clone(),
-        tracker_handle,
-        node_handle.clone(),
-        monitoring_event_sender,
-        stratum_config.network,
-        stratum_config.pool_signature,
-    )
-    .await
-    {
-        Ok((shutdown_tx, _port)) => shutdown_tx,
-        Err(e) => {
-            error!("Error starting API server: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    info!(
-        "API server started on host {} port {}",
-        config.api.hostname, config.api.port
-    );
-
-    let mut exit_receiver = exit_sender.subscribe();
-    let stop_all = async move |reason: ShutdownReason| -> ShutdownReason {
-        info!("Node shutting down...");
-
-        // Save metrics before shutdown to prevent data loss
-        let metrics = metrics_for_shutdown.get_metrics().await;
-        if let Err(e) = p2poolv2_lib::accounting::stats::pool_local_stats::save_pool_local_stats(
-            &metrics,
-            &stats_dir_for_shutdown,
-        ) {
-            error!("Failed to save metrics on shutdown: {e}");
-        } else {
-            info!("Metrics saved on shutdown");
-        }
-
-        // Shutdown node gracefully
-        if let Err(e) = node_handle.shutdown().await {
-            error!("Failed to shutdown node: {e}");
-        }
-
-        // channels might be closed already, ignore errors
-        let _ = stratum_shutdown_tx.send(());
-        let _ = api_shutdown_tx.send(());
-        // Notify signal handler to exit
-        let _ = exit_sender.send(reason);
-        reason
-    };
-
-    // Check if shutdown was already requested before we started waiting
-    let early_reason = *exit_receiver.borrow();
-    if early_reason != ShutdownReason::None {
-        stop_all(early_reason).await;
-        trace!("Waiting signal handlers");
-        sig_handle.await.unwrap();
-        return if early_reason == ShutdownReason::Signal {
-            ExitCode::SUCCESS
-        } else {
-            ExitCode::FAILURE
-        };
-    }
-
-    let shutdown_reason = tokio::select! {
-        _ = stopping_rx => {
-            // Node stopped unexpectedly - treat as error
-            stop_all(ShutdownReason::Error).await
-        },
-        _ = exit_receiver.changed() => {
-            let reason = *exit_receiver.borrow();
-            stop_all(reason).await
-        },
-    };
-
-    trace!("Waiting signal handlers");
-    sig_handle.await.unwrap();
-
-    if shutdown_reason == ShutdownReason::Signal {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::FAILURE
-    }
+    runner.run().await
 }

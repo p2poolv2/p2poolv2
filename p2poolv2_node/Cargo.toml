@@ -13,6 +13,10 @@ categories.workspace = true
 rust-version.workspace = true
 default-run = "p2poolv2"
 
+[lib]
+name = "p2poolv2_node"
+path = "src/lib.rs"
+
 [dependencies]
 tokio = { workspace = true }
 tracing = { workspace = true }
