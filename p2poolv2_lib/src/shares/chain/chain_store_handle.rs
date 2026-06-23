@@ -727,16 +727,12 @@ impl ChainStoreHandle {
     /// the next promote_block call will pick up.
     pub async fn promote_block(&self, header: ShareHeader) -> Result<Option<u32>, StoreError> {
         let blockhash = header.block_hash();
-        #[cfg(feature = "sim")]
         let uncle_count = header.uncles.len();
         self.organise_header(header).await?;
         let height = self.organise_block().await?;
         info!("Promoted block {blockhash} to confirmed height {height:?}");
-        // Sim-only: surface uncle references so the harness can measure uncle
-        // rate (uncles only appear once propagation latency is injected).
-        #[cfg(feature = "sim")]
         if uncle_count > 0 {
-            info!("sim-uncle: confirmed block {blockhash} references {uncle_count} uncle(s)");
+            info!("Confirmed block {blockhash} references {uncle_count} uncle(s)");
         }
         Ok(height)
     }
