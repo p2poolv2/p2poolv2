@@ -33,8 +33,22 @@ const HALFLIFE: u32 = 600;
 #[cfg(feature = "sim")]
 use crate::accounting::payout::sharechain_pplns::pplns_window::MAX_PPLNS_WINDOW_SHARES;
 
+use crate::pool_difficulty;
+use crate::shares::genesis::GenesisData;
+use bitcoin::CompactTarget;
+
+// ---------------------------------------------------------------------------
+// OnceLock state (sim-only, does not exist in production builds)
+// ---------------------------------------------------------------------------
+
 #[cfg(feature = "sim")]
 static SIM_IDEAL_BLOCK_TIME: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+
+#[cfg(feature = "sim")]
+static SIM_ASERT_ANCHOR_TIME: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+
+#[cfg(feature = "sim")]
+static SIM_NETWORK_HASHRATE: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
 
 /// Set the sim ideal block time. Called once at startup by the sim binary.
 /// Does not exist in production builds.
@@ -75,6 +89,64 @@ pub fn half_life() -> u32 {
     #[cfg(not(feature = "sim"))]
     {
         HALFLIFE
+    }
+}
+
+// ---------------------------------------------------------------------------
+// genesis overrides
+// ---------------------------------------------------------------------------
+
+/// Set the sim genesis overrides. Called once at startup by the sim binary.
+/// Does not exist in production builds.
+#[cfg(feature = "sim")]
+pub fn init_genesis_overrides(asert_anchor_time: u64, network_hashrate: u64) {
+    SIM_ASERT_ANCHOR_TIME.set(asert_anchor_time).ok();
+    SIM_NETWORK_HASHRATE.set(network_hashrate).ok();
+}
+
+/// Return the genesis timestamp.
+///
+/// Production: returns `genesis_data.timestamp`.
+/// Sim: returns the configured ASERT anchor time, falling back to
+/// `genesis_data.timestamp` if unset or zero.
+#[inline(always)]
+pub fn genesis_timestamp(genesis_data: &GenesisData) -> u32 {
+    #[cfg(feature = "sim")]
+    {
+        let anchor = *SIM_ASERT_ANCHOR_TIME.get().unwrap_or(&0);
+        if anchor == 0 {
+            genesis_data.timestamp
+        } else {
+            anchor as u32
+        }
+    }
+    #[cfg(not(feature = "sim"))]
+    {
+        genesis_data.timestamp
+    }
+}
+
+/// Return the genesis target (bits).
+///
+/// Production: returns the fixed regtest maximum target.
+/// Sim: computes the steady-state target for the configured network
+/// hashrate so the chain starts already regulated. Falls back to the
+/// fixed target if network hashrate is unset or zero.
+/// Runs once at startup so `#[inline]` (not always) is sufficient.
+#[inline]
+pub fn anchor_target() -> CompactTarget {
+    #[cfg(feature = "sim")]
+    {
+        let hps = *SIM_NETWORK_HASHRATE.get().unwrap_or(&0);
+        if hps == 0 {
+            CompactTarget::from_consensus(0x1b4188f5)
+        } else {
+            pool_difficulty::anchor_target_for_network_hashrate(hps as f64)
+        }
+    }
+    #[cfg(not(feature = "sim"))]
+    {
+        CompactTarget::from_consensus(0x1b4188f5)
     }
 }
 

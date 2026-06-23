@@ -23,6 +23,7 @@ use crate::shares::extranonce::Extranonce;
 use crate::shares::genesis;
 use crate::shares::share_commitment::ShareCommitment;
 use crate::shares::witness_commitment::WitnessCommitment;
+use crate::sim_overrides;
 use bitcoin::consensus::encode::Error::ParseFailed;
 use bitcoin::{
     Address, BlockHash, CompactTarget, CompressedPublicKey, Target, TxMerkleNode, Txid, VarInt,
@@ -377,40 +378,8 @@ impl ShareBlock {
             }
         };
 
-        // The genesis time is the ASERT anchor (via PoolDifficulty::build). The
-        // fixed regtest genesis is dated in the past, so on regtest the chain is
-        // permanently behind schedule and ASERT stays floored at the easy clamp
-        // (the chain races). Under sim, override the genesis time to a shared
-        // ~launch time so ASERT regulates around the target rate. 0 = unset →
-        // the fixed timestamp. MUST be identical across nodes (same genesis
-        // hash). See docs/simulation/load-test-plan.md.
-        #[cfg(not(feature = "sim"))]
-        let genesis_time = genesis_data.timestamp;
-        #[cfg(feature = "sim")]
-        let genesis_time = {
-            let sim_t = crate::sim::asert_anchor_time();
-            if sim_t == 0 {
-                genesis_data.timestamp
-            } else {
-                sim_t as u32
-            }
-        };
-
-        // Genesis bits = the ASERT anchor target. Under sim, anchor at the
-        // steady-state difficulty for the configured total network hashrate so
-        // the chain starts regulated (paired with the launch-time genesis above);
-        // 0 = unset → the fixed target. Shared across nodes → same genesis hash.
-        #[cfg(not(feature = "sim"))]
-        let genesis_bits = CompactTarget::from_consensus(0x1b4188f5);
-        #[cfg(feature = "sim")]
-        let genesis_bits = {
-            let hps = crate::sim::network_hashrate();
-            if hps == 0 {
-                CompactTarget::from_consensus(0x1b4188f5)
-            } else {
-                crate::pool_difficulty::anchor_target_for_network_hashrate(hps as f64)
-            }
-        };
+        let genesis_time = sim_overrides::genesis_timestamp(genesis_data);
+        let genesis_bits = sim_overrides::anchor_target();
 
         let header = ShareHeader {
             prev_share_blockhash: BlockHash::all_zeros(),
