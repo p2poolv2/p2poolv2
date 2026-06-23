@@ -125,7 +125,7 @@ load-tests/sim/stop-swarm.sh       # stop all (incl. orphans matching this RUN_D
 Configs/stores/logs land in `RUN_DIR` (default `/tmp/p2pool-sim`). Tunables via
 env: `RUN_DIR`, `BASE_P2P`/`BASE_STRATUM`/`BASE_API`, `RPC_*`, `ZMQ`,
 `MINER_ADDRESS`, `HASHRATE` + `HASHRATE_DIST`(equal|zipf) + `ZIPF_ALPHA`,
-`RATIO`, `WINDOW_SHARES`, `LATENCY_MS` + `LATENCY_DIST`(equal|spread),
+`SHARES_PER_BLOCK`, `WINDOW_SHARES`, `LATENCY_MS` + `LATENCY_DIST`(equal|spread),
 `ASERT_ANCHOR` (shared anchor, default launch time), `NETWORK_HASHRATE` (shared,
 default `N*HASHRATE`; anchors genesis at the steady-state difficulty so there's
 no ASERT warmup), `IDEAL_BLOCK_TIME` (default 10s; lower = time-compressed run —

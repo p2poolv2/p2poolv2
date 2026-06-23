@@ -22,7 +22,7 @@
 #   HASHRATE_DIST  equal | zipf                       (default zipf — power-law,
 #                  total ≈ N*HASHRATE preserved; a few big miners + long tail)
 #   ZIPF_ALPHA     power-law exponent for zipf        (default 1.0)
-#   RATIO          block_to_share_ratio               (default 10000)
+#   SHARES_PER_BLOCK  block_to_share_ratio             (default 10000)
 #   LATENCY_MS     mean per-node outbound delay (ms)   (default 0; raise to see uncles)
 #   LATENCY_DIST   equal | spread                     (default spread — per-node
 #                  log-uniform around LATENCY_MS; models heterogeneous links)
@@ -53,7 +53,7 @@ MINER_ADDRESS="${MINER_ADDRESS:-bcrt1qqclp5usts33x0cgy2l5839659t7798w7g5a0fu}"
 HASHRATE="${HASHRATE:-1.0e12}"
 HASHRATE_DIST="${HASHRATE_DIST:-zipf}"
 ZIPF_ALPHA="${ZIPF_ALPHA:-1.0}"
-RATIO="${RATIO:-10000}"
+SHARES_PER_BLOCK="${SHARES_PER_BLOCK:-10000}"
 LATENCY_MS="${LATENCY_MS:-0}"
 # Time-compression: shorter share interval = more blocks/min for faster data.
 # Scale the latency base by the same factor so uncle rate (latency/interval) is
@@ -236,7 +236,7 @@ port = $api_port
 enabled = true
 miner_address = "$node_addr"
 hashrate = $node_hashrate
-block_to_share_ratio = $RATIO
+block_to_share_ratio = $SHARES_PER_BLOCK
 seed = $seed
 propagation_delay_ms = $node_latency
 asert_anchor_time = $ASERT_ANCHOR
