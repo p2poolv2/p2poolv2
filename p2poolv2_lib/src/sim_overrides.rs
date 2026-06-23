@@ -33,9 +33,20 @@ const HALFLIFE: u32 = 600;
 #[cfg(feature = "sim")]
 use crate::accounting::payout::sharechain_pplns::pplns_window::MAX_PPLNS_WINDOW_SHARES;
 
-use crate::pool_difficulty;
 use crate::shares::genesis::GenesisData;
 use bitcoin::CompactTarget;
+use bitcoin::{BlockHash, Target};
+
+#[cfg(feature = "sim")]
+use crate::node::SwarmSend;
+#[cfg(feature = "sim")]
+use crate::node::messages::Message;
+#[cfg(feature = "sim")]
+use crate::pool_difficulty;
+#[cfg(feature = "sim")]
+use crate::shares::share_block::ShareBlock;
+#[cfg(feature = "sim")]
+use libp2p::request_response::ResponseChannel;
 
 // ---------------------------------------------------------------------------
 // OnceLock state (sim-only, does not exist in production builds)
@@ -49,6 +60,9 @@ static SIM_ASERT_ANCHOR_TIME: std::sync::OnceLock<u64> = std::sync::OnceLock::ne
 
 #[cfg(feature = "sim")]
 static SIM_NETWORK_HASHRATE: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+
+#[cfg(feature = "sim")]
+static SIM_PROPAGATION_DELAY_MS: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
 
 /// Set the sim ideal block time. Called once at startup by the sim binary.
 /// Does not exist in production builds.
@@ -181,9 +195,75 @@ pub fn pplns_total_difficulty(
     }
 }
 
+// ---------------------------------------------------------------------------
+// pow_meets
+// ---------------------------------------------------------------------------
+
+/// Proof-of-work gate: does `hash` meet `target`?
+///
+/// Production: real PoW check via `target.is_met_by(hash)`.
+/// Sim: always returns `true` -- the no-PoW load test emits structurally
+/// valid shares whose nonce satisfies no target. The sim feature must
+/// never be enabled in a release build.
+#[inline(always)]
+pub fn pow_meets(target: Target, hash: BlockHash) -> bool {
+    #[cfg(feature = "sim")]
+    {
+        let _ = (target, hash);
+        true
+    }
+    #[cfg(not(feature = "sim"))]
+    {
+        target.is_met_by(hash)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// propagation delay
+// ---------------------------------------------------------------------------
+
+/// Set the sim propagation delay base value (milliseconds).
+/// Called once at startup by the sim binary. Does not exist in production builds.
+#[cfg(feature = "sim")]
+pub fn init_propagation_delay(ms: u64) {
+    SIM_PROPAGATION_DELAY_MS.set(ms).ok();
+}
+
+/// Spawn a delayed broadcast of a share block to peers.
+///
+/// Computes a jittered delay from the configured base propagation delay,
+/// then spawns a task that sleeps and sends. All delay/jitter complexity
+/// lives here. Does not exist in production builds.
+#[cfg(feature = "sim")]
+pub fn spawn_delayed_broadcast(
+    swarm_tx: tokio::sync::mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
+    share_block: ShareBlock,
+) {
+    let base = *SIM_PROPAGATION_DELAY_MS.get().unwrap_or(&0);
+    let delay = if base == 0 {
+        std::time::Duration::ZERO
+    } else {
+        let jitter = (base as f64 * 0.5 * (2.0 * rand::random::<f64>() - 1.0)) as i64;
+        std::time::Duration::from_millis((base as i64 + jitter).max(0) as u64)
+    };
+    tokio::spawn(async move {
+        if !delay.is_zero() {
+            tokio::time::sleep(delay).await;
+        }
+        if swarm_tx
+            .send(SwarmSend::BroadcastBlock(share_block))
+            .await
+            .is_err()
+        {
+            tracing::error!("Failed to broadcast share block");
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bitcoin::hashes::Hash;
 
     #[test]
     fn test_ideal_block_time_returns_production_default() {
@@ -199,5 +279,21 @@ mod tests {
     fn test_pplns_total_difficulty_uses_production_formula() {
         let result = pplns_total_difficulty(1000, 2016, 500);
         assert_eq!(result, 1000 * 2016);
+    }
+
+    #[test]
+    fn test_pow_meets_rejects_hash_above_target() {
+        // A very hard target (difficulty ~2^224) rejects the all-ones hash
+        let hard_target = Target::from_compact(CompactTarget::from_consensus(0x01010000));
+        let high_hash = BlockHash::from_byte_array([0xff; 32]);
+        assert!(!pow_meets(hard_target, high_hash));
+    }
+
+    #[test]
+    fn test_pow_meets_accepts_hash_below_target() {
+        use bitcoin::hashes::Hash;
+        let easy_target = Target::MAX;
+        let hash = BlockHash::all_zeros();
+        assert!(pow_meets(easy_target, hash));
     }
 }
