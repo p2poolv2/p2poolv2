@@ -77,7 +77,7 @@ echo "log scan (all nodes):  promotions=$promos  error-lines=$errs"
 n0="$RUN_DIR/node-0.log"
 if [ -f "$n0" ]; then
   n0_promos=$(grep -c "Promoted block" "$n0" 2>/dev/null || echo 0)
-  n0_uncle_blocks=$(grep -c "sim-uncle:" "$n0" 2>/dev/null || echo 0)
+  n0_uncle_blocks=$(grep -c "references .* uncle" "$n0" 2>/dev/null || echo 0)
   n0_uncle_refs=$(grep -oE "references [0-9]+ uncle" "$n0" 2>/dev/null \
                     | grep -oE "[0-9]+" | paste -sd+ - | bc 2>/dev/null || echo 0)
   rate="n/a"

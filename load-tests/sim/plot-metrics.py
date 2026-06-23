@@ -8,7 +8,7 @@ refresh. Output: RUN_DIR/metrics.png, or the path given as argv[1].
 
 Data sources (all timestamped) from the logs:
   "Promoted block … confirmed height Some(N)"  -> main-chain share rate
-  "sim-uncle: … references N uncle(s)"          -> uncle rate
+  "Confirmed block … references N uncle(s)"      -> uncle rate
   "sim stats: … pool_difficulty=D …"            -> ASERT difficulty / emitted
   "Block submitted successfully"                -> bitcoin block-finds
 """
@@ -56,7 +56,7 @@ node0 = os.path.join(RUN_DIR, "node-0.log")
 # Main chain / uncles: node 0's view (the confirmed chain is shared, so one
 # node is representative and avoids cross-node double counting).
 promos = events(node0, r"to confirmed height Some\(")
-uncles = events(node0, r"sim-uncle:")
+uncles = events(node0, r"Confirmed block .* references \d+ uncle")
 # Difficulty + block-finds: aggregate across ALL nodes. Difficulty is a shared
 # pool quantity, so pooling every node's periodic samples gives a dense series
 # (node 0 alone logs only every ~15s and slowly). Block-finds happen on whatever
@@ -89,7 +89,7 @@ def bin_counts(ev):
 
 # Uncle rate = uncles / (main-chain blocks + uncles), i.e. the % of all
 # produced shares that became uncles instead of extending the main chain.
-# Each "sim-uncle:" line reports how many uncles that block referenced (N).
+# Each "Confirmed block ... references N uncle(s)" line reports uncle count.
 uncle_ev = []
 for t, l in uncles:
     m = re.search(r"references (\d+) uncle", l)
