@@ -25,6 +25,7 @@ use crate::pool_difficulty;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
+use crate::sim_overrides;
 use crate::stratum::work::prepared_notify::{PreparedNotifyParams, PreparedNotifyParamsBuilder};
 use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
 use std::sync::Arc;
@@ -45,66 +46,27 @@ pub(crate) struct NotifyContext {
 /// Build the output distribution for the coinbase transaction using
 /// payout accounting in NotifyContext.
 ///
-/// difficulty_multiplier is used to get the total difficulty we need
-/// to match to collect all the shares to use to compute output distribution.
-#[cfg(not(feature = "sim"))]
+/// The total difficulty threshold is computed by `sim_overrides::pplns_total_difficulty`,
+/// which uses the production formula (bitcoin_difficulty * multiplier) in normal
+/// builds and a sim-specific formula in sim builds.
 fn build_output_distribution(
-    template: &BlockTemplate,
-    context: &mut NotifyContext,
-) -> Vec<OutputPair> {
-    let total_amount = bitcoin::Amount::from_sat(template.coinbasevalue);
-
-    let compact_target = bitcoin::pow::CompactTarget::from_unprefixed_hex(&template.bits).unwrap();
-    let required_target = bitcoin::Target::from_compact(compact_target);
-
-    let total_difficulty = required_target
-        .difficulty(context.config.network)
-        .saturating_mul(context.config.difficulty_multiplier as u128);
-
-    match context.payout.get_output_distribution(
-        &context.chain_store_handle,
-        total_difficulty,
-        total_amount,
-        &context.config,
-    ) {
-        Ok(distribution) => distribution,
-        Err(e) => {
-            error!("Payout distribution failed: {}", e);
-            Vec::new()
-        }
-    }
-}
-
-/// Sim-only variant of `build_output_distribution`.
-///
-/// On regtest the bitcoin block difficulty is trivially 1, which collapses the
-/// PPLNS window to a single share. When `[sim].pplns_window_shares = N` is set,
-/// this sizes `total_difficulty` to `(pool-target difficulty) × N` so the window
-/// spans ~N recent shares (mainnet-like), giving a real multi-miner coinbase.
-/// `pool_target` is the tip's ASERT target — the same value that becomes the
-/// share's bits — so this stays consistent with the validate-side computation in
-/// `validate_bitcoin_payout`. Falls back to the production formula when N is
-/// unset. See docs/simulation/load-test-plan.md.
-#[cfg(feature = "sim")]
-fn build_output_distribution_sim(
     template: &BlockTemplate,
     pool_target: bitcoin::CompactTarget,
     context: &mut NotifyContext,
 ) -> Vec<OutputPair> {
     let total_amount = bitcoin::Amount::from_sat(template.coinbasevalue);
 
-    let window_shares = crate::sim::pplns_window_shares();
-    let total_difficulty = if window_shares == 0 {
-        let compact_target =
-            bitcoin::pow::CompactTarget::from_unprefixed_hex(&template.bits).unwrap();
-        bitcoin::Target::from_compact(compact_target)
-            .difficulty(context.config.network)
-            .saturating_mul(context.config.difficulty_multiplier as u128)
-    } else {
-        bitcoin::Target::from_compact(pool_target)
-            .difficulty(context.config.network)
-            .saturating_mul(window_shares as u128)
-    };
+    let compact_target = bitcoin::pow::CompactTarget::from_unprefixed_hex(&template.bits).unwrap();
+    let bitcoin_difficulty =
+        bitcoin::Target::from_compact(compact_target).difficulty(context.config.network);
+    let share_pool_difficulty =
+        bitcoin::Target::from_compact(pool_target).difficulty(context.config.network);
+
+    let total_difficulty = sim_overrides::pplns_total_difficulty(
+        bitcoin_difficulty,
+        context.config.difficulty_multiplier as u128,
+        share_pool_difficulty,
+    );
 
     match context.payout.get_output_distribution(
         &context.chain_store_handle,
@@ -129,9 +91,6 @@ fn build_prepared_notify(
     clean_jobs: bool,
     context: &mut NotifyContext,
 ) -> Result<PreparedNotifyParams, WorkError> {
-    #[cfg(not(feature = "sim"))]
-    let output_distribution = build_output_distribution(template, context);
-
     let (tip, uncles) = context
         .chain_store_handle
         .get_chain_tip_and_uncles()
@@ -148,10 +107,7 @@ fn build_prepared_notify(
         .pool_difficulty
         .calculate_target_clamped(parent_time, tip_height);
 
-    // Sim sizes the payout window to ~N shares using the tip's pool target
-    // (which becomes the share's bits); see build_output_distribution_sim.
-    #[cfg(feature = "sim")]
-    let output_distribution = build_output_distribution_sim(template, target, context);
+    let output_distribution = build_output_distribution(template, target, context);
 
     let time = SystemTimeProvider.seconds_since_epoch() as u32;
 

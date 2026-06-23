@@ -37,7 +37,7 @@ use tracing::debug;
 /// Maximum number of confirmed shares in the PPLNS window.
 /// At 6 shares per minute over 2 weeks: 6 * 60 * 24 * 14 = 120,960.
 /// Provide a 10% buffer 120,960 * 1.1 = 133056
-pub(crate) const MAX_PPLNS_WINDOW_SHARES: usize = 133056;
+pub const MAX_PPLNS_WINDOW_SHARES: usize = 133056;
 
 /// Scale factor applied to all difficulty contributions.
 /// Allows integer representation of 90%/10% uncle/nephew weighting.
