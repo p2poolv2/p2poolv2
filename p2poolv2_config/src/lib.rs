@@ -477,10 +477,6 @@ pub struct Config {
     pub bitcoinrpc: BitcoinRpcConfig,
     pub logging: LoggingConfig,
     pub api: ApiConfig,
-    /// No-PoW load-test simulation config (only acted on under the `sim`
-    /// feature). See docs/simulation/load-test-plan.md.
-    #[serde(default)]
-    pub sim: Option<SimConfig>,
 }
 
 #[allow(dead_code)]

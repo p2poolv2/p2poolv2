@@ -45,9 +45,6 @@ required-features = ["debug-tools"]
 
 [features]
 debug-tools = []
-# No-PoW load-test simulation; see docs/simulation/load-test-plan.md.
-# MUST NEVER be enabled in a release build.
-sim = ["p2poolv2_lib/sim"]
 
 [dev-dependencies]
 p2poolv2_lib = { workspace = true, features = ["test-utils"] }

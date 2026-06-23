@@ -3385,6 +3385,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "p2poolv2_sim"
+version = "0.12.0"
+dependencies = [
+ "bitcoin",
+ "bitcoindrpc",
+ "clap",
+ "config",
+ "p2poolv2_config",
+ "p2poolv2_lib",
+ "p2poolv2_node",
+ "serde",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "p2poolv2_tests"
 version = "0.12.0"
 dependencies = [

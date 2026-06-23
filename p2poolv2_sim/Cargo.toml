@@ -1,0 +1,35 @@
+[package]
+name = "p2poolv2_sim"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "No-PoW load-test simulation binary for P2Poolv2"
+readme.workspace = true
+homepage.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+tokio = { workspace = true }
+tracing = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+config = { workspace = true }
+bitcoin = { workspace = true }
+bitcoindrpc = { workspace = true }
+p2poolv2_node = { path = "../p2poolv2_node" }
+p2poolv2_lib = { path = "../p2poolv2_lib" }
+p2poolv2_config = { path = "../p2poolv2_config" }
+
+[features]
+default = []
+# No-PoW load-test simulation; see docs/simulation/load-test-plan.md.
+# MUST NEVER be enabled in a release/production build.
+sim = ["p2poolv2_lib/sim"]
+
+[[bin]]
+name = "p2poolv2_sim"
+path = "src/main.rs"

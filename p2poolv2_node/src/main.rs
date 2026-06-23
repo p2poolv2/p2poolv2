@@ -17,11 +17,6 @@
 use clap::Parser;
 use p2poolv2_lib::config::Config;
 use p2poolv2_lib::logging::setup_logging;
-#[cfg(feature = "sim")]
-use p2poolv2_lib::sim::emitter::SimEmitter;
-#[cfg(feature = "sim")]
-use p2poolv2_lib::sim_overrides;
-use p2poolv2_node::signal::ShutdownReason;
 use std::process::ExitCode;
 use tracing::{error, info};
 
@@ -59,70 +54,10 @@ async fn main() -> ExitCode {
 
     info!("Running on {} network", &config.stratum.network);
 
-    // Initialize sim overrides early -- before PoolDifficulty::build (ASERT
-    // anchor) and before the first share. In production builds the init
-    // functions do not exist; the bridge functions return compile-time constants.
-    #[cfg(feature = "sim")]
-    if let Some(sim_cfg) = config.sim.as_ref() {
-        if sim_cfg.enabled {
-            sim_overrides::init_ideal_block_time(sim_cfg.ideal_block_time_secs.unwrap_or(10));
-            sim_overrides::init_genesis_overrides(
-                sim_cfg.asert_anchor_time.unwrap_or(0),
-                sim_cfg.network_hashrate.unwrap_or(0),
-            );
-            sim_overrides::init_propagation_delay(sim_cfg.propagation_delay_ms.unwrap_or(0));
-        }
-    }
-
-    let (handles, runner) = match p2poolv2_node::build_node(config.clone()).await {
+    let (_handles, runner) = match p2poolv2_node::build_node(config).await {
         Ok(result) => result,
         Err(exit_code) => return exit_code,
     };
-
-    // No-PoW load-test emitter. Only present under the `sim` feature.
-    // See docs/simulation/load-test-plan.md. MUST NEVER run in production.
-    #[cfg(feature = "sim")]
-    if let Some(sim_cfg) = config.sim.clone() {
-        if sim_cfg.enabled {
-            let sim_network = config.stratum.network;
-            match sim_cfg
-                .miner_address
-                .parse::<bitcoin::Address<bitcoin::address::NetworkUnchecked>>()
-                .map_err(|e| e.to_string())
-                .and_then(|a| a.require_network(sim_network).map_err(|e| e.to_string()))
-            {
-                Ok(miner_address) => {
-                    match bitcoindrpc::BitcoindRpcClient::new(
-                        &config.bitcoinrpc.url,
-                        &config.bitcoinrpc.username,
-                        &config.bitcoinrpc.password,
-                    ) {
-                        Ok(sim_rpc) => {
-                            let emitter = SimEmitter::new(
-                                handles.emissions_tx.clone(),
-                                handles.template_rx.clone(),
-                                miner_address,
-                                sim_cfg,
-                                sim_rpc,
-                            );
-                            let mut sim_exit_rx = handles.shutdown_tx.subscribe();
-                            tokio::spawn(async move {
-                                tokio::select! {
-                                    _ = emitter.run() => {}
-                                    _ = sim_exit_rx.wait_for(|r| *r != ShutdownReason::None) => {
-                                        info!("Sim emitter shutting down");
-                                    }
-                                }
-                            });
-                            info!("Sim emitter spawned");
-                        }
-                        Err(e) => error!("Failed to build sim bitcoind rpc client: {e}"),
-                    }
-                }
-                Err(e) => error!("Invalid sim miner_address, not starting sim emitter: {e}"),
-            }
-        }
-    }
 
     runner.run().await
 }

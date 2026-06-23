@@ -102,11 +102,9 @@ impl NodeRunner {
             info!("Node shutting down...");
 
             let metrics = metrics_handle.get_metrics().await;
-            if let Err(e) =
-                p2poolv2_lib::accounting::stats::pool_local_stats::save_pool_local_stats(
-                    &metrics, &stats_dir,
-                )
-            {
+            if let Err(e) = p2poolv2_lib::accounting::stats::pool_local_stats::save_pool_local_stats(
+                &metrics, &stats_dir,
+            ) {
                 error!("Failed to save metrics on shutdown: {e}");
             } else {
                 info!("Metrics saved on shutdown");
