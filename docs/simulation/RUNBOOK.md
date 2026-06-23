@@ -260,16 +260,16 @@ Stop everything:
 
 ## 8. Where things live
 
-| Thing | Path |
-|---|---|
-| Single-node config | `config-dev.toml` (has `[sim]`) |
-| Swarm run dir | `/tmp/p2pool-sim/` |
-| Per-node config | `/tmp/p2pool-sim/node-<i>.toml` |
-| Per-node log | `/tmp/p2pool-sim/node-<i>.log` |
-| Per-node store | `/tmp/p2pool-sim/store-<i>.db` |
-| PIDs | `/tmp/p2pool-sim/pids.txt` |
-| Node APIs | `http://127.0.0.1:760<i>` (node i) |
-| regtest bitcoind | datadir `/tmp/p2pool-regtest`, RPC `:19443`, ZMQ `:28332` |
+| Thing              | Path                                                      |
+|--------------------|-----------------------------------------------------------|
+| Single-node config | `config-dev.toml` (has `[sim]`)                           |
+| Swarm run dir      | `/tmp/p2pool-sim/`                                        |
+| Per-node config    | `/tmp/p2pool-sim/node-<i>.toml`                           |
+| Per-node log       | `/tmp/p2pool-sim/node-<i>.log`                            |
+| Per-node store     | `/tmp/p2pool-sim/store-<i>.db`                            |
+| PIDs               | `/tmp/p2pool-sim/pids.txt`                                |
+| Node APIs          | `http://127.0.0.1:760<i>` (node i)                        |
+| regtest bitcoind   | datadir `/tmp/p2pool-regtest`, RPC `:19443`, ZMQ `:28332` |
 
 Useful log greps (per node or across all):
 
@@ -294,18 +294,18 @@ curl -s :7600/chain_info | jq            # tip/candidate heights (prefer logs fo
 
 `run-swarm.sh [N]` (default N=20). Override with env vars:
 
-| Var | Default | Meaning |
-|---|---|---|
-| `RATIO` | 10000 | shares per block-find (lower = more blocks) |
-| `LATENCY_MS` | 0 | per-node outbound announce delay (raise for uncles) |
-| `IDEAL_BLOCK_TIME` | 10 | share interval (s); lower = time-compressed, more blocks/min for faster data (auto-scales `LATENCY_MS`); floor ~1s |
-| `WINDOW_SHARES` | = `RATIO` | PPLNS payout window in shares (how many miners appear in a coinbase) |
-| `HASHRATE` | 1.0e12 | modeled per-node hashrate (higher = faster shares) |
-| `DISTINCT_ADDR` | 1 | each node gets its own payout address via the wallet |
-| `DIAL_FANOUT` | 3 | how many earlier peers each node dials |
-| `PROFILE` | release | `release` or `debug` |
-| `RUN_DIR` | /tmp/p2pool-sim | where configs/logs/stores go |
-| `BASE_P2P`/`BASE_STRATUM`/`BASE_API` | 7000/7300/7600 | first ports |
+| Var                                  | Default         | Meaning                                                                                                            |
+|--------------------------------------|-----------------|--------------------------------------------------------------------------------------------------------------------|
+| `RATIO`                              | 10000           | shares per block-find (lower = more blocks)                                                                        |
+| `LATENCY_MS`                         | 0               | per-node outbound announce delay (raise for uncles)                                                                |
+| `IDEAL_BLOCK_TIME`                   | 10              | share interval (s); lower = time-compressed, more blocks/min for faster data (auto-scales `LATENCY_MS`); floor ~1s |
+| `WINDOW_SHARES`                      | = `RATIO`       | PPLNS payout window in shares (how many miners appear in a coinbase)                                               |
+| `HASHRATE`                           | 1.0e12          | modeled per-node hashrate (higher = faster shares)                                                                 |
+| `DISTINCT_ADDR`                      | 1               | each node gets its own payout address via the wallet                                                               |
+| `DIAL_FANOUT`                        | 3               | how many earlier peers each node dials                                                                             |
+| `PROFILE`                            | release         | `release` or `debug`                                                                                               |
+| `RUN_DIR`                            | /tmp/p2pool-sim | where configs/logs/stores go                                                                                       |
+| `BASE_P2P`/`BASE_STRATUM`/`BASE_API` | 7000/7300/7600  | first ports                                                                                                        |
 
 ---
 
