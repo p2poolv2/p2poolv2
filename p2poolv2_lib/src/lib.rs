@@ -27,6 +27,7 @@ pub mod service;
 pub mod shares;
 #[cfg(feature = "sim")]
 pub mod sim;
+pub mod sim_overrides;
 pub mod store;
 pub mod stratum;
 pub mod utils;

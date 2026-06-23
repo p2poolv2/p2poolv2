@@ -31,45 +31,7 @@ uint::construct_uint! {
     struct U512(8);
 }
 
-/// Ideal block time for the share chain in seconds (target: one share every 10 seconds)
-const IDEAL_BLOCK_TIME: u32 = 10;
-
-/// Half life for the ASERT algorithm in seconds.
-/// Set to 60 times the ideal block time (60 * 10 = 600 seconds = 10 minutes).
-/// Difficulty halves (or doubles) when blocks are consistently twice as fast
-/// (or slow) as expected over this period.
-const HALFLIFE: u32 = 600;
-
-/// Effective ideal block time: a sim override (for time-compressed runs) or the
-/// production constant.
-#[cfg(not(feature = "sim"))]
-#[inline]
-fn ideal_block_time() -> u32 {
-    IDEAL_BLOCK_TIME
-}
-#[cfg(feature = "sim")]
-#[inline]
-fn ideal_block_time() -> u32 {
-    match crate::sim::ideal_block_time_secs() {
-        0 => IDEAL_BLOCK_TIME,
-        s => s,
-    }
-}
-
-/// Effective ASERT half-life. Under sim it scales with the ideal block time so
-/// that HALFLIFE/IDEAL_BLOCK_TIME stays constant — ASERT's per-block dynamics
-/// are then identical under time compression (the controller doesn't know the
-/// clock is sped up).
-#[cfg(not(feature = "sim"))]
-#[inline]
-fn half_life() -> u32 {
-    HALFLIFE
-}
-#[cfg(feature = "sim")]
-#[inline]
-fn half_life() -> u32 {
-    (HALFLIFE as u64 * ideal_block_time() as u64 / IDEAL_BLOCK_TIME as u64) as u32
-}
+use crate::sim_overrides;
 
 /// Maximum (easiest) target as a consensus u32. This is the regtest maximum and
 /// serves as the ceiling for the share chain target. Stored as u32 because
@@ -203,10 +165,10 @@ pub(crate) fn asert_calculate_target(
 /// by `d_clamp / D*` (target ∝ 1/difficulty), which inverts `difficulty_float`
 /// exactly via a known reference target rather than guessing its constant.
 /// Returns the clamp unchanged when the hashrate is too low to exceed the floor.
-#[cfg(feature = "sim")]
 pub fn anchor_target_for_network_hashrate(hashrate_hps: f64) -> CompactTarget {
     let clamp = CompactTarget::from_consensus(MAX_TARGET_CONSENSUS);
-    let d_star = (hashrate_hps * ideal_block_time() as f64 / 4_294_967_296.0).max(1.0);
+    let d_star =
+        (hashrate_hps * sim_overrides::ideal_block_time() as f64 / 4_294_967_296.0).max(1.0);
     let d_clamp = Target::from_compact(clamp).difficulty_float();
     if d_star <= d_clamp {
         return clamp;
@@ -310,8 +272,8 @@ impl PoolDifficulty {
             self.anchor_target,
             time_delta,
             height_delta,
-            half_life(),
-            ideal_block_time(),
+            sim_overrides::half_life(),
+            sim_overrides::ideal_block_time(),
         )
     }
 
