@@ -27,8 +27,6 @@
 #   LATENCY_DIST   equal | spread                     (default spread — per-node
 #                  log-uniform around LATENCY_MS; models heterogeneous links)
 #   DIST_SEED      seed for the latency spread        (default 42; reproducible)
-#   WINDOW_SHARES  PPLNS payout window size in shares   (default = RATIO; sets how
-#                  (mainnet-like multi-miner payout)         many miners appear in a coinbase)
 #   DISTINCT_ADDR  1 = each node gets its own payout    (default 1; needs a loaded
 #                  address via RPC getnewaddress             wallet on the bitcoind)
 #   POOL_SIGNATURE must be identical across nodes      (default P2Poolv2-dev)
@@ -64,7 +62,6 @@ IDEAL_BLOCK_TIME="${IDEAL_BLOCK_TIME:-10}"
 LATENCY_MS=$(awk -v l="$LATENCY_MS" -v t="$IDEAL_BLOCK_TIME" 'BEGIN{printf "%.0f", l*t/10}')
 LATENCY_DIST="${LATENCY_DIST:-spread}"
 DIST_SEED="${DIST_SEED:-42}"
-WINDOW_SHARES="${WINDOW_SHARES:-$RATIO}"
 # Shared ASERT anchor = launch time (one value for all nodes; must match across
 # nodes). Lets ASERT regulate around the 10s target instead of staying floored
 # at the easy clamp because the fixed regtest genesis is dated in the past.
@@ -242,7 +239,6 @@ hashrate = $node_hashrate
 block_to_share_ratio = $RATIO
 seed = $seed
 propagation_delay_ms = $node_latency
-pplns_window_shares = $WINDOW_SHARES
 asert_anchor_time = $ASERT_ANCHOR
 network_hashrate = $NETWORK_HASHRATE
 ideal_block_time_secs = $IDEAL_BLOCK_TIME
