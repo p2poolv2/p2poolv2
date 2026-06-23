@@ -74,11 +74,11 @@ rpc getnewaddress '["x","bech32"]' | jq -r .result   # wallet works -> prints a 
 Two builds matter:
 
 ```sh
-# debug — fine for a single node
-cargo build -p p2poolv2_node --features sim
+# debug -- fine for a single node
+cargo build -p p2poolv2_sim --features sim
 
-# release — REQUIRED for multi-node swarms (see gotcha #1)
-cargo build -p p2poolv2_node --features sim --release
+# release -- REQUIRED for multi-node swarms (see gotcha #1)
+cargo build -p p2poolv2_sim --features sim --release
 ```
 
 
