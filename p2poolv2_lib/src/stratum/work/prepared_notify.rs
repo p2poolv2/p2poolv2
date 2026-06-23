@@ -81,9 +81,6 @@ pub struct PreparedNotifyParams {
 
 impl PreparedNotifyParams {
     /// The ASERT-computed pool target for shares built on these params.
-    ///
-    /// Used by the sim emitter to pace its closed-loop emission rate.
-    #[cfg(feature = "sim")]
     pub fn bits(&self) -> bitcoin::CompactTarget {
         self.bits
     }
