@@ -75,7 +75,7 @@ echo "(hr_share% and em_share% track each other once enough shares accumulate)"
 echo "--- 5. uncles / block-finds / health ---"
 n0="$RUN_DIR/node-0.log"
 n0_promos=$(grep -c "to confirmed height Some" "$n0" 2>/dev/null || echo 0)
-n0_uncles=$(grep -h "sim-uncle:" "$n0" 2>/dev/null | grep -oE "references [0-9]+" | awk '{s+=$2} END{print s+0}')
+n0_uncles=$(grep -h "references .* uncle" "$n0" 2>/dev/null | grep -oE "references [0-9]+" | awk '{s+=$2} END{print s+0}')
 urate=$(awk -v u="${n0_uncles:-0}" -v p="${n0_promos:-0}" 'BEGIN{d=p+u; printf "%.1f", (d>0?100*u/d:0)}')
 echo "uncle rate (node 0): ${urate}%   ($n0_uncles uncles / $n0_promos main-chain blocks)"
 bf=$(grep -h "sim block-find" "$RUN_DIR"/node-*.log 2>/dev/null | wc -l | tr -d ' ')
