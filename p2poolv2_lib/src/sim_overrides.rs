@@ -276,17 +276,33 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "sim"))]
     fn test_pplns_total_difficulty_uses_production_formula() {
         let result = pplns_total_difficulty(1000, 2016, 500);
         assert_eq!(result, 1000 * 2016);
     }
 
     #[test]
+    #[cfg(feature = "sim")]
+    fn test_pplns_total_difficulty_uses_sim_formula() {
+        let result = pplns_total_difficulty(1000, 2016, 500);
+        assert_eq!(result, 500 * MAX_PPLNS_WINDOW_SHARES as u128);
+    }
+
+    #[test]
+    #[cfg(not(feature = "sim"))]
     fn test_pow_meets_rejects_hash_above_target() {
-        // A very hard target (difficulty ~2^224) rejects the all-ones hash
         let hard_target = Target::from_compact(CompactTarget::from_consensus(0x01010000));
         let high_hash = BlockHash::from_byte_array([0xff; 32]);
         assert!(!pow_meets(hard_target, high_hash));
+    }
+
+    #[test]
+    #[cfg(feature = "sim")]
+    fn test_pow_meets_always_passes_in_sim() {
+        let hard_target = Target::from_compact(CompactTarget::from_consensus(0x01010000));
+        let high_hash = BlockHash::from_byte_array([0xff; 32]);
+        assert!(pow_meets(hard_target, high_hash));
     }
 
     #[test]
