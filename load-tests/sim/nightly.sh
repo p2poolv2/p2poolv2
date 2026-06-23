@@ -49,6 +49,7 @@ Env vars (passed through to run-swarm.sh):
   SHARES_PER_BLOCK           shares per block-find         (default 10000)
   IDEAL_BLOCK_TIME           share interval in seconds     (default 10; lower = time-compressed)
   LATENCY_MS                 per-node outbound delay ms    (default 0)
+  DIAL_FANOUT                peers each node dials         (default 3)
   HASHRATE                   mean per-node hashrate        (default 1.0e12)
   RPC_URL / RPC_USER / RPC_PASS   bitcoind RPC             (default localhost:19443 p2pool/p2pool)
   ZMQ                        zmqpubhashblock               (default tcp://127.0.0.1:28332)
@@ -79,7 +80,8 @@ RPC_PASS="${RPC_PASS:-p2pool}"
 ZMQ="${ZMQ:-tcp://127.0.0.1:28332}"
 RUN_DIR="${RUN_DIR:-/tmp/p2pool-sim}"
 SHARES_PER_BLOCK="${SHARES_PER_BLOCK:-10000}"
-export RUN_DIR RPC_URL RPC_USER RPC_PASS ZMQ SHARES_PER_BLOCK
+DIAL_FANOUT="${DIAL_FANOUT:-3}"
+export RUN_DIR RPC_URL RPC_USER RPC_PASS ZMQ SHARES_PER_BLOCK DIAL_FANOUT
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STARTED_BITCOIND=0
