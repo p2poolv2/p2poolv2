@@ -53,12 +53,12 @@ libp2p = { version = "0.53", features = [
     "secp256k1",
     "request-response",
 ] }
-tokio = { version = "1.0", features = ["full"] }
+tokio = { version = "1.0", features = ["rt-multi-thread", "net", "io-util", "sync", "time", "signal", "macros"] }
 futures = "0.3"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = { version = "0.2.3" }
-config = "0.13"
+config = { version = "0.13", default-features = false, features = ["toml"] }
 serde = { version = "1.0", features = ["derive"] }
 clap = { version = "4.0", features = ["derive", "env"] }
 hex = "0.4.3"
@@ -79,13 +79,13 @@ bitcoinconsensus = { version = "0.106.0" }
 base64 = "0.22.1"
 void = "1.0.2"
 chrono = { version = "0.4", features = ["serde"] }
-tokio-util = "0.7.15"
+tokio-util = { version = "0.7.15", features = ["codec"] }
 tokio-stream = "0.1.17"
 bitcoindrpc = { path = "bitcoindrpc" }
 p2poolv2_config = { path = "p2poolv2_config" }
 p2poolv2_api = { path = "p2poolv2_api" }
 p2poolv2_lib = { path = "p2poolv2_lib", features = ["test-utils"] }
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "default-tls"] }
 mockall = "0.13.1"
 mockall_double = "0.3.1"
 tempfile = "3.15.0"
