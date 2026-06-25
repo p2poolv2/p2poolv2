@@ -73,6 +73,9 @@ impl Store {
         });
 
         let mut read_opts = rocksdb::ReadOptions::default();
+        // Avoid polluting the block cache with scan data -- this range scan
+        // can touch 100K+ items and would evict hot tip/header data.
+        read_opts.fill_cache(false);
 
         // Set lower bound for start_time if specified (exclusive lower bound)
         if let Some(start) = start_time {
