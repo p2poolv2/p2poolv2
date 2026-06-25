@@ -1,7 +1,7 @@
 # Sim load-test runbook (local, manual)
 
 A step-by-step guide to running the no-PoW sim by hand and seeing the outcomes.
-This file is gitignored. Companion to `load-test-plan.md` (the design).
+Companion to the simulation [overview](./overview.md).
 
 Mental model: there is **no proof-of-work**. Each node runs a "miner" that just
 *sleeps* between shares (interval ≈ difficulty·2³²/hashrate) and emits
@@ -93,7 +93,7 @@ Run it as a **single line** (don't split it with a `\` — pasting the
 continuation often drops you into a `dquote>` prompt; if that happens, Ctrl-C):
 
 ```sh
-P2POOL_STORE_PATH=/tmp/store-sim-A.db ./target/debug/p2poolv2 --config config-dev.toml > /tmp/sim-A.log 2>&1 &
+P2POOL_STORE_PATH=/tmp/store-sim-A.db ./target/debug/p2poolv2_sim --config config-dev.toml > /tmp/sim-A.log 2>&1 &
 ```
 
 zsh prints the background pid itself (e.g. `[1] 12345`).
@@ -119,7 +119,7 @@ commitment all check out). No p2p, no blocks yet.
 Stop it:
 
 ```sh
-kill %1    # or: pkill -f 'target/debug/p2poolv2'
+kill %1    # or: pkill -f 'target/debug/p2poolv2_sim'
 ```
 
 ---
