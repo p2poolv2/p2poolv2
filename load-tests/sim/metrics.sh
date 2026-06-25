@@ -74,10 +74,30 @@ echo "(hr_share% and em_share% track each other once enough shares accumulate)"
 # --- 5. uncles, block-finds, health ---
 echo "--- 5. uncles / block-finds / health ---"
 n0="$RUN_DIR/node-0.log"
-n0_promos=$(grep -c "to confirmed height Some" "$n0" 2>/dev/null || echo 0)
-n0_uncles=$(grep -h "references .* uncle" "$n0" 2>/dev/null | grep -oE "references [0-9]+" | awk '{s+=$2} END{print s+0}')
-urate=$(awk -v u="${n0_uncles:-0}" -v p="${n0_promos:-0}" 'BEGIN{d=p+u; printf "%.1f", (d>0?100*u/d:0)}')
-echo "uncle rate (node 0): ${urate}%   ($n0_uncles uncles / $n0_promos main-chain blocks)"
+# Uncle rate (reorg-immune). An uncle is a produced share that doesn't make the
+# canonical chain; in healthy operation these are all credited as uncles. Count
+# DISTINCT produced blocks vs the chain's net growth -- NOT log-line sums.
+# promote_block re-logs "Confirmed block ... references N uncle(s)" on every
+# reorg re-promotion (including height=None ones), so summing those lines
+# double-counts and inflates badly under forking: e.g. it reported 89% where the
+# true rate was ~29%. A block references at most MAX_UNCLES=3, yet the line-sum
+# gave >10 per main block -- impossible under any uncle definition (the per-block
+# ceiling is 3), so it is re-promotion noise, not uncles.
+# Distinct produced = blocks node-0 ever promoted (each once); main = net
+# confirmed-chain growth; uncles = produced - main (= 1 - main/production rate).
+# A pathologically high value means the network is failing -- more stale shares
+# than can be credited as uncles, i.e. true orphans.
+produced=$(grep -oE "Promoted block [0-9a-f]+" "$n0" 2>/dev/null | awk '{print $3}' | sort -u | wc -l | tr -d ' ')
+chain_hi=$(grep -oE "to confirmed height Some\([0-9]+\)" "$n0" 2>/dev/null | grep -oE "[0-9]+" | sort -n | tail -1)
+chain_lo=$(grep -oE "to confirmed height Some\([0-9]+\)" "$n0" 2>/dev/null | grep -oE "[0-9]+" | sort -n | head -1)
+if [ -z "${chain_hi:-}" ] || [ "$produced" -eq 0 ]; then
+  echo "uncle rate (node 0): n/a (no confirmed blocks yet)"
+else
+  mainchain=$(( chain_hi - chain_lo + 1 ))
+  uncles=$(( produced - mainchain )); [ "$uncles" -lt 0 ] && uncles=0
+  urate=$(awk -v u="$uncles" -v d="$produced" 'BEGIN{printf "%.1f", (d>0?100*u/d:0)}')
+  echo "uncle rate (node 0): ${urate}%   ($uncles uncles / $produced produced; main-chain length $mainchain)"
+fi
 bf=$(grep -h "sim block-find" "$RUN_DIR"/node-*.log 2>/dev/null | wc -l | tr -d ' ')
 echo "block-finds (all nodes): $bf"
 asert=$(grep -ih "AsertMismatch" "$RUN_DIR"/node-*.log 2>/dev/null | wc -l | tr -d ' ')

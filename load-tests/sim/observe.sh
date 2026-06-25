@@ -72,19 +72,23 @@ errs=$(grep -ihE "error|panic|failed to build emission" "$RUN_DIR"/node-*.log 2>
 promos=$(grep -ih "Promoted block" "$RUN_DIR"/node-*.log 2>/dev/null | wc -l | tr -d ' ')
 echo "log scan (all nodes):  promotions=$promos  error-lines=$errs"
 
-# Uncle rate measured on node 0 only (each node confirms independently, so
-# all-node sums double-count). uncle rate = uncle-referencing blocks / confirmed.
+# Uncle rate on node 0 (live snapshot). An uncle is a produced share not on the
+# canonical chain (credited as an uncle in healthy operation). Count DISTINCT
+# produced blocks vs the chain's net growth -- NOT log-line counts: promote_block
+# re-logs on every reorg re-promotion (incl. height=None), so line counts
+# inflate under forking. See metrics.sh for the authoritative version.
 n0="$RUN_DIR/node-0.log"
 if [ -f "$n0" ]; then
-  n0_promos=$(grep -c "Promoted block" "$n0" 2>/dev/null || echo 0)
-  n0_uncle_blocks=$(grep -c "references .* uncle" "$n0" 2>/dev/null || echo 0)
-  n0_uncle_refs=$(grep -oE "references [0-9]+ uncle" "$n0" 2>/dev/null \
-                    | grep -oE "[0-9]+" | paste -sd+ - | bc 2>/dev/null || echo 0)
-  rate="n/a"
-  if [ "${n0_promos:-0}" -gt 0 ] 2>/dev/null; then
-    rate=$(awk "BEGIN{printf \"%.1f%%\", 100*${n0_uncle_blocks:-0}/${n0_promos}}")
+  produced=$(grep -oE "Promoted block [0-9a-f]+" "$n0" 2>/dev/null | awk '{print $3}' | sort -u | wc -l | tr -d ' ')
+  chain_hi=$(grep -oE "to confirmed height Some\([0-9]+\)" "$n0" 2>/dev/null | grep -oE "[0-9]+" | sort -n | tail -1)
+  chain_lo=$(grep -oE "to confirmed height Some\([0-9]+\)" "$n0" 2>/dev/null | grep -oE "[0-9]+" | sort -n | head -1)
+  rate="n/a"; mainchain=0; uncles=0
+  if [ -n "${chain_hi:-}" ] && [ "$produced" -gt 0 ]; then
+    mainchain=$(( chain_hi - chain_lo + 1 ))
+    uncles=$(( produced - mainchain )); [ "$uncles" -lt 0 ] && uncles=0
+    rate=$(awk "BEGIN{printf \"%.1f%%\", 100*${uncles}/${produced}}")
   fi
-  echo "node 0:  confirmed=$n0_promos  uncle-blocks=$n0_uncle_blocks  uncle-refs=${n0_uncle_refs:-0}  uncle-rate=$rate"
+  echo "node 0:  produced=$produced  main-chain=$mainchain  uncles=$uncles  uncle-rate=$rate"
 fi
 if [ "$errs" -gt 0 ]; then
   echo "sample errors:"
