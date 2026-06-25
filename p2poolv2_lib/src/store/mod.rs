@@ -20,7 +20,7 @@ use crate::store::column_families::ColumnFamily;
 use crate::store::dag_store::{MAX_BLOCKS_PER_HEIGHT, MAX_UNCLES_DEPTH};
 use bitcoin::consensus::{Encodable, encode};
 use bitcoin::{BlockHash, Work};
-use rocksdb::{ColumnFamilyDescriptor, DB, Options as RocksDbOptions};
+use rocksdb::{BlockBasedOptions, ColumnFamilyDescriptor, DB, Options as RocksDbOptions};
 use std::sync::{Arc, RwLock};
 use tracing::debug;
 use writer::StoreError;
@@ -117,28 +117,44 @@ fn parse_blockhash_bytes(bytes: &[u8]) -> Option<Vec<BlockHash>> {
 /// We use column families to store different types of data, so that compactions are independent for each type.
 #[allow(dead_code)]
 impl Store {
+    /// Build CF options with a 10-bit bloom filter for point-lookup CFs.
+    /// Bloom filters eliminate disk reads for keys that don't exist,
+    /// which speeds up existence checks and negative lookups during sync.
+    fn cf_options_with_bloom() -> RocksDbOptions {
+        let mut block_opts = BlockBasedOptions::default();
+        block_opts.set_bloom_filter(10.0, false);
+        let mut opts = RocksDbOptions::default();
+        opts.set_block_based_table_factory(&block_opts);
+        opts
+    }
+
     /// Create a new share store
     pub fn new(path: String, read_only: bool) -> Result<Self, StoreError> {
-        // for now we use default options for all column families, we can tweak this later based on performance testing
+        // Point-lookup CFs get bloom filters to speed up existence checks
+        // and reject negative lookups without disk I/O.
+        // Merge/iterator CFs (BlockIndex, BlockHeight, TxidsBlocks, Uncles)
+        // skip bloom filters since they primarily use range scans or merges.
         let block_metadata_cf_descriptor =
-            ColumnFamilyDescriptor::new(ColumnFamily::BlockMetadata, RocksDbOptions::default());
+            ColumnFamilyDescriptor::new(ColumnFamily::BlockMetadata, Self::cf_options_with_bloom());
         let block_txids_cf =
             ColumnFamilyDescriptor::new(ColumnFamily::BlockTxids, RocksDbOptions::default());
         let inputs_cf =
-            ColumnFamilyDescriptor::new(ColumnFamily::Inputs, RocksDbOptions::default());
+            ColumnFamilyDescriptor::new(ColumnFamily::Inputs, Self::cf_options_with_bloom());
         let outputs_cf =
-            ColumnFamilyDescriptor::new(ColumnFamily::Outputs, RocksDbOptions::default());
-        let tx_cf = ColumnFamilyDescriptor::new(ColumnFamily::Tx, RocksDbOptions::default());
+            ColumnFamilyDescriptor::new(ColumnFamily::Outputs, Self::cf_options_with_bloom());
+        let tx_cf = ColumnFamilyDescriptor::new(ColumnFamily::Tx, Self::cf_options_with_bloom());
 
-        // Configure BlockIndex column family with merge operator for efficient appends
-        let mut block_index_opts = RocksDbOptions::default();
+        // Configure BlockIndex column family with merge operator for efficient appends.
+        // Bloom filter helps point lookups in get_children_blockhashes.
+        let mut block_index_opts = Self::cf_options_with_bloom();
         block_index_opts
             .set_merge_operator_associative("blockhash_list_merge", blockhash_list_merge);
         let block_index_cf =
             ColumnFamilyDescriptor::new(ColumnFamily::BlockIndex, block_index_opts);
 
-        // Configure BlockHeight column family with merge operator for efficient appends
-        let mut block_height_opts = RocksDbOptions::default();
+        // Configure BlockHeight column family with merge operator for efficient appends.
+        // Bloom filter helps point lookups for TOP_CANDIDATE/TOP_CONFIRMED keys.
+        let mut block_height_opts = Self::cf_options_with_bloom();
         block_height_opts
             .set_merge_operator_associative("blockhash_list_merge", blockhash_list_merge);
         let block_height_cf =
@@ -163,17 +179,18 @@ impl Store {
             ColumnFamilyDescriptor::new(ColumnFamily::BitcoinTxids, RocksDbOptions::default());
 
         let share_cf = ColumnFamilyDescriptor::new(ColumnFamily::Share, RocksDbOptions::default());
-        let user_cf = ColumnFamilyDescriptor::new(ColumnFamily::User, RocksDbOptions::default());
+        let user_cf =
+            ColumnFamilyDescriptor::new(ColumnFamily::User, Self::cf_options_with_bloom());
         let user_index_cf =
             ColumnFamilyDescriptor::new(ColumnFamily::UserIndex, RocksDbOptions::default());
         let metadata_cf =
             ColumnFamilyDescriptor::new(ColumnFamily::Metadata, RocksDbOptions::default());
 
         let spends_index_cf =
-            ColumnFamilyDescriptor::new(ColumnFamily::SpendsIndex, RocksDbOptions::default());
+            ColumnFamilyDescriptor::new(ColumnFamily::SpendsIndex, Self::cf_options_with_bloom());
 
         let header_cf =
-            ColumnFamilyDescriptor::new(ColumnFamily::Header, RocksDbOptions::default());
+            ColumnFamilyDescriptor::new(ColumnFamily::Header, Self::cf_options_with_bloom());
 
         let template_merkle_branches_cf = ColumnFamilyDescriptor::new(
             ColumnFamily::TemplateMerkleBranches,
