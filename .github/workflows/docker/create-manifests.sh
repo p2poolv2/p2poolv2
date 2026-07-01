@@ -1,20 +1,39 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SRC_TAG="ghcr.io/${GITHUB_REPOSITORY}:${IMAGE_SHA}"
-ANN_SOURCE="org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}"
-ANN_DESC="org.opencontainers.image.description=P2Poolv2 is a peer-to-peer Bitcoin mining pool where miners coordinate directly and verify their rewards without centralized operators."
+REPO_GHCR="ghcr.io/${GITHUB_REPOSITORY}"
+REPO_DH="docker.io/${GITHUB_REPOSITORY}"
+SRC_TAG="${REPO_GHCR}:${IMAGE_SHA}"
+DH_TAG="${REPO_DH}:${IMAGE_SHA}"
+ANN_SOURCE="index:org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}"
+ANN_DESC="index:org.opencontainers.image.description=P2Poolv2 is a peer-to-peer Bitcoin mining pool where miners coordinate directly and verify their rewards without centralized operators."
 
+echo "=== 1/5 GHCR: merge per-arch temps into multi-arch manifest ==="
 docker buildx imagetools create \
-  $(echo "${TAGS_GHCR}" | xargs -I{} echo -t {}) \
+  -t "${SRC_TAG}" \
   --annotation "${ANN_SOURCE}" \
   --annotation "${ANN_DESC}" \
   "${SRC_TAG}-amd64" \
   "${SRC_TAG}-arm64" \
   "${SRC_TAG}-armv7"
 
-docker buildx imagetools create \
-  $(echo "${TAGS_DH}" | xargs -I{} echo -t {}) \
-  --annotation "${ANN_SOURCE}" \
-  --annotation "${ANN_DESC}" \
-  "${SRC_TAG}"
+echo "=== 2/5 Docker Hub: copy multi-arch manifest (self-contained) ==="
+docker buildx imagetools create -t "${DH_TAG}" "${SRC_TAG}"
+
+echo "=== 3/5 Cleanup: delete per-arch temp tags from GHCR ==="
+.github/workflows/docker/cleanup-temp-tags.sh
+
+echo "=== 4/5 GHCR: copy back from Docker Hub (self-contained) ==="
+docker buildx imagetools create -t "${SRC_TAG}" "${DH_TAG}"
+
+echo "=== 5/5 Tag version + latest on both registries ==="
+for tag in ${TAGS_GHCR}; do
+  [[ "${tag}" == "${SRC_TAG}" ]] && continue
+  echo "  GHCR: ${tag}"
+  docker buildx imagetools create -t "${tag}" "${SRC_TAG}"
+done
+for tag in ${TAGS_DH}; do
+  [[ "${tag}" == "${DH_TAG}" ]] && continue
+  echo "  Docker Hub: ${tag}"
+  docker buildx imagetools create -t "${tag}" "${DH_TAG}"
+done
