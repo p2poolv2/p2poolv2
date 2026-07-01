@@ -17,11 +17,10 @@ Once you have downloaded the vscode extension you can then run the model checker
 === Run model checker from command line
 
 ```
-java -cp ~/.vscode/extensions/tlaplus.vscode-ide-2025.12.32241/tools/tla2tools.jar -XX:+UseParallelGC -DTLA-Library= -Dtlc2.TLC.ide=vscode tlc2.TLC ShareChain.tla -tool -modelcheck -config ShareChain.cfg -workers 16 -coverage 1
+java -cp ~/.local/share/tlaplus/lib/tla2tools.jar -XX:+UseParallelGC -DTLA-Library= -Dtlc2.TLC.ide=vscode tlc2.TLC ShareChain.tla -tool -modelcheck -config ShareChain.cfg -workers 16 -coverage 1
 ```
-
 === Generate PDF of the specification
 
 ```
-java -cp ~/.vscode/extensions/tlaplus.vscode-ide-2025.12.32241/tools/tla2tools.jar tla2tex.TLA -shade -number -latexCommand pdflatex ShareChain.tla
+java -cp ~/.local/share/tlaplus/lib/tla2tools.jar tla2tex.TLA -shade -number -latexCommand pdflatex ShareChain.tla
 ```

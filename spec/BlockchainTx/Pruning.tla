@@ -2,8 +2,12 @@
 EXTENDS BlockchainTx
 
 CONSTANTS
-    PrunedLength,       \* Number of blocks retained after pruning (deletion boundary)
-    SpendWindow         \* Outputs older than this are unspendable (< PrunedLength)
+    PruneDepth,         \* Number of blocks from chain tip that must be retained
+    PPLNSDepth          \* Outputs older than this from tip are unspendable (< PruneDepth)
+
+\* In production PruneDepth = 2 * PPLNSDepth (Pruning.org: "the pruned chain
+\* is as long as 2x the PPLNS Depth"). The cfg uses smaller values that do not
+\* satisfy this ratio in order to keep the model checker state space tractable.
 
 VARIABLES
     prune_height        \* Blocks at or below this height are pruned
@@ -14,22 +18,22 @@ all_vars == <<chain, next_txid, prune_height>>
 (* Maximum height that can be pruned given the current chain length         *)
 (****************************************************************************)
 MaxPruneHeight ==
-    IF ChainHeight > PrunedLength
-    THEN ChainHeight - PrunedLength
+    IF ChainHeight > PruneDepth
+    THEN ChainHeight - PruneDepth
     ELSE 0
 
 (****************************************************************************)
-(* Spendable UTXOs restricted to outputs within the spend window.           *)
-(* Rule 3 from pruning design: an output past SpendWindow is unspendable.   *)
-(* SpendWindow < PrunedLength provides a buffer so that by the time an      *)
-(* output is deleted (past PrunedLength), blocks referencing it are safely  *)
+(* Spendable UTXOs restricted to outputs within the PPLNS Depth.            *)
+(* Rule 2 from pruning design: an output past PPLNS Depth is unspendable.  *)
+(* PPLNSDepth < PruneDepth provides a buffer so that by the time an        *)
+(* output is deleted (past Prune Depth), blocks referencing it are safely   *)
 (* above the prune boundary.                                                *)
 (****************************************************************************)
 NotPrunedSpendableUTXOs ==
-    {u \in SpendableUTXOs : ChainHeight - u.height < SpendWindow}
+    {u \in SpendableUTXOs : ChainHeight - u.height < PPLNSDepth}
 
 (****************************************************************************)
-(* Add a block, only allowing spends of outputs within the prune window.    *)
+(* Add a block, only allowing spends of outputs within PPLNS Depth.         *)
 (* Reuses AddBlockCoinbaseOnly and AddBlockWithSpend from the base module.  *)
 (****************************************************************************)
 PrunedAddBlock ==
@@ -119,17 +123,17 @@ UTXOInRange(from_height, to_height) ==
 
 (****************************************************************************)
 (* The non-pruned portion of the chain can be fully validated, except for   *)
-(* the first SpendWindow blocks above the prune boundary. Those blocks      *)
-(* may reference outputs that were valid when built but are now pruned.     *)
-(* This matches the sync protocol's relaxed validation zone (anchor block   *)
-(* and nearby blocks get trusted based on PoW, not full re-validation).     *)
+(* the first PPLNSDepth blocks above the prune boundary (the relaxed        *)
+(* validation zone). Those blocks may reference outputs that were valid     *)
+(* when built but are now pruned. This matches the sync protocol where      *)
+(* blocks in the Prune Depth minus PPLNS Depth range are trusted via PoW.  *)
 (*                                                                          *)
-(* Proof: if block_idx > prune_height + SpendWindow, then any output O it   *)
-(* references satisfies O > block_idx - 1 - SpendWindow >= prune_height,    *)
+(* Proof: if block_idx > prune_height + PPLNSDepth, then any output O it    *)
+(* references satisfies O > block_idx - 1 - PPLNSDepth >= prune_height,     *)
 (* so O is above the prune boundary and available for validation.           *)
 (****************************************************************************)
 PrunedChainValid ==
-    \A block_idx \in (prune_height + 1 + SpendWindow)..ChainHeight:
+    \A block_idx \in (prune_height + 1 + PPLNSDepth)..ChainHeight:
         ValidateBlockAgainst(
             chain[block_idx],
             UTXOInRange(prune_height + 1, block_idx - 1),
