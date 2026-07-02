@@ -20,8 +20,6 @@
 //! event loop, improving P2P responsiveness. Storage is delegated to the
 //! ChainStoreHandle for serialized database writes.
 
-use crate::node::SwarmSend;
-use crate::node::messages::Message;
 use crate::node::organise_worker::{OrganiseEvent, OrganiseSender};
 #[cfg(test)]
 #[mockall_double::double]
@@ -29,15 +27,8 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::handle_stratum_share::handle_stratum_share;
-#[cfg(feature = "sim")]
-use crate::sim_overrides;
 use crate::stratum::emission::EmissionReceiver;
-use libp2p::request_response::ResponseChannel;
-use tokio::sync::mpsc;
 use tracing::{debug, error, info};
-
-/// Type alias for the swarm sender used by the emission worker.
-type SwarmSender = mpsc::Sender<SwarmSend<ResponseChannel<Message>>>;
 
 /// Worker that processes emissions from the stratum server.
 ///
@@ -45,7 +36,6 @@ type SwarmSender = mpsc::Sender<SwarmSend<ResponseChannel<Message>>>;
 /// during CPU-intensive share processing operations.
 pub struct EmissionWorker {
     emissions_rx: EmissionReceiver,
-    swarm_tx: SwarmSender,
     chain_store_handle: ChainStoreHandle,
     network: bitcoin::Network,
     organise_tx: OrganiseSender,
@@ -55,14 +45,12 @@ impl EmissionWorker {
     /// Creates a new emission worker.
     pub fn new(
         emissions_rx: EmissionReceiver,
-        swarm_tx: SwarmSender,
         chain_store_handle: ChainStoreHandle,
         network: bitcoin::Network,
         organise_tx: OrganiseSender,
     ) -> Self {
         Self {
             emissions_rx,
-            swarm_tx,
             chain_store_handle,
             network,
             organise_tx,
@@ -80,27 +68,10 @@ impl EmissionWorker {
                     // Send block to organise worker for confirmed promotion.
                     if let Err(e) = self
                         .organise_tx
-                        .send(OrganiseEvent::Block(share_block.clone()))
+                        .send(OrganiseEvent::Block(share_block))
                         .await
                     {
                         error!("Failed to send block to organise worker: {e}");
-                    }
-                    // Announce the block to peers.
-                    #[cfg(not(feature = "sim"))]
-                    {
-                        if let Err(_) = self
-                            .swarm_tx
-                            .send(SwarmSend::BroadcastBlock(share_block))
-                            .await
-                        {
-                            error!("Failed to broadcast share block");
-                        }
-                    }
-                    // Under sim, optionally delay the announcement to model
-                    // network latency. All jitter logic lives in sim_overrides.
-                    #[cfg(feature = "sim")]
-                    {
-                        sim_overrides::spawn_delayed_broadcast(self.swarm_tx.clone(), share_block);
                     }
                 }
                 Ok(None) => {
@@ -131,6 +102,7 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
     use std::time::Duration;
+    use tokio::sync::mpsc;
 
     fn create_test_blocktemplate() -> BlockTemplate {
         BlockTemplate {
@@ -225,9 +197,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_run_with_p2p_share_sends_organise_and_inv() {
+    async fn test_run_with_p2p_share_sends_organise_event() {
         let (emissions_tx, emissions_rx) = mpsc::channel::<Emission>(10);
-        let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<ResponseChannel<Message>>>(10);
         let (organise_tx, mut organise_rx) = create_organise_channel();
 
         let mut mock_chain_store = ChainStoreHandle::default();
@@ -237,7 +208,6 @@ mod tests {
 
         let worker = EmissionWorker::new(
             emissions_rx,
-            swarm_tx,
             mock_chain_store,
             bitcoin::Network::Regtest,
             organise_tx,
@@ -256,19 +226,12 @@ mod tests {
             "Expected OrganiseEvent::Block"
         );
 
-        let swarm_event = tokio::time::timeout(Duration::from_secs(2), swarm_rx.recv()).await;
-        assert!(
-            matches!(swarm_event, Ok(Some(SwarmSend::BroadcastBlock(_)))),
-            "Expected SwarmSend::BroadcastBlock"
-        );
-
         worker_handle.await.unwrap();
     }
 
     #[tokio::test]
     async fn test_run_without_commitment_sends_nothing() {
         let (emissions_tx, emissions_rx) = mpsc::channel::<Emission>(10);
-        let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<ResponseChannel<Message>>>(10);
         let (organise_tx, mut organise_rx) = create_organise_channel();
 
         let mut mock_chain_store = ChainStoreHandle::default();
@@ -278,7 +241,6 @@ mod tests {
 
         let worker = EmissionWorker::new(
             emissions_rx,
-            swarm_tx,
             mock_chain_store,
             bitcoin::Network::Regtest,
             organise_tx,
@@ -297,16 +259,11 @@ mod tests {
             organise_rx.try_recv().is_err(),
             "No OrganiseEvent expected for PPLNS-only share"
         );
-        assert!(
-            swarm_rx.try_recv().is_err(),
-            "No SwarmSend expected for PPLNS-only share"
-        );
     }
 
     #[tokio::test]
     async fn test_run_continues_after_handle_error() {
         let (emissions_tx, emissions_rx) = mpsc::channel::<Emission>(10);
-        let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<ResponseChannel<Message>>>(10);
         let (organise_tx, mut organise_rx) = create_organise_channel();
 
         let mut mock_chain_store = ChainStoreHandle::default();
@@ -322,7 +279,6 @@ mod tests {
 
         let worker = EmissionWorker::new(
             emissions_rx,
-            swarm_tx,
             mock_chain_store,
             bitcoin::Network::Regtest,
             organise_tx,
@@ -343,37 +299,27 @@ mod tests {
 
         worker_handle.await.unwrap();
 
-        // Only the second emission should produce organise + inv events
+        // Only the second emission should produce an organise event
         assert!(
             matches!(organise_rx.try_recv(), Ok(OrganiseEvent::Block(_))),
             "Expected OrganiseEvent::Block from second emission"
-        );
-        assert!(
-            matches!(swarm_rx.try_recv(), Ok(SwarmSend::BroadcastBlock(_))),
-            "Expected SwarmSend::BroadcastBlock from second emission"
         );
 
         assert!(
             organise_rx.try_recv().is_err(),
             "No more organise events expected"
         );
-        assert!(
-            swarm_rx.try_recv().is_err(),
-            "No more swarm events expected"
-        );
     }
 
     #[tokio::test]
     async fn test_run_stops_when_channel_closes() {
         let (emissions_tx, emissions_rx) = mpsc::channel::<Emission>(10);
-        let (swarm_tx, _swarm_rx) = mpsc::channel::<SwarmSend<ResponseChannel<Message>>>(10);
         let (organise_tx, _organise_rx) = create_organise_channel();
 
         let mock_chain_store = ChainStoreHandle::default();
 
         let worker = EmissionWorker::new(
             emissions_rx,
-            swarm_tx,
             mock_chain_store,
             bitcoin::Network::Regtest,
             organise_tx,
