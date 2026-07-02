@@ -899,4 +899,85 @@ mod tests {
         store.commit_batch(batch).unwrap();
         assert!(result.is_ok());
     }
+
+    /// Fallback confirmation must also extend the candidate chain so
+    /// that a later organise_header call does not overwrite the
+    /// Confirmed status.
+    ///
+    /// Scenario:
+    /// - genesis -> share1(h:1) confirmed via push_to_confirmed_chain
+    ///   (share1 is also the top candidate)
+    /// - share2(h:2, parent=share1) stored with block data and valid
+    ///   metadata but NOT on the candidate chain.
+    /// - organise_block promotes share2 via try_fallback_confirmation.
+    ///   The fix: fallback also writes a candidate entry so the
+    ///   candidate chain stays consistent with the confirmed chain.
+    /// - organise_header(share2) is called again (peer re-send).
+    ///   share2 must remain Confirmed.
+    #[test]
+    fn test_fallback_confirmation_extends_candidate_chain() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // share1: confirmed at h:1, also top candidate
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        store.push_to_confirmed_chain(&share1).unwrap();
+        assert!(store.is_confirmed(&share1.block_hash()));
+
+        let top_candidate = store.get_top_candidate().unwrap();
+        assert_eq!(top_candidate.hash, share1.block_hash());
+        assert_eq!(top_candidate.height, 1);
+
+        // share2: child of share1, stored with block data and
+        // HeaderValid metadata but NOT on the candidate chain.
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(0xe9695793)
+            .build();
+        store.store_with_valid_metadata(&share2);
+
+        // Promote share2 via fallback confirmation (organise_block).
+        // try_fallback_confirmation finds share2 at h:2 with parent =
+        // confirmed tip (share1) and promotes it to Confirmed.
+        // The fix also extends the candidate chain.
+        let mut batch = Store::get_write_batch();
+        let result = store.organise_block(&mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+        assert_eq!(result, Some(2));
+        assert!(store.is_confirmed(&share2.block_hash()));
+        assert_eq!(store.get_top_confirmed_height().unwrap(), 2);
+
+        // Candidate chain must also be extended to share2
+        let top_candidate = store.get_top_candidate().unwrap();
+        assert_eq!(top_candidate.hash, share2.block_hash());
+        assert_eq!(top_candidate.height, 2);
+
+        // Simulate a peer re-sending share2's header.
+        // organise_header must not downgrade the Confirmed status.
+        let mut batch = Store::get_write_batch();
+        store.organise_header(&share2.header, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let metadata = store.get_block_metadata(&share2.block_hash()).unwrap();
+        assert_eq!(
+            metadata.status,
+            Status::Confirmed,
+            "organise_header must not downgrade Confirmed to Candidate \
+             after fallback confirmation extended the candidate chain"
+        );
+
+        // The confirmed index must still point to share2
+        assert_eq!(
+            store.get_confirmed_at_height(2).unwrap(),
+            share2.block_hash()
+        );
+    }
 }

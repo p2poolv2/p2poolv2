@@ -68,9 +68,10 @@ impl Store {
 
     /// Directly set top candidate height without consecutive-height validation.
     ///
-    /// Used by `reorg_candidate` which computes the correct final height
-    /// locally instead of reading stale DB state within a single WriteBatch.
-    fn set_top_candidate_height(&self, height: Height, batch: &mut rocksdb::WriteBatch) {
+    /// Used by `reorg_candidate` and `try_fallback_confirmation` which
+    /// compute the correct final height locally instead of reading
+    /// stale DB state within a single WriteBatch.
+    pub(super) fn set_top_candidate_height(&self, height: Height, batch: &mut rocksdb::WriteBatch) {
         let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
         let serialized_height = consensus::serialize(&height);
         batch.put_cf(
@@ -101,7 +102,11 @@ impl Store {
     }
 
     /// Write a candidate index entry directly into the batch.
-    fn put_candidate_entry(
+    /// Write a candidate index entry directly into the batch.
+    ///
+    /// Used by `try_fallback_confirmation` to add the confirmed block
+    /// to the candidate index without touching metadata status.
+    pub(super) fn put_candidate_entry(
         &self,
         height: Height,
         blockhash: &BlockHash,
