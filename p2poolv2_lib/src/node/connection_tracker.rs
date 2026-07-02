@@ -450,7 +450,7 @@ mod tests {
 
         assert_eq!(
             tracker.connected_peers[&peer_id].compact_block_from,
-            CompactBlockRelayStatus::Disabled
+            CompactBlockRelayStatus::Handshake
         );
 
         tracker.set_compact_block_from(&peer_id, CompactBlockRelayStatus::HighBandwidth);
@@ -501,13 +501,12 @@ mod tests {
         tracker.handle_established(peer_b, &make_listener_endpoint("/ip4/5.6.7.8/tcp/12345"));
         tracker.handle_established(peer_c, &make_dialer_endpoint("/ip4/9.0.1.2/tcp/46884"));
 
-        // All start as Disabled (not compact-capable)
-        assert_eq!(tracker.count_compact_capable_peers(), 0);
+        // All start as Handshake (default), which counts as compact-capable
+        assert_eq!(tracker.count_compact_capable_peers(), 3);
 
-        // HighBandwidth and LowBandwidth are compact-capable
         tracker.set_compact_block_from(&peer_a, CompactBlockRelayStatus::HighBandwidth);
         tracker.set_compact_block_from(&peer_b, CompactBlockRelayStatus::LowBandwidth);
-        assert_eq!(tracker.count_compact_capable_peers(), 2);
+        assert_eq!(tracker.count_compact_capable_peers(), 3);
 
         // Disabled does not count
         tracker.set_compact_block_from(&peer_c, CompactBlockRelayStatus::Disabled);
