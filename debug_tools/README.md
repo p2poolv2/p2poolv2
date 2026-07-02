@@ -63,7 +63,7 @@ Checks performed:
 - Uncle parent is an ancestor of the nephew (ancestor-type, not sibling)
 
 ```
-just run /path/to/store.db
+just verify_chain /path/to/store.db
 ```
 
 Returns exit code 0 on success, 1 if any errors are found.

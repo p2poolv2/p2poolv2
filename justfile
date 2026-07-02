@@ -97,7 +97,7 @@ bench-flamegraph package="p2poolv2_lib" name="pplns_window" function="get_addres
 
 # Verify chain integrity in a store.db
 verify_chain db_path:
-    cargo run --bin verify_chain --features debug-tools -- {{ db_path }}
+    cargo run --release --bin verify_chain --features debug-tools -- {{ db_path }}
 
 # fix common warnings
 fix:
