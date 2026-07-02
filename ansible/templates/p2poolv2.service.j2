@@ -1,0 +1,17 @@
+[Unit]
+Description=P2Poolv2 Node - %i
+After=network.target
+
+[Service]
+Type=simple
+User={{ user_name }}
+Group={{ user_name }}
+WorkingDirectory={{ data_dir }}
+ExecStart={{ bin_dir }}/p2poolv2_node --config {{ config_dir }}/config.toml
+Restart=always
+RestartSec=5
+StandardOutput=append:{{ log_dir }}/p2poolv2.log
+StandardError=append:{{ log_dir }}/p2poolv2.log
+
+[Install]
+WantedBy=multi-user.target
