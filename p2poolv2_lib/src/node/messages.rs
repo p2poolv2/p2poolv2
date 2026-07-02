@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::node::bip152::{ShareBlockTransactionsRequest, ShareHeaderAndShortIds};
+use crate::node::compact_block_relay::{ShareBlockTransactionsRequest, ShareHeaderAndShortIds};
 use crate::shares::share_block::{ShareBlock, ShareHeader, Txids};
 use bitcoin::consensus::{Decodable, Encodable, encode};
 use bitcoin::hashes::{Hash, sha256d};
@@ -54,6 +54,7 @@ mod inventory_discriminants {
 mod getdata_discriminants {
     pub const BLOCK: u8 = 0;
     pub const TXID: u8 = 1;
+    pub const COMPACT_BLOCK: u8 = 2;
 }
 
 /// P2P network messages, encoded using bitcoin consensus_encode
@@ -458,6 +459,8 @@ impl Decodable for InventoryMessage {
 pub enum GetData {
     Block(BlockHash),
     Txid(Txid),
+    /// Requests a compact block response for a recently announced share.
+    CompactBlock(BlockHash),
 }
 
 impl Encodable for GetData {
@@ -474,6 +477,11 @@ impl Encodable for GetData {
                 len += txid.consensus_encode(w)?;
                 Ok(len)
             }
+            GetData::CompactBlock(hash) => {
+                let mut len = COMPACT_BLOCK.consensus_encode(w)?;
+                len += hash.consensus_encode(w)?;
+                Ok(len)
+            }
         }
     }
 }
@@ -485,6 +493,7 @@ impl Decodable for GetData {
         match disc {
             BLOCK => Ok(GetData::Block(BlockHash::consensus_decode(r)?)),
             TXID => Ok(GetData::Txid(Txid::consensus_decode(r)?)),
+            COMPACT_BLOCK => Ok(GetData::CompactBlock(BlockHash::consensus_decode(r)?)),
             _ => Err(encode::Error::ParseFailed("Invalid GetData discriminant")),
         }
     }
@@ -493,8 +502,26 @@ impl Decodable for GetData {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::node::compact_block_relay::ShareHeaderAndShortIds;
+    use crate::test_utils::{TestShareBlockBuilder, test_coinbase_transaction};
+    use bitcoin::bip152::{BlockTransactions, BlockTransactionsRequest, HeaderAndShortIds};
     use bitcoin::consensus::encode;
     use std::str::FromStr;
+
+    fn compact_block_message() -> Message {
+        let sharechain_header = TestShareBlockBuilder::new().build().header;
+        Message::CompactBlock(ShareHeaderAndShortIds {
+            bitcoin_header: HeaderAndShortIds {
+                header: sharechain_header.bitcoin_header,
+                nonce: 0,
+                short_ids: Vec::new(),
+                prefilled_txs: Vec::new(),
+            },
+            sharechain_header,
+            sharechain_short_ids: Vec::new(),
+            sharechain_prefilled_txs: Vec::new(),
+        })
+    }
 
     #[test]
     fn test_raw_message_roundtrip() {
@@ -653,6 +680,71 @@ mod tests {
 
         let decoded = GetData::consensus_decode(&mut &encoded[..]).unwrap();
         assert_eq!(decoded, get_data);
+    }
+
+    #[test]
+    fn test_get_data_compact_block_roundtrip() {
+        let block_hash = BlockHash::all_zeros();
+        let get_data = GetData::CompactBlock(block_hash);
+        let mut encoded = Vec::new();
+        get_data.consensus_encode(&mut encoded).unwrap();
+
+        let decoded = GetData::consensus_decode(&mut &encoded[..]).unwrap();
+        assert_eq!(decoded, get_data);
+    }
+
+    #[test]
+    fn test_message_send_compact_roundtrip() {
+        let message = Message::SendCompact(true, 1);
+        let mut encoded = Vec::new();
+        message.consensus_encode(&mut encoded).unwrap();
+
+        let decoded = Message::consensus_decode(&mut &encoded[..]).unwrap();
+        assert_eq!(decoded, message);
+    }
+
+    #[test]
+    fn test_message_compact_block_roundtrip() {
+        let message = compact_block_message();
+        let mut encoded = Vec::new();
+        message.consensus_encode(&mut encoded).unwrap();
+
+        let decoded = Message::consensus_decode(&mut &encoded[..]).unwrap();
+        assert_eq!(decoded, message);
+    }
+
+    #[test]
+    fn test_message_get_block_txn_roundtrip() {
+        let block_hash = BlockHash::all_zeros();
+        let request = ShareBlockTransactionsRequest::new(
+            BlockTransactionsRequest {
+                block_hash,
+                indexes: vec![1, 3],
+            },
+            BlockTransactionsRequest {
+                block_hash,
+                indexes: vec![0, 2],
+            },
+        );
+        let message = Message::GetBlockTxn(request);
+        let mut encoded = Vec::new();
+        message.consensus_encode(&mut encoded).unwrap();
+
+        let decoded = Message::consensus_decode(&mut &encoded[..]).unwrap();
+        assert_eq!(decoded, message);
+    }
+
+    #[test]
+    fn test_message_block_txn_roundtrip() {
+        let message = Message::BlockTxn(BlockTransactions {
+            block_hash: BlockHash::all_zeros(),
+            transactions: vec![test_coinbase_transaction(1)],
+        });
+        let mut encoded = Vec::new();
+        message.consensus_encode(&mut encoded).unwrap();
+
+        let decoded = Message::consensus_decode(&mut &encoded[..]).unwrap();
+        assert_eq!(decoded, message);
     }
 
     #[test]
