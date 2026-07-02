@@ -91,6 +91,13 @@ impl Store {
                     "Fallback confirmation: block {blockhash} at height {next_height} \
                      extends confirmed tip"
                 );
+                // Write the candidate index entry so the candidate
+                // chain stays consistent with the confirmed chain.
+                // Only the index is updated -- metadata status is left
+                // untouched so extend_confirmed is the sole writer
+                // that sets it to Confirmed.
+                self.put_candidate_entry(next_height, blockhash, batch);
+                self.set_top_candidate_height(next_height, batch);
                 let candidates = vec![(next_height, *blockhash)];
                 return self.extend_confirmed(next_height, &candidates, batch);
             }
