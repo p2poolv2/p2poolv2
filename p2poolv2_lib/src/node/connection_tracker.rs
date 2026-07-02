@@ -20,7 +20,9 @@ use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::time::Instant;
-use tracing::warn;
+use tracing::{debug, warn};
+
+use crate::node::compact_block_relay::CompactBlockRelayStatus;
 
 /// Direction of a peer connection.
 #[derive(Debug, Clone, Serialize)]
@@ -34,8 +36,26 @@ pub enum ConnectionDirection {
 pub struct PeerInfo {
     pub address: Multiaddr,
     pub ip: Option<IpAddr>,
+    /// Whether we should send compact blocks
+    pub compact_block_to: CompactBlockRelayStatus,
+    /// Whether we should expect compact blocks
+    pub compact_block_from: CompactBlockRelayStatus,
     pub connected_at: Instant,
     pub direction: ConnectionDirection,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+impl Default for PeerInfo {
+    fn default() -> Self {
+        Self {
+            address: "/ip4/0.0.0.0/tcp/46889".parse().unwrap(),
+            ip: Default::default(),
+            compact_block_to: Default::default(),
+            compact_block_from: Default::default(),
+            connected_at: Instant::now(),
+            direction: ConnectionDirection::Inbound,
+        }
+    }
 }
 
 /// Serializable peer info returned by the API.
@@ -46,6 +66,23 @@ pub struct PeerInfoResponse {
     pub address: String,
     pub direction: ConnectionDirection,
     pub connected_secs: u64,
+    pub compact_block_to: CompactBlockRelayStatus,
+    pub compact_block_from: CompactBlockRelayStatus,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+impl Default for PeerInfoResponse {
+    fn default() -> Self {
+        Self {
+            peer_id: PeerId::random().to_string(),
+            address: "/ip4/127.0.0.1/tcp/46889".to_string(),
+            ip: Some("127.0.0.1".to_string()),
+            compact_block_to: Default::default(),
+            compact_block_from: Default::default(),
+            connected_secs: 0,
+            direction: ConnectionDirection::Inbound,
+        }
+    }
 }
 
 /// Result of processing a new connection.
@@ -127,6 +164,8 @@ impl ConnectionTracker {
             ip,
             connected_at: Instant::now(),
             direction,
+            compact_block_from: Default::default(),
+            compact_block_to: Default::default(),
         };
         self.connected_peers.insert(peer_id, peer_info.clone());
         ConnectionAction::Accept(peer_info)
@@ -155,6 +194,34 @@ impl ConnectionTracker {
         self.blocked_ips.iter().copied().collect()
     }
 
+    /// Count peers currently in HighBandwidth mode (for the sendcmpct receiver cap).
+    pub(crate) fn count_high_bandwidth_peers(&self) -> u8 {
+        self.connected_peers
+            .values()
+            .filter(|p| matches!(p.compact_block_from, CompactBlockRelayStatus::HighBandwidth))
+            .count() as u8
+    }
+
+    /// Count peers that are not in Disabled mode (for the sender-side decision on connection established).
+    pub(crate) fn count_compact_capable_peers(&self) -> u32 {
+        self.connected_peers
+            .values()
+            .filter(|p| !matches!(p.compact_block_from, CompactBlockRelayStatus::Disabled))
+            .count() as u32
+    }
+
+    /// Set a peer's compact_block_from status. No-op (with debug log) if peer not tracked.
+    pub(crate) fn set_compact_block_from(
+        &mut self,
+        peer_id: &PeerId,
+        status: CompactBlockRelayStatus,
+    ) {
+        match self.connected_peers.get_mut(peer_id) {
+            Some(info) => info.compact_block_from = status,
+            None => debug!(%peer_id, "set_compact_block_from: peer not tracked"),
+        }
+    }
+
     /// Build a list of connected peer info responses.
     pub(crate) fn get_peer_infos(&self) -> Vec<PeerInfoResponse> {
         let now = Instant::now();
@@ -166,6 +233,8 @@ impl ConnectionTracker {
                 address: info.address.to_string(),
                 direction: info.direction.clone(),
                 connected_secs: now.duration_since(info.connected_at).as_secs(),
+                compact_block_from: info.compact_block_from,
+                compact_block_to: info.compact_block_to,
             })
             .collect()
     }

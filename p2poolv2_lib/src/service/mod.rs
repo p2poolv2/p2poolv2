@@ -15,7 +15,6 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 pub mod p2p_service;
-pub mod peer_state;
 
 use crate::node::SwarmSend;
 use crate::service::p2p_service::{P2PService, RequestContext};
@@ -181,7 +180,6 @@ mod tests {
     use crate::node::request_response_handler::block_fetcher;
     use crate::node::validation_worker;
     use crate::service::p2p_service::{P2PService, RequestContext};
-    use crate::service::peer_state::PeerState;
     #[mockall_double::double]
     use crate::shares::chain::chain_store_handle::ChainStoreHandle;
     use crate::shares::validation::MockDefaultShareValidator;
@@ -199,7 +197,7 @@ mod tests {
 
     /// Build a RequestContext for testing with a oneshot response channel.
     fn make_test_context(
-        peer: PeerState,
+        peer_id: PeerId,
         swarm_tx: mpsc::Sender<SwarmSend<oneshot::Sender<Message>>>,
         response_channel: oneshot::Sender<Message>,
     ) -> RequestContext<oneshot::Sender<Message>, TestTimeProvider> {
@@ -212,7 +210,7 @@ mod tests {
         let (block_receiver_handle, _) = create_block_receiver_channel();
 
         RequestContext {
-            peer: peer.into(),
+            peer_id,
             request: Message::NotFound(GetData::Block(BlockHash::all_zeros())),
             chain_store_handle,
             response_channel,
@@ -232,7 +230,6 @@ mod tests {
         //! at 500ms, guaranteeing the Disconnect path is taken.
         let (swarm_tx, mut swarm_rx) = mpsc::channel(8);
         let peer_id = PeerId::random();
-        let peer_state = PeerState::new(peer_id);
 
         let service = build_rate_limited_service(1);
         let (sender, receiver) = mpsc::channel(16);
@@ -247,7 +244,7 @@ mod tests {
 
         // First request -- consumes the rate limit bucket
         let (response_tx, _response_rx) = oneshot::channel::<Message>();
-        let ctx = make_test_context(peer_state.clone(), swarm_tx.clone(), response_tx);
+        let ctx = make_test_context(peer_id, swarm_tx.clone(), response_tx);
         sender.send(ctx).await.unwrap();
 
         // Give the task time to process the first request
@@ -255,7 +252,7 @@ mod tests {
 
         // Second request -- rate limiter is exhausted
         let (response_tx2, _response_rx2) = oneshot::channel::<Message>();
-        let ctx2 = make_test_context(peer_state, swarm_tx.clone(), response_tx2);
+        let ctx2 = make_test_context(peer_id, swarm_tx.clone(), response_tx2);
         sender.send(ctx2).await.unwrap();
 
         // Wait for the 500ms timeout to fire (well before 1s refill)
@@ -302,9 +299,7 @@ mod tests {
         //! gets disconnected, but Peer B processes its request fine.
         let (swarm_tx, mut swarm_rx) = mpsc::channel(16);
         let peer_a = PeerId::random();
-        let peer_state_a = PeerState::new(peer_a);
         let peer_b = PeerId::random();
-        let peer_state_b = PeerState::new(peer_b);
         let ready_timeout = Duration::from_millis(500);
 
         let service_a = build_rate_limited_service(1);
@@ -329,7 +324,7 @@ mod tests {
 
         // Peer A -- first request consumes its rate bucket
         let (response_tx_a, _) = oneshot::channel::<Message>();
-        let ctx_a = make_test_context(peer_state_a.clone(), swarm_tx.clone(), response_tx_a);
+        let ctx_a = make_test_context(peer_a, swarm_tx.clone(), response_tx_a);
         sender_a.send(ctx_a).await.unwrap();
 
         // Give task A time to process
@@ -337,12 +332,12 @@ mod tests {
 
         // Peer A -- second request, will be rate limited
         let (response_tx_a2, _) = oneshot::channel::<Message>();
-        let ctx_a2 = make_test_context(peer_state_a, swarm_tx.clone(), response_tx_a2);
+        let ctx_a2 = make_test_context(peer_a, swarm_tx.clone(), response_tx_a2);
         sender_a.send(ctx_a2).await.unwrap();
 
         // Peer B -- should process immediately despite A being rate limited
         let (response_tx_b, _) = oneshot::channel::<Message>();
-        let ctx_b = make_test_context(peer_state_b, swarm_tx.clone(), response_tx_b);
+        let ctx_b = make_test_context(peer_b, swarm_tx.clone(), response_tx_b);
         sender_b.send(ctx_b).await.unwrap();
 
         // Wait for A's timeout to fire (500ms) plus some margin
@@ -375,13 +370,12 @@ mod tests {
         //! the task processes it without panicking.
         let (swarm_tx, _swarm_rx) = mpsc::channel(8);
         let peer_id = PeerId::random();
-        let peer_state = PeerState::new(peer_id);
 
         let handle: PeerHandle<oneshot::Sender<Message>, TestTimeProvider> =
             spawn_peer_service(peer_id, 10, swarm_tx.clone());
 
         let (response_tx, _response_rx) = oneshot::channel::<Message>();
-        let ctx = make_test_context(peer_state, swarm_tx.clone(), response_tx);
+        let ctx = make_test_context(peer_id, swarm_tx.clone(), response_tx);
         handle.try_send(ctx).unwrap();
 
         // Drop the handle to close the channel, causing the task to exit

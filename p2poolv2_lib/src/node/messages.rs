@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::node::bip152::{ShareBlockTransactionsRequest, ShareHeaderAndShortIds};
+use crate::node::compact_block_relay::{ShareBlockTransactionsRequest, ShareHeaderAndShortIds};
 use crate::shares::share_block::{ShareBlock, ShareHeader, Txids};
 use bitcoin::consensus::{Decodable, Encodable, encode};
 use bitcoin::hashes::{Hash, sha256d};
@@ -47,6 +47,7 @@ mod message_discriminants {
 mod inventory_discriminants {
     pub const BLOCK_HASHES: u8 = 0;
     pub const TRANSACTION_HASHES: u8 = 1;
+    pub const COMPACT_BLOCK: u8 = 2;
 }
 
 /// GetData discriminants to determine the type of get data message
@@ -459,6 +460,10 @@ impl Decodable for InventoryMessage {
             TRANSACTION_HASHES => Ok(InventoryMessage::TransactionHashes(
                 Txids::consensus_decode(r)?,
             )),
+            COMPACT_BLOCK => {
+                // TODO: Implement low bandwidth block relay
+                Ok(InventoryMessage::CompactBlock)
+            }
             _ => Err(encode::Error::ParseFailed(
                 "Invalid InventoryMessage discriminant",
             )),

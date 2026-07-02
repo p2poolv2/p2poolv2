@@ -219,6 +219,7 @@ mod tests {
         let peer_event = MonitoringEvent::Peer(p2poolv2_lib::monitoring_events::PeerResponse {
             peer_id: "peer1".to_string(),
             status: p2poolv2_lib::monitoring_events::PeerStatus::Connected,
+            ..Default::default()
         });
 
         assert!(event_matches_subscriptions(&share_event, &subscriptions));

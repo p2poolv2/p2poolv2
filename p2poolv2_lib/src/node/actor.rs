@@ -63,7 +63,7 @@ use tracing::trace;
 use tracing::{debug, error, info};
 
 /// NodeHandle provides an interface to interact with a Node running in a separate task
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 #[allow(dead_code)]
 pub struct NodeHandle {
     // The channel to send commands to the Node Actor
@@ -71,7 +71,21 @@ pub struct NodeHandle {
 }
 
 #[allow(dead_code)]
+#[cfg(any(test, feature = "test-utils"))]
+impl Default for NodeHandle {
+    /// Create a dummy channel for testing purposes
+    fn default() -> Self {
+        let (command_tx, _) = mpsc::channel(1);
+        Self { command_tx }
+    }
+}
+
 impl NodeHandle {
+    /// Create a new NodeHandle from a command sender
+    pub(crate) fn from_sender(command_tx: mpsc::Sender<Command>) -> Self {
+        Self { command_tx }
+    }
+
     /// Create a new Node and return a handle to interact with it
     pub async fn new(
         config: Config,
@@ -83,20 +97,7 @@ impl NodeHandle {
         pplns_window: Arc<RwLock<PplnsWindow>>,
     ) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error + Send + Sync>> {
         let (command_tx, command_rx) = mpsc::channel::<Command>(32);
-        let pool_difficulty = PoolDifficulty::build(&chain_store_handle)
-            .expect("Failed to build pool difficulty from chain store");
-        let pool_signature = config
-            .stratum
-            .pool_signature
-            .as_deref()
-            .unwrap_or("")
-            .as_bytes()
-            .to_vec();
-        let share_validator: Arc<DefaultShareValidator> = Arc::new(DefaultShareValidator::new(
-            pool_difficulty,
-            config.stratum.difficulty_multiplier as u128,
-            pool_signature,
-        ));
+        let node_handle = Self::from_sender(command_tx);
 
         let (node_actor, stopping_rx) = NodeActor::new(
             config,
@@ -107,7 +108,7 @@ impl NodeHandle {
             monitoring_event_sender,
             notify_tx,
             pplns_window,
-            share_validator,
+            node_handle.clone(),
         )
         .unwrap();
 
@@ -115,7 +116,7 @@ impl NodeHandle {
             node_actor.run().await;
         });
 
-        Ok((Self { command_tx }, stopping_rx))
+        Ok((node_handle, stopping_rx))
     }
 
     /// Get a list of connected peers
@@ -250,6 +251,8 @@ impl NodeHandle {
                 address: "/ip4/127.0.0.1/tcp/46884".to_string(),
                 direction: ConnectionDirection::Outbound,
                 connected_secs: 0,
+                compact_block_from: Default::default(),
+                compact_block_to: Default::default(),
             })
             .collect();
         let (command_tx, mut command_rx) = mpsc::channel::<Command>(32);
@@ -334,7 +337,7 @@ impl NodeActor {
         monitoring_event_sender: MonitoringEventSender,
         notify_tx: NotifySender,
         pplns_window: Arc<RwLock<PplnsWindow>>,
-        share_validator: Arc<dyn ShareValidator + Send + Sync>,
+        node_handle: NodeHandle,
     ) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error>> {
         // Create organise channel
         let (organise_tx, organise_rx) = create_organise_channel();
@@ -378,6 +381,7 @@ impl NodeActor {
             block_receiver_tx,
             monitoring_event_sender.clone(),
             share_validator.clone(),
+            node_handle,
         )?;
 
         // Spawn organise worker

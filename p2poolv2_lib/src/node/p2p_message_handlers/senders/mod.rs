@@ -14,10 +14,12 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+pub mod compact_block;
 pub mod getheaders;
 pub mod handshake;
 pub mod inventory;
 
+pub use compact_block::send_send_compact;
 pub use getheaders::send_getheaders;
 pub use handshake::send_handshake;
 pub use inventory::send_block_inventory;
