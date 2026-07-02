@@ -26,6 +26,7 @@ use crate::config::Config;
 use crate::monitoring_events::MonitoringEventSender;
 use crate::node::Node;
 use crate::node::SwarmSend;
+use crate::node::connection_tracker::ConnectionTrackerHandle;
 use crate::node::emission_worker::EmissionWorker;
 use crate::node::messages::Message;
 use crate::node::organise_worker::OrganiseError;
@@ -64,15 +65,27 @@ use tracing::trace;
 use tracing::{debug, error, info};
 
 /// NodeHandle provides an interface to interact with a Node running in a separate task
-#[derive(Clone)]
-#[allow(dead_code)]
+#[derive(Clone, Debug)]
 pub struct NodeHandle {
     // The channel to send commands to the Node Actor
     command_tx: mpsc::Sender<Command>,
 }
 
-#[allow(dead_code)]
+#[cfg(any(test, feature = "test-utils"))]
+impl Default for NodeHandle {
+    /// Create a dummy channel for testing purposes
+    fn default() -> Self {
+        let (command_tx, _) = mpsc::channel(1);
+        Self { command_tx }
+    }
+}
+
 impl NodeHandle {
+    /// Create a new NodeHandle from a command sender
+    pub(crate) fn from_sender(command_tx: mpsc::Sender<Command>) -> Self {
+        Self { command_tx }
+    }
+
     /// Create a new Node and return a handle to interact with it
     pub async fn new(
         config: Config,
@@ -84,20 +97,7 @@ impl NodeHandle {
         pplns_window: Arc<RwLock<PplnsWindow>>,
     ) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error + Send + Sync>> {
         let (command_tx, command_rx) = mpsc::channel::<Command>(32);
-        let pool_difficulty = PoolDifficulty::build(&chain_store_handle)
-            .expect("Failed to build pool difficulty from chain store");
-        let pool_signature = config
-            .stratum
-            .pool_signature
-            .as_deref()
-            .unwrap_or("")
-            .as_bytes()
-            .to_vec();
-        let share_validator: Arc<DefaultShareValidator> = Arc::new(DefaultShareValidator::new(
-            pool_difficulty,
-            config.stratum.difficulty_multiplier as u128,
-            pool_signature,
-        ));
+        let node_handle = Self::from_sender(command_tx);
 
         let (node_actor, stopping_rx) = NodeActor::new(
             config,
@@ -108,7 +108,7 @@ impl NodeHandle {
             monitoring_event_sender,
             notify_tx,
             pplns_window,
-            share_validator,
+            node_handle.clone(),
         )
         .unwrap();
 
@@ -116,7 +116,7 @@ impl NodeHandle {
             node_actor.run().await;
         });
 
-        Ok((Self { command_tx }, stopping_rx))
+        Ok((node_handle, stopping_rx))
     }
 
     /// Get a list of connected peers
@@ -251,6 +251,8 @@ impl NodeHandle {
                 address: "/ip4/127.0.0.1/tcp/46884".to_string(),
                 direction: ConnectionDirection::Outbound,
                 connected_secs: 0,
+                compact_block_from: Default::default(),
+                compact_block_to: Default::default(),
             })
             .collect();
         let (command_tx, mut command_rx) = mpsc::channel::<Command>(32);
@@ -323,6 +325,7 @@ struct NodeActor {
     block_fetcher_handle: tokio::task::JoinHandle<Result<(), BlockFetcherError>>,
     validation_handle: tokio::task::JoinHandle<Result<(), ValidationWorkerError>>,
     block_receiver_handle: tokio::task::JoinHandle<()>,
+    connection_tracker_handle: ConnectionTrackerHandle,
 }
 
 impl NodeActor {
@@ -335,7 +338,7 @@ impl NodeActor {
         monitoring_event_sender: MonitoringEventSender,
         notify_tx: NotifySender,
         pplns_window: Arc<RwLock<PplnsWindow>>,
-        share_validator: Arc<dyn ShareValidator + Send + Sync>,
+        node_handle: NodeHandle,
     ) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error>> {
         // Create organise channel
         let (organise_tx, organise_rx) = create_organise_channel();
@@ -380,6 +383,7 @@ impl NodeActor {
             block_receiver_tx,
             monitoring_event_sender.clone(),
             share_validator.clone(),
+            node_handle,
         )?;
 
         // Spawn organise worker
@@ -419,6 +423,8 @@ impl NodeActor {
         );
         let block_receiver_join_handle = tokio::spawn(block_receiver.run());
 
+        let connection_tracker_handle = node.connection_tracker_handle.clone();
+
         let (stopping_tx, stopping_rx) = oneshot::channel();
         Ok((
             Self {
@@ -433,6 +439,7 @@ impl NodeActor {
                 block_fetcher_handle,
                 validation_handle,
                 block_receiver_handle: block_receiver_join_handle,
+                connection_tracker_handle,
             },
             stopping_rx,
         ))
@@ -568,7 +575,10 @@ impl NodeActor {
                             };
                         },
                         Some(Command::Shutdown(tx)) => {
-                            self.node.shutdown().unwrap();
+                            self.node
+                                .shutdown()
+                                .await
+                                .expect("node to shutdown properly");
                             if tx.send(()).is_err() {
                                 error!("Failed to send Shutdown response - receiver dropped");
                             }
@@ -585,25 +595,41 @@ impl NodeActor {
                             }
                         },
                         Some(Command::GetPeerInfos(tx)) => {
-                            let infos = self.node.connection_tracker.get_peer_infos();
-                            if tx.send(infos).is_err() {
-                                error!("Failed to send GetPeerInfos response - receiver dropped");
+                            match self.connection_tracker_handle.get_peer_infos().await {
+                                Ok(infos) => {
+                                    if tx.send(infos).is_err() {
+                                        error!("Failed to send GetPeerInfos response - receiver dropped");
+                                    }
+                                }
+                                Err(e) => {
+                                    error!("Failed to get peer infos: {}", e);
+                                }
                             }
                         },
                         Some(Command::BlockIp(ip, tx)) => {
                             info!("Blocking IP {ip} via runtime command");
-                            self.node.connection_tracker.block_ip(ip);
+                            if let Err(e) = self.connection_tracker_handle.block_ip(ip).await {
+                                error!("Failed to send BlockIp command: {}", e);
+                            }
                             let _ = tx.send(());
                         },
                         Some(Command::UnblockIp(ip, tx)) => {
                             info!("Unblocking IP {ip} via runtime command");
-                            self.node.connection_tracker.unblock_ip(ip);
+                            if let Err(e) = self.connection_tracker_handle.unblock_ip(ip).await {
+                                error!("Failed to send UnblockIp command: {}", e);
+                            }
                             let _ = tx.send(());
                         },
                         Some(Command::GetBlockedIps(tx)) => {
-                            let ips = self.node.connection_tracker.get_blocked_ips();
-                            if tx.send(ips).is_err() {
-                                error!("Failed to send GetBlockedIps response - receiver dropped");
+                            match self.connection_tracker_handle.get_blocked_ips().await {
+                                Ok(ips) => {
+                                    if tx.send(ips).is_err() {
+                                        error!("Failed to send GetBlockedIps response - receiver dropped");
+                                    }
+                                }
+                                Err(e) => {
+                                    error!("Failed to get blocked IPs: {}", e);
+                                }
                             }
                         },
                         None => {

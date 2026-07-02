@@ -14,19 +14,53 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-/*!
- * BIP-152-like implementation
- */
+//!
+//! ## BIP-152-like implementation
+//! We have a custom implementation of compact block relay that matches
+//! P2PoolV2 needs better.
+//!
+
+use crate::shares::share_block::ShareHeader;
 
 use bitcoin::{
     bip152::{BlockTransactionsRequest, HeaderAndShortIds, PrefilledTransaction, ShortId},
     consensus::{Decodable, Encodable},
 };
+use serde::Serialize;
 
-use crate::shares::share_block::ShareHeader;
+#[repr(u64)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompactBlockRelayVersion {
+    One = 1,
+}
+
+impl Encodable for CompactBlockRelayVersion {
+    fn consensus_encode<W: bitcoin::io::Write + ?Sized>(
+        &self,
+        writer: &mut W,
+    ) -> Result<usize, bitcoin::io::Error> {
+        let mut len = 0;
+        len += (*self as u64).consensus_encode(writer)?;
+        Ok(len)
+    }
+}
+
+impl Decodable for CompactBlockRelayVersion {
+    fn consensus_decode<R: bitcoin::io::Read + ?Sized>(
+        reader: &mut R,
+    ) -> Result<Self, bitcoin::consensus::encode::Error> {
+        let version = u64::consensus_decode(reader)?;
+        match version {
+            1 => Ok(CompactBlockRelayVersion::One),
+            _ => Err(bitcoin::consensus::encode::Error::ParseFailed(
+                "Invalid version",
+            )),
+        }
+    }
+}
 
 /// Similar to [HeaderAndShortIds] but with added data for the sharechain
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(PartialEq, Eq, Clone, Debug, PartialOrd, Ord, Hash)]
 pub struct ShareHeaderAndShortIds {
     /// Bitcoin block header and short ids
     pub bitcoin_header: HeaderAndShortIds,
@@ -41,7 +75,7 @@ pub struct ShareHeaderAndShortIds {
 }
 
 /// Request for missing txs in compact share block (separate bitcoin/sharechain RLE indexes per BIP152)
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(PartialEq, Eq, Clone, Debug, PartialOrd, Ord, Hash)]
 pub struct ShareBlockTransactionsRequest {
     /// Bitcoin missing tx indexes (RLE encoded)
     pub bitcoin_req: BlockTransactionsRequest,
@@ -133,12 +167,38 @@ impl Decodable for ShareHeaderAndShortIds {
 }
 
 #[repr(i8)]
-#[derive(Debug, Clone)]
-pub enum CompactBlockRelay {
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub enum CompactBlockRelayStatus {
+    #[default]
+    /// Handshaking
+    Handshake = -2,
     /// Disabled when the other node can't handle it
     Disabled = -1,
     /// **Low** bandwidth connection
     LowBandwidth = 0,
     /// **High** bandwidth connection
     HighBandwidth = 1,
+}
+
+#[cfg(test)]
+mod tests {
+    use bitcoin::consensus;
+
+    use crate::test_utils::TestShareHeaderAndShortIdsBuilder;
+
+    use super::*;
+
+    #[test]
+    fn test_compact_block_relay_status_default() {
+        let status = CompactBlockRelayStatus::default();
+        assert_eq!(status, CompactBlockRelayStatus::Handshake);
+    }
+
+    #[test]
+    fn test_compact_block_serde() {
+        let cb = TestShareHeaderAndShortIdsBuilder::new().random().build();
+        let bin = consensus::encode::serialize(&cb);
+        let decoded: ShareHeaderAndShortIds = consensus::encode::deserialize(&bin).unwrap();
+        assert_eq!(cb, decoded);
+    }
 }

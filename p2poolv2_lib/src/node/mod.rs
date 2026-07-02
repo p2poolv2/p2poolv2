@@ -25,20 +25,22 @@ pub mod request_sender;
 pub mod validation_worker;
 pub use crate::config::Config;
 pub mod actor;
-pub mod bip152;
+pub mod compact_block_relay;
 pub mod messages;
 pub mod p2p_message_handlers;
 
 use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::monitoring_events::{MonitoringEvent, MonitoringEventSender, PeerResponse, PeerStatus};
-use crate::node::bip152::CompactBlockRelay;
+use crate::node::actor::NodeHandle;
+use crate::node::connection_tracker::ConnectionTrackerActor;
 use crate::node::messages::Message;
 use crate::node::p2p_message_handlers::receivers::block_receiver::BlockReceiverHandle;
-use crate::node::p2p_message_handlers::senders::{send_getheaders, send_handshake};
+use crate::node::p2p_message_handlers::senders::{
+    send_getheaders, send_handshake, send_send_compact,
+};
 use crate::node::request_response_handler::RequestResponseHandler;
 use crate::node::request_response_handler::block_fetcher::BlockFetcherHandle;
 use crate::node::validation_worker::ValidationSender;
-use crate::service::peer_state::PeerStates;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -62,12 +64,11 @@ use libp2p::{
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt::Debug;
-use std::hash::DefaultHasher;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, warn};
 
 pub struct SwarmResponseChannel<T> {
     channel: ResponseChannel<T>,
@@ -105,7 +106,7 @@ pub enum SwarmSend<C> {
     Disconnect(PeerId),
 }
 
-use connection_tracker::{ConnectionAction, ConnectionTracker};
+use connection_tracker::{ConnectionAction, ConnectionTracker, ConnectionTrackerHandle};
 
 /// Node is the main struct that represents the node
 struct Node {
@@ -117,7 +118,8 @@ struct Node {
     config: Config,
     monitoring_event_sender: MonitoringEventSender,
     peer_reconnector: peer_reconnector::PeerReconnector,
-    connection_tracker: ConnectionTracker,
+    connection_tracker_actor: ConnectionTrackerActor,
+    connection_tracker_handle: ConnectionTrackerHandle,
     /// Whether an external address has been confirmed and advertised
     external_address_confirmed: bool,
     /// Cached TCP listen port extracted from config
@@ -126,7 +128,6 @@ struct Node {
     has_bootstrapped_kad: bool,
     /// Tracks Multiaddrs of currently connected outbound peers for reconnection logic
     connected_dial_addresses: Vec<Multiaddr>,
-    peer_states: Arc<PeerStates>,
 }
 
 impl Node {
@@ -138,6 +139,7 @@ impl Node {
         block_receiver_handle: BlockReceiverHandle,
         monitoring_event_sender: MonitoringEventSender,
         share_validator: Arc<dyn ShareValidator + Send + Sync>,
+        node_handle: NodeHandle,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let id_keys = libp2p::identity::Keypair::generate_ed25519();
 
@@ -247,22 +249,6 @@ impl Node {
 
         let (swarm_tx, swarm_rx) = mpsc::channel(100);
 
-        // TODO: persist this to disk
-        let peer_states = Arc::new(PeerStates::default());
-
-        let request_response_handler = RequestResponseHandler::new(
-            config.network.clone(),
-            chain_store_handle.clone(),
-            swarm_tx.clone(),
-            block_fetcher_handle,
-            validation_tx,
-            block_receiver_handle,
-            share_validator,
-            peer_states.clone(),
-        );
-
-        let peer_reconnector = peer_reconnector::PeerReconnector::new(&config.network.dial_peers);
-
         let blocked_ips: HashSet<IpAddr> = config
             .network
             .blocked_ips
@@ -281,6 +267,24 @@ impl Node {
             info!("Loaded {} blocked IPs from config", blocked_ips.len());
         }
 
+        let connection_tracker = ConnectionTracker::new(blocked_ips);
+        let connection_tracker_actor = ConnectionTrackerActor::from(connection_tracker);
+        let connection_tracker_handle = connection_tracker_actor.handle_owned();
+
+        let request_response_handler = RequestResponseHandler::new(
+            config.network.clone(),
+            chain_store_handle.clone(),
+            swarm_tx.clone(),
+            block_fetcher_handle,
+            validation_tx,
+            block_receiver_handle,
+            share_validator,
+            node_handle.clone(),
+            connection_tracker_handle.clone(),
+        );
+
+        let peer_reconnector = peer_reconnector::PeerReconnector::new(&config.network.dial_peers);
+
         Ok(Self {
             swarm,
             swarm_tx,
@@ -290,12 +294,12 @@ impl Node {
             config,
             monitoring_event_sender,
             peer_reconnector,
-            connection_tracker: ConnectionTracker::new(blocked_ips),
             external_address_confirmed,
             listen_port,
             has_bootstrapped_kad: false,
             connected_dial_addresses: Vec::new(),
-            peer_states,
+            connection_tracker_handle,
+            connection_tracker_actor,
         })
     }
 
@@ -305,11 +309,11 @@ impl Node {
         self.swarm.connected_peers().cloned().collect()
     }
 
-    #[allow(dead_code)]
-    pub fn shutdown(&mut self) -> Result<(), Box<dyn Error>> {
+    pub async fn shutdown(&mut self) -> Result<(), Box<dyn Error>> {
         for peer_id in self.swarm.connected_peers().cloned().collect::<Vec<_>>() {
             self.swarm.disconnect_peer_id(peer_id).unwrap_or_default();
         }
+        self.connection_tracker_actor.shutdown().await;
         Ok(())
     }
 
@@ -325,9 +329,9 @@ impl Node {
 
     /// Attempt to reconnect to any configured dial_peers that are not currently connected.
     fn attempt_reconnections(&mut self) {
-        let addresses = self
-            .peer_reconnector
-            .addresses_to_reconnect(&self.connection_tracker.connected_dial_addresses);
+        // TODO: get connected_dial_addresses from ConnectionTracker via channel
+        // For now, use peer_reconnector's internal tracking
+        let addresses = self.peer_reconnector.addresses_to_reconnect(&[]);
         for address in addresses {
             match self.swarm.dial(address.clone()) {
                 Ok(_) => {
@@ -398,28 +402,36 @@ impl Node {
                 }
 
                 match self
-                    .connection_tracker
-                    .handle_established(peer_id, &endpoint)
+                    .connection_tracker_handle
+                    .add_connection(peer_id, endpoint.clone())
+                    .await
                 {
-                    ConnectionAction::Block => {
-                        let _ = self.swarm.disconnect_peer_id(peer_id);
-                        return Ok(());
-                    }
-                    ConnectionAction::Accept(ref peer_info) => {
-                        if let Err(error) = send_handshake(
-                            peer_id,
-                            self.chain_store_handle.clone(),
-                            self.swarm_tx.clone(),
-                        )
-                        .await
-                        {
-                            error!("Failed to send handshake to peer {}: {}", peer_id, error);
-                        } else {
-                            debug!(
-                                "{:?} connection established, handshake sent to peer: {}",
-                                peer_info.direction, peer_id
-                            );
+                    Ok(action) => match action {
+                        ConnectionAction::Block => {
+                            debug!(%peer_id, "Blocked peer attempted connection. Dropping.");
+                            let _ = self.swarm.disconnect_peer_id(peer_id);
+                            return Ok(());
                         }
+                        ConnectionAction::Accept(ref peer_info) => {
+                            if let Err(error) = send_handshake(
+                                peer_id,
+                                self.chain_store_handle.clone(),
+                                self.swarm_tx.clone(),
+                            )
+                            .await
+                            {
+                                error!("Failed to send handshake to peer {}: {}", peer_id, error);
+                            } else {
+                                debug!(
+                                    "{:?} connection established, handshake sent to peer: {}",
+                                    peer_info.direction, peer_id
+                                );
+                            }
+                        }
+                    },
+                    Err(e) => {
+                        error!("Failed to send AddConnection command: {}", e);
+                        return Ok(());
                     }
                 }
 
@@ -429,6 +441,7 @@ impl Node {
                     .send(MonitoringEvent::Peer(PeerResponse {
                         peer_id: peer_id.to_string(),
                         status: PeerStatus::Connected,
+                        ..Default::default()
                     }));
                 Ok(())
             }
@@ -436,16 +449,22 @@ impl Node {
                 peer_id, endpoint, ..
             } => {
                 info!("Disconnected from peer: {peer_id}");
-                self.connection_tracker.handle_closed(&peer_id, &endpoint);
+
+                if let Err(e) = self
+                    .connection_tracker_handle
+                    .remove_connection(peer_id, endpoint)
+                    .await
+                {
+                    error!("Failed to send RemoveConnection command: {}", e);
+                }
                 self.swarm.behaviour_mut().remove_peer(&peer_id);
                 self.request_response_handler.remove_peer(&peer_id).await;
-                // TODO: Track this in [PeerState] and add peerstatus
-                self.peer_states.remove(&peer_id);
                 let _ = self
                     .monitoring_event_sender
                     .send(MonitoringEvent::Peer(PeerResponse {
                         peer_id: peer_id.to_string(),
                         status: PeerStatus::Disconnected,
+                        ..Default::default()
                     }));
                 Ok(())
             }
@@ -457,14 +476,12 @@ impl Node {
                 error!(
                     "Failed to connect to peer: {peer_id:?}, error: {error}, connection_id: {connection_id}"
                 );
-                error!(
-                    "Failed to connect to peer: {peer_id:?}, error: {error}, connection_id: {connection_id}"
-                );
                 Ok(())
             }
             SwarmEvent::Behaviour(event) => match event {
                 P2PoolBehaviourEvent::Identify(identify_event) => {
-                    self.handle_identify_event(identify_event);
+                    // peer identified - we speak same protocols
+                    self.handle_identify_event(identify_event).await;
                     Ok(())
                 }
                 P2PoolBehaviourEvent::Kademlia(kad_event) => {
@@ -486,7 +503,7 @@ impl Node {
     }
 
     /// Handle identify events, these are events that are generated by the identify protocol
-    fn handle_identify_event(&mut self, event: identify::Event) {
+    async fn handle_identify_event(&mut self, event: identify::Event) {
         match event {
             identify::Event::Received { peer_id, info } => {
                 info!(
@@ -511,6 +528,19 @@ impl Node {
                 if !self.has_bootstrapped_kad {
                     self.attempt_kademlia_bootstrap();
                 }
+
+                if let Err(e) = self.handle_connection_established(peer_id).await {
+                    error!(
+                        %peer_id,
+                        "Failed to handle outbound connection to peer: {}",
+                         e
+                    );
+                } else {
+                    info!(%peer_id, "Outbound connection established to peer");
+                }
+            }
+            identify::Event::Sent { peer_id } => {
+                debug!("Sent identify info to peer: {}", peer_id);
             }
             _ => {
                 debug!("Other identify event: {:?}", event);
@@ -609,8 +639,19 @@ impl Node {
         )
         .await?;
 
-        // TODO: Re-add send inventory messages here?
-        //
+        let compact_block_peer_count = match self
+            .connection_tracker_handle
+            .count_compact_capable_peers()
+            .await
+        {
+            Ok(count) => count as u8,
+            Err(e) => {
+                error!("Failed to get compact capable peer count: {}", e);
+                0
+            }
+        };
+
+        send_send_compact(peer_id, compact_block_peer_count, &self.swarm_tx).await?;
 
         Ok(())
     }
@@ -644,10 +685,12 @@ impl Node {
 #[cfg(test)]
 mod tests {
     use super::ChainStoreHandle;
+    use super::NodeHandle;
     use crate::config::{
         ApiConfig, Config, LoggingConfig, NetworkConfig, StoreConfig, StratumConfig,
     };
     use crate::monitoring_events::create_monitoring_event_channel;
+    use crate::node;
     use crate::node::Node;
     use crate::node::p2p_message_handlers::receivers::block_receiver::create_block_receiver_channel;
     use crate::node::request_response_handler::block_fetcher::create_block_fetcher_channel;
@@ -732,7 +775,8 @@ mod tests {
             validation_tx,
             block_receiver_handle,
             monitoring_tx,
-            Arc::new(crate::shares::validation::MockDefaultShareValidator::default()),
+            Arc::new(MockDefaultShareValidator::default()),
+            NodeHandle::default(),
         )
         .expect("Node initialization failed");
 
@@ -838,6 +882,7 @@ mod tests {
         let (validation_tx, _validation_rx) = create_validation_channel();
         let (block_receiver_handle, _block_receiver_rx) = create_block_receiver_channel();
         let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let node_handle = NodeHandle::new_for_test();
         Node::new(
             config,
             chain_store_handle,
@@ -846,6 +891,7 @@ mod tests {
             block_receiver_handle,
             monitoring_tx,
             Arc::new(crate::shares::validation::MockDefaultShareValidator::default()),
+            node_handle,
         )
         .expect("Node initialization failed")
     }

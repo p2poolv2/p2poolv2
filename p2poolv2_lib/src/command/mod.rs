@@ -18,6 +18,7 @@ use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::node::connection_tracker::PeerInfoResponse;
 use crate::node::messages::Message;
 use std::error::Error;
+use std::fmt::Debug;
 use std::net::IpAddr;
 use tokio::sync::oneshot;
 

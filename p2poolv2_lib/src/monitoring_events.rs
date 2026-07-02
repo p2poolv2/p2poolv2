@@ -44,16 +44,17 @@ pub struct ChainInfo {
 }
 
 /// JSON response for a peer event.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Default, Serialize)]
 pub struct PeerResponse {
     pub peer_id: String,
     pub status: PeerStatus,
 }
 
 /// Whether a peer connected or disconnected.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Default, Serialize)]
 pub enum PeerStatus {
     Connected,
+    #[default]
     Disconnected,
 }
 
@@ -111,6 +112,7 @@ mod tests {
         let event = MonitoringEvent::Peer(PeerResponse {
             peer_id: "12D3KooW".to_string(),
             status: PeerStatus::Connected,
+            ..Default::default()
         });
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("\"topic\":\"Peer\""));
@@ -123,6 +125,7 @@ mod tests {
         let event = MonitoringEvent::Peer(PeerResponse {
             peer_id: "12D3KooW".to_string(),
             status: PeerStatus::Disconnected,
+            ..Default::default()
         });
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("\"status\":\"Disconnected\""));
@@ -180,6 +183,7 @@ mod tests {
         let event = MonitoringEvent::Peer(PeerResponse {
             peer_id: "12D3KooW".to_string(),
             status: PeerStatus::Connected,
+            ..Default::default()
         });
         sender.send(event.clone()).unwrap();
         let received = receiver.try_recv().unwrap();
