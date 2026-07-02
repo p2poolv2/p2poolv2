@@ -187,8 +187,6 @@ mod tests {
     use bitcoin::BlockHash;
     use bitcoin::hashes::Hash as _;
     use libp2p::PeerId;
-    use std::future::Future;
-    use std::pin::Pin;
     use std::sync::Arc;
     use std::time::SystemTime;
     use tokio::sync::mpsc;

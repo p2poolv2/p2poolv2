@@ -293,6 +293,7 @@ mod tests {
 
         let response_headers = vec![block1.header.clone(), block2.header.clone()];
 
+        // Mock the response headers
         chain_store_handle
             .expect_get_headers_for_locator()
             .returning(move |_, _, _| Ok(response_headers.clone()));
@@ -332,12 +333,14 @@ mod tests {
         let time_provider = TestTimeProvider::new(SystemTime::now());
         let (block_fetcher_handle, validation_tx, block_receiver_handle) = test_handles();
 
+        // Create test blocks that will be returned
         let block1 = TestShareBlockBuilder::new().build();
         let block2 = TestShareBlockBuilder::new().build();
 
         let block_hashes: Vec<BlockHash> = vec![block1.block_hash(), block2.block_hash()];
         let stop_block_hash = block2.block_hash();
 
+        // Set up mock expectations
         chain_store_handle
             .expect_get_blockhashes_for_locator()
             .returning(move |_, _, _| Ok(vec![block1.block_hash(), block2.block_hash()]));
@@ -639,6 +642,7 @@ mod tests {
         let time_provider = TestTimeProvider::new(SystemTime::now());
         let (block_fetcher_handle, validation_tx, block_receiver_handle) = test_handles();
 
+        // Create a test transaction
         let transaction = test_coinbase_transaction(1);
 
         let ctx = RequestContext {
@@ -668,6 +672,7 @@ mod tests {
         let time_provider = TestTimeProvider::new(SystemTime::now());
         let (block_fetcher_handle, validation_tx, block_receiver_handle) = test_handles();
 
+        // Create test share headers
         let block1 = TestShareBlockBuilder::new().build();
         let block2 = TestShareBlockBuilder::new().build();
 
@@ -761,7 +766,7 @@ mod tests {
         let mut header1 = TestShareBlockBuilder::new().build().header;
         header1.bits = CompactTarget::from_consensus(crate::shares::share_block::MAX_POOL_TARGET);
         let mut header2 = TestShareBlockBuilder::new()
-            .nonce(0xe9695792)
+            .nonce(0xe9695792) // doesn't matter, as we don't compare block hash to target
             .build()
             .header;
         header2.bits = CompactTarget::from_consensus(crate::shares::share_block::MAX_POOL_TARGET);

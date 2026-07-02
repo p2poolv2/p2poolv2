@@ -441,4 +441,76 @@ mod tests {
             "same address should not be added twice"
         );
     }
+
+    #[test]
+    fn test_set_compact_block_from_tracked_peer() {
+        let mut tracker = ConnectionTracker::new(HashSet::new());
+        let peer_id = PeerId::random();
+        tracker.handle_established(peer_id, &make_dialer_endpoint("/ip4/1.2.3.4/tcp/46884"));
+
+        assert_eq!(
+            tracker.connected_peers[&peer_id].compact_block_from,
+            CompactBlockRelayStatus::Disabled
+        );
+
+        tracker.set_compact_block_from(&peer_id, CompactBlockRelayStatus::HighBandwidth);
+        assert_eq!(
+            tracker.connected_peers[&peer_id].compact_block_from,
+            CompactBlockRelayStatus::HighBandwidth
+        );
+    }
+
+    #[test]
+    fn test_set_compact_block_from_untracked_peer_is_noop() {
+        let mut tracker = ConnectionTracker::new(HashSet::new());
+        let untracked = PeerId::random();
+        tracker.set_compact_block_from(&untracked, CompactBlockRelayStatus::HighBandwidth);
+        assert_eq!(tracker.connected_peers.len(), 0);
+    }
+
+    #[test]
+    fn test_count_high_bandwidth_peers() {
+        let mut tracker = ConnectionTracker::new(HashSet::new());
+        let peer_a = PeerId::random();
+        let peer_b = PeerId::random();
+        let peer_c = PeerId::random();
+        tracker.handle_established(peer_a, &make_dialer_endpoint("/ip4/1.2.3.4/tcp/46884"));
+        tracker.handle_established(peer_b, &make_listener_endpoint("/ip4/5.6.7.8/tcp/12345"));
+        tracker.handle_established(peer_c, &make_dialer_endpoint("/ip4/9.0.1.2/tcp/46884"));
+
+        assert_eq!(tracker.count_high_bandwidth_peers(), 0);
+
+        tracker.set_compact_block_from(&peer_a, CompactBlockRelayStatus::HighBandwidth);
+        assert_eq!(tracker.count_high_bandwidth_peers(), 1);
+
+        tracker.set_compact_block_from(&peer_b, CompactBlockRelayStatus::HighBandwidth);
+        assert_eq!(tracker.count_high_bandwidth_peers(), 2);
+
+        // LowBandwidth should not count
+        tracker.set_compact_block_from(&peer_c, CompactBlockRelayStatus::LowBandwidth);
+        assert_eq!(tracker.count_high_bandwidth_peers(), 2);
+    }
+
+    #[test]
+    fn test_count_compact_capable_peers() {
+        let mut tracker = ConnectionTracker::new(HashSet::new());
+        let peer_a = PeerId::random();
+        let peer_b = PeerId::random();
+        let peer_c = PeerId::random();
+        tracker.handle_established(peer_a, &make_dialer_endpoint("/ip4/1.2.3.4/tcp/46884"));
+        tracker.handle_established(peer_b, &make_listener_endpoint("/ip4/5.6.7.8/tcp/12345"));
+        tracker.handle_established(peer_c, &make_dialer_endpoint("/ip4/9.0.1.2/tcp/46884"));
+
+        // All start as Disabled (not compact-capable)
+        assert_eq!(tracker.count_compact_capable_peers(), 0);
+
+        // HighBandwidth and LowBandwidth are compact-capable
+        tracker.set_compact_block_from(&peer_a, CompactBlockRelayStatus::HighBandwidth);
+        tracker.set_compact_block_from(&peer_b, CompactBlockRelayStatus::LowBandwidth);
+        assert_eq!(tracker.count_compact_capable_peers(), 2);
+
+        // Disabled does not count
+        tracker.set_compact_block_from(&peer_c, CompactBlockRelayStatus::Disabled);
+        assert_eq!(tracker.count_compact_capable_peers(), 2);
+    }
 }

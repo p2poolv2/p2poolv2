@@ -439,7 +439,7 @@ mod tests {
         let mut header1 = TestShareBlockBuilder::new().build().header;
         header1.bits = CompactTarget::from_consensus(crate::shares::share_block::MAX_POOL_TARGET);
         let mut header2 = TestShareBlockBuilder::new()
-            .nonce(0xe9695792)
+            .nonce(0xe9695792) // doesn't matter, as we don't compare block hash to target
             .build()
             .header;
         header2.bits = CompactTarget::from_consensus(crate::shares::share_block::MAX_POOL_TARGET);
@@ -559,6 +559,7 @@ mod tests {
 
         assert!(result.is_ok());
 
+        // The per-peer task processes asynchronously, wait for response
         if let Some(SwarmSend::Response(_, Message::ShareHeaders(headers))) = swarm_rx.recv().await
         {
             assert_eq!(headers.len(), 2);
@@ -582,6 +583,7 @@ mod tests {
 
         let mut handler = build_test_handler(chain_store_handle, swarm_tx);
 
+        // Do NOT call add_peer -- dispatch_request should create the handle
         let peer_id = PeerId::random();
         let (channel_tx, _channel_rx) = oneshot::channel::<Message>();
 
@@ -594,6 +596,7 @@ mod tests {
             .await;
         assert!(result.is_ok());
 
+        // Verify the handle was created
         assert!(handler.peer_handles.contains_key(&peer_id));
     }
 
@@ -609,6 +612,8 @@ mod tests {
 
         let peer_id = PeerId::random();
 
+        // Create a channel where the receiver is immediately dropped,
+        // simulating a task that has exited.
         let (sender, receiver) = mpsc::channel(16);
         drop(receiver);
         handler
@@ -625,6 +630,7 @@ mod tests {
             .await;
         assert!(result.is_ok());
 
+        // Stale handle should have been removed on Closed
         assert!(
             !handler.peer_handles.contains_key(&peer_id),
             "Stale handle should be removed after Closed error"
@@ -668,6 +674,8 @@ mod tests {
         let (swarm_tx, _swarm_rx) = mpsc::channel(32);
         let mut chain_store_handle = ChainStoreHandle::default();
 
+        // The cloned handle is used by handle_response -> handle_share_block,
+        // which checks for duplicates, validates header, and stores the block.
         chain_store_handle.expect_clone().returning(|| {
             let mut cloned = ChainStoreHandle::default();
             cloned.expect_share_block_exists().returning(|_| false);
@@ -699,6 +707,7 @@ mod tests {
             .await;
         assert!(result.is_ok());
 
+        // Knowledge is recorded before handle_response processes the block
         assert!(
             handler
                 .peer_block_knowledge()
