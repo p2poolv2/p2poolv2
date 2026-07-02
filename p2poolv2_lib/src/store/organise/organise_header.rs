@@ -65,6 +65,17 @@ impl Store {
             }
         };
 
+        // A Confirmed block must not be re-organised into the candidate
+        // chain. This can happen when a peer re-sends a block that was
+        // already confirmed via try_fallback_confirmation while the
+        // candidate chain was on a different fork. Without this guard,
+        // should_extend_candidates would match (parent == top candidate,
+        // height and work match) and append_to_candidates would
+        // overwrite the Confirmed status to Candidate.
+        if metadata.status == Status::Confirmed {
+            return Ok(None);
+        }
+
         let top_candidate = self.get_top_candidate().ok();
         let Some(top_confirmed) = self.get_top_confirmed().ok() else {
             return Err(StoreError::Database(
@@ -900,9 +911,8 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    /// Fallback confirmation must also extend the candidate chain so
-    /// that a later organise_header call does not overwrite the
-    /// Confirmed status.
+    /// organise_header must not downgrade a Confirmed block even when
+    /// the candidate chain diverges from the confirmed chain.
     ///
     /// Scenario:
     /// - genesis -> share1(h:1) confirmed via push_to_confirmed_chain
@@ -910,12 +920,14 @@ mod tests {
     /// - share2(h:2, parent=share1) stored with block data and valid
     ///   metadata but NOT on the candidate chain.
     /// - organise_block promotes share2 via try_fallback_confirmation.
-    ///   The fix: fallback also writes a candidate entry so the
-    ///   candidate chain stays consistent with the confirmed chain.
+    ///   The candidate chain is NOT updated, so share1 remains the
+    ///   top candidate.
     /// - organise_header(share2) is called again (peer re-send).
-    ///   share2 must remain Confirmed.
+    ///   Without the Confirmed guard, should_extend_candidates would
+    ///   match and append_to_candidates would overwrite Confirmed to
+    ///   Candidate. The guard prevents this.
     #[test]
-    fn test_fallback_confirmation_extends_candidate_chain() {
+    fn test_organise_header_skips_confirmed_block() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
@@ -947,7 +959,7 @@ mod tests {
         // Promote share2 via fallback confirmation (organise_block).
         // try_fallback_confirmation finds share2 at h:2 with parent =
         // confirmed tip (share1) and promotes it to Confirmed.
-        // The fix also extends the candidate chain.
+        // The candidate chain is NOT updated.
         let mut batch = Store::get_write_batch();
         let result = store.organise_block(&mut batch).unwrap();
         store.commit_batch(batch).unwrap();
@@ -955,23 +967,23 @@ mod tests {
         assert!(store.is_confirmed(&share2.block_hash()));
         assert_eq!(store.get_top_confirmed_height().unwrap(), 2);
 
-        // Candidate chain must also be extended to share2
+        // Candidate chain still has share1 as top
         let top_candidate = store.get_top_candidate().unwrap();
-        assert_eq!(top_candidate.hash, share2.block_hash());
-        assert_eq!(top_candidate.height, 2);
+        assert_eq!(top_candidate.hash, share1.block_hash());
+        assert_eq!(top_candidate.height, 1);
 
         // Simulate a peer re-sending share2's header.
-        // organise_header must not downgrade the Confirmed status.
+        // The Confirmed guard in organise_header must skip it.
         let mut batch = Store::get_write_batch();
-        store.organise_header(&share2.header, &mut batch).unwrap();
+        let result = store.organise_header(&share2.header, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
+        assert_eq!(result, None);
 
         let metadata = store.get_block_metadata(&share2.block_hash()).unwrap();
         assert_eq!(
             metadata.status,
             Status::Confirmed,
-            "organise_header must not downgrade Confirmed to Candidate \
-             after fallback confirmation extended the candidate chain"
+            "organise_header must not downgrade Confirmed to Candidate"
         );
 
         // The confirmed index must still point to share2
