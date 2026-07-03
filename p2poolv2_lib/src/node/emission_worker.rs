@@ -39,7 +39,6 @@ use tracing::{debug, error, info};
 pub struct EmissionWorker {
     emissions_rx: EmissionReceiver,
     chain_store_handle: ChainStoreHandle,
-    network: bitcoin::Network,
     validation_tx: ValidationSender,
 }
 
@@ -48,13 +47,11 @@ impl EmissionWorker {
     pub fn new(
         emissions_rx: EmissionReceiver,
         chain_store_handle: ChainStoreHandle,
-        network: bitcoin::Network,
         validation_tx: ValidationSender,
     ) -> Self {
         Self {
             emissions_rx,
             chain_store_handle,
-            network,
             validation_tx,
         }
     }
@@ -211,12 +208,7 @@ mod tests {
             .expect_add_share_block()
             .returning(|_| Ok(()));
 
-        let worker = EmissionWorker::new(
-            emissions_rx,
-            mock_chain_store,
-            bitcoin::Network::Regtest,
-            validation_tx,
-        );
+        let worker = EmissionWorker::new(emissions_rx, mock_chain_store, validation_tx);
         let worker_handle = tokio::spawn(worker.run());
 
         emissions_tx
@@ -248,12 +240,7 @@ mod tests {
             .expect_add_pplns_share()
             .returning(|_| Ok(()));
 
-        let worker = EmissionWorker::new(
-            emissions_rx,
-            mock_chain_store,
-            bitcoin::Network::Regtest,
-            validation_tx,
-        );
+        let worker = EmissionWorker::new(emissions_rx, mock_chain_store, validation_tx);
         let worker_handle = tokio::spawn(worker.run());
 
         emissions_tx
@@ -286,12 +273,7 @@ mod tests {
             .times(1)
             .returning(|_| Ok(()));
 
-        let worker = EmissionWorker::new(
-            emissions_rx,
-            mock_chain_store,
-            bitcoin::Network::Regtest,
-            validation_tx,
-        );
+        let worker = EmissionWorker::new(emissions_rx, mock_chain_store, validation_tx);
         let worker_handle = tokio::spawn(worker.run());
 
         // First emission: error path (no commitment, store fails)
@@ -330,12 +312,7 @@ mod tests {
 
         let mock_chain_store = ChainStoreHandle::default();
 
-        let worker = EmissionWorker::new(
-            emissions_rx,
-            mock_chain_store,
-            bitcoin::Network::Regtest,
-            validation_tx,
-        );
+        let worker = EmissionWorker::new(emissions_rx, mock_chain_store, validation_tx);
         let worker_handle = tokio::spawn(worker.run());
 
         drop(emissions_tx);

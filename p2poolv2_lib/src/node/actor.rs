@@ -424,7 +424,6 @@ impl NodeActor {
         let emission_worker = EmissionWorker::new(
             self.emissions_rx,
             self.chain_store_handle.clone(),
-            self.node.config.stratum.network,
             self.validation_tx,
         );
         tokio::spawn(emission_worker.run());
