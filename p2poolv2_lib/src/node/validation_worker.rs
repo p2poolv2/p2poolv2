@@ -238,8 +238,15 @@ async fn validate_and_emit(
     // Broadcast block after validation, if later confirmation fails,
     // the peers should have this block anyway.
     if chain_store_handle.is_current() {
-        if let Err(send_error) = swarm_tx.send(SwarmSend::BroadcastBlock(share_block)).await {
-            error!("Failed to send broadcast for validated block {block_hash}: {send_error}");
+        #[cfg(not(feature = "sim"))]
+        {
+            if let Err(send_error) = swarm_tx.send(SwarmSend::BroadcastBlock(share_block)).await {
+                error!("Failed to send broadcast for validated block {block_hash}: {send_error}");
+            }
+        }
+        #[cfg(feature = "sim")]
+        {
+            crate::sim_overrides::spawn_delayed_broadcast(swarm_tx, share_block);
         }
     } else {
         debug!("Skipping broadcast for {block_hash} - chain not current");
