@@ -20,7 +20,7 @@
 //! event loop, improving P2P responsiveness. Storage is delegated to the
 //! ChainStoreHandle for serialized database writes.
 
-use crate::node::organise_worker::{OrganiseEvent, OrganiseSender};
+use crate::node::validation_worker::{ValidationEvent, ValidationSender};
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -33,12 +33,14 @@ use tracing::{debug, error, info};
 /// Worker that processes emissions from the stratum server.
 ///
 /// Runs in a separate tokio task to avoid blocking the main swarm event loop
-/// during CPU-intensive share processing operations.
+/// during CPU-intensive share processing operations. After storing, blocks are
+/// sent to the validation worker which handles organise events and peer
+/// broadcast after validation succeeds.
 pub struct EmissionWorker {
     emissions_rx: EmissionReceiver,
     chain_store_handle: ChainStoreHandle,
     network: bitcoin::Network,
-    organise_tx: OrganiseSender,
+    validation_tx: ValidationSender,
 }
 
 impl EmissionWorker {
@@ -47,13 +49,13 @@ impl EmissionWorker {
         emissions_rx: EmissionReceiver,
         chain_store_handle: ChainStoreHandle,
         network: bitcoin::Network,
-        organise_tx: OrganiseSender,
+        validation_tx: ValidationSender,
     ) -> Self {
         Self {
             emissions_rx,
             chain_store_handle,
             network,
-            organise_tx,
+            validation_tx,
         }
     }
 
@@ -65,13 +67,16 @@ impl EmissionWorker {
             // Pass a reference to chain store handle to avoid clones on each loop
             match handle_stratum_share(emission, &self.chain_store_handle).await {
                 Ok(Some(share_block)) => {
-                    // Send block to organise worker for confirmed promotion.
+                    // Enqueue the block for validation. The validation worker
+                    // will emit OrganiseEvent::Block and broadcast to peers
+                    // after the block passes validation.
+                    let block_hash = share_block.block_hash();
                     if let Err(e) = self
-                        .organise_tx
-                        .send(OrganiseEvent::Block(share_block))
+                        .validation_tx
+                        .send(ValidationEvent::ValidateBlock(block_hash))
                         .await
                     {
-                        error!("Failed to send block to organise worker: {e}");
+                        error!("Failed to send block to validation worker: {e}");
                     }
                 }
                 Ok(None) => {
@@ -90,7 +95,7 @@ impl EmissionWorker {
 mod tests {
     use super::*;
     use crate::accounting::payout::simple_pplns::SimplePplnsShare;
-    use crate::node::organise_worker::create_organise_channel;
+    use crate::node::validation_worker::create_validation_channel;
     use crate::shares::extranonce::Extranonce;
     use crate::store::writer::StoreError;
     use crate::stratum::emission::Emission;
@@ -197,9 +202,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_run_with_p2p_share_sends_organise_event() {
+    async fn test_run_with_p2p_share_sends_validation_event() {
         let (emissions_tx, emissions_rx) = mpsc::channel::<Emission>(10);
-        let (organise_tx, mut organise_rx) = create_organise_channel();
+        let (validation_tx, mut validation_rx) = create_validation_channel();
 
         let mut mock_chain_store = ChainStoreHandle::default();
         mock_chain_store
@@ -210,7 +215,7 @@ mod tests {
             emissions_rx,
             mock_chain_store,
             bitcoin::Network::Regtest,
-            organise_tx,
+            validation_tx,
         );
         let worker_handle = tokio::spawn(worker.run());
 
@@ -220,10 +225,14 @@ mod tests {
             .unwrap();
         drop(emissions_tx);
 
-        let organise_event = tokio::time::timeout(Duration::from_secs(2), organise_rx.recv()).await;
+        let validation_event =
+            tokio::time::timeout(Duration::from_secs(2), validation_rx.recv()).await;
         assert!(
-            matches!(organise_event, Ok(Some(OrganiseEvent::Block(_)))),
-            "Expected OrganiseEvent::Block"
+            matches!(
+                validation_event,
+                Ok(Some(ValidationEvent::ValidateBlock(_)))
+            ),
+            "Expected ValidationEvent::ValidateBlock"
         );
 
         worker_handle.await.unwrap();
@@ -232,7 +241,7 @@ mod tests {
     #[tokio::test]
     async fn test_run_without_commitment_sends_nothing() {
         let (emissions_tx, emissions_rx) = mpsc::channel::<Emission>(10);
-        let (organise_tx, mut organise_rx) = create_organise_channel();
+        let (validation_tx, mut validation_rx) = create_validation_channel();
 
         let mut mock_chain_store = ChainStoreHandle::default();
         mock_chain_store
@@ -243,7 +252,7 @@ mod tests {
             emissions_rx,
             mock_chain_store,
             bitcoin::Network::Regtest,
-            organise_tx,
+            validation_tx,
         );
         let worker_handle = tokio::spawn(worker.run());
 
@@ -256,15 +265,15 @@ mod tests {
         worker_handle.await.unwrap();
 
         assert!(
-            organise_rx.try_recv().is_err(),
-            "No OrganiseEvent expected for PPLNS-only share"
+            validation_rx.try_recv().is_err(),
+            "No ValidationEvent expected for PPLNS-only share"
         );
     }
 
     #[tokio::test]
     async fn test_run_continues_after_handle_error() {
         let (emissions_tx, emissions_rx) = mpsc::channel::<Emission>(10);
-        let (organise_tx, mut organise_rx) = create_organise_channel();
+        let (validation_tx, mut validation_rx) = create_validation_channel();
 
         let mut mock_chain_store = ChainStoreHandle::default();
         // First call fails, second call succeeds
@@ -281,7 +290,7 @@ mod tests {
             emissions_rx,
             mock_chain_store,
             bitcoin::Network::Regtest,
-            organise_tx,
+            validation_tx,
         );
         let worker_handle = tokio::spawn(worker.run());
 
@@ -299,22 +308,25 @@ mod tests {
 
         worker_handle.await.unwrap();
 
-        // Only the second emission should produce an organise event
+        // Only the second emission should produce a validation event
         assert!(
-            matches!(organise_rx.try_recv(), Ok(OrganiseEvent::Block(_))),
-            "Expected OrganiseEvent::Block from second emission"
+            matches!(
+                validation_rx.try_recv(),
+                Ok(ValidationEvent::ValidateBlock(_))
+            ),
+            "Expected ValidationEvent::ValidateBlock from second emission"
         );
 
         assert!(
-            organise_rx.try_recv().is_err(),
-            "No more organise events expected"
+            validation_rx.try_recv().is_err(),
+            "No more validation events expected"
         );
     }
 
     #[tokio::test]
     async fn test_run_stops_when_channel_closes() {
         let (emissions_tx, emissions_rx) = mpsc::channel::<Emission>(10);
-        let (organise_tx, _organise_rx) = create_organise_channel();
+        let (validation_tx, _validation_rx) = create_validation_channel();
 
         let mock_chain_store = ChainStoreHandle::default();
 
@@ -322,7 +334,7 @@ mod tests {
             emissions_rx,
             mock_chain_store,
             bitcoin::Network::Regtest,
-            organise_tx,
+            validation_tx,
         );
         let worker_handle = tokio::spawn(worker.run());
 
