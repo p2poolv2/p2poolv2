@@ -43,12 +43,14 @@ jobs:
           bitcoind --version
 
       - name: Run sim integration test
+        env:
+          NODE_COUNT: ${{ github.event.inputs.node_count || '10' }}
+          CONVERGENCE_WAIT_SECONDS: ${{ github.event.inputs.duration_seconds || '300' }}
+          IDEAL_BLOCK_TIME: '5'
+          SHARES_PER_BLOCK: '1000'
         run: |
-          NODE_COUNT="${{ github.event.inputs.node_count || '10' }}" \
-          CONVERGENCE_WAIT_SECONDS="${{ github.event.inputs.duration_seconds || '300' }}" \
-          IDEAL_BLOCK_TIME=5 \
-          SHARES_PER_BLOCK=1000 \
           set -o pipefail
+          mkdir -p /tmp/p2pool-sim
           ./load-tests/sim/nightly.sh 2>&1 | tee /tmp/p2pool-sim/nightly-output.log
 
       - name: Upload logs on failure
