@@ -534,4 +534,57 @@ mod tests {
 
         worker_handle.abort();
     }
+
+    #[tokio::test]
+    async fn test_validate_share_block_skips_store_read() {
+        let (validation_tx, validation_rx) = create_validation_channel();
+        let mut mock_chain_handle = MockChainStoreHandle::new();
+
+        let share_block = TestShareBlockBuilder::new().build();
+        let block_hash = share_block.block_hash();
+
+        let mut mock_clone = MockChainStoreHandle::new();
+        mock_clone.expect_get_share().never();
+        mock_clone.expect_has_status().returning(|_, _| true);
+        mock_clone.expect_is_current().returning(|| true);
+        mock_chain_handle
+            .expect_clone()
+            .return_once(move || mock_clone);
+
+        let (organise_tx, mut organise_rx) = organise_worker::create_organise_channel();
+        let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
+
+        let worker = ValidationWorker::new(
+            validation_rx,
+            mock_chain_handle,
+            organise_tx,
+            swarm_tx,
+            1,
+            b"P2Poolv2".to_vec(),
+            PoolDifficulty::default(),
+        );
+
+        let worker_handle = tokio::spawn(worker.run());
+
+        validation_tx
+            .send(ValidationEvent::ValidateShareBlock(share_block))
+            .await
+            .unwrap();
+
+        let organise_event = tokio::time::timeout(Duration::from_secs(2), organise_rx.recv()).await;
+        if let Ok(Some(OrganiseEvent::Block(received_block))) = organise_event {
+            assert_eq!(received_block.block_hash(), block_hash);
+        } else {
+            panic!("Expected OrganiseEvent::Block for prefetched share block");
+        }
+
+        let swarm_event = tokio::time::timeout(Duration::from_secs(2), swarm_rx.recv()).await;
+        if let Ok(Some(SwarmSend::BroadcastBlock(broadcast_block))) = swarm_event {
+            assert_eq!(broadcast_block.block_hash(), block_hash);
+        } else {
+            panic!("Expected SwarmSend::BroadcastBlock for prefetched share block");
+        }
+
+        worker_handle.abort();
+    }
 }
