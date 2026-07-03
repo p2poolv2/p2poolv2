@@ -13,7 +13,7 @@
 #   NODE_COUNT                 number of sim nodes           (default 20)
 #   CONVERGENCE_WAIT_SECONDS   seconds to let swarm run      (default 60)
 #   UNCLE_RATE_THRESHOLD       max uncle rate % to pass      (default 25)
-#   BITCOIND_DATADIR           regtest data directory        (default /tmp/p2pool-regtest)
+#   BITCOIND_DATADIR           regtest data directory        (default /tmp/bitcoind-p2poolv2)
 #   BITCOIND_BIN               path to bitcoind binary       (auto-detected)
 #   BITCOIN_CLI_BIN            path to bitcoin-cli binary    (auto-detected)
 #
@@ -40,7 +40,7 @@ Env vars (nightly-specific):
   NODE_COUNT                 number of sim nodes           (default 20)
   CONVERGENCE_WAIT_SECONDS   seconds to let swarm run      (default 60)
   UNCLE_RATE_THRESHOLD       max uncle rate % to pass      (default 25)
-  BITCOIND_DATADIR           regtest data directory        (default /tmp/p2pool-regtest)
+  BITCOIND_DATADIR           regtest data directory        (default /tmp/bitcoind-p2poolv2)
   BITCOIND_BIN               path to bitcoind binary       (auto-detected)
   BITCOIN_CLI_BIN            path to bitcoin-cli binary    (auto-detected)
 
@@ -73,7 +73,7 @@ fi
 NODE_COUNT="${NODE_COUNT:-20}"
 CONVERGENCE_WAIT_SECONDS="${CONVERGENCE_WAIT_SECONDS:-60}"
 UNCLE_RATE_THRESHOLD="${UNCLE_RATE_THRESHOLD:-25}"
-BITCOIND_DATADIR="${BITCOIND_DATADIR:-/tmp/p2pool-regtest}"
+BITCOIND_DATADIR="${BITCOIND_DATADIR:-/tmp/bitcoind-p2poolv2}"
 RPC_URL="${RPC_URL:-http://127.0.0.1:19443}"
 RPC_USER="${RPC_USER:-p2pool}"
 RPC_PASS="${RPC_PASS:-p2pool}"
@@ -154,7 +154,8 @@ ensure_bitcoind_running() {
     return
   fi
 
-  log_message "Starting regtest bitcoind..."
+  log_message "Starting fresh regtest bitcoind..."
+  rm -rf "$BITCOIND_DATADIR"
   mkdir -p "$BITCOIND_DATADIR"
   "$BITCOIND_BIN" -regtest \
     -datadir="$BITCOIND_DATADIR" \
@@ -236,7 +237,7 @@ verify_all_chains() {
     log_message "Building verify_chain ($profile)..."
     local profile_flag=""
     [ "$profile" = "release" ] && profile_flag="--release"
-    ( cd "$REPO_ROOT" && cargo build -p p2poolv2_node --bin verify_chain $profile_flag )
+    ( cd "$REPO_ROOT" && cargo build -p p2poolv2_node --bin verify_chain --features debug-tools $profile_flag )
   fi
 
   VERIFY_CHAIN_FAILURES=0
@@ -246,7 +247,7 @@ verify_all_chains() {
     local store="$RUN_DIR/store-$i.db"
     VERIFY_CHAIN_TOTAL=$((VERIFY_CHAIN_TOTAL + 1))
     if [ ! -d "$store" ]; then
-      log_message "  node $i: store not found at $store (SKIP)"
+      log_message "  node $i: FAIL (store not found at $store)"
       VERIFY_CHAIN_FAILURES=$((VERIFY_CHAIN_FAILURES + 1))
       continue
     fi
