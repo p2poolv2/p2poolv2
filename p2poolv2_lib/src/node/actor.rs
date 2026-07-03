@@ -28,7 +28,7 @@ use crate::node::Node;
 use crate::node::SwarmSend;
 use crate::node::emission_worker::EmissionWorker;
 use crate::node::messages::Message;
-use crate::node::organise_worker::{OrganiseError, OrganiseSender};
+use crate::node::organise_worker::OrganiseError;
 use crate::node::organise_worker::{OrganiseWorker, create_organise_channel};
 use crate::node::p2p_message_handlers::receivers::block_receiver::{
     BlockReceiver, create_block_receiver_channel,
@@ -40,7 +40,7 @@ use crate::node::request_response_handler::block_fetcher::{
     BlockFetcher, BlockFetcherError, create_block_fetcher_channel,
 };
 use crate::node::validation_worker::{
-    ValidationWorker, ValidationWorkerError, create_validation_channel,
+    ValidationSender, ValidationWorker, ValidationWorkerError, create_validation_channel,
 };
 #[cfg(test)]
 #[mockall_double::double]
@@ -300,7 +300,7 @@ struct NodeActor {
     chain_store_handle: ChainStoreHandle,
     #[allow(dead_code)]
     metrics: MetricsHandle,
-    organise_tx: OrganiseSender,
+    validation_tx: ValidationSender,
     organise_handle: tokio::task::JoinHandle<Result<(), OrganiseError>>,
     block_fetcher_handle: tokio::task::JoinHandle<Result<(), BlockFetcherError>>,
     validation_handle: tokio::task::JoinHandle<Result<(), ValidationWorkerError>>,
@@ -332,6 +332,7 @@ impl NodeActor {
 
         // Clone handles for workers before moving them into Node::new
         let validation_tx_for_worker = validation_tx.clone();
+        let validation_tx_for_emission = validation_tx.clone();
         let block_fetcher_tx_for_receiver = block_fetcher_tx.clone();
         let difficulty_multiplier = config.stratum.difficulty_multiplier as u128;
         let pool_signature = config
@@ -408,7 +409,7 @@ impl NodeActor {
                 emissions_rx,
                 chain_store_handle,
                 metrics,
-                organise_tx,
+                validation_tx: validation_tx_for_emission,
                 organise_handle,
                 block_fetcher_handle,
                 validation_handle,
@@ -424,7 +425,7 @@ impl NodeActor {
             self.emissions_rx,
             self.chain_store_handle.clone(),
             self.node.config.stratum.network,
-            self.organise_tx,
+            self.validation_tx,
         );
         tokio::spawn(emission_worker.run());
 
