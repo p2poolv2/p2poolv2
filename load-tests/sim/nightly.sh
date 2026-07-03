@@ -84,6 +84,7 @@ DIAL_FANOUT="${DIAL_FANOUT:-3}"
 export RUN_DIR RPC_URL RPC_USER RPC_PASS ZMQ SHARES_PER_BLOCK DIAL_FANOUT
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 STARTED_BITCOIND=0
 SWARM_RUNNING=0
 METRICS_OUTPUT=""
@@ -222,6 +223,42 @@ stop_swarm() {
   fi
 }
 
+verify_all_chains() {
+  local profile="${PROFILE:-release}"
+  local verify_bin
+  if [ "$profile" = "release" ]; then
+    verify_bin="$REPO_ROOT/target/release/verify_chain"
+  else
+    verify_bin="$REPO_ROOT/target/debug/verify_chain"
+  fi
+
+  if [ ! -x "$verify_bin" ]; then
+    log_message "Building verify_chain ($profile)..."
+    local profile_flag=""
+    [ "$profile" = "release" ] && profile_flag="--release"
+    ( cd "$REPO_ROOT" && cargo build -p p2poolv2_node --bin verify_chain $profile_flag )
+  fi
+
+  VERIFY_CHAIN_FAILURES=0
+  VERIFY_CHAIN_TOTAL=0
+  log_message "Running verify_chain on all ${NODE_COUNT} node stores..."
+  for i in $(seq 0 $((NODE_COUNT - 1))); do
+    local store="$RUN_DIR/store-$i.db"
+    VERIFY_CHAIN_TOTAL=$((VERIFY_CHAIN_TOTAL + 1))
+    if [ ! -d "$store" ]; then
+      log_message "  node $i: store not found at $store (SKIP)"
+      VERIFY_CHAIN_FAILURES=$((VERIFY_CHAIN_FAILURES + 1))
+      continue
+    fi
+    if "$verify_bin" "$store" > "$RUN_DIR/verify-$i.log" 2>&1; then
+      log_message "  node $i: PASS"
+    else
+      log_message "  node $i: FAIL (see $RUN_DIR/verify-$i.log)"
+      VERIFY_CHAIN_FAILURES=$((VERIFY_CHAIN_FAILURES + 1))
+    fi
+  done
+}
+
 stop_bitcoind_if_started() {
   if [ "$STARTED_BITCOIND" -eq 1 ]; then
     log_message "Stopping bitcoind (started by this script)..."
@@ -344,6 +381,12 @@ evaluate_results() {
     failed=1
   fi
 
+  local verify_result="PASS"
+  if [ "${VERIFY_CHAIN_FAILURES:-0}" -gt 0 ]; then
+    verify_result="FAIL"
+    failed=1
+  fi
+
   echo "=== NIGHTLY SIM RESULTS ==="
   printf "  nodes alive:        %-4s  (%s/%s)\n" \
     "$alive_result" "$ALIVE_COUNT" "$ALIVE_TOTAL"
@@ -357,6 +400,8 @@ evaluate_results() {
     "$rejections_result" "$ASERT_MISMATCH_COUNT" "$MERKLE_PAYOUT_COUNT"
   printf "  uncle rate:         %-4s  (%s%% < %s%%)\n" \
     "$uncle_result" "$UNCLE_RATE" "$UNCLE_RATE_THRESHOLD"
+  printf "  verify_chain:       %-4s  (%s/%s passed)\n" \
+    "$verify_result" "$((VERIFY_CHAIN_TOTAL - VERIFY_CHAIN_FAILURES))" "$VERIFY_CHAIN_TOTAL"
 
   if [ "$failed" -eq 0 ]; then
     echo "RESULT: PASS"
@@ -384,5 +429,6 @@ wait_for_convergence
 check_all_nodes_alive || true
 collect_metrics
 stop_swarm
+verify_all_chains
 
 evaluate_results
