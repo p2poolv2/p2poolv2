@@ -111,7 +111,7 @@ impl ShareCommitment {
 }
 
 /// Encode an optional address as a bool flag followed by the address string when present.
-fn encode_optional_address<W: Write + ?Sized>(
+pub(crate) fn encode_optional_address<W: Write + ?Sized>(
     address: &Option<Address>,
     writer: &mut W,
 ) -> Result<usize, bitcoin::io::Error> {

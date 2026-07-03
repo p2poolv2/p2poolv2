@@ -27,7 +27,6 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::sim_overrides;
 use crate::stratum::work::prepared_notify::{PreparedNotifyParams, PreparedNotifyParamsBuilder};
-use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
 use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
 use tracing::{debug, error};
@@ -109,8 +108,6 @@ fn build_prepared_notify(
 
     let output_distribution = build_output_distribution(template, target, context);
 
-    let time = SystemTimeProvider.seconds_since_epoch() as u32;
-
     PreparedNotifyParamsBuilder::new(
         Arc::clone(template),
         output_distribution,
@@ -120,7 +117,6 @@ fn build_prepared_notify(
     .prev_share_blockhash(tip)
     .uncles(uncles.into_iter().collect())
     .bits(target)
-    .time(time)
     .donation_address(context.config.donation_address().cloned())
     .donation(context.config.donation)
     .fee_address(context.config.fee_address().cloned())
@@ -275,7 +271,6 @@ mod tests {
         let prepared =
             PreparedNotifyParamsBuilder::new(Arc::new(template), test_distribution, &[], false)
                 .bits(bitcoin::CompactTarget::from_consensus(0x1d00ffff))
-                .time(1700000000u32)
                 .build()
                 .expect("Failed to build prepared notify");
 
@@ -542,7 +537,6 @@ mod tests {
             true,
         )
         .bits(bitcoin::CompactTarget::from_consensus(0x1d00ffff))
-        .time(1700000000u32)
         .build()
         .expect("Failed to build prepared notify");
 
