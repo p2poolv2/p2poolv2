@@ -1,0 +1,60 @@
+name: Sim Integration Test
+
+on:
+  schedule:
+    - cron: '0 3 * * *'   # every day at 03:00 UTC
+  workflow_dispatch:
+    inputs:
+      node_count:
+        description: 'Number of sim nodes'
+        required: false
+        default: '10'
+      duration_seconds:
+        description: 'Swarm run duration in seconds'
+        required: false
+        default: '300'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  sim:
+    name: Sim Swarm (10 nodes, 5 min)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.88.0
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install bitcoind
+        env:
+          BITCOIN_VERSION: "30.0"
+        run: |
+          wget -q "https://bitcoincore.org/bin/bitcoin-core-${BITCOIN_VERSION}/bitcoin-${BITCOIN_VERSION}-x86_64-linux-gnu.tar.gz"
+          tar -xzf "bitcoin-${BITCOIN_VERSION}-x86_64-linux-gnu.tar.gz"
+          sudo install -m 0755 "bitcoin-${BITCOIN_VERSION}/bin/bitcoind" /usr/local/bin/
+          sudo install -m 0755 "bitcoin-${BITCOIN_VERSION}/bin/bitcoin-cli" /usr/local/bin/
+          bitcoind --version
+
+      - name: Run sim integration test
+        run: |
+          NODE_COUNT="${{ github.event.inputs.node_count || '10' }}" \
+          CONVERGENCE_WAIT_SECONDS="${{ github.event.inputs.duration_seconds || '300' }}" \
+          IDEAL_BLOCK_TIME=5 \
+          SHARES_PER_BLOCK=1000 \
+          set -o pipefail
+          ./load-tests/sim/nightly.sh 2>&1 | tee /tmp/p2pool-sim/nightly-output.log
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sim-logs
+          path: /tmp/p2pool-sim/
+          retention-days: 7
