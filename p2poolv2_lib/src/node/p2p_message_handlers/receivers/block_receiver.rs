@@ -261,10 +261,10 @@ impl BlockReceiver {
 
         if let Err(error) = self
             .validation_tx
-            .send(ValidationEvent::ValidateBlock(*block_hash))
+            .send(ValidationEvent::ValidateBlockHash(*block_hash))
             .await
         {
-            error!("Failed to send ValidateBlock for {block_hash}: {error}");
+            error!("Failed to send ValidateBlockHash for {block_hash}: {error}");
             return Err(error.into());
         }
 
@@ -788,7 +788,10 @@ mod tests {
 
         let validation_event = validation_rx.try_recv().unwrap();
         match validation_event {
-            ValidationEvent::ValidateBlock(hash) => assert_eq!(hash, child_hash),
+            ValidationEvent::ValidateBlockHash(hash) => assert_eq!(hash, child_hash),
+            ValidationEvent::ValidateShareBlock(_) => {
+                panic!("Expected ValidateBlockHash, got ValidateShareBlock")
+            }
         }
     }
 
@@ -938,7 +941,10 @@ mod tests {
 
         let event = validation_rx.try_recv().unwrap();
         match event {
-            ValidationEvent::ValidateBlock(hash) => assert_eq!(hash, child_hash),
+            ValidationEvent::ValidateBlockHash(hash) => assert_eq!(hash, child_hash),
+            ValidationEvent::ValidateShareBlock(_) => {
+                panic!("Expected ValidateBlockHash, got ValidateShareBlock")
+            }
         }
     }
 
@@ -1116,13 +1122,19 @@ mod tests {
             .try_recv()
             .expect("expected first validation event");
         match event1 {
-            ValidationEvent::ValidateBlock(hash) => assert_eq!(hash, parent_hash),
+            ValidationEvent::ValidateBlockHash(hash) => assert_eq!(hash, parent_hash),
+            ValidationEvent::ValidateShareBlock(_) => {
+                panic!("Expected ValidateBlockHash, got ValidateShareBlock")
+            }
         }
         let event2 = validation_rx
             .try_recv()
             .expect("expected second validation event");
         match event2 {
-            ValidationEvent::ValidateBlock(hash) => assert_eq!(hash, child_hash),
+            ValidationEvent::ValidateBlockHash(hash) => assert_eq!(hash, child_hash),
+            ValidationEvent::ValidateShareBlock(_) => {
+                panic!("Expected ValidateBlockHash, got ValidateShareBlock")
+            }
         }
     }
 
