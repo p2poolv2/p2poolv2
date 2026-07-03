@@ -185,9 +185,10 @@ impl ValidationWorker {
 /// (avoids a redundant store read for locally mined shares). Otherwise
 /// reads the block from the chain store by hash.
 ///
-/// Sends `OrganiseEvent::Block` for chain promotion. Only broadcasts
-/// to peers when the chain is current, suppressing relay of historic
-/// blocks during initial sync or catchup.
+/// Sends `OrganiseEvent::Block` for chain promotion. Locally mined
+/// blocks (prefetched) are always broadcast to peers. Blocks received
+/// from peers are only broadcast when the chain is current,
+/// suppressing relay of historic blocks during initial sync or catchup.
 ///
 /// Duplicate validation of already-confirmed blocks is handled by
 /// `validate_share_block` which returns Ok immediately for blocks
@@ -200,6 +201,7 @@ async fn validate_and_emit(
     organise_tx: OrganiseSender,
     swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
 ) {
+    let locally_mined = prefetched_block.is_some();
     let share_block = match prefetched_block {
         Some(block) => block,
         None => match chain_store_handle.get_share(&block_hash) {
@@ -232,12 +234,10 @@ async fn validate_and_emit(
         error!("Failed to send validated block to organise worker: {send_error}");
     }
 
-    // Only broadcast when the chain is current. During initial sync or
-    // catchup, validated historic blocks should not be relayed to peers.
-    //
-    // Broadcast block after validation, if later confirmation fails,
-    // the peers should have this block anyway.
-    if chain_store_handle.is_current() {
+    // Always broadcast locally mined blocks. For blocks received from
+    // peers, only broadcast when the chain is current to avoid relaying
+    // historic blocks during initial sync or catchup.
+    if locally_mined || chain_store_handle.is_current() {
         #[cfg(not(feature = "sim"))]
         {
             if let Err(send_error) = swarm_tx.send(SwarmSend::BroadcastBlock(share_block)).await {
