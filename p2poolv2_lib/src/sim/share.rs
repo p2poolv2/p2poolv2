@@ -194,7 +194,6 @@ mod tests {
         }];
         PreparedNotifyParamsBuilder::new(template, output_distribution, POOL_SIGNATURE, false)
             .bits(CompactTarget::from_consensus(0x1d00ffff))
-            .time(1_700_000_000u32)
             .build()
             .expect("prepared build")
     }

@@ -1580,7 +1580,6 @@ mod stratum_server_tests {
         let prepared =
             PreparedNotifyParamsBuilder::new(template, output_distribution, b"test_pool", false)
                 .bits(CompactTarget::from_consensus(0x1d00ffff))
-                .time(1700000000u32)
                 .build()
                 .expect("PreparedNotifyParamsBuilder::build should succeed");
 
