@@ -70,7 +70,7 @@ pub async fn handle_share_block(
         if !chain_store_handle.has_status(&block_hash, Status::Confirmed) {
             debug!("Share block {block_hash} in store but not confirmed, re-sending to validation");
             if let Err(send_error) = validation_tx
-                .send(ValidationEvent::ValidateBlock(block_hash))
+                .send(ValidationEvent::ValidateBlockHash(block_hash))
                 .await
             {
                 error!("Failed to re-send block to validation worker: {send_error}");
@@ -283,7 +283,10 @@ mod tests {
             .try_recv()
             .expect("Expected validation event for unconfirmed stored block");
         match event {
-            ValidationEvent::ValidateBlock(hash) => assert_eq!(hash, block_hash),
+            ValidationEvent::ValidateBlockHash(hash) => assert_eq!(hash, block_hash),
+            ValidationEvent::ValidateShareBlock(_) => {
+                panic!("Expected ValidateBlockHash, got ValidateShareBlock")
+            }
         }
     }
 

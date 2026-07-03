@@ -64,13 +64,13 @@ impl EmissionWorker {
             // Pass a reference to chain store handle to avoid clones on each loop
             match handle_stratum_share(emission, &self.chain_store_handle).await {
                 Ok(Some(share_block)) => {
-                    // Enqueue the block for validation. The validation worker
+                    // Send the block directly to the validation worker,
+                    // avoiding a redundant store read. The validation worker
                     // will emit OrganiseEvent::Block and broadcast to peers
                     // after the block passes validation.
-                    let block_hash = share_block.block_hash();
                     if let Err(e) = self
                         .validation_tx
-                        .send(ValidationEvent::ValidateBlock(block_hash))
+                        .send(ValidationEvent::ValidateShareBlock(share_block))
                         .await
                     {
                         error!("Failed to send block to validation worker: {e}");
@@ -222,9 +222,9 @@ mod tests {
         assert!(
             matches!(
                 validation_event,
-                Ok(Some(ValidationEvent::ValidateBlock(_)))
+                Ok(Some(ValidationEvent::ValidateShareBlock(_)))
             ),
-            "Expected ValidationEvent::ValidateBlock"
+            "Expected ValidationEvent::ValidateShareBlock"
         );
 
         worker_handle.await.unwrap();
@@ -294,9 +294,9 @@ mod tests {
         assert!(
             matches!(
                 validation_rx.try_recv(),
-                Ok(ValidationEvent::ValidateBlock(_))
+                Ok(ValidationEvent::ValidateShareBlock(_))
             ),
-            "Expected ValidationEvent::ValidateBlock from second emission"
+            "Expected ValidationEvent::ValidateShareBlock from second emission"
         );
 
         assert!(

@@ -35,6 +35,7 @@ use crate::pool_difficulty::PoolDifficulty;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
+use crate::shares::share_block::ShareBlock;
 use crate::shares::validation::{DefaultShareValidator, ShareValidator};
 use crate::utils::cpu::available_cpus;
 use bitcoin::BlockHash;
@@ -49,8 +50,10 @@ const VALIDATION_CHANNEL_CAPACITY: usize = 8192;
 
 /// Events for the validation worker.
 pub enum ValidationEvent {
-    /// Validate a stored ShareBlock by its hash.
-    ValidateBlock(BlockHash),
+    /// Validate a stored ShareBlock by its hash (reads from store).
+    ValidateBlockHash(BlockHash),
+    /// Validate a ShareBlock already in memory (avoids redundant store read).
+    ValidateShareBlock(ShareBlock),
 }
 
 /// Sender half of the validation channel.
@@ -137,43 +140,50 @@ impl ValidationWorker {
         ));
 
         while let Some(event) = self.validation_rx.recv().await {
-            match event {
-                ValidationEvent::ValidateBlock(block_hash) => {
-                    let permit = match self.semaphore.clone().acquire_owned().await {
-                        Ok(permit) => permit,
-                        Err(_) => {
-                            error!("Validation semaphore closed");
-                            return Err(ValidationWorkerError {
-                                message: "Validation semaphore closed".to_string(),
-                            });
-                        }
-                    };
-                    let chain_store_handle = self.chain_store_handle.clone();
-                    let organise_tx = self.organise_tx.clone();
-                    let swarm_tx = self.swarm_tx.clone();
-                    let validator = Arc::clone(&share_validator);
+            let (block_hash, prefetched_block) = match event {
+                ValidationEvent::ValidateBlockHash(hash) => (hash, None),
+                ValidationEvent::ValidateShareBlock(share_block) => {
+                    (share_block.block_hash(), Some(share_block))
+                }
+            };
 
-                    tokio::spawn(async move {
-                        let _permit = permit;
-                        validate_and_emit(
-                            block_hash,
-                            validator,
-                            chain_store_handle,
-                            organise_tx,
-                            swarm_tx,
-                        )
-                        .await;
+            let permit = match self.semaphore.clone().acquire_owned().await {
+                Ok(permit) => permit,
+                Err(_) => {
+                    error!("Validation semaphore closed");
+                    return Err(ValidationWorkerError {
+                        message: "Validation semaphore closed".to_string(),
                     });
                 }
-            }
+            };
+            let chain_store_handle = self.chain_store_handle.clone();
+            let organise_tx = self.organise_tx.clone();
+            let swarm_tx = self.swarm_tx.clone();
+            let validator = Arc::clone(&share_validator);
+
+            tokio::spawn(async move {
+                let _permit = permit;
+                validate_and_emit(
+                    block_hash,
+                    prefetched_block,
+                    validator,
+                    chain_store_handle,
+                    organise_tx,
+                    swarm_tx,
+                )
+                .await;
+            });
         }
         info!("Validation worker stopped - channel closed");
         Ok(())
     }
 }
 
-/// Read a share block from the store, validate it, and emit events
-/// on success.
+/// Validate a share block and emit events on success.
+///
+/// When `prefetched_block` is `Some`, uses the provided block directly
+/// (avoids a redundant store read for locally mined shares). Otherwise
+/// reads the block from the chain store by hash.
 ///
 /// Sends `OrganiseEvent::Block` for chain promotion. Only broadcasts
 /// to peers when the chain is current, suppressing relay of historic
@@ -184,17 +194,21 @@ impl ValidationWorker {
 /// with `BlockValid` status.
 async fn validate_and_emit(
     block_hash: BlockHash,
+    prefetched_block: Option<ShareBlock>,
     share_validator: Arc<DefaultShareValidator>,
     chain_store_handle: ChainStoreHandle,
     organise_tx: OrganiseSender,
     swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
 ) {
-    let share_block = match chain_store_handle.get_share(&block_hash) {
-        Some(share_block) => share_block,
-        None => {
-            error!("Share block {block_hash} not found in store for validation");
-            return;
-        }
+    let share_block = match prefetched_block {
+        Some(block) => block,
+        None => match chain_store_handle.get_share(&block_hash) {
+            Some(share_block) => share_block,
+            None => {
+                error!("Share block {block_hash} not found in store for validation");
+                return;
+            }
+        },
     };
 
     if let Err(validation_error) =
@@ -277,7 +291,7 @@ mod tests {
         let worker_handle = tokio::spawn(worker.run());
 
         validation_tx
-            .send(ValidationEvent::ValidateBlock(block_hash))
+            .send(ValidationEvent::ValidateBlockHash(block_hash))
             .await
             .unwrap();
 
@@ -326,7 +340,7 @@ mod tests {
         let worker_handle = tokio::spawn(worker.run());
 
         validation_tx
-            .send(ValidationEvent::ValidateBlock(block_hash))
+            .send(ValidationEvent::ValidateBlockHash(block_hash))
             .await
             .unwrap();
 
@@ -375,7 +389,7 @@ mod tests {
         let worker_handle = tokio::spawn(worker.run());
 
         validation_tx
-            .send(ValidationEvent::ValidateBlock(block_hash))
+            .send(ValidationEvent::ValidateBlockHash(block_hash))
             .await
             .unwrap();
 
@@ -426,7 +440,7 @@ mod tests {
         let worker_handle = tokio::spawn(worker.run());
 
         validation_tx
-            .send(ValidationEvent::ValidateBlock(block_hash))
+            .send(ValidationEvent::ValidateBlockHash(block_hash))
             .await
             .unwrap();
 
@@ -493,7 +507,7 @@ mod tests {
         let worker_handle = tokio::spawn(worker.run());
 
         validation_tx
-            .send(ValidationEvent::ValidateBlock(block_hash))
+            .send(ValidationEvent::ValidateBlockHash(block_hash))
             .await
             .unwrap();
 
