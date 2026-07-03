@@ -727,16 +727,17 @@ mod tests {
         let job_id_str = params[0].as_str().unwrap();
         assert_ne!(job_id_str, "0000000000000000");
 
-        // Verify commitment hash was computed and placed in coinbase2.
-        // The per-miner coinbase2 starts with "20" (push 32 bytes) + 64 hex chars hash.
+        // Verify commitment hash and nsecs were placed in coinbase2.
+        // Format: "20" + 64 hex hash + "08" + 16 hex nsecs + suffix
         let coinbase2 = params[3].as_str().unwrap();
         assert!(
             coinbase2.starts_with("20"),
             "coinbase2 should start with commitment hash push opcode"
         );
-        assert!(
-            coinbase2.len() > 66,
-            "coinbase2 should contain at least the commitment hash"
+        assert_eq!(
+            &coinbase2[66..68],
+            "08",
+            "coinbase2 should have nsecs push opcode at offset 66"
         );
 
         // Verify job was inserted in tracker with no share_commitment
