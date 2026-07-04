@@ -7,6 +7,88 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- ShareBlock relay: blocks are now pushed directly as full ShareBlocks
+  instead of the Inv-then-fetch protocol, reducing propagation latency.
+  Blocks are relayed on validation and broadcast only when the chain is
+  current.
+
+- Kademlia peer discovery with periodic bootstrap. libp2p identity is
+  now configured from the node key, routable IPv6 address detection is
+  improved, and the node advertises its external address to peers.
+
+- Local block validation: locally mined blocks are enqueued for
+  validation before being broadcast, matching the same path as
+  remotely received blocks. Blocks are always broadcast after
+  successful validation.
+
+- Simulation framework: no-PoW share emitter, sim_overrides module,
+  separate sim binary crate, log-based metrics with target rate
+  auto-detect, nightly integration test, and simulation runbook.
+
+- TLA+ pruning specification with two-window (Spend and Prune) model
+  and blockchain transaction specs.
+
+- Build script that embeds the git version; version is printed in info
+  log on startup.
+
+- Docker image builds for release tags. Podman-specific commands added
+  to docker compose setup.
+
+- Nightly sim script with configurable dial fanout, lagging node
+  detection, and clean starts between runs.
+
+### Changed
+
+- RocksDB bloom filters enabled for column families using point
+  queries, improving read performance.
+
+- Limit transient dependencies to only those required, reducing
+  compile times and binary size.
+
+- PPLNS window rebuild no longer evicts the cache, avoiding redundant
+  recalculations during sync.
+
+- Candidates with available body are now preferred when selecting
+  uncles.
+
+- Do not candidatize a block that is already confirmed. Update
+  candidates when a local block is confirmed.
+
+- Use fresh timestamp when building work instead of reusing stale
+  values.
+
+- Send getheaders when a received block has a missing parent, resuming
+  sync without waiting for the next periodic retry.
+
+- Refactor node main into separate build and runner functions. Move
+  sim to a separate binary crate with sim_overrides module localising
+  pool difficulty, payout distribution, genesis, PoW, and emission
+  overrides.
+
+- Remove network parameter from Emission Worker.
+
+- Use Bitcoin Core 31.0 for regtest in sim.
+
+- Docker compose uses net mode host to avoid NAT issues.
+
+- Run docker checks and builds only on release branches.
+
+- Use debug logging level for nightly runs.
+
+### Fixed
+
+- Block receiver no longer early-returns on pending blocks, which
+  could cause missed block processing.
+
+- Sim uncle rate metric no longer over-counts under reorg churn by
+  counting distinct blocks instead of all appearances.
+
+- Do not advertise observed address with ephemeral source port to
+  peers, which caused unreachable address entries in peer routing
+  tables.
+
 ## [v0.12.0] - 2026-06-12
 
 ### Changed
