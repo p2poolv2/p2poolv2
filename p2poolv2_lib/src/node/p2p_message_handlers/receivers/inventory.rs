@@ -16,7 +16,7 @@
 
 use crate::node::SwarmSend;
 use crate::node::messages::{InventoryMessage, Message};
-use crate::node::p2p_message_handlers::senders::send_getheaders;
+use crate::node::p2p_message_handlers::receivers::request_missing_blocks::request_headers_for_missing_blocks;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -57,22 +57,8 @@ pub async fn handle_inventory<C: Send + Sync>(
     match inventory {
         InventoryMessage::BlockHashes(blockhashes) => {
             debug!("Received block hashes locator: {:?}", blockhashes);
-
-            if !chain_store_handle.is_current() {
-                debug!("Chain not current, ignoring inv from peer {peer}");
-                return Ok(());
-            }
-
-            let missing_blocks = chain_store_handle.get_missing_blockhashes(&blockhashes);
-
-            if !missing_blocks.is_empty() {
-                debug!(
-                    "Have {} missing blocks from peer {}, sending getheaders",
-                    missing_blocks.len(),
-                    peer
-                );
-                send_getheaders(peer, chain_store_handle, swarm_tx, 0).await?;
-            }
+            request_headers_for_missing_blocks(&blockhashes, peer, chain_store_handle, swarm_tx)
+                .await?;
         }
         InventoryMessage::TransactionHashes(transaction_hashes) => {
             debug!(
