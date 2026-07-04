@@ -225,7 +225,7 @@ password = "$RPC_PASS"
 
 [logging]
 console = true
-level = "info"
+level = "debug"
 stats_dir = "$RUN_DIR/stats-$i"
 
 [api]
