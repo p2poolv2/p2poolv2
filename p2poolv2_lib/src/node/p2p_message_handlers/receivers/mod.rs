@@ -20,6 +20,7 @@ pub mod getdata;
 pub mod getheaders;
 pub mod handshake;
 pub mod inventory;
+pub mod request_missing_blocks;
 pub mod share_blocks;
 pub mod share_headers;
 
