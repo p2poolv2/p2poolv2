@@ -53,7 +53,6 @@ struct Args {
 #[cfg(feature = "sim")]
 #[tokio::main]
 async fn main() -> ExitCode {
-    info!("Starting P2Poolv2 sim...");
     let args = Args::parse();
 
     let sim_node_config = match SimNodeConfig::load(&args.config) {
@@ -68,10 +67,7 @@ async fn main() -> ExitCode {
     let sim_cfg = sim_node_config.sim;
 
     let _guards = match setup_logging(&node_config.logging) {
-        Ok(guards) => {
-            info!("Logging set up successfully");
-            guards
-        }
+        Ok(guards) => guards,
         Err(e) => {
             error!("Failed to set up logging: {e}");
             return ExitCode::FAILURE;
@@ -79,8 +75,9 @@ async fn main() -> ExitCode {
     };
 
     info!(
-        "Running on {} network (sim mode)",
-        &node_config.stratum.network
+        "Running on {} network (sim mode, git: {})",
+        &node_config.stratum.network,
+        env!("GIT_VERSION")
     );
 
     // Initialize sim overrides before build_node (ASERT anchor, genesis).
