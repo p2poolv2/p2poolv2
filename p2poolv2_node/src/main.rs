@@ -29,7 +29,6 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    info!("Starting P2Poolv2...");
     let args = Args::parse();
 
     let config = match Config::load(&args.config) {
@@ -52,7 +51,11 @@ async fn main() -> ExitCode {
         }
     };
 
-    info!("Running on {} network", &config.stratum.network);
+    info!(
+        "Running on {} network (git: {})",
+        &config.stratum.network,
+        env!("GIT_VERSION")
+    );
 
     let (_handles, runner) = match p2poolv2_node::build_node(config).await {
         Ok(result) => result,
