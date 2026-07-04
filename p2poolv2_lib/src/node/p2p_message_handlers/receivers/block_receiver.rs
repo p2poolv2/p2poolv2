@@ -307,11 +307,6 @@ impl BlockReceiver {
             }
         }
 
-        if self.pending.contains_key(&block_hash) {
-            debug!("Block {block_hash} already pending, ignoring duplicate");
-            return Ok(());
-        }
-
         // Notify block fetcher that we received this block so it can
         // clear any in-flight request.
         let _ = self
@@ -328,6 +323,8 @@ impl BlockReceiver {
             self.add_to_pending(block_hash, share_block);
             return Ok(());
         }
+
+        self.remove_from_pending(&block_hash);
 
         // Ancestry is ready: ASERT-check and persist this block.
         if let Err(error) = self.validate_asert(&share_block) {
@@ -1131,6 +1128,115 @@ mod tests {
             .try_recv()
             .expect("expected second validation event");
         match event2 {
+            ValidationEvent::ValidateBlockHash(hash) => assert_eq!(hash, child_hash),
+            ValidationEvent::ValidateShareBlock(_) => {
+                panic!("Expected ValidateBlockHash, got ValidateShareBlock")
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_pending_block_re_received_with_ready_parent_is_processed() {
+        let parent_hash = BlockHash::from_byte_array([0xdd; 32]);
+        let parent_header = TestShareBlockBuilder::new()
+            .nonce(0xe9695790)
+            .build()
+            .header;
+        let parent_header_clone = parent_header.clone();
+
+        let mut child_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(parent_hash.to_string())
+            .nonce(0xe9695791)
+            .build();
+        child_block.header.bits =
+            CompactTarget::from_consensus(crate::shares::share_block::MAX_POOL_TARGET);
+        let child_hash = child_block.block_hash();
+        let child_block_clone = child_block.clone();
+
+        let mut mock_store = ChainStoreHandle::default();
+        // First call: child's own metadata lookup (fast path) -> NotFound
+        // Second call: parent metadata -> NotFound (parent not ready)
+        // These cover the first process_share_block call.
+        mock_store
+            .expect_get_block_metadata()
+            .with(mockall::predicate::eq(child_hash))
+            .returning(|_| Err(StoreError::NotFound("not found".to_string())));
+        mock_store
+            .expect_get_block_metadata()
+            .with(mockall::predicate::eq(parent_hash))
+            .times(1)
+            .returning(|_| Err(StoreError::NotFound("not found".to_string())));
+        // After headers sync, parent is now HeaderValid. This covers the
+        // second process_share_block call (re-receive) and validate_asert.
+        mock_store
+            .expect_get_block_metadata()
+            .with(mockall::predicate::eq(parent_hash))
+            .returning(|_| {
+                Ok(BlockMetadata {
+                    expected_height: Some(0),
+                    chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
+                    status: Status::HeaderValid,
+                })
+            });
+        mock_store
+            .expect_get_share_header()
+            .with(mockall::predicate::eq(parent_hash))
+            .returning(move |_| Ok(parent_header_clone.clone()));
+        mock_store
+            .expect_add_share_block_and_organise_header()
+            .returning(|_| Ok(None));
+
+        let mut mock_validator = MockDefaultShareValidator::default();
+        let mut pool_difficulty = PoolDifficulty::default();
+        pool_difficulty
+            .expect_calculate_target_clamped()
+            .returning(|_, _| {
+                CompactTarget::from_consensus(crate::shares::share_block::MAX_POOL_TARGET)
+            });
+        mock_validator
+            .expect_pool_difficulty()
+            .return_const(pool_difficulty);
+
+        let (_, event_rx) = create_block_receiver_channel();
+        let (block_fetcher_handle, mut block_fetcher_rx) =
+            block_fetcher::create_block_fetcher_channel();
+        let (validation_tx, mut validation_rx) = validation_worker::create_validation_channel();
+        let mut receiver = BlockReceiver::new(
+            event_rx,
+            Arc::new(mock_validator),
+            mock_store,
+            block_fetcher_handle,
+            validation_tx,
+        );
+
+        // First arrival: parent not ready, block is buffered
+        let result = receiver.process_share_block(child_block).await;
+        assert!(result.is_ok());
+        assert_eq!(receiver.pending_count(), 1);
+
+        // Drain the BlockRequestCompleted from first arrival
+        let fetcher_event = block_fetcher_rx.try_recv().unwrap();
+        match fetcher_event {
+            BlockFetcherEvent::BlockRequestCompleted(hash) => assert_eq!(hash, child_hash),
+            other => panic!("Expected BlockRequestCompleted, got: {other}"),
+        }
+
+        // Second arrival (via GetData response after headers synced parent).
+        // Parent is now HeaderValid. Block should be processed, not dropped.
+        let result = receiver.process_share_block(child_block_clone).await;
+        assert!(result.is_ok(), "Expected Ok, got: {}", result.unwrap_err());
+
+        // BlockRequestCompleted must be sent to clear the fetcher's in-flight state
+        let fetcher_event = block_fetcher_rx.try_recv().unwrap();
+        match fetcher_event {
+            BlockFetcherEvent::BlockRequestCompleted(hash) => assert_eq!(hash, child_hash),
+            other => panic!("Expected BlockRequestCompleted on re-receive, got: {other}"),
+        }
+
+        // Block should have been committed and sent to validation
+        assert_eq!(receiver.pending_count(), 0);
+        let validation_event = validation_rx.try_recv().unwrap();
+        match validation_event {
             ValidationEvent::ValidateBlockHash(hash) => assert_eq!(hash, child_hash),
             ValidationEvent::ValidateShareBlock(_) => {
                 panic!("Expected ValidateBlockHash, got ValidateShareBlock")
