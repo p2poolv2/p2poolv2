@@ -307,7 +307,12 @@ check_chain_converged() {
   DISTINCT_HASHES=$(echo "$METRICS_OUTPUT" \
     | grep -oE "distinct block hash at height [0-9]+ across nodes: [0-9]+" \
     | grep -oE "[0-9]+$" || echo "-1")
-  [ "$DISTINCT_HASHES" -eq 1 ]
+  WITHIN2=$(echo "$METRICS_OUTPUT" \
+    | grep -oE "nodes within 2 of tip: [0-9]+/[0-9]+" \
+    | grep -oE "[0-9]+/[0-9]+$" || echo "0/0")
+  WITHIN2_COUNT=$(echo "$WITHIN2" | cut -d/ -f1)
+  WITHIN2_TOTAL=$(echo "$WITHIN2" | cut -d/ -f2)
+  [ "$DISTINCT_HASHES" -eq 1 ] && [ "$WITHIN2_COUNT" -eq "$WITHIN2_TOTAL" ] && [ "$WITHIN2_TOTAL" -gt 0 ]
 }
 
 check_chain_grew() {
@@ -391,8 +396,8 @@ evaluate_results() {
   echo "=== NIGHTLY SIM RESULTS ==="
   printf "  nodes alive:        %-4s  (%s/%s)\n" \
     "$alive_result" "$ALIVE_COUNT" "$ALIVE_TOTAL"
-  printf "  chain converged:    %-4s  (distinct hashes: %s)\n" \
-    "$converged_result" "$DISTINCT_HASHES"
+  printf "  chain converged:    %-4s  (distinct hashes: %s, within 2 of tip: %s)\n" \
+    "$converged_result" "$DISTINCT_HASHES" "$WITHIN2"
   printf "  chain grew:         %-4s  (promotions: %s)\n" \
     "$grew_result" "$PROMOTION_COUNT"
   printf "  no panics:          %-4s  (panicked nodes: %s)\n" \
