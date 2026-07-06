@@ -223,9 +223,12 @@ pub async fn handle_share_headers<C: Send + Sync>(
     }
 
     // Phase 1: Validate the header chain in memory
-    if let Err(sync_error) =
-        validate_header_chain(&share_headers, &chain_store_handle, share_validator, starting_height)
-    {
+    if let Err(sync_error) = validate_header_chain(
+        &share_headers,
+        &chain_store_handle,
+        share_validator,
+        starting_height,
+    ) {
         if sync_error.is_retryable() {
             let tip_height = chain_store_handle
                 .get_tip_height()

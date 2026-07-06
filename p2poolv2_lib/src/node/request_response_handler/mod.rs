@@ -513,7 +513,7 @@ mod tests {
                 TestShareBlockBuilder::new().build().header,
             ];
             mock.expect_get_headers_for_locator()
-                .returning(move |_, _, _| Ok(headers.clone()));
+                .returning(move |_, _, _| Ok((headers.clone(), 1)));
             mock
         });
 
@@ -534,7 +534,8 @@ mod tests {
         assert!(result.is_ok());
 
         // The per-peer task processes asynchronously, wait for response
-        if let Some(SwarmSend::Response(_, Message::ShareHeaders(headers, _))) = swarm_rx.recv().await
+        if let Some(SwarmSend::Response(_, Message::ShareHeaders(headers, _))) =
+            swarm_rx.recv().await
         {
             assert_eq!(headers.len(), 2);
         } else {

@@ -280,7 +280,7 @@ mod tests {
 
         chain_store_handle
             .expect_get_headers_for_locator()
-            .returning(move |_, _, _| Ok(response_headers.clone()));
+            .returning(move |_, _, _| Ok((response_headers.clone(), 1)));
 
         let ctx = RequestContext {
             peer: peer_id,
@@ -328,7 +328,7 @@ mod tests {
         // Set up mock expectations
         chain_store_handle
             .expect_get_blockhashes_for_locator()
-            .returning(move |_, _, _| Ok(vec![block1.block_hash(), block2.block_hash()]));
+            .returning(move |_, _, _| Ok((vec![block1.block_hash(), block2.block_hash()], 1)));
 
         let ctx = RequestContext {
             peer: peer_id,
@@ -668,7 +668,7 @@ mod tests {
         // Set up mock expectations for processing headers
         chain_store_handle
             .expect_get_headers_for_locator()
-            .returning(|_, _, _| Ok(vec![]));
+            .returning(|_, _, _| Ok((vec![], 1)));
 
         let ctx = RequestContext {
             peer: peer_id,

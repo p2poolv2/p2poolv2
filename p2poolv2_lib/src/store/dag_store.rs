@@ -16,6 +16,7 @@
 
 use super::block_tx_metadata::{BlockMetadata, Status};
 use super::{ColumnFamily, Store, writer::StoreError};
+use crate::accounting::payout::sharechain_pplns::pplns_window::PRUNE_DEPTH;
 use crate::shares::chain::chain_store_handle::{COMMON_ANCESTOR_DEPTH, ConfirmedHeaderResult};
 use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::shares::validation::MAX_UNCLES;
@@ -177,26 +178,32 @@ impl Store {
     }
 
     /// Get blockhashes to satisfy the locator query.
-    /// Returns a list of blockhashes from the earliest block from the block hashes
-    /// We assume the list of blocks in the locator is ordered by height, so we stop when we find the first block in the locator
-    /// Find blockhashes up to the stop blockhash, or the limit provided
+    /// Returns blockhashes from the first matching locator entry and the
+    /// share chain height of the first returned block.
+    ///
+    /// When a locator match is found, walks descendants forward from
+    /// that point. When no locator matches, falls back to the lowest
+    /// retained height (tip - PRUNE_DEPTH, clamped to 0) and walks descendants from there.
     pub fn get_blockhashes_for_locator(
         &self,
         locator: &[BlockHash],
         stop_blockhash: &BlockHash,
         limit: usize,
-    ) -> Result<Vec<BlockHash>, StoreError> {
+    ) -> Result<(Vec<BlockHash>, u32), StoreError> {
         let start_blockhash = self.first_known_for_locator(locator);
-        // If no blockhash found, return vector with genesis block
         let start_blockhash = match start_blockhash {
             Some(hash) => hash,
-            None => match self.get_genesis_blockhash() {
-                Some(hash) => return Ok(vec![hash]),
-                None => return Ok(vec![]),
-            },
+            None => {
+                let start_hash = self.lowest_retained_blockhash()?;
+                let hashes = self.get_descendant_blockhashes(&start_hash, stop_blockhash, limit)?;
+                let starting_height = self.get_height_for_blockhash(&start_hash);
+                return Ok((hashes, starting_height));
+            }
         };
 
-        self.get_descendant_blockhashes(&start_blockhash, stop_blockhash, limit)
+        let hashes = self.get_descendant_blockhashes(&start_blockhash, stop_blockhash, limit)?;
+        let starting_height = self.get_height_for_first_block(&hashes);
+        Ok((hashes, starting_height))
     }
 
     /// Find the first locator hash that we know about.
@@ -223,17 +230,44 @@ impl Store {
         None
     }
 
-    /// Get headers to satisfy the locator query.
+    /// Get the blockhash at the lowest retained height.
+    ///
+    /// Computes lowest_retained = tip - PRUNE_DEPTH, clamped to 0.
+    /// At height 0 this returns the genesis block which is always present.
+    fn lowest_retained_blockhash(&self) -> Result<BlockHash, StoreError> {
+        let top_height = self.get_top_confirmed_height().unwrap_or(0);
+        let lowest_retained = top_height.saturating_sub(PRUNE_DEPTH as u32);
+        self.get_confirmed_at_height(lowest_retained)
+    }
+
+    /// Get the share chain height of a blockhash from its metadata.
+    fn get_height_for_blockhash(&self, blockhash: &BlockHash) -> u32 {
+        self.get_block_metadata(blockhash)
+            .ok()
+            .and_then(|metadata| metadata.expected_height)
+            .unwrap_or(0)
+    }
+
+    /// Get the share chain height of the first block in a list.
+    fn get_height_for_first_block(&self, blockhashes: &[BlockHash]) -> u32 {
+        match blockhashes.first() {
+            Some(hash) => self.get_height_for_blockhash(hash),
+            None => 0,
+        }
+    }
+
+    /// Get headers and starting height to satisfy the locator query.
     pub fn get_headers_for_locator(
         &self,
         locator: &[BlockHash],
         stop_blockhash: &BlockHash,
         limit: usize,
-    ) -> Result<Vec<ShareHeader>, StoreError> {
-        let blockhashes = self.get_blockhashes_for_locator(locator, stop_blockhash, limit)?;
+    ) -> Result<(Vec<ShareHeader>, u32), StoreError> {
+        let (blockhashes, starting_height) =
+            self.get_blockhashes_for_locator(locator, stop_blockhash, limit)?;
         let headers = self.get_share_headers(&blockhashes)?;
         let ordered: Vec<ShareHeader> = headers.into_iter().map(|(_, header)| header).collect();
-        Ok(ordered)
+        Ok((ordered, starting_height))
     }
 
     /// Get descendants headers of a share
@@ -911,7 +945,7 @@ mod tests {
         let locator = store.get_blockhashes_for_height(0);
 
         // Call handle_getblocks
-        let result = store
+        let (result, _starting_height) = store
             .get_headers_for_locator(locator.as_slice(), &stop_block, 10)
             .unwrap();
 
@@ -956,7 +990,7 @@ mod tests {
                 .unwrap();
 
         // Call get_headers_for_locator with non-existent stop block
-        let result = store
+        let (result, _starting_height) = store
             .get_headers_for_locator(&locator, &non_existent_stop_block, 10)
             .unwrap();
         assert_eq!(result.len(), 2);
@@ -1003,7 +1037,7 @@ mod tests {
         let locator = store.get_blockhashes_for_height(0);
 
         // Call handle_getblocks
-        let result = store
+        let (result, _starting_height) = store
             .get_blockhashes_for_locator(locator.as_slice(), &stop_block, 10)
             .unwrap();
 
@@ -3553,7 +3587,7 @@ mod tests {
         // height is max(1-3,0)+1 = 1. Returns all blocks at h:1
         // (uncle, share_a) and h:2 (share_b).
         let locator = vec![uncle.block_hash()];
-        let result = store
+        let (result, _starting_height) = store
             .get_blockhashes_for_locator(&locator, &BlockHash::all_zeros(), 10)
             .unwrap();
 

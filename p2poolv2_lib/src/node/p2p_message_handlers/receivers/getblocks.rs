@@ -41,7 +41,7 @@ pub async fn handle_getblocks<C: Send + Sync>(
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     debug!("Received GetBlocks: {:?}", locator);
-    let response_block_hashes =
+    let (response_block_hashes, _starting_height) =
         chain_store_handle.get_blockhashes_for_locator(&locator, &stop_block_hash, MAX_BLOCKS)?;
     let inventory_message =
         Message::Inventory(InventoryMessage::BlockHashes(response_block_hashes));
@@ -86,7 +86,7 @@ mod tests {
         // Set up mock expectations
         chain_store_handle
             .expect_get_blockhashes_for_locator()
-            .returning(move |_, _, _| Ok(response_block_hashes.clone()));
+            .returning(move |_, _, _| Ok((response_block_hashes.clone(), 1)));
 
         // Call the handler
         handle_getblocks(

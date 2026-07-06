@@ -206,25 +206,25 @@ impl ChainStoreHandle {
             .ok_or(StoreError::NotFound(share_hash.to_string()))
     }
 
-    /// Get headers for a locator.
+    /// Get headers and starting height for a locator.
     pub fn get_headers_for_locator(
         &self,
         block_hashes: &[BlockHash],
         stop_block_hash: &BlockHash,
         limit: usize,
-    ) -> Result<Vec<ShareHeader>, StoreError> {
+    ) -> Result<(Vec<ShareHeader>, u32), StoreError> {
         self.store_handle
             .store()
             .get_headers_for_locator(block_hashes, stop_block_hash, limit)
     }
 
-    /// Get blockhashes for a locator.
+    /// Get blockhashes and starting height for a locator.
     pub fn get_blockhashes_for_locator(
         &self,
         locator: &[BlockHash],
         stop_block_hash: &BlockHash,
         max_blockhashes: usize,
-    ) -> Result<Vec<BlockHash>, StoreError> {
+    ) -> Result<(Vec<BlockHash>, u32), StoreError> {
         self.store_handle.store().get_blockhashes_for_locator(
             locator,
             stop_block_hash,
@@ -797,8 +797,8 @@ mockall::mock! {
         pub fn get_shares_at_height(&self, height: u32) -> Result<HashMap<BlockHash, ShareBlock>, StoreError>;
         pub fn get_share_headers(&self, share_hashes: &[BlockHash]) -> Result<Vec<(BlockHash, ShareHeader)>, StoreError>;
         pub fn get_share_header(&self, share_hash: &BlockHash) -> Result<ShareHeader, StoreError>;
-        pub fn get_headers_for_locator(&self, block_hashes: &[BlockHash], stop_block_hash: &BlockHash, limit: usize) -> Result<Vec<ShareHeader>, StoreError>;
-        pub fn get_blockhashes_for_locator(&self, locator: &[BlockHash], stop_block_hash: &BlockHash, max_blockhashes: usize) -> Result<Vec<BlockHash>, StoreError>;
+        pub fn get_headers_for_locator(&self, block_hashes: &[BlockHash], stop_block_hash: &BlockHash, limit: usize) -> Result<(Vec<ShareHeader>, u32), StoreError>;
+        pub fn get_blockhashes_for_locator(&self, locator: &[BlockHash], stop_block_hash: &BlockHash, max_blockhashes: usize) -> Result<(Vec<BlockHash>, u32), StoreError>;
         pub fn get_tip_height(&self) -> Result<Option<u32>, StoreError>;
         pub fn get_candidate_tip_height(&self) -> Result<Option<u32>, StoreError>;
         pub fn build_locator(&self, depth: u32) -> Result<Vec<BlockHash>, StoreError>;
