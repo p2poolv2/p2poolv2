@@ -421,7 +421,7 @@ mod tests {
         let share_headers = vec![header1, header2];
 
         let result = handler
-            .dispatch_response(peer_id, Message::ShareHeaders(share_headers))
+            .dispatch_response(peer_id, Message::ShareHeaders(share_headers, 1))
             .await;
 
         assert!(result.is_ok());
@@ -534,7 +534,7 @@ mod tests {
         assert!(result.is_ok());
 
         // The per-peer task processes asynchronously, wait for response
-        if let Some(SwarmSend::Response(_, Message::ShareHeaders(headers))) = swarm_rx.recv().await
+        if let Some(SwarmSend::Response(_, Message::ShareHeaders(headers, _))) = swarm_rx.recv().await
         {
             assert_eq!(headers.len(), 2);
         } else {

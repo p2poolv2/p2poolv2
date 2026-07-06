@@ -173,9 +173,10 @@ pub async fn handle_response<C: Send + Sync>(
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     debug!("Received response {} from peer: {}", response, peer);
     match response {
-        Message::ShareHeaders(share_headers) => handle_share_headers(
+        Message::ShareHeaders(share_headers, starting_height) => handle_share_headers(
             peer,
             share_headers,
+            starting_height,
             chain_store_handle,
             swarm_tx,
             block_fetcher_handle,
@@ -298,7 +299,7 @@ mod tests {
         assert!(result.is_ok());
 
         // Verify swarm message
-        if let Some(SwarmSend::Response(channel, Message::ShareHeaders(headers))) =
+        if let Some(SwarmSend::Response(channel, Message::ShareHeaders(headers, _))) =
             swarm_rx.recv().await
         {
             assert_eq!(channel, response_channel);
@@ -671,7 +672,7 @@ mod tests {
 
         let ctx = RequestContext {
             peer: peer_id,
-            request: Message::ShareHeaders(share_headers),
+            request: Message::ShareHeaders(share_headers, 1),
             chain_store_handle,
             response_channel: response_channel_tx,
             swarm_tx,
@@ -854,7 +855,7 @@ mod tests {
         let (block_fetcher_handle, validation_tx, block_receiver_handle) = test_handles();
         let result = handle_response(
             peer_id,
-            Message::ShareHeaders(share_headers),
+            Message::ShareHeaders(share_headers, 1),
             chain_store_handle,
             swarm_tx,
             block_fetcher_handle,

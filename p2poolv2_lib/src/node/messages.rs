@@ -69,7 +69,11 @@ pub enum Message {
     NotFound(GetData),
     GetShareHeaders(Vec<BlockHash>, BlockHash),
     GetShareBlocks(Vec<BlockHash>, BlockHash),
-    ShareHeaders(Vec<ShareHeader>),
+    /// Share chain headers with the share chain height of the first
+    /// header. The receiver uses this to assign heights during
+    /// validation. For pruned sync the first header's parent may not
+    /// be in the receiver's store.
+    ShareHeaders(Vec<ShareHeader>, u32),
     ShareBlock(ShareBlock),
     GetData(GetData),
     Transaction(bitcoin::Transaction),
@@ -161,7 +165,7 @@ impl Message {
             Message::NotFound(_) => "NotFound",
             Message::GetShareHeaders(_, _) => "GetShareHeaders",
             Message::GetShareBlocks(_, _) => "GetShareBlocks",
-            Message::ShareHeaders(_) => "ShareHeaders",
+            Message::ShareHeaders(_, _) => "ShareHeaders",
             Message::ShareBlock(_) => "ShareBlock",
             Message::GetData(_) => "GetData",
             Message::Transaction(_) => "Transaction",
@@ -248,9 +252,10 @@ impl Encodable for Message {
                 len += stop.consensus_encode(w)?;
                 Ok(len)
             }
-            Message::ShareHeaders(headers) => {
+            Message::ShareHeaders(headers, starting_height) => {
                 let mut len = SHARE_HEADERS.consensus_encode(w)?;
                 len += ShareHeaderSerializationWrapper(headers).consensus_encode(w)?;
+                len += starting_height.consensus_encode(w)?;
                 Ok(len)
             }
             Message::ShareBlock(block) => {
@@ -299,6 +304,7 @@ impl Decodable for Message {
             )),
             SHARE_HEADERS => Ok(Message::ShareHeaders(
                 ShareHeaderDeserializationWrapper::consensus_decode(r)?.0,
+                u32::consensus_decode(r)?,
             )),
             SHARE_BLOCK => Ok(Message::ShareBlock(ShareBlock::consensus_decode(r)?)),
             GET_DATA => Ok(Message::GetData(GetData::consensus_decode(r)?)),
@@ -528,6 +534,48 @@ mod tests {
                 assert_eq!(decoded_stop, stop);
             }
             _ => panic!("Expected GetShareHeaders variant"),
+        }
+    }
+
+    #[test]
+    fn test_message_share_headers_roundtrip() {
+        use crate::test_utils::TestShareBlockBuilder;
+
+        let header = TestShareBlockBuilder::new().build().header;
+        let starting_height = 1u32;
+        let msg = Message::ShareHeaders(vec![header.clone()], starting_height);
+        let mut encoded = Vec::new();
+        msg.consensus_encode(&mut encoded).unwrap();
+
+        let decoded = Message::consensus_decode(&mut &encoded[..]).unwrap();
+        match decoded {
+            Message::ShareHeaders(decoded_headers, decoded_starting_height) => {
+                assert_eq!(decoded_headers.len(), 1);
+                assert_eq!(decoded_headers[0], header);
+                assert_eq!(decoded_starting_height, starting_height);
+            }
+            _ => panic!("Expected ShareHeaders variant"),
+        }
+    }
+
+    #[test]
+    fn test_message_share_headers_pruned_roundtrip() {
+        use crate::test_utils::TestShareBlockBuilder;
+
+        let header = TestShareBlockBuilder::new().build().header;
+        let starting_height = 200_000u32;
+        let msg = Message::ShareHeaders(vec![header.clone()], starting_height);
+        let mut encoded = Vec::new();
+        msg.consensus_encode(&mut encoded).unwrap();
+
+        let decoded = Message::consensus_decode(&mut &encoded[..]).unwrap();
+        match decoded {
+            Message::ShareHeaders(decoded_headers, decoded_starting_height) => {
+                assert_eq!(decoded_headers.len(), 1);
+                assert_eq!(decoded_headers[0], header);
+                assert_eq!(decoded_starting_height, starting_height);
+            }
+            _ => panic!("Expected ShareHeaders variant"),
         }
     }
 

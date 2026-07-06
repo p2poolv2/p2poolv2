@@ -28,7 +28,7 @@ pub struct P2PoolRequestResponseProtocol(String);
 
 impl P2PoolRequestResponseProtocol {
     pub fn new() -> Self {
-        Self("/p2pool/1.0.0".to_string())
+        Self("/p2pool/1.1.0".to_string())
     }
 }
 

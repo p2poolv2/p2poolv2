@@ -44,7 +44,9 @@ pub async fn handle_getheaders<C: Send + Sync>(
         &stop_block_hash,
         MAX_HEADERS_IN_RESPONSE,
     )?;
-    let headers_message = Message::ShareHeaders(response_headers);
+    // TODO(Step 3): get_headers_for_locator will return the starting
+    // height alongside headers so we pass the correct value here.
+    let headers_message = Message::ShareHeaders(response_headers, 0);
     // Send response and handle errors by logging them before returning
     debug!("Sending Headers {headers_message:?}");
     if let Err(err) = swarm_tx
@@ -96,7 +98,7 @@ mod tests {
         .await;
 
         // Verify swarm message
-        if let Some(SwarmSend::Response(channel, Message::ShareHeaders(headers))) =
+        if let Some(SwarmSend::Response(channel, Message::ShareHeaders(headers, _))) =
             swarm_rx.recv().await
         {
             assert_eq!(channel, response_channel);
