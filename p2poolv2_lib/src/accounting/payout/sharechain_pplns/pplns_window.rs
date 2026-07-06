@@ -36,8 +36,16 @@ use tracing::debug;
 
 /// Maximum number of confirmed shares in the PPLNS window.
 /// At 6 shares per minute over 2 weeks: 6 * 60 * 24 * 14 = 120,960.
-/// Provide a 10% buffer 120,960 * 1.1 = 133056
-pub const MAX_PPLNS_WINDOW_SHARES: usize = 133056;
+pub const MAX_PPLNS_WINDOW_SHARES: usize = 120960;
+
+/// Number of blocks from the chain tip that must be retained by each node.
+/// Equals 2x the PPLNS window: one window for full tx validation and one
+/// window for PoW-only validation that provides output availability.
+pub const PRUNE_DEPTH: usize = 2 * MAX_PPLNS_WINDOW_SHARES;
+
+/// Pruning runs every PRUNE_INTERVAL blocks (approximately 1 hour at
+/// 10s/block: 60 * 6 = 360).
+pub const PRUNE_INTERVAL: usize = 360;
 
 /// Scale factor applied to all difficulty contributions.
 /// Allows integer representation of 90%/10% uncle/nephew weighting.

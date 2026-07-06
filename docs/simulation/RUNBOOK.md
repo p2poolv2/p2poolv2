@@ -246,7 +246,7 @@ miner's share contribution in the window.
 
 > Breadth: the number of payees = distinct miners with weight in the PPLNS
 > window. In sim builds, the PPLNS window uses `MAX_PPLNS_WINDOW_SHARES`
-> (133056) as the window depth, so all active miners appear in the coinbase
+> (120960) as the window depth, so all active miners appear in the coinbase
 > once the chain has enough shares. With 20 nodes you'll see ~17-20 payees
 > per block once the chain is deeper than the window.
 

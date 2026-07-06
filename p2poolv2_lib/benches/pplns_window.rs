@@ -30,7 +30,7 @@ use p2poolv2_lib::test_utils::{
 };
 
 /// Total confirmed shares to fill the window (MAX_PPLNS_WINDOW_SHARES).
-const TOTAL_CONFIRMED_SHARES: usize = 133056;
+const TOTAL_CONFIRMED_SHARES: usize = 120960;
 
 /// Every Nth confirmed share references one uncle, yielding ~10% uncles.
 const UNCLE_INTERVAL: usize = 10;
