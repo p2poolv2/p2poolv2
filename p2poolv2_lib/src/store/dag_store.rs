@@ -178,12 +178,14 @@ impl Store {
     }
 
     /// Get blockhashes to satisfy the locator query.
-    /// Returns blockhashes from the first matching locator entry and the
-    /// share chain height of the first returned block.
+    /// Returns blockhashes and a starting_height for the response.
     ///
-    /// When a locator match is found, walks descendants forward from
-    /// that point. When no locator matches, falls back to the lowest
-    /// retained height (tip - PRUNE_DEPTH, clamped to 0) and walks descendants from there.
+    /// When a locator match is found, walks descendants forward and
+    /// returns starting_height = 1 (normal sync, full context available).
+    /// When no locator matches, falls back to the lowest retained height
+    /// (tip - PRUNE_DEPTH, clamped to 0) and returns the actual height
+    /// of the first block. starting_height > 1 signals the first batch
+    /// of a pruned sync where boundary rules apply.
     pub fn get_blockhashes_for_locator(
         &self,
         locator: &[BlockHash],
@@ -196,14 +198,17 @@ impl Store {
             None => {
                 let start_hash = self.lowest_retained_blockhash()?;
                 let hashes = self.get_descendant_blockhashes(&start_hash, stop_blockhash, limit)?;
-                let starting_height = self.get_height_for_blockhash(&start_hash);
+                let start_hash_height = self.get_height_for_blockhash(&start_hash);
+                // Height 0 means genesis (full sync), use 1 like the
+                // locator-match path. Only heights > 0 signal a pruned
+                // sync boundary.
+                let starting_height = std::cmp::max(1, start_hash_height);
                 return Ok((hashes, starting_height));
             }
         };
 
         let hashes = self.get_descendant_blockhashes(&start_blockhash, stop_blockhash, limit)?;
-        let starting_height = self.get_height_for_first_block(&hashes);
-        Ok((hashes, starting_height))
+        Ok((hashes, 1))
     }
 
     /// Find the first locator hash that we know about.
@@ -246,14 +251,6 @@ impl Store {
             .ok()
             .and_then(|metadata| metadata.expected_height)
             .unwrap_or(0)
-    }
-
-    /// Get the share chain height of the first block in a list.
-    fn get_height_for_first_block(&self, blockhashes: &[BlockHash]) -> u32 {
-        match blockhashes.first() {
-            Some(hash) => self.get_height_for_blockhash(hash),
-            None => 0,
-        }
     }
 
     /// Get headers and starting height to satisfy the locator query.
@@ -3587,7 +3584,7 @@ mod tests {
         // height is max(1-3,0)+1 = 1. Returns all blocks at h:1
         // (uncle, share_a) and h:2 (share_b).
         let locator = vec![uncle.block_hash()];
-        let (result, _starting_height) = store
+        let (result, starting_height) = store
             .get_blockhashes_for_locator(&locator, &BlockHash::all_zeros(), 10)
             .unwrap();
 
@@ -3595,6 +3592,8 @@ mod tests {
         assert!(result.contains(&uncle.block_hash()));
         assert!(result.contains(&share_a.block_hash()));
         assert!(result.contains(&share_b.block_hash()));
+        // Locator matched, so starting_height signals normal sync
+        assert_eq!(starting_height, 1);
     }
 
     /// first_known_for_locator returns the first known hash from the
@@ -3766,5 +3765,76 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].blockhash, share.block_hash());
         assert!(!entries[0].has_block_data);
+    }
+
+    /// When no locator matches on a short chain (shorter than
+    /// PRUNE_DEPTH), the fallback returns genesis descendants with
+    /// starting_height = 0.
+    #[test]
+    fn test_get_blockhashes_for_locator_no_match_short_chain_returns_genesis() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share_a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .work(2)
+            .nonce(1)
+            .build();
+        store.push_to_confirmed_chain(&share_a).unwrap();
+
+        // Locator with an unknown hash -- no match
+        let unknown_hash = TestShareBlockBuilder::new().nonce(999).build().block_hash();
+        let (result, starting_height) = store
+            .get_blockhashes_for_locator(&[unknown_hash], &BlockHash::all_zeros(), 100)
+            .unwrap();
+
+        // Short chain: lowest_retained = 0 (genesis), starting_height = 1
+        // (full sync, same as locator-match path)
+        assert_eq!(starting_height, 1);
+        // get_descendant_blockhashes starts from height 1 (genesis height
+        // 0, minus MAX_UNCLES_DEPTH overlap, plus 1), so share_a is returned
+        assert!(!result.is_empty());
+        assert!(result.contains(&share_a.block_hash()));
+    }
+
+    /// When a locator matches, starting_height is always 1 regardless
+    /// of the actual height of the first returned block.
+    #[test]
+    fn test_get_blockhashes_for_locator_match_returns_starting_height_one() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share_a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .work(2)
+            .nonce(1)
+            .build();
+        store.push_to_confirmed_chain(&share_a).unwrap();
+
+        let share_b = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_a.block_hash().to_string())
+            .work(2)
+            .nonce(2)
+            .build();
+        store.push_to_confirmed_chain(&share_b).unwrap();
+
+        // Locator matches share_b
+        let (result, starting_height) = store
+            .get_blockhashes_for_locator(&[share_b.block_hash()], &BlockHash::all_zeros(), 100)
+            .unwrap();
+
+        // Locator matched, so starting_height = 1 (normal sync)
+        assert_eq!(starting_height, 1);
+        assert!(!result.is_empty());
     }
 }

@@ -32,8 +32,8 @@ use crate::shares::share_block::{
     MAX_POOL_TARGET, MIN_CUMULATIVE_CHAIN_WORK_MULTIPLIER, ShareHeader,
 };
 use crate::shares::validation::ShareValidator;
-use crate::store::block_tx_metadata::BlockMetadata;
-use crate::store::dag_store::MAX_BLOCKS_PER_HEIGHT;
+use crate::store::block_tx_metadata::{BlockMetadata, Status};
+use crate::store::dag_store::{MAX_BLOCKS_PER_HEIGHT, MAX_UNCLES_DEPTH};
 use crate::store::writer::StoreError;
 use bitcoin::hashes::Hash;
 use bitcoin::{BlockHash, CompactTarget, Target, Work};
@@ -223,30 +223,26 @@ pub async fn handle_share_headers<C: Send + Sync>(
     }
 
     // Phase 1: Validate the header chain in memory
-    if let Err(sync_error) = validate_header_chain(
+    let missing_parent_hashes = match validate_header_chain(
         &share_headers,
         &chain_store_handle,
         share_validator,
         starting_height,
     ) {
-        if sync_error.is_retryable() {
-            let tip_height = chain_store_handle
-                .get_tip_height()
-                .ok()
-                .flatten()
-                .unwrap_or(0);
-            let depth = sync_error.retry_depth(tip_height).unwrap_or(0);
-            debug!(
-                "Retryable header sync error, sending getheaders with depth {depth}: {sync_error}"
-            );
-            send_getheaders(peer_id, chain_store_handle, swarm_tx, depth).await?;
-            return Ok(());
+        Ok(missing_parents) => missing_parents,
+        Err(sync_error) => {
+            return handle_validation_error(sync_error, peer_id, chain_store_handle, swarm_tx)
+                .await;
         }
-        if matches!(sync_error, HeaderSyncError::DenseHeight { .. }) {
-            error!("Disconnecting peer {peer_id}: {sync_error}");
-            let _ = swarm_tx.send(SwarmSend::Disconnect(peer_id)).await;
-        }
-        return Err(sync_error.into());
+    };
+
+    // Store metadata for missing parents so organise_header can
+    // find them when computing heights for boundary headers.
+    for parent_hash in &missing_parent_hashes {
+        let parent_height = starting_height - 1;
+        chain_store_handle
+            .store_missing_parent_metadata(*parent_hash, parent_height)
+            .await?;
     }
 
     // Phase 2: Organise validated headers into the candidate chain
@@ -267,6 +263,34 @@ pub async fn handle_share_headers<C: Send + Sync>(
     .await
 }
 
+/// Handle a validation error from validate_header_chain.
+///
+/// Retryable errors trigger a deeper getheaders request. DenseHeight
+/// errors disconnect the peer. All other errors propagate up.
+async fn handle_validation_error<C: Send + Sync>(
+    sync_error: HeaderSyncError,
+    peer_id: libp2p::PeerId,
+    chain_store_handle: ChainStoreHandle,
+    swarm_tx: mpsc::Sender<SwarmSend<C>>,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    if sync_error.is_retryable() {
+        let tip_height = chain_store_handle
+            .get_tip_height()
+            .ok()
+            .flatten()
+            .unwrap_or(0);
+        let depth = sync_error.retry_depth(tip_height).unwrap_or(0);
+        debug!("Retryable header sync error, sending getheaders with depth {depth}: {sync_error}");
+        send_getheaders(peer_id, chain_store_handle, swarm_tx, depth).await?;
+        return Ok(());
+    }
+    if matches!(sync_error, HeaderSyncError::DenseHeight { .. }) {
+        error!("Disconnecting peer {peer_id}: {sync_error}");
+        let _ = swarm_tx.send(SwarmSend::Disconnect(peer_id)).await;
+    }
+    Err(sync_error.into())
+}
+
 /// Validate the received header batch as a connected DAG.
 ///
 /// The batch contains a mix of main chain and uncle headers. Validation
@@ -274,17 +298,25 @@ pub async fn handle_share_headers<C: Send + Sync>(
 /// either earlier in the batch or in the store), that every header meets
 /// ASERT difficulty, that all declared uncle hashes are available, and
 /// that cumulative work exceeds the minimum threshold.
+/// Returns the set of missing parent hashes that need metadata stored
+/// before organise_header can process boundary headers. Empty for
+/// non-pruned sync.
 fn validate_header_chain(
     share_headers: &[ShareHeader],
     chain_store_handle: &ChainStoreHandle,
     share_validator: &(dyn ShareValidator + Send + Sync),
-    _starting_height: u32,
-) -> Result<(), HeaderSyncError> {
+    starting_height: u32,
+) -> Result<HashSet<BlockHash>, HeaderSyncError> {
     let pool_difficulty = share_validator.pool_difficulty();
 
-    let anchors = find_chain_anchors(share_headers, chain_store_handle)?;
+    let (anchors, missing_parent_hashes) =
+        find_chain_anchors(share_headers, chain_store_handle, starting_height)?;
     let anchor_hashes: HashSet<BlockHash> = anchors.iter().map(|(hash, _)| *hash).collect();
-    debug!("Found {} anchor(s) for header batch", anchors.len());
+    debug!(
+        "Found {} anchor(s) for header batch ({} missing parents)",
+        anchors.len(),
+        missing_parent_hashes.len(),
+    );
 
     let lowest_anchor_height = anchors
         .iter()
@@ -305,12 +337,15 @@ fn validate_header_chain(
         &anchor_hashes,
         chain_store_handle,
         lowest_anchor_height,
+        &missing_parent_hashes,
+        starting_height,
     )?;
     verify_all_uncles_available(
         share_headers,
         &batch_hashes,
         chain_store_handle,
         lowest_anchor_height,
+        starting_height,
     )?;
     validate_cumulative_work(best_anchor_work, cumulative_chain_work)?;
 
@@ -318,7 +353,7 @@ fn validate_header_chain(
         "Validated {} headers, cumulative chain work: {cumulative_chain_work}",
         share_headers.len(),
     );
-    Ok(())
+    Ok(missing_parent_hashes)
 }
 
 /// Get the blockhash's timestamp and height, checking the batch-local
@@ -350,6 +385,59 @@ fn get_share_time_and_height(
 ///
 /// Returns the set of all blockhashes in the batch and the cumulative
 /// work across all headers.
+/// Check whether a header is in the boundary window where missing
+/// parents and uncles are tolerated during pruned sync.
+fn is_in_boundary_window(header_height: u32, starting_height: u32) -> bool {
+    starting_height > 1 && header_height <= starting_height + MAX_UNCLES_DEPTH as u32
+}
+
+/// Build the initial time/height cache. For pruned sync, seeds entries
+/// for missing parents using starting_height - 1 and the first
+/// header's time. Returns an empty cache for full sync.
+fn build_time_height_cache(
+    share_headers: &[ShareHeader],
+    missing_parent_hashes: &HashSet<BlockHash>,
+    starting_height: u32,
+) -> HashMap<BlockHash, (u32, u32)> {
+    let mut cache = HashMap::with_capacity(share_headers.len() + missing_parent_hashes.len());
+    if !missing_parent_hashes.is_empty() {
+        let first_header_time = share_headers[0].time;
+        let parent_height = starting_height - 1;
+        for parent_hash in missing_parent_hashes {
+            cache.insert(*parent_hash, (first_header_time, parent_height));
+        }
+    }
+    cache
+}
+
+/// Check ASERT difficulty for a header. Skips the check when the
+/// header's parent is a missing boundary parent during pruned sync.
+/// Min PoW is always checked separately before this function.
+fn check_asert_difficulty(
+    header: &ShareHeader,
+    header_height: u32,
+    parent_time: u32,
+    parent_height: u32,
+    pool_difficulty: &PoolDifficulty,
+    missing_parent_hashes: &HashSet<BlockHash>,
+    starting_height: u32,
+) -> Result<(), HeaderSyncError> {
+    let parent_is_missing = missing_parent_hashes.contains(&header.prev_share_blockhash);
+    if parent_is_missing && is_in_boundary_window(header_height, starting_height) {
+        return Ok(());
+    }
+
+    let expected_bits = pool_difficulty.calculate_target_clamped(parent_time, parent_height);
+    if header.bits != expected_bits {
+        return Err(HeaderSyncError::AsertMismatch {
+            block_hash: header.block_hash(),
+            declared: header.bits.to_consensus(),
+            expected: expected_bits.to_consensus(),
+        });
+    }
+    Ok(())
+}
+
 fn validate_dag_connectivity_and_difficulty(
     share_headers: &[ShareHeader],
     share_validator: &(dyn ShareValidator + Send + Sync),
@@ -357,14 +445,16 @@ fn validate_dag_connectivity_and_difficulty(
     anchor_hashes: &HashSet<BlockHash>,
     chain_store_handle: &ChainStoreHandle,
     lowest_anchor_height: u32,
+    missing_parent_hashes: &HashSet<BlockHash>,
+    starting_height: u32,
 ) -> Result<(HashSet<BlockHash>, Work), HeaderSyncError> {
     let mut known_hashes: HashSet<BlockHash> =
         HashSet::with_capacity(share_headers.len() + anchor_hashes.len());
     known_hashes.extend(anchor_hashes);
 
     let mut cumulative_work = Work::from_hex("0x00").unwrap();
-    let mut time_height_cache: HashMap<BlockHash, (u32, u32)> =
-        HashMap::with_capacity(share_headers.len() + 1);
+    let mut time_height_cache =
+        build_time_height_cache(share_headers, missing_parent_hashes, starting_height);
     let mut blocks_per_height: HashMap<u32, usize> = HashMap::with_capacity(64);
 
     for header in share_headers {
@@ -384,16 +474,17 @@ fn validate_dag_connectivity_and_difficulty(
         let (parent_time, parent_height) =
             get_share_time_and_height(&parent_hash, &mut time_height_cache, chain_store_handle)?;
 
-        let expected_bits = pool_difficulty.calculate_target_clamped(parent_time, parent_height);
-        if header.bits != expected_bits {
-            return Err(HeaderSyncError::AsertMismatch {
-                block_hash: header.block_hash(),
-                declared: header.bits.to_consensus(),
-                expected: expected_bits.to_consensus(),
-            });
-        }
-
         let header_height = parent_height + 1;
+        check_asert_difficulty(
+            header,
+            header_height,
+            parent_time,
+            parent_height,
+            pool_difficulty,
+            missing_parent_hashes,
+            starting_height,
+        )?;
+
         check_dense_height(&mut blocks_per_height, header_height)?;
 
         let header_hash = header.block_hash();
@@ -408,7 +499,7 @@ fn validate_dag_connectivity_and_difficulty(
 /// Reject batches where a single height has too many blocks.
 ///
 /// In normal operation a height has at most a few blocks (confirmed +
-/// uncles). A dense height indicates a misbehaving or attacking peer.
+/// uncles). A dense height indicates a misbehaving or malicious peer.
 fn check_dense_height(
     blocks_per_height: &mut HashMap<u32, usize>,
     height: u32,
@@ -427,17 +518,32 @@ fn check_dense_height(
 /// Verify every uncle hash declared by any header in the batch exists
 /// either as another header in this batch or in the store. Catches
 /// phantom uncle references that no peer ever sent.
+/// Verify every uncle hash declared by any header in the batch exists
+/// either as another header in this batch or in the store.
+///
+/// During pruned sync, uncles referenced by headers in the boundary
+/// window (height <= starting_height + MAX_UNCLES_DEPTH) may be below
+/// the prune boundary and are tolerated as missing.
 fn verify_all_uncles_available(
     share_headers: &[ShareHeader],
     batch_hashes: &HashSet<BlockHash>,
     chain_store_handle: &ChainStoreHandle,
     lowest_anchor_height: u32,
+    starting_height: u32,
 ) -> Result<(), HeaderSyncError> {
     for header in share_headers {
         for uncle_hash in &header.uncles {
-            if !batch_hashes.contains(uncle_hash)
-                && chain_store_handle.get_block_metadata(uncle_hash).is_err()
+            if batch_hashes.contains(uncle_hash)
+                || chain_store_handle.get_block_metadata(uncle_hash).is_ok()
             {
+                // Uncle found, nothing to check.
+            } else if is_in_boundary_window(lowest_anchor_height + 1, starting_height) {
+                debug!(
+                    "Pruned sync: tolerating missing uncle {} for header {}",
+                    uncle_hash,
+                    header.block_hash(),
+                );
+            } else {
                 return Err(HeaderSyncError::MissingUncle {
                     uncle_hash: *uncle_hash,
                     lowest_anchor_height,
@@ -448,18 +554,8 @@ fn verify_all_uncles_available(
     Ok(())
 }
 
-/// Find all chain anchors: external parents from the batch that exist
-/// in our store.
-///
-/// Collects all `prev_share_blockhash` values that are NOT themselves
-/// hashes of headers in this batch (i.e., external parents from the
-/// store). With height-based batches, multiple blocks may have
-/// external parents at the previous batch boundary on different
-/// branches.
-fn find_chain_anchors(
-    share_headers: &[ShareHeader],
-    chain_store_handle: &ChainStoreHandle,
-) -> Result<Vec<(BlockHash, BlockMetadata)>, HeaderSyncError> {
+/// Collect external parent hashes not present in this batch.
+fn collect_external_parents(share_headers: &[ShareHeader]) -> (HashSet<BlockHash>, Vec<BlockHash>) {
     let batch_hashes: HashSet<BlockHash> = share_headers
         .iter()
         .map(|header| header.block_hash())
@@ -473,6 +569,17 @@ fn find_chain_anchors(
         .into_iter()
         .collect();
 
+    (batch_hashes, external_parents)
+}
+
+/// Find chain anchors for a full sync (starting_height <= 1).
+///
+/// All external parents must exist in the store. Returns an error if
+/// any are missing.
+fn find_anchors_full_sync(
+    external_parents: Vec<BlockHash>,
+    chain_store_handle: &ChainStoreHandle,
+) -> Result<(Vec<(BlockHash, BlockMetadata)>, HashSet<BlockHash>), HeaderSyncError> {
     let metadata_results = chain_store_handle.get_block_metadata_batch(&external_parents);
 
     if metadata_results.len() != external_parents.len() {
@@ -492,7 +599,64 @@ fn find_chain_anchors(
         });
     }
 
-    Ok(metadata_results)
+    Ok((metadata_results, HashSet::new()))
+}
+
+/// Find chain anchors for a pruned sync (starting_height > 1).
+///
+/// External parents missing from the store are expected -- they are
+/// below the prune boundary. For these, anchor entries are created
+/// with height = starting_height - 1. The returned HashSet contains
+/// the missing parent hashes that need metadata stored before
+/// organise_header can process boundary headers.
+fn find_anchors_pruned_sync(
+    external_parents: Vec<BlockHash>,
+    chain_store_handle: &ChainStoreHandle,
+    starting_height: u32,
+) -> (Vec<(BlockHash, BlockMetadata)>, HashSet<BlockHash>) {
+    let mut metadata_results = chain_store_handle.get_block_metadata_batch(&external_parents);
+
+    let found: HashSet<BlockHash> = metadata_results.iter().map(|(hash, _)| *hash).collect();
+    let missing: Vec<BlockHash> = external_parents
+        .into_iter()
+        .filter(|hash| !found.contains(hash))
+        .collect();
+
+    let missing_parent_hashes: HashSet<BlockHash> = missing.iter().copied().collect();
+    let parent_height = starting_height - 1;
+    for missing_hash in &missing {
+        let anchor_metadata = BlockMetadata {
+            expected_height: Some(parent_height),
+            chain_work: Work::from_hex("0x00").unwrap(),
+            status: Status::HeaderValid,
+        };
+        metadata_results.push((*missing_hash, anchor_metadata));
+    }
+
+    (metadata_results, missing_parent_hashes)
+}
+
+/// Find all chain anchors: external parents from the batch that exist
+/// in our store, plus any missing parents below the prune boundary.
+///
+/// Returns anchors and the set of missing parent hashes (empty for
+/// full sync).
+fn find_chain_anchors(
+    share_headers: &[ShareHeader],
+    chain_store_handle: &ChainStoreHandle,
+    starting_height: u32,
+) -> Result<(Vec<(BlockHash, BlockMetadata)>, HashSet<BlockHash>), HeaderSyncError> {
+    let (_batch_hashes, external_parents) = collect_external_parents(share_headers);
+
+    if starting_height <= 1 {
+        find_anchors_full_sync(external_parents, chain_store_handle)
+    } else {
+        Ok(find_anchors_pruned_sync(
+            external_parents,
+            chain_store_handle,
+            starting_height,
+        ))
+    }
 }
 
 /// Verify cumulative chain work exceeds the minimum threshold.
@@ -1584,6 +1748,696 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("External parent(s) not found in store"),
+        );
+    }
+
+    #[test]
+    fn test_validate_header_chain_pruned_sync_accepts_missing_parent_in_boundary_window() {
+        // When starting_height > 1 and header is within the boundary
+        // window (height <= starting_height + MAX_UNCLES_DEPTH), missing
+        // parents are tolerated and ASERT is skipped for those headers.
+        let starting_height = 5000u32;
+
+        // header_a at starting_height, parent is pruned (not in store)
+        let header_a = build_valid_test_header();
+        let missing_parent_hash = header_a.prev_share_blockhash;
+
+        // header_b at starting_height + 1, parent = header_a (in batch)
+        let mut header_b = build_valid_test_header();
+        header_b.prev_share_blockhash = header_a.block_hash();
+
+        let headers = vec![header_a, header_b];
+
+        let mut chain_store_handle = ChainStoreHandle::default();
+
+        // External parent not found in store (pruned)
+        chain_store_handle
+            .expect_get_block_metadata_batch()
+            .returning(|_| Vec::new());
+
+        // No block metadata in store for any hash
+        chain_store_handle
+            .expect_get_block_metadata()
+            .returning(|_| Err(StoreError::NotFound("pruned".to_string())));
+
+        let genesis_header = build_valid_test_header();
+        chain_store_handle
+            .expect_get_genesis_header()
+            .returning(move || Ok(genesis_header.clone()));
+
+        let mut mock_validator = MockDefaultShareValidator::default();
+        setup_minimum_difficulty_mock(&mut mock_validator);
+
+        let result = validate_header_chain(
+            &headers,
+            &chain_store_handle,
+            &mock_validator,
+            starting_height,
+        );
+
+        assert!(result.is_ok(), "Expected Ok, got: {:?}", result.err());
+        let missing_parents = result.unwrap();
+        assert_eq!(missing_parents.len(), 1);
+        assert!(missing_parents.contains(&missing_parent_hash));
+    }
+
+    #[test]
+    fn test_validate_header_chain_pruned_sync_enforces_asert_for_non_boundary_headers() {
+        // In pruned sync, ASERT is skipped for boundary headers (whose
+        // parents are missing). But headers whose parents ARE in the
+        // batch must pass full ASERT validation. header_b has wrong bits
+        // and should be rejected.
+        let starting_height = 5000u32;
+
+        // header_a at starting_height, parent is pruned -- ASERT skipped
+        let header_a = build_valid_test_header();
+
+        // header_b at starting_height + 1, parent = header_a (in batch)
+        // Set bits to a WRONG value to trigger ASERT mismatch
+        let mut header_b = build_valid_test_header();
+        header_b.prev_share_blockhash = header_a.block_hash();
+        header_b.bits = CompactTarget::from_consensus(0x1b300000);
+
+        let headers = vec![header_a, header_b];
+
+        let mut chain_store_handle = ChainStoreHandle::default();
+
+        chain_store_handle
+            .expect_get_block_metadata_batch()
+            .returning(|_| Vec::new());
+
+        chain_store_handle
+            .expect_get_block_metadata()
+            .returning(|_| Err(StoreError::NotFound("pruned".to_string())));
+
+        let genesis_header = build_valid_test_header();
+        chain_store_handle
+            .expect_get_genesis_header()
+            .returning(move || Ok(genesis_header.clone()));
+
+        let mut mock_validator = MockDefaultShareValidator::default();
+        mock_validator
+            .expect_validate_header_minimum_difficulty()
+            .returning(|_| Ok(()));
+        let mut pool_difficulty = PoolDifficulty::default();
+        // ASERT expects MAX_POOL_TARGET but header_b declares 0x1b300000
+        pool_difficulty
+            .expect_calculate_target_clamped()
+            .returning(|_, _| CompactTarget::from_consensus(MAX_POOL_TARGET));
+        mock_validator
+            .expect_pool_difficulty()
+            .return_const(pool_difficulty);
+
+        let result = validate_header_chain(
+            &headers,
+            &chain_store_handle,
+            &mock_validator,
+            starting_height,
+        );
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("ASERT mismatch"),);
+    }
+
+    #[tokio::test]
+    async fn test_pruned_sync_stores_missing_parent_metadata_and_organises_headers() {
+        let peer_id = libp2p::PeerId::random();
+        let starting_height = 5000u32;
+
+        // Build two headers: header_a at starting_height, header_b at starting_height + 1
+        let mut header_a = build_valid_test_header();
+        // header_a's parent is below the prune boundary (not in store)
+        let missing_parent_hash = header_a.prev_share_blockhash;
+
+        let mut header_b = build_valid_test_header();
+        header_b.prev_share_blockhash = header_a.block_hash();
+
+        let share_headers = vec![header_a.clone(), header_b.clone()];
+
+        let mut chain_store_handle = ChainStoreHandle::default();
+
+        // get_block_metadata_batch: missing_parent_hash is NOT found (pruned)
+        chain_store_handle
+            .expect_get_block_metadata_batch()
+            .returning(|_hashes| Vec::new());
+
+        // get_block_metadata: header_a's parent is not in store, but
+        // header_a itself is found via the time_height_cache path.
+        // The first call (parent connectivity check) should succeed
+        // because the parent is in anchor_hashes (known_hashes).
+        // Subsequent calls for time/height fall back to cache.
+        chain_store_handle
+            .expect_get_block_metadata()
+            .returning(|_| Err(StoreError::NotFound("not in store (pruned)".to_string())));
+
+        // Genesis header for PoolDifficulty::build
+        let template_header = build_valid_test_header();
+        let genesis_header = template_header.clone();
+        chain_store_handle
+            .expect_get_genesis_header()
+            .returning(move || Ok(genesis_header.clone()));
+
+        // share_header lookup not needed since time_height_cache is
+        // pre-seeded for missing parents and populated for batch headers
+
+        // store_missing_parent_metadata should be called once with
+        // the missing parent hash and height = starting_height - 1
+        chain_store_handle
+            .expect_store_missing_parent_metadata()
+            .withf({
+                let expected_parent_hash = missing_parent_hash;
+                let expected_parent_height = starting_height - 1;
+                move |hash, height| {
+                    *hash == expected_parent_hash && *height == expected_parent_height
+                }
+            })
+            .times(1)
+            .returning(|_, _| Ok(()));
+
+        // organise_header called for both headers
+        chain_store_handle
+            .expect_organise_header()
+            .times(2)
+            .returning(|_| Ok(None));
+
+        // After organise, fewer than MAX_HEADERS_IN_RESPONSE triggers
+        // block fetch path
+        chain_store_handle
+            .expect_find_fork_point_height()
+            .returning(move |_| Ok(Some(starting_height)));
+        chain_store_handle
+            .expect_get_candidate_blocks_missing_data()
+            .returning(|_| Ok(Vec::new()));
+
+        let (swarm_tx, _swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
+        let (block_fetcher_handle, _block_fetcher_rx) =
+            block_fetcher::create_block_fetcher_channel();
+
+        let mut mock_validator = MockDefaultShareValidator::default();
+        mock_validator
+            .expect_validate_header_minimum_difficulty()
+            .returning(|_| Ok(()));
+        let mut pool_difficulty = PoolDifficulty::default();
+        // ASERT is skipped for header_a (boundary), but called for header_b, so there is only one call
+        pool_difficulty
+            .expect_calculate_target_clamped()
+            .returning(|_, _| CompactTarget::from_consensus(MAX_POOL_TARGET));
+        mock_validator
+            .expect_pool_difficulty()
+            .return_const(pool_difficulty);
+
+        let result = handle_share_headers(
+            peer_id,
+            share_headers,
+            starting_height,
+            chain_store_handle,
+            swarm_tx,
+            block_fetcher_handle,
+            &mock_validator,
+        )
+        .await;
+
+        assert!(result.is_ok(), "Expected Ok, got: {}", result.unwrap_err());
+    }
+
+    #[tokio::test]
+    async fn test_pruned_sync_tolerates_missing_uncle_below_starting_height() {
+        // A header at starting_height references an uncle that is below
+        // the prune boundary. The uncle hash is not in the batch or store.
+        // verify_all_uncles_available should tolerate this.
+        let starting_height = 5000u32;
+
+        // Use a fabricated hash for the missing uncle below the prune boundary
+        let missing_uncle_hash = TestShareBlockBuilder::new().build().block_hash();
+
+        let mut header_a = build_valid_test_header();
+        header_a.uncles = vec![missing_uncle_hash];
+        let missing_parent_hash = header_a.prev_share_blockhash;
+
+        let headers = vec![header_a];
+
+        let mut chain_store_handle = ChainStoreHandle::default();
+
+        // External parent not found in store (pruned)
+        chain_store_handle
+            .expect_get_block_metadata_batch()
+            .returning(|_| Vec::new());
+
+        // Neither parent nor uncle found in store
+        chain_store_handle
+            .expect_get_block_metadata()
+            .returning(|_| Err(StoreError::NotFound("pruned".to_string())));
+
+        let genesis_header = build_valid_test_header();
+        chain_store_handle
+            .expect_get_genesis_header()
+            .returning(move || Ok(genesis_header.clone()));
+
+        let mut mock_validator = MockDefaultShareValidator::default();
+        mock_validator
+            .expect_validate_header_minimum_difficulty()
+            .returning(|_| Ok(()));
+        let mut pool_difficulty = PoolDifficulty::default();
+        pool_difficulty
+            .expect_calculate_target_clamped()
+            .returning(|_, _| CompactTarget::from_consensus(MAX_POOL_TARGET));
+        mock_validator
+            .expect_pool_difficulty()
+            .return_const(pool_difficulty);
+
+        let result = validate_header_chain(
+            &headers,
+            &chain_store_handle,
+            &mock_validator,
+            starting_height,
+        );
+
+        assert!(result.is_ok(), "Expected Ok, got: {:?}", result.err());
+        let missing_parents = result.unwrap();
+        assert!(missing_parents.contains(&missing_parent_hash));
+    }
+
+    #[tokio::test]
+    async fn test_pruned_sync_tolerates_uncle_with_parent_below_starting_height() {
+        // An uncle block IS in the batch but its own prev_share_blockhash
+        // is below the prune boundary. This is case 3: missing uncle parents.
+        //
+        // Structure:
+        //   header_a at starting_height, parent_a pruned
+        //   uncle at starting_height, parent_b pruned (sibling of header_a)
+        //   header_above at starting_height + 1, parent = header_a,
+        //     uncle = uncle (ancestor's sibling)
+        let starting_height = 5000u32;
+
+        // header_a at starting_height, parent pruned
+        let header_a = build_valid_test_header();
+        let parent_a_hash = header_a.prev_share_blockhash;
+
+        // uncle at starting_height, different pruned parent
+        let uncle = build_valid_test_header();
+        let parent_b_hash = uncle.prev_share_blockhash;
+
+        // header_above at starting_height + 1, parent = header_a,
+        // references uncle as ancestor's sibling
+        let mut header_above = build_valid_test_header();
+        header_above.prev_share_blockhash = header_a.block_hash();
+        header_above.uncles = vec![uncle.block_hash()];
+
+        let headers = vec![header_a, uncle, header_above];
+
+        let mut chain_store_handle = ChainStoreHandle::default();
+
+        // External parents (parent_a, parent_b) not found in store
+        chain_store_handle
+            .expect_get_block_metadata_batch()
+            .returning(|_| Vec::new());
+
+        chain_store_handle
+            .expect_get_block_metadata()
+            .returning(|_| Err(StoreError::NotFound("pruned".to_string())));
+
+        let genesis_header = build_valid_test_header();
+        chain_store_handle
+            .expect_get_genesis_header()
+            .returning(move || Ok(genesis_header.clone()));
+
+        let mut mock_validator = MockDefaultShareValidator::default();
+        mock_validator
+            .expect_validate_header_minimum_difficulty()
+            .returning(|_| Ok(()));
+        let mut pool_difficulty = PoolDifficulty::default();
+        pool_difficulty
+            .expect_calculate_target_clamped()
+            .returning(|_, _| CompactTarget::from_consensus(MAX_POOL_TARGET));
+        mock_validator
+            .expect_pool_difficulty()
+            .return_const(pool_difficulty);
+
+        let result = validate_header_chain(
+            &headers,
+            &chain_store_handle,
+            &mock_validator,
+            starting_height,
+        );
+
+        assert!(result.is_ok(), "Expected Ok, got: {:?}", result.err());
+        let missing_parents = result.unwrap();
+        assert!(missing_parents.contains(&parent_a_hash));
+        assert!(missing_parents.contains(&parent_b_hash));
+    }
+
+    #[tokio::test]
+    async fn test_handle_validation_error_retryable_sends_getheaders() {
+        let peer_id = libp2p::PeerId::random();
+        let mut chain_store_handle = ChainStoreHandle::default();
+
+        chain_store_handle
+            .expect_get_tip_height()
+            .returning(|| Ok(Some(500)));
+        chain_store_handle
+            .expect_build_locator()
+            .returning(|_| Ok(vec![BlockHash::all_zeros()]));
+
+        let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
+
+        let error = HeaderSyncError::MissingExternalParents {
+            missing: vec![BlockHash::all_zeros()],
+            lowest_anchor_height: 100,
+        };
+
+        let result = handle_validation_error(error, peer_id, chain_store_handle, swarm_tx).await;
+
+        assert!(result.is_ok());
+        // Should have sent a GetShareHeaders request
+        if let Some(SwarmSend::Request(sent_peer, Message::GetShareHeaders(_, _))) =
+            swarm_rx.recv().await
+        {
+            assert_eq!(sent_peer, peer_id);
+        } else {
+            panic!("Expected GetShareHeaders request");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_validation_error_dense_height_disconnects_peer() {
+        let peer_id = libp2p::PeerId::random();
+        let chain_store_handle = ChainStoreHandle::default();
+
+        let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
+
+        let error = HeaderSyncError::DenseHeight {
+            height: 42,
+            count: 100,
+        };
+
+        let result = handle_validation_error(error, peer_id, chain_store_handle, swarm_tx).await;
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("exceeds MAX_BLOCKS_PER_HEIGHT"),
+        );
+        // Should have sent a Disconnect
+        if let Some(SwarmSend::Disconnect(disconnected_peer)) = swarm_rx.recv().await {
+            assert_eq!(disconnected_peer, peer_id);
+        } else {
+            panic!("Expected Disconnect");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_validation_error_asert_mismatch_returns_error_without_disconnect() {
+        let peer_id = libp2p::PeerId::random();
+        let chain_store_handle = ChainStoreHandle::default();
+
+        let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
+
+        let error = HeaderSyncError::AsertMismatch {
+            block_hash: BlockHash::all_zeros(),
+            declared: 0x1b384bd7,
+            expected: 0x1b300000,
+        };
+
+        let result = handle_validation_error(error, peer_id, chain_store_handle, swarm_tx).await;
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("ASERT mismatch"),);
+        // No disconnect for non-DenseHeight errors
+        assert!(swarm_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn test_dag_validation_pruned_sync_skips_asert_for_boundary_header() {
+        // Header whose parent is a missing boundary parent should skip
+        // ASERT and accumulate work normally.
+        let starting_height = 5000u32;
+        let header = build_valid_test_header();
+        let parent_hash = header.prev_share_blockhash;
+
+        let anchor_hashes: HashSet<BlockHash> = [parent_hash].into_iter().collect();
+        let missing_parent_hashes: HashSet<BlockHash> = [parent_hash].into_iter().collect();
+
+        let chain_store_handle = ChainStoreHandle::default();
+
+        let mut mock_validator = MockDefaultShareValidator::default();
+        mock_validator
+            .expect_validate_header_minimum_difficulty()
+            .returning(|_| Ok(()));
+        let mut pool_difficulty = PoolDifficulty::default();
+        // Should NOT be called for boundary header
+        pool_difficulty
+            .expect_calculate_target_clamped()
+            .times(0)
+            .returning(|_, _| CompactTarget::from_consensus(MAX_POOL_TARGET));
+
+        let result = validate_dag_connectivity_and_difficulty(
+            &[header.clone()],
+            &mock_validator,
+            &pool_difficulty,
+            &anchor_hashes,
+            &chain_store_handle,
+            starting_height - 1,
+            &missing_parent_hashes,
+            starting_height,
+        );
+
+        assert!(result.is_ok(), "Expected Ok, got: {:?}", result.err());
+        let (batch_hashes, cumulative_work) = result.unwrap();
+        assert!(batch_hashes.contains(&header.block_hash()));
+        assert!(cumulative_work > Work::from_hex("0x00").unwrap());
+    }
+
+    #[test]
+    fn test_dag_validation_pruned_sync_enforces_asert_for_chained_header() {
+        // Header whose parent IS in the batch (not a missing parent)
+        // must pass ASERT. Wrong bits should cause AsertMismatch.
+        let starting_height = 5000u32;
+        let header_a = build_valid_test_header();
+        let parent_hash = header_a.prev_share_blockhash;
+
+        let mut header_b = build_valid_test_header();
+        header_b.prev_share_blockhash = header_a.block_hash();
+        // Set wrong bits to trigger ASERT mismatch
+        header_b.bits = CompactTarget::from_consensus(0x1b300000);
+
+        let anchor_hashes: HashSet<BlockHash> = [parent_hash].into_iter().collect();
+        let missing_parent_hashes: HashSet<BlockHash> = [parent_hash].into_iter().collect();
+
+        let chain_store_handle = ChainStoreHandle::default();
+
+        let mut mock_validator = MockDefaultShareValidator::default();
+        mock_validator
+            .expect_validate_header_minimum_difficulty()
+            .returning(|_| Ok(()));
+        let mut pool_difficulty = PoolDifficulty::default();
+        // ASERT expects MAX_POOL_TARGET, header_b declares 0x1b300000
+        pool_difficulty
+            .expect_calculate_target_clamped()
+            .returning(|_, _| CompactTarget::from_consensus(MAX_POOL_TARGET));
+
+        let result = validate_dag_connectivity_and_difficulty(
+            &[header_a, header_b],
+            &mock_validator,
+            &pool_difficulty,
+            &anchor_hashes,
+            &chain_store_handle,
+            starting_height - 1,
+            &missing_parent_hashes,
+            starting_height,
+        );
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("ASERT mismatch"));
+    }
+
+    #[test]
+    fn test_dag_validation_rejects_missing_parent_in_full_sync() {
+        // In full sync (starting_height <= 1), a header whose parent is
+        // not in anchor_hashes and not in the store should be rejected.
+        let header = build_valid_test_header();
+
+        // Empty anchors -- parent not known
+        let anchor_hashes: HashSet<BlockHash> = HashSet::new();
+        let missing_parent_hashes: HashSet<BlockHash> = HashSet::new();
+
+        let mut chain_store_handle = ChainStoreHandle::default();
+        chain_store_handle
+            .expect_get_block_metadata()
+            .returning(|_| Err(StoreError::NotFound("not found".to_string())));
+
+        let mut mock_validator = MockDefaultShareValidator::default();
+        mock_validator
+            .expect_validate_header_minimum_difficulty()
+            .returning(|_| Ok(()));
+        let pool_difficulty = PoolDifficulty::default();
+
+        let result = validate_dag_connectivity_and_difficulty(
+            &[header],
+            &mock_validator,
+            &pool_difficulty,
+            &anchor_hashes,
+            &chain_store_handle,
+            0,
+            &missing_parent_hashes,
+            1,
+        );
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("not in batch or store"),
+        );
+    }
+
+    #[test]
+    fn test_dag_validation_accumulates_work_across_chain() {
+        // Two headers chained together should accumulate work from both.
+        let header_a = build_valid_test_header();
+        let parent_hash = header_a.prev_share_blockhash;
+
+        let mut header_b = build_valid_test_header();
+        header_b.prev_share_blockhash = header_a.block_hash();
+
+        let anchor_hashes: HashSet<BlockHash> = [parent_hash].into_iter().collect();
+        let missing_parent_hashes: HashSet<BlockHash> = HashSet::new();
+
+        let mut chain_store_handle = ChainStoreHandle::default();
+        chain_store_handle
+            .expect_get_block_metadata()
+            .returning(|_| {
+                Ok(BlockMetadata {
+                    expected_height: Some(0),
+                    chain_work: Work::from_hex("0x00").unwrap(),
+                    status: Status::Confirmed,
+                })
+            });
+        let template_header = build_valid_test_header();
+        chain_store_handle
+            .expect_get_share_header()
+            .returning(move |_| Ok(template_header.clone()));
+
+        let mut mock_validator = MockDefaultShareValidator::default();
+        mock_validator
+            .expect_validate_header_minimum_difficulty()
+            .returning(|_| Ok(()));
+        let mut pool_difficulty = PoolDifficulty::default();
+        pool_difficulty
+            .expect_calculate_target_clamped()
+            .returning(|_, _| CompactTarget::from_consensus(MAX_POOL_TARGET));
+
+        let result = validate_dag_connectivity_and_difficulty(
+            &[header_a.clone(), header_b.clone()],
+            &mock_validator,
+            &pool_difficulty,
+            &anchor_hashes,
+            &chain_store_handle,
+            0,
+            &missing_parent_hashes,
+            1,
+        );
+
+        assert!(result.is_ok(), "Expected Ok, got: {:?}", result.err());
+        let (batch_hashes, cumulative_work) = result.unwrap();
+        assert!(batch_hashes.contains(&header_a.block_hash()));
+        assert!(batch_hashes.contains(&header_b.block_hash()));
+        let single_work = header_a.get_work();
+        assert!(cumulative_work >= single_work + single_work);
+    }
+
+    #[test]
+    fn test_verify_uncles_pruned_sync_tolerates_missing_uncle_in_boundary_window() {
+        // During pruned sync, a header references an uncle that is not
+        // in the batch or store. The header is in the boundary window
+        // so the missing uncle is tolerated.
+        let starting_height = 5000u32;
+        let lowest_anchor_height = starting_height - 1;
+
+        let missing_uncle_hash = TestShareBlockBuilder::new().nonce(999).build().block_hash();
+        let mut header = build_valid_test_header();
+        header.uncles = vec![missing_uncle_hash];
+
+        let batch_hashes: HashSet<BlockHash> = [header.block_hash()].into_iter().collect();
+
+        let mut chain_store_handle = ChainStoreHandle::default();
+        chain_store_handle
+            .expect_get_block_metadata()
+            .returning(|_| Err(StoreError::NotFound("pruned".to_string())));
+
+        let result = verify_all_uncles_available(
+            &[header],
+            &batch_hashes,
+            &chain_store_handle,
+            lowest_anchor_height,
+            starting_height,
+        );
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_verify_uncles_pruned_sync_accepts_uncle_present_in_batch() {
+        // Uncle hash is present in the batch -- always accepted
+        // regardless of starting_height.
+        let starting_height = 5000u32;
+        let lowest_anchor_height = starting_height - 1;
+
+        let uncle = build_valid_test_header();
+        let mut header = build_valid_test_header();
+        header.uncles = vec![uncle.block_hash()];
+
+        let batch_hashes: HashSet<BlockHash> = [header.block_hash(), uncle.block_hash()]
+            .into_iter()
+            .collect();
+
+        let chain_store_handle = ChainStoreHandle::default();
+
+        let result = verify_all_uncles_available(
+            &[header],
+            &batch_hashes,
+            &chain_store_handle,
+            lowest_anchor_height,
+            starting_height,
+        );
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_verify_uncles_full_sync_rejects_missing_uncle() {
+        // During full sync (starting_height <= 1), a missing uncle is
+        // not tolerated and returns MissingUncle error.
+        let starting_height = 1u32;
+        let lowest_anchor_height = 0u32;
+
+        let missing_uncle_hash = TestShareBlockBuilder::new().nonce(999).build().block_hash();
+        let mut header = build_valid_test_header();
+        header.uncles = vec![missing_uncle_hash];
+
+        let batch_hashes: HashSet<BlockHash> = [header.block_hash()].into_iter().collect();
+
+        let mut chain_store_handle = ChainStoreHandle::default();
+        chain_store_handle
+            .expect_get_block_metadata()
+            .returning(|_| Err(StoreError::NotFound("not found".to_string())));
+
+        let result = verify_all_uncles_available(
+            &[header],
+            &batch_hashes,
+            &chain_store_handle,
+            lowest_anchor_height,
+            starting_height,
+        );
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("not delivered in batch and not in store"),
         );
     }
 }

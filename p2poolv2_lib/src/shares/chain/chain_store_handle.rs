@@ -567,6 +567,19 @@ impl ChainStoreHandle {
         self.store_handle.store().is_candidate(blockhash)
     }
 
+    /// Store metadata for a missing parent hash during pruned sync.
+    /// This allows organise_header to find parent metadata when
+    /// computing heights for boundary headers.
+    pub async fn store_missing_parent_metadata(
+        &self,
+        blockhash: BlockHash,
+        height: u32,
+    ) -> Result<(), StoreError> {
+        self.store_handle
+            .store_missing_parent_metadata(blockhash, height)
+            .await
+    }
+
     /// Get metadata for blockhash.
     pub fn get_block_metadata(&self, hash: &BlockHash) -> Result<BlockMetadata, StoreError> {
         self.store_handle.store().get_block_metadata(hash)
@@ -826,6 +839,7 @@ mockall::mock! {
         pub fn is_confirmed_or_confirmed_uncle(&self, blockhash: &BlockHash) -> bool;
         pub fn get_btcaddresses_for_user_ids(&self, user_ids: &[u64]) -> Result<Vec<(u64, String)>, StoreError>;
         pub async fn init_or_setup_genesis(&self, genesis_block: ShareBlock) -> Result<(), StoreError>;
+        pub async fn store_missing_parent_metadata(&self, blockhash: BlockHash, height: u32) -> Result<(), StoreError>;
         pub async fn organise_header(&self, header: ShareHeader) -> Result<Option<u32>, StoreError>;
         pub async fn organise_block(&self) -> Result<Option<u32>, StoreError>;
         pub async fn promote_block(&self, header: ShareHeader) -> Result<Option<u32>, StoreError>;

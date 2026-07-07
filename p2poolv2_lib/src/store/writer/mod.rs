@@ -30,7 +30,8 @@ pub use handle::StoreHandle;
 use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::store::Store;
-use bitcoin::BlockHash;
+use crate::store::block_tx_metadata::{BlockMetadata, Status};
+use bitcoin::{BlockHash, Work};
 use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
@@ -129,6 +130,15 @@ pub enum WriteCommand {
 
     /// Set genesis block hash (fire-and-forget)
     SetGenesisBlockHash { hash: BlockHash },
+
+    /// Store metadata for a missing parent during pruned sync.
+    /// This allows organise_header to find the parent when computing
+    /// heights for boundary headers.
+    StoreMissingParentMetadata {
+        blockhash: BlockHash,
+        height: u32,
+        reply: oneshot::Sender<Result<(), StoreError>>,
+    },
 
     /// Organise a header into the candidate chain.
     /// Returns the new candidate height.
@@ -253,6 +263,24 @@ impl StoreWriter {
             // Fire-and-forget commands (in-memory state updates)
             WriteCommand::SetGenesisBlockHash { hash } => {
                 self.store.set_genesis_blockhash(hash);
+            }
+
+            WriteCommand::StoreMissingParentMetadata {
+                blockhash,
+                height,
+                reply,
+            } => {
+                let mut batch = Store::get_write_batch();
+                let metadata = BlockMetadata {
+                    expected_height: Some(height),
+                    chain_work: Work::from_hex("0x00").unwrap(),
+                    status: Status::HeaderValid,
+                };
+                let result = self
+                    .store
+                    .update_block_metadata(&blockhash, &metadata, &mut batch)
+                    .and_then(|()| self.store.commit_batch(batch).map_err(StoreError::from));
+                let _ = reply.send(result);
             }
 
             WriteCommand::OrganiseHeader { header, reply } => {

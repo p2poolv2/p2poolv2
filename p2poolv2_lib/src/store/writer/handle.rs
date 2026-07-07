@@ -308,6 +308,25 @@ impl StoreHandle {
         reply_rx.await.map_err(|_| StoreError::ChannelClosed)?
     }
 
+    /// Store metadata for a missing parent hash during pruned sync.
+    /// This allows organise_header to find parent metadata when
+    /// computing heights for boundary headers.
+    pub async fn store_missing_parent_metadata(
+        &self,
+        blockhash: BlockHash,
+        height: u32,
+    ) -> Result<(), StoreError> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.write_tx
+            .send(WriteCommand::StoreMissingParentMetadata {
+                blockhash,
+                height,
+                reply: reply_tx,
+            })
+            .map_err(|_| StoreError::ChannelClosed)?;
+        reply_rx.await.map_err(|_| StoreError::ChannelClosed)?
+    }
+
     /// Organise a header into the candidate chain.
     /// Returns the new candidate height if changed.
     pub async fn organise_header(&self, header: ShareHeader) -> Result<Option<u32>, StoreError> {

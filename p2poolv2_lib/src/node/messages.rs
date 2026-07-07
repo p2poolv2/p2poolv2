@@ -72,7 +72,9 @@ pub enum Message {
     /// Share chain headers with the share chain height of the first
     /// header. The receiver uses this to assign heights during
     /// validation. For pruned sync the first header's parent may not
-    /// be in the receiver's store.
+    /// be in the receiver's store in such cases the second field is
+    /// the starting height used to signal pruned sync. Otherwise
+    /// starting height is set to 1.
     ShareHeaders(Vec<ShareHeader>, u32),
     ShareBlock(ShareBlock),
     GetData(GetData),
