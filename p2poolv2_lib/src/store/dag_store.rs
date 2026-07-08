@@ -198,11 +198,18 @@ impl Store {
             None => {
                 let start_hash = self.lowest_retained_blockhash()?;
                 let hashes = self.get_descendant_blockhashes(&start_hash, stop_blockhash, limit)?;
-                let start_hash_height = self.get_height_for_blockhash(&start_hash);
+                // Use the height of the first returned block, not
+                // start_hash. get_descendant_blockhashes applies a
+                // MAX_UNCLES_DEPTH overlap so the first block may be
+                // at a lower height than start_hash.
+                let first_block_height = hashes
+                    .first()
+                    .map(|hash| self.get_height_for_blockhash(hash))
+                    .unwrap_or(0);
                 // Height 0 means genesis (full sync), use 1 like the
                 // locator-match path. Only heights > 0 signal a pruned
                 // sync boundary.
-                let starting_height = std::cmp::max(1, start_hash_height);
+                let starting_height = std::cmp::max(1, first_block_height);
                 return Ok((hashes, starting_height));
             }
         };
@@ -3898,5 +3905,67 @@ mod tests {
         // Locator matched, so starting_height = 1 (normal sync)
         assert_eq!(starting_height, 1);
         assert!(!result.is_empty());
+    }
+
+    /// When no locator matches on a tall chain (taller than PRUNE_DEPTH),
+    /// the fallback starts from lowest_retained. starting_height is the
+    /// height of the first returned block, which accounts for the
+    /// MAX_UNCLES_DEPTH overlap in get_descendant_blockhashes.
+    ///
+    /// We build genesis(h:0) -> share_a(h:1) -> share_b(h:2) normally,
+    /// then set top_confirmed_height to PRUNE_DEPTH + 1. This makes
+    /// lowest_retained = 1 = share_a's confirmed height, so the pruned
+    /// fallback path starts from share_a.
+    #[test]
+    fn test_get_blockhashes_for_locator_no_match_tall_chain_returns_pruned_start() {
+        use crate::accounting::payout::sharechain_pplns::pplns_window::PRUNE_DEPTH;
+
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share_a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .work(2)
+            .nonce(1)
+            .build();
+        store.push_to_confirmed_chain(&share_a).unwrap();
+
+        let share_b = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_a.block_hash().to_string())
+            .work(2)
+            .nonce(2)
+            .build();
+        store.push_to_confirmed_chain(&share_b).unwrap();
+
+        // Artificially set top_confirmed_height to PRUNE_DEPTH + 1.
+        // lowest_retained = (PRUNE_DEPTH + 1) - PRUNE_DEPTH = 1.
+        // share_a is confirmed at height 1, so it becomes the start.
+        // Genesis at height 0 falls below the prune boundary.
+        let artificial_tip_height = PRUNE_DEPTH as u32 + 1;
+        let mut batch = Store::get_write_batch();
+        store.set_top_confirmed_height(artificial_tip_height, &mut batch);
+        store.commit_batch(batch).unwrap();
+
+        // Locator with only genesis -- below prune boundary, no match
+        let (result, _starting_height) = store
+            .get_blockhashes_for_locator(&[genesis.block_hash()], &BlockHash::all_zeros(), 100)
+            .unwrap();
+
+        // The key behavior: genesis was NOT matched as a locator even
+        // though it exists in the store, so the pruned fallback ran.
+        assert!(!result.is_empty());
+        assert!(result.contains(&share_a.block_hash()));
+
+        // Verify genesis was ignored by the locator match
+        let locator_result = store.first_known_for_locator(&[genesis.block_hash()]);
+        assert_eq!(
+            locator_result, None,
+            "Genesis should be below prune boundary"
+        );
     }
 }
