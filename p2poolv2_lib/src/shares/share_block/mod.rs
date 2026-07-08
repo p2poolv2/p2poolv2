@@ -329,7 +329,7 @@ impl ShareBlock {
     pub fn build_genesis_for_network(
         network: bitcoin::Network,
     ) -> Result<Self, Box<dyn Error + Send + Sync>> {
-        tracing::debug!("USING NETWORK {network}");
+        tracing::debug!("Using network {network}");
         assert!(
             network == bitcoin::Network::Signet
                 || network == bitcoin::Network::Bitcoin

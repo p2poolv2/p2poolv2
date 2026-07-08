@@ -211,24 +211,30 @@ impl Store {
         Ok((hashes, 1))
     }
 
-    /// Find the first locator hash that we know about.
+    /// Find the first locator hash that we know about and is within
+    /// the retained chain (at or above lowest retained height).
     ///
     /// Uses a single batch metadata lookup and then walks the locator
     /// in order to return the first hash with a valid status
-    /// (HeaderValid, Candidate, Confirmed, or BlockValid). Pending
-    /// and Invalid blocks are skipped.
-    ///
-    /// With height-based walking, get_descendant_blockhashes sends all
-    /// blocks at each height regardless of status, so matching any
-    /// valid block is correct. The locator is ordered newest-first, so
-    /// the first match gives the highest known height.
+    /// (HeaderValid, Candidate, Confirmed, or BlockValid) whose height
+    /// is at or above the lowest retained height. Blocks below the
+    /// prune boundary are ignored even if present in the store, so the
+    /// node behaves as a pruned node.
     fn first_known_for_locator(&self, locator: &[BlockHash]) -> Option<BlockHash> {
+        let lowest_retained = self
+            .get_top_confirmed_height()
+            .unwrap_or(0)
+            .saturating_sub(PRUNE_DEPTH as u32);
+
         let metadata_results: HashMap<BlockHash, BlockMetadata> =
             self.get_block_metadata_batch(locator).into_iter().collect();
         for blockhash in locator {
             if let Some(metadata) = metadata_results.get(blockhash) {
                 if metadata.status != Status::Pending && metadata.status != Status::Invalid {
-                    return Some(*blockhash);
+                    let height = metadata.expected_height.unwrap_or(0);
+                    if height >= lowest_retained {
+                        return Some(*blockhash);
+                    }
                 }
             }
         }
@@ -3665,6 +3671,62 @@ mod tests {
 
         // Locator with only confirmed entries returns the first one
         let locator = vec![share_a.block_hash(), genesis.block_hash()];
+        let result = store.first_known_for_locator(&locator);
+        assert_eq!(result, Some(share_a.block_hash()));
+    }
+
+    /// first_known_for_locator ignores blocks below the lowest retained
+    /// height (tip - PRUNE_DEPTH). Even if a block exists in the store,
+    /// it is treated as unknown if its height is below the prune boundary.
+    ///
+    /// This test builds a chain and then artificially sets the confirmed
+    /// tip height high enough that genesis falls below the prune boundary.
+    #[test]
+    fn test_first_known_for_locator_ignores_blocks_below_prune_boundary() {
+        use crate::accounting::payout::sharechain_pplns::pplns_window::PRUNE_DEPTH;
+
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share_a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .work(2)
+            .nonce(1)
+            .build();
+        store.push_to_confirmed_chain(&share_a).unwrap();
+
+        // Artificially set share_a's height to PRUNE_DEPTH + 100 so
+        // that lowest_retained = 100, making genesis (height 0) fall
+        // below the prune boundary.
+        let artificial_height = PRUNE_DEPTH as u32 + 100;
+        let mut batch = Store::get_write_batch();
+        let metadata = BlockMetadata {
+            expected_height: Some(artificial_height),
+            chain_work: share_a.header.get_work(),
+            status: Status::Confirmed,
+        };
+        store
+            .update_block_metadata(&share_a.block_hash(), &metadata, &mut batch)
+            .unwrap();
+        store.set_top_confirmed_height(artificial_height, &mut batch);
+        store.commit_batch(batch).unwrap();
+
+        // Genesis is at height 0, below lowest_retained (100).
+        // Locator with only genesis should return None.
+        let locator = vec![genesis.block_hash()];
+        let result = store.first_known_for_locator(&locator);
+        assert_eq!(
+            result, None,
+            "Genesis below prune boundary should not match"
+        );
+
+        // share_a is at artificial_height (above boundary), should match
+        let locator = vec![genesis.block_hash(), share_a.block_hash()];
         let result = store.first_known_for_locator(&locator);
         assert_eq!(result, Some(share_a.block_hash()));
     }
