@@ -518,8 +518,6 @@ fn check_dense_height(
 /// Verify every uncle hash declared by any header in the batch exists
 /// either as another header in this batch or in the store. Catches
 /// phantom uncle references that no peer ever sent.
-/// Verify every uncle hash declared by any header in the batch exists
-/// either as another header in this batch or in the store.
 ///
 /// During pruned sync, uncles referenced by headers in the boundary
 /// window (height <= starting_height + MAX_UNCLES_DEPTH) may be below

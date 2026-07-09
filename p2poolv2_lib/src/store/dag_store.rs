@@ -207,7 +207,7 @@ impl Store {
                     .map(|hash| self.get_height_for_blockhash(hash))
                     .unwrap_or(0);
                 // Height 0 means genesis (full sync), use 1 like the
-                // locator-match path. Only heights > 0 signal a pruned
+                // locator-match path. Only heights > 1 signal a pruned
                 // sync boundary.
                 let starting_height = std::cmp::max(1, first_block_height);
                 return Ok((hashes, starting_height));
@@ -3838,7 +3838,7 @@ mod tests {
 
     /// When no locator matches on a short chain (shorter than
     /// PRUNE_DEPTH), the fallback returns genesis descendants with
-    /// starting_height = 0.
+    /// starting_height = 1.
     #[test]
     fn test_get_blockhashes_for_locator_no_match_short_chain_returns_genesis() {
         let temp_dir = tempdir().unwrap();
