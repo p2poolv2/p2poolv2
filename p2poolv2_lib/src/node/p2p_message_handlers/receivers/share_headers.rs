@@ -644,8 +644,11 @@ fn find_anchors_pruned_sync(
 /// Find all chain anchors: external parents from the batch that exist
 /// in our store, plus any missing parents below the prune boundary.
 ///
-/// Returns anchors and the set of missing parent hashes (empty for
-/// full sync).
+/// Always tries the full sync path first. Falls back to the pruned
+/// sync path only when external parents are genuinely missing from
+/// the store AND starting_height > 1. This prevents a malicious peer
+/// from using starting_height to bypass validation when we already
+/// have the parent data.
 fn find_chain_anchors(
     share_headers: &[ShareHeader],
     chain_store_handle: &ChainStoreHandle,
@@ -653,14 +656,14 @@ fn find_chain_anchors(
 ) -> Result<(Vec<(BlockHash, BlockMetadata)>, HashSet<BlockHash>), HeaderSyncError> {
     let (_batch_hashes, external_parents) = collect_external_parents(share_headers);
 
-    if starting_height <= 1 {
-        find_anchors_full_sync(external_parents, chain_store_handle)
-    } else {
-        Ok(find_anchors_pruned_sync(
+    match find_anchors_full_sync(external_parents.clone(), chain_store_handle) {
+        Ok(result) => Ok(result),
+        Err(_) if starting_height > 1 => Ok(find_anchors_pruned_sync(
             external_parents,
             chain_store_handle,
             starting_height,
-        ))
+        )),
+        Err(full_sync_error) => Err(full_sync_error),
     }
 }
 
@@ -2442,5 +2445,117 @@ mod tests {
                 .to_string()
                 .contains("not delivered in batch and not in store"),
         );
+    }
+
+    #[tokio::test]
+    async fn test_malicious_starting_height_does_not_bypass_validation_when_parent_exists() {
+        // A malicious peer sends starting_height = 200000 even though
+        // the receiver has the parent in its store at height 5. Before
+        // the defense-in-depth fix, find_anchors_pruned_sync would run
+        // and create a synthetic anchor at height 199999, potentially
+        // poisoning stored heights. After the fix, find_anchors_full_sync
+        // succeeds (parent found in store) and the pruned path is never
+        // reached, so no synthetic metadata is created.
+        let malicious_starting_height = 200_000u32;
+
+        let header = build_valid_test_header();
+        let parent_hash = header.prev_share_blockhash;
+
+        // header_b chains off header, so header is an internal parent
+        // and parent_hash is the only external parent.
+        let mut header_b = build_valid_test_header();
+        header_b.prev_share_blockhash = header.block_hash();
+
+        let headers = vec![header, header_b];
+
+        let mut chain_store_handle = ChainStoreHandle::default();
+
+        // Parent IS in the store at the real height (5), so the full
+        // sync path should succeed without falling through to pruned.
+        let real_parent_hash = parent_hash;
+        chain_store_handle
+            .expect_get_block_metadata_batch()
+            .returning(move |hashes| {
+                hashes
+                    .iter()
+                    .filter(|hash| **hash == real_parent_hash)
+                    .map(|hash| {
+                        (
+                            *hash,
+                            BlockMetadata {
+                                expected_height: Some(5),
+                                chain_work: Work::from_hex("0x00").unwrap(),
+                                status: Status::Confirmed,
+                            },
+                        )
+                    })
+                    .collect()
+            });
+
+        // get_block_metadata for parent connectivity check (store has it)
+        chain_store_handle
+            .expect_get_block_metadata()
+            .returning(|_| {
+                Ok(BlockMetadata {
+                    expected_height: Some(5),
+                    chain_work: Work::from_hex("0x00").unwrap(),
+                    status: Status::Confirmed,
+                })
+            });
+
+        // get_share_header for time lookup (falls through from cache miss)
+        let template_header = build_valid_test_header();
+        chain_store_handle
+            .expect_get_share_header()
+            .returning(move |_| Ok(template_header.clone()));
+
+        let genesis_header = build_valid_test_header();
+        chain_store_handle
+            .expect_get_genesis_header()
+            .returning(move || Ok(genesis_header.clone()));
+
+        let mut mock_validator = MockDefaultShareValidator::default();
+        setup_minimum_difficulty_mock(&mut mock_validator);
+
+        // store_missing_parent_metadata must NOT be called -- if the
+        // pruned path were taken, it would try to store metadata at
+        // height 199999 for the parent that already exists at height 5.
+        chain_store_handle
+            .expect_store_missing_parent_metadata()
+            .times(0)
+            .returning(|_, _| Ok(()));
+
+        chain_store_handle
+            .expect_organise_header()
+            .returning(|_| Ok(None));
+        chain_store_handle
+            .expect_find_fork_point_height()
+            .returning(|_| Ok(Some(5)));
+        chain_store_handle
+            .expect_get_candidate_blocks_missing_data()
+            .returning(|_| Ok(Vec::new()));
+
+        let (swarm_tx, _swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
+        let (block_fetcher_handle, _block_fetcher_rx) =
+            block_fetcher::create_block_fetcher_channel();
+
+        // Run handle_share_headers which calls validate_header_chain
+        // and then conditionally calls store_missing_parent_metadata.
+        let peer_id = libp2p::PeerId::random();
+        let result = handle_share_headers(
+            peer_id,
+            headers,
+            malicious_starting_height,
+            chain_store_handle,
+            swarm_tx,
+            block_fetcher_handle,
+            &mock_validator,
+        )
+        .await;
+
+        assert!(result.is_ok(), "Expected Ok, got: {}", result.unwrap_err());
+        // store_missing_parent_metadata was never called (times(0)),
+        // confirming the pruned path was not taken and no metadata
+        // was written at the malicious height.
     }
 }
