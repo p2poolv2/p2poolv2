@@ -330,7 +330,7 @@ fn validate_header_chain(
         .max()
         .unwrap_or(Work::from_hex("0x00").unwrap());
 
-    let (batch_hashes, cumulative_chain_work) = validate_dag_connectivity_and_difficulty(
+    let cumulative_chain_work = validate_dag_connectivity_and_difficulty(
         share_headers,
         share_validator,
         pool_difficulty,
@@ -338,13 +338,6 @@ fn validate_header_chain(
         chain_store_handle,
         lowest_anchor_height,
         &missing_parent_hashes,
-        starting_height,
-    )?;
-    verify_all_uncles_available(
-        share_headers,
-        &batch_hashes,
-        chain_store_handle,
-        lowest_anchor_height,
         starting_height,
     )?;
     validate_cumulative_work(best_anchor_work, cumulative_chain_work)?;
@@ -377,14 +370,6 @@ fn get_share_time_and_height(
     Ok(result)
 }
 
-/// Validate that the batch forms a connected DAG with valid difficulty.
-///
-/// Every header's parent must be either already processed in this batch
-/// or present in the store. Every header must pass minimum difficulty
-/// and ASERT target validation.
-///
-/// Returns the set of all blockhashes in the batch and the cumulative
-/// work across all headers.
 /// Check whether a header is in the boundary window where missing
 /// parents and uncles are tolerated during pruned sync.
 fn is_in_boundary_window(header_height: u32, starting_height: u32) -> bool {
@@ -438,6 +423,19 @@ fn check_asert_difficulty(
     Ok(())
 }
 
+/// Validate that the batch forms a connected DAG with valid difficulty.
+///
+/// Every header's parent must be either already processed in this batch
+/// or present in the store. Every header must pass minimum difficulty
+/// and ASERT target validation.
+///
+/// During pruned sync (missing_parent_hashes is non-empty), headers whose
+/// parent is a missing boundary parent skip ASERT validation within the
+/// boundary window (height <= starting_height + MAX_UNCLES_DEPTH). The
+/// time_height_cache is pre-seeded with entries for missing parents so
+/// subsequent headers can compute their heights.
+///
+/// Returns the cumulative work across all headers.
 fn validate_dag_connectivity_and_difficulty(
     share_headers: &[ShareHeader],
     share_validator: &(dyn ShareValidator + Send + Sync),
@@ -447,7 +445,7 @@ fn validate_dag_connectivity_and_difficulty(
     lowest_anchor_height: u32,
     missing_parent_hashes: &HashSet<BlockHash>,
     starting_height: u32,
-) -> Result<(HashSet<BlockHash>, Work), HeaderSyncError> {
+) -> Result<Work, HeaderSyncError> {
     let mut known_hashes: HashSet<BlockHash> =
         HashSet::with_capacity(share_headers.len() + anchor_hashes.len());
     known_hashes.extend(anchor_hashes);
@@ -487,13 +485,22 @@ fn validate_dag_connectivity_and_difficulty(
 
         check_dense_height(&mut blocks_per_height, header_height)?;
 
+        verify_uncles_available(
+            header,
+            header_height,
+            &known_hashes,
+            chain_store_handle,
+            lowest_anchor_height,
+            starting_height,
+        )?;
+
         let header_hash = header.block_hash();
         time_height_cache.insert(header_hash, (header.time, header_height));
         known_hashes.insert(header_hash);
         cumulative_work = cumulative_work + header.get_work();
     }
 
-    Ok((known_hashes, cumulative_work))
+    Ok(cumulative_work)
 }
 
 /// Reject batches where a single height has too many blocks.
@@ -515,38 +522,38 @@ fn check_dense_height(
     Ok(())
 }
 
-/// Verify every uncle hash declared by any header in the batch exists
-/// either as another header in this batch or in the store. Catches
-/// phantom uncle references that no peer ever sent.
+/// Verify every uncle hash declared by a single header exists either
+/// in the batch (known_hashes) or in the store.
 ///
-/// During pruned sync, uncles referenced by headers in the boundary
-/// window (height <= starting_height + MAX_UNCLES_DEPTH) may be below
-/// the prune boundary and are tolerated as missing.
-fn verify_all_uncles_available(
-    share_headers: &[ShareHeader],
-    batch_hashes: &HashSet<BlockHash>,
+/// During pruned sync, if the header is in the boundary window
+/// (height <= starting_height + MAX_UNCLES_DEPTH), missing uncles
+/// are tolerated as being below the prune boundary. Headers above
+/// the boundary window must have all uncles present.
+fn verify_uncles_available(
+    header: &ShareHeader,
+    header_height: u32,
+    known_hashes: &HashSet<BlockHash>,
     chain_store_handle: &ChainStoreHandle,
     lowest_anchor_height: u32,
     starting_height: u32,
 ) -> Result<(), HeaderSyncError> {
-    for header in share_headers {
-        for uncle_hash in &header.uncles {
-            if batch_hashes.contains(uncle_hash)
-                || chain_store_handle.get_block_metadata(uncle_hash).is_ok()
-            {
-                // Uncle found, nothing to check.
-            } else if is_in_boundary_window(lowest_anchor_height + 1, starting_height) {
-                debug!(
-                    "Pruned sync: tolerating missing uncle {} for header {}",
-                    uncle_hash,
-                    header.block_hash(),
-                );
-            } else {
-                return Err(HeaderSyncError::MissingUncle {
-                    uncle_hash: *uncle_hash,
-                    lowest_anchor_height,
-                });
-            }
+    for uncle_hash in &header.uncles {
+        if known_hashes.contains(uncle_hash)
+            || chain_store_handle.get_block_metadata(uncle_hash).is_ok()
+        {
+            // Uncle found.
+        } else if is_in_boundary_window(header_height, starting_height) {
+            debug!(
+                "Pruned sync: tolerating missing uncle {} for header {} at height {}",
+                uncle_hash,
+                header.block_hash(),
+                header_height,
+            );
+        } else {
+            return Err(HeaderSyncError::MissingUncle {
+                uncle_hash: *uncle_hash,
+                lowest_anchor_height,
+            });
         }
     }
     Ok(())
@@ -1962,7 +1969,7 @@ mod tests {
     async fn test_pruned_sync_tolerates_missing_uncle_below_starting_height() {
         // A header at starting_height references an uncle that is below
         // the prune boundary. The uncle hash is not in the batch or store.
-        // verify_all_uncles_available should tolerate this.
+        // verify_uncles_available should tolerate this.
         let starting_height = 5000u32;
 
         // Use a fabricated hash for the missing uncle below the prune boundary
@@ -2177,18 +2184,16 @@ mod tests {
         let anchor_hashes: HashSet<BlockHash> = [parent_hash].into_iter().collect();
         let missing_parent_hashes: HashSet<BlockHash> = [parent_hash].into_iter().collect();
 
-        let chain_store_handle = ChainStoreHandle::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
+        chain_store_handle
+            .expect_get_block_metadata()
+            .returning(|_| Err(StoreError::NotFound("not in store".to_string())));
 
         let mut mock_validator = MockDefaultShareValidator::default();
         mock_validator
             .expect_validate_header_minimum_difficulty()
             .returning(|_| Ok(()));
-        let mut pool_difficulty = PoolDifficulty::default();
-        // Should NOT be called for boundary header
-        pool_difficulty
-            .expect_calculate_target_clamped()
-            .times(0)
-            .returning(|_, _| CompactTarget::from_consensus(MAX_POOL_TARGET));
+        let pool_difficulty = PoolDifficulty::default();
 
         let result = validate_dag_connectivity_and_difficulty(
             &[header.clone()],
@@ -2202,8 +2207,7 @@ mod tests {
         );
 
         assert!(result.is_ok(), "Expected Ok, got: {:?}", result.err());
-        let (batch_hashes, cumulative_work) = result.unwrap();
-        assert!(batch_hashes.contains(&header.block_hash()));
+        let cumulative_work = result.unwrap();
         assert!(cumulative_work > Work::from_hex("0x00").unwrap());
     }
 
@@ -2339,9 +2343,7 @@ mod tests {
         );
 
         assert!(result.is_ok(), "Expected Ok, got: {:?}", result.err());
-        let (batch_hashes, cumulative_work) = result.unwrap();
-        assert!(batch_hashes.contains(&header_a.block_hash()));
-        assert!(batch_hashes.contains(&header_b.block_hash()));
+        let cumulative_work = result.unwrap();
         let single_work = header_a.get_work();
         assert!(cumulative_work >= single_work + single_work);
     }
@@ -2358,16 +2360,17 @@ mod tests {
         let mut header = build_valid_test_header();
         header.uncles = vec![missing_uncle_hash];
 
-        let batch_hashes: HashSet<BlockHash> = [header.block_hash()].into_iter().collect();
+        let known_hashes: HashSet<BlockHash> = [header.block_hash()].into_iter().collect();
 
         let mut chain_store_handle = ChainStoreHandle::default();
         chain_store_handle
             .expect_get_block_metadata()
             .returning(|_| Err(StoreError::NotFound("pruned".to_string())));
 
-        let result = verify_all_uncles_available(
-            &[header],
-            &batch_hashes,
+        let result = verify_uncles_available(
+            &header,
+            starting_height,
+            &known_hashes,
             &chain_store_handle,
             lowest_anchor_height,
             starting_height,
@@ -2387,15 +2390,16 @@ mod tests {
         let mut header = build_valid_test_header();
         header.uncles = vec![uncle.block_hash()];
 
-        let batch_hashes: HashSet<BlockHash> = [header.block_hash(), uncle.block_hash()]
+        let known_hashes: HashSet<BlockHash> = [header.block_hash(), uncle.block_hash()]
             .into_iter()
             .collect();
 
         let chain_store_handle = ChainStoreHandle::default();
 
-        let result = verify_all_uncles_available(
-            &[header],
-            &batch_hashes,
+        let result = verify_uncles_available(
+            &header,
+            starting_height,
+            &known_hashes,
             &chain_store_handle,
             lowest_anchor_height,
             starting_height,
@@ -2415,16 +2419,17 @@ mod tests {
         let mut header = build_valid_test_header();
         header.uncles = vec![missing_uncle_hash];
 
-        let batch_hashes: HashSet<BlockHash> = [header.block_hash()].into_iter().collect();
+        let known_hashes: HashSet<BlockHash> = [header.block_hash()].into_iter().collect();
 
         let mut chain_store_handle = ChainStoreHandle::default();
         chain_store_handle
             .expect_get_block_metadata()
             .returning(|_| Err(StoreError::NotFound("not found".to_string())));
 
-        let result = verify_all_uncles_available(
-            &[header],
-            &batch_hashes,
+        let result = verify_uncles_available(
+            &header,
+            starting_height,
+            &known_hashes,
             &chain_store_handle,
             lowest_anchor_height,
             starting_height,
