@@ -69,12 +69,12 @@ pub enum Message {
     NotFound(GetData),
     GetShareHeaders(Vec<BlockHash>, BlockHash),
     GetShareBlocks(Vec<BlockHash>, BlockHash),
-    /// Share chain headers with the share chain height of the first
-    /// header. The receiver uses this to assign heights during
-    /// validation. For pruned sync the first header's parent may not
-    /// be in the receiver's store in such cases the second field is
-    /// the starting height used to signal pruned sync. Otherwise
-    /// starting height is set to 1.
+    /// Share chain headers plus a `starting_height` hint.
+    ///
+    /// `starting_height == 1` indicates normal sync (full context available).
+    /// `starting_height > 1` indicates pruned sync, and is the actual share-chain
+    /// height of the first header in this message so the receiver can assign
+    /// heights during boundary validation.
     ShareHeaders(Vec<ShareHeader>, u32),
     ShareBlock(ShareBlock),
     GetData(GetData),
