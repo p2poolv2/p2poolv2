@@ -31,6 +31,7 @@ use tracing::debug;
 use std::collections::{HashSet, VecDeque};
 
 use super::{Chain, Height, TopResult, height_to_key_with_suffix};
+use crate::accounting::payout::sharechain_pplns::pplns_window::PRUNE_DEPTH;
 
 const CANDIDATE_SUFFIX: &str = ":c";
 const TOP_CANDIDATE_KEY: &str = "meta:top_candidate_height";
@@ -222,9 +223,9 @@ impl Store {
     /// any referenced uncle that lacks block data.
     pub fn get_candidate_blocks_missing_data(
         &self,
-        min_scan_height: Option<u32>,
+        fork_height: Option<u32>,
     ) -> Result<Vec<BlockHash>, StoreError> {
-        let scan_start = self.missing_data_scan_start(min_scan_height)?;
+        let scan_start = self.missing_data_scan_start(fork_height)?;
         let candidate_height = match self.get_top_candidate_height() {
             Ok(height) => height,
             Err(StoreError::NotFound(_)) => return Ok(Vec::new()),
@@ -254,20 +255,34 @@ impl Store {
 
     /// Compute the starting height for the missing-data scan.
     ///
-    /// Defaults to `confirmed_top + 1`. When `min_scan_height` is
+    /// Defaults to `confirmed_top + 1`. When `fork_height` is
     /// provided, uses the lower of the two so that fork blocks below
     /// the confirmed tip are included.
-    fn missing_data_scan_start(&self, min_scan_height: Option<u32>) -> Result<u32, StoreError> {
+    ///
+    /// The result is clamped upward to the prune boundary
+    /// (candidate_tip - PRUNE_DEPTH) so blocks under the prune zone are
+    /// never fetched. Their PoW is already validated at header sync
+    /// time and they don't need block bodies.
+    fn missing_data_scan_start(&self, fork_height: Option<u32>) -> Result<u32, StoreError> {
         let confirmed_height = match self.get_top_confirmed_height() {
             Ok(height) => height,
             Err(StoreError::NotFound(_)) => 0,
             Err(error) => return Err(error),
         };
-        let default_start = confirmed_height + 1;
-        Ok(match min_scan_height {
-            Some(hint) => std::cmp::min(hint, default_start),
-            None => default_start,
-        })
+        let next_confirmed_height = confirmed_height + 1;
+        let min_fork_and_confirmed_height = match fork_height {
+            Some(fork_height) => std::cmp::min(fork_height, next_confirmed_height),
+            None => next_confirmed_height,
+        };
+
+        let candidate_height = match self.get_top_candidate_height() {
+            Ok(height) => height,
+            Err(StoreError::NotFound(_)) => return Ok(min_fork_and_confirmed_height),
+            Err(error) => return Err(error),
+        };
+        let prune_floor = candidate_height.saturating_sub(PRUNE_DEPTH as u32);
+
+        Ok(std::cmp::max(min_fork_and_confirmed_height, prune_floor))
     }
 
     /// Walk heights from `scan_start` to `candidate_height`, collecting
@@ -1791,5 +1806,64 @@ mod tests {
             )
             .unwrap();
         assert_eq!(result.unwrap().0, valid_child.block_hash());
+    }
+
+    #[test]
+    fn test_missing_data_scan_start_clamps_to_prune_floor() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // confirmed tip at 0 (genesis), candidate tip above PRUNE_DEPTH
+        // so prune_floor is meaningful.
+        // next_confirmed_height = 0 + 1 = 1
+        // prune_floor = candidate_tip - PRUNE_DEPTH = 1000
+        let candidate_tip = PRUNE_DEPTH as u32 + 1000;
+        let prune_floor = candidate_tip - PRUNE_DEPTH as u32;
+        let mut batch = Store::get_write_batch();
+        store
+            .increment_top_candidate(candidate_tip, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // No fork_height: min_fork_and_confirmed_height = 1.
+        // Result = max(1, prune_floor=1000) = 1000.
+        let result = store.missing_data_scan_start(None).unwrap();
+        assert_eq!(result, prune_floor);
+
+        // fork_height below prune_floor: min(500, 1) = 1.
+        // Result = max(1, 1000) = 1000.
+        let result = store.missing_data_scan_start(Some(500)).unwrap();
+        assert_eq!(result, prune_floor);
+
+        // fork_height above prune_floor: min(2000, 1) = 1.
+        // Result = max(1, 1000) = 1000.
+        let result = store.missing_data_scan_start(Some(2000)).unwrap();
+        assert_eq!(result, prune_floor);
+    }
+
+    #[test]
+    fn test_missing_data_scan_start_no_clamp_on_short_chain() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // candidate tip below PRUNE_DEPTH: prune_floor = 0.
+        // next_confirmed_height = 0 + 1 = 1.
+        // Result = max(1, 0) = 1.
+        let mut batch = Store::get_write_batch();
+        store.increment_top_candidate(100, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let result = store.missing_data_scan_start(None).unwrap();
+        assert_eq!(result, 1);
     }
 }
