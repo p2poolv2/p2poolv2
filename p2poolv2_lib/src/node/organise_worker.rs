@@ -36,6 +36,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::shares::validation::ShareValidator;
+use crate::shares::validation::check_pplns_zone;
 use crate::store::dag_store::ShareInfo;
 use crate::store::writer::StoreError;
 use crate::stratum::work::notify::{NotifyCmd, NotifySender};
@@ -225,13 +226,23 @@ impl OrganiseWorker {
         let blockhash = share_block.block_hash();
         debug!("Organising block: {blockhash:?}");
 
-        if let Err(validation_error) = self.share_validator.validate_with_chain_context(
-            share_block,
-            &self.chain_store_handle,
-            Arc::clone(&self.pplns_window),
-        ) {
-            error!("Chain-context validation failed for {blockhash}: {validation_error}");
-            return Ok(None);
+        let in_pplns_zone = match check_pplns_zone(&blockhash, &self.chain_store_handle) {
+            Ok(result) => result,
+            Err(error_message) => {
+                error!("Error looking checking for zone: {error_message}");
+                return Ok(None);
+            }
+        };
+
+        if in_pplns_zone {
+            if let Err(validation_error) = self.share_validator.validate_with_chain_context(
+                share_block,
+                &self.chain_store_handle,
+                Arc::clone(&self.pplns_window),
+            ) {
+                error!("Chain-context validation failed for {blockhash}: {validation_error}");
+                return Ok(None);
+            }
         }
 
         match self
@@ -427,8 +438,10 @@ mod tests {
     use crate::monitoring_events::create_monitoring_event_channel;
     use crate::shares::chain::chain_store_handle::MockChainStoreHandle;
     use crate::shares::validation::MockDefaultShareValidator;
+    use crate::shares::validation::ValidationError;
     use crate::store::block_tx_metadata::BlockMetadata;
     use crate::stratum::work::notify::{NotifyCmd, NotifyReceiver};
+    use crate::test_utils::TestShareBlockBuilder;
 
     /// Create a notify channel for tests, returning the sender and receiver.
     fn create_test_notify_channel() -> (NotifySender, NotifyReceiver) {
@@ -499,9 +512,7 @@ mod tests {
             stub_share_validator_with_success(),
         );
 
-        let share = crate::test_utils::TestShareBlockBuilder::new()
-            .nonce(0xe9695791)
-            .build();
+        let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
         organise_tx
             .send(OrganiseEvent::Header(share.header))
             .await
@@ -521,7 +532,19 @@ mod tests {
             .return_once(MockChainStoreHandle::new);
         mock_chain_handle
             .expect_get_block_metadata()
-            .returning(|_| Err(StoreError::NotFound("not found".into())));
+            .returning(|_| {
+                Ok(BlockMetadata {
+                    expected_height: Some(1),
+                    chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
+                    status: crate::store::block_tx_metadata::Status::Candidate,
+                })
+            });
+        mock_chain_handle
+            .expect_get_candidate_tip_height()
+            .returning(|| Ok(Some(1)));
+        mock_chain_handle
+            .expect_get_tip_height()
+            .returning(|| Ok(Some(1)));
         mock_chain_handle
             .expect_promote_block()
             .returning(|_| Ok(None));
@@ -537,9 +560,7 @@ mod tests {
             stub_share_validator_with_success(),
         );
 
-        let share = crate::test_utils::TestShareBlockBuilder::new()
-            .nonce(0xe9695791)
-            .build();
+        let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
         organise_tx.send(OrganiseEvent::Block(share)).await.unwrap();
         drop(organise_tx);
 
@@ -549,8 +570,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_organise_worker_skips_promote_when_validator_rejects() {
-        use crate::shares::validation::ValidationError;
-
         let (organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
         mock_chain_handle
@@ -558,7 +577,19 @@ mod tests {
             .return_once(MockChainStoreHandle::new);
         mock_chain_handle
             .expect_get_block_metadata()
-            .returning(|_| Err(StoreError::NotFound("not found".into())));
+            .returning(|_| {
+                Ok(BlockMetadata {
+                    expected_height: Some(10),
+                    chain_work: bitcoin::Work::from_hex("0x00").unwrap(),
+                    status: crate::store::block_tx_metadata::Status::Candidate,
+                })
+            });
+        mock_chain_handle
+            .expect_get_candidate_tip_height()
+            .returning(|| Ok(Some(10)));
+        mock_chain_handle
+            .expect_get_tip_height()
+            .returning(|| Ok(Some(10)));
         // promote_block must NOT be called when chain-context validation fails.
         mock_chain_handle.expect_promote_block().never();
 
@@ -579,9 +610,7 @@ mod tests {
             share_validator,
         );
 
-        let share = crate::test_utils::TestShareBlockBuilder::new()
-            .nonce(0xe9695791)
-            .build();
+        let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
         organise_tx.send(OrganiseEvent::Block(share)).await.unwrap();
         drop(organise_tx);
 
@@ -598,7 +627,19 @@ mod tests {
             .return_once(MockChainStoreHandle::new);
         mock_chain_handle
             .expect_get_block_metadata()
-            .returning(|_| Err(StoreError::NotFound("not found".into())));
+            .returning(|_| {
+                Ok(BlockMetadata {
+                    expected_height: Some(1),
+                    chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
+                    status: crate::store::block_tx_metadata::Status::Candidate,
+                })
+            });
+        mock_chain_handle
+            .expect_get_candidate_tip_height()
+            .returning(|| Ok(Some(1)));
+        mock_chain_handle
+            .expect_get_tip_height()
+            .returning(|| Ok(Some(1)));
         mock_chain_handle
             .expect_promote_block()
             .returning(|_| Err(StoreError::ChannelClosed));
@@ -614,9 +655,7 @@ mod tests {
             stub_share_validator_with_success(),
         );
 
-        let share = crate::test_utils::TestShareBlockBuilder::new()
-            .nonce(0xe9695791)
-            .build();
+        let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
         organise_tx.send(OrganiseEvent::Block(share)).await.unwrap();
         drop(organise_tx);
 
@@ -633,7 +672,19 @@ mod tests {
             .return_once(MockChainStoreHandle::new);
         mock_chain_handle
             .expect_get_block_metadata()
-            .returning(|_| Err(StoreError::NotFound("not found".into())));
+            .returning(|_| {
+                Ok(BlockMetadata {
+                    expected_height: Some(1),
+                    chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
+                    status: crate::store::block_tx_metadata::Status::Candidate,
+                })
+            });
+        mock_chain_handle
+            .expect_get_candidate_tip_height()
+            .returning(|| Ok(Some(1)));
+        mock_chain_handle
+            .expect_get_tip_height()
+            .returning(|| Ok(Some(1)));
         mock_chain_handle
             .expect_promote_block()
             .returning(|_| Err(StoreError::Database("test error".to_string())));
@@ -649,9 +700,7 @@ mod tests {
             stub_share_validator_with_success(),
         );
 
-        let share = crate::test_utils::TestShareBlockBuilder::new()
-            .nonce(0xe9695791)
-            .build();
+        let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
         tx.send(OrganiseEvent::Block(share)).await.unwrap();
         drop(tx);
 
@@ -669,10 +718,16 @@ mod tests {
             .return_once(MockChainStoreHandle::new);
         mock_chain_handle
             .expect_get_block_metadata()
-            .returning(|_| Err(StoreError::NotFound("not found".into())));
+            .returning(|_| {
+                Ok(BlockMetadata {
+                    expected_height: Some(1),
+                    chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
+                    status: crate::store::block_tx_metadata::Status::Candidate,
+                })
+            });
         mock_chain_handle
             .expect_get_tip_height()
-            .returning(|| Ok(None));
+            .returning(|| Ok(Some(1)));
         mock_chain_handle
             .expect_promote_block()
             .returning(|_| Ok(Some(5)));
@@ -694,9 +749,7 @@ mod tests {
             stub_share_validator_with_success(),
         );
 
-        let share = crate::test_utils::TestShareBlockBuilder::new()
-            .nonce(0xe9695791)
-            .build();
+        let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
         organise_tx.send(OrganiseEvent::Block(share)).await.unwrap();
         drop(organise_tx);
 
@@ -718,10 +771,16 @@ mod tests {
             .return_once(MockChainStoreHandle::new);
         mock_chain_handle
             .expect_get_block_metadata()
-            .returning(|_| Err(StoreError::NotFound("not found".into())));
+            .returning(|_| {
+                Ok(BlockMetadata {
+                    expected_height: Some(1),
+                    chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
+                    status: crate::store::block_tx_metadata::Status::Candidate,
+                })
+            });
         mock_chain_handle
             .expect_get_tip_height()
-            .returning(|| Ok(None));
+            .returning(|| Ok(Some(1)));
         // Confirmed height 3 is below candidate tip 5
         mock_chain_handle
             .expect_promote_block()
@@ -744,9 +803,7 @@ mod tests {
             stub_share_validator_with_success(),
         );
 
-        let share = crate::test_utils::TestShareBlockBuilder::new()
-            .nonce(0xe9695791)
-            .build();
+        let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
         organise_tx.send(OrganiseEvent::Block(share)).await.unwrap();
         drop(organise_tx);
 
@@ -792,9 +849,7 @@ mod tests {
             stub_share_validator_with_success(),
         );
 
-        let share = crate::test_utils::TestShareBlockBuilder::new()
-            .nonce(0xe9695791)
-            .build();
+        let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
         organise_tx.send(OrganiseEvent::Block(share)).await.unwrap();
         drop(organise_tx);
 
@@ -842,9 +897,7 @@ mod tests {
             stub_share_validator_with_success(),
         );
 
-        let share = crate::test_utils::TestShareBlockBuilder::new()
-            .nonce(0xe9695791)
-            .build();
+        let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
         organise_tx.send(OrganiseEvent::Block(share)).await.unwrap();
         drop(organise_tx);
 
@@ -916,18 +969,14 @@ mod tests {
         );
 
         // Block A: parent height 100, will be buffered
-        let share_a = crate::test_utils::TestShareBlockBuilder::new()
-            .nonce(0xe9695791)
-            .build();
+        let share_a = TestShareBlockBuilder::new().nonce(0xe9695791).build();
         organise_tx
             .send(OrganiseEvent::Block(share_a))
             .await
             .unwrap();
 
         // Block B: parent height 5, will proceed and promote
-        let share_b = crate::test_utils::TestShareBlockBuilder::new()
-            .nonce(0xe9695792)
-            .build();
+        let share_b = TestShareBlockBuilder::new().nonce(0xe9695792).build();
         organise_tx
             .send(OrganiseEvent::Block(share_b))
             .await
@@ -949,26 +998,19 @@ mod tests {
             .expect_clone()
             .return_once(MockChainStoreHandle::new);
 
-        // Blocks A and B both have parents at height 10; block C has no
-        // metadata so it skips buffering and goes straight to promote.
-        let metadata_call_count = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
-        let metadata_counter = metadata_call_count.clone();
+        // All blocks return valid metadata with height 10.
         mock_chain_handle
             .expect_get_block_metadata()
-            .returning(move |_| {
-                let count = metadata_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                if count < 2 {
-                    Ok(BlockMetadata {
-                        expected_height: Some(10),
-                        chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
-                        status: crate::store::block_tx_metadata::Status::Candidate,
-                    })
-                } else {
-                    Err(StoreError::NotFound("not found".into()))
-                }
+            .returning(|_| {
+                Ok(BlockMetadata {
+                    expected_height: Some(10),
+                    chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
+                    status: crate::store::block_tx_metadata::Status::Candidate,
+                })
             });
 
         // First two calls (should_buffer for A and B): tip is 5 -> buffer.
+        // Third call (should_buffer for C): tip is 10 -> not buffered.
         // Remaining calls (drain after C promotes): tip is 10 -> drain.
         let tip_call_count = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
         let tip_counter = tip_call_count.clone();
@@ -1011,9 +1053,7 @@ mod tests {
         );
 
         // Block A: parent height 10, tip is 5 -> buffered at key 10
-        let share_a = crate::test_utils::TestShareBlockBuilder::new()
-            .nonce(0xe9695791)
-            .build();
+        let share_a = TestShareBlockBuilder::new().nonce(0xe9695791).build();
         organise_tx
             .send(OrganiseEvent::Block(share_a))
             .await
@@ -1021,19 +1061,15 @@ mod tests {
 
         // Block B: different nonce (different hash), same parent height 10
         // -> should also be buffered, but currently overwrites A
-        let share_b = crate::test_utils::TestShareBlockBuilder::new()
-            .nonce(0xe9695792)
-            .build();
+        let share_b = TestShareBlockBuilder::new().nonce(0xe9695792).build();
         organise_tx
             .send(OrganiseEvent::Block(share_b))
             .await
             .unwrap();
 
-        // Block C: metadata returns Err -> skips buffer, goes to promote,
-        // which triggers drain of the buffered blocks
-        let share_c = crate::test_utils::TestShareBlockBuilder::new()
-            .nonce(0xe9695793)
-            .build();
+        // Block C: parent height 10, tip is now 10 -> not buffered,
+        // goes to promote, which triggers drain of the buffered blocks
+        let share_c = TestShareBlockBuilder::new().nonce(0xe9695793).build();
         organise_tx
             .send(OrganiseEvent::Block(share_c))
             .await
