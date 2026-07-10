@@ -26,6 +26,7 @@ use crate::accounting::payout::payout_distribution::{
 use crate::accounting::payout::sharechain_pplns::PplnsWindow;
 #[cfg(not(test))]
 use crate::accounting::payout::sharechain_pplns::PplnsWindow;
+use crate::accounting::payout::sharechain_pplns::pplns_window::MAX_PPLNS_WINDOW_SHARES;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::pool_difficulty::PoolDifficulty;
@@ -89,6 +90,38 @@ pub const COINBASE_MATURITY: usize = 6048;
 /// Maximum total sigop cost allowed in a share block (matches Bitcoin consensus).
 pub const MAX_BLOCK_SIGOPS_COST: usize = 80_000;
 
+/// Check whether a block is in the PPLNS zone (needing full
+/// validation) or the prune zone (PoW-only validation).
+///
+/// PPLNS zone: block_height > tip_height - PPLNS_DEPTH
+/// Prune zone: everything else below that height
+pub fn is_in_pplns_zone(block_height: u32, tip_height: u32) -> bool {
+    block_height > tip_height.saturating_sub(MAX_PPLNS_WINDOW_SHARES as u32)
+}
+
+/// Look up a block's height and the candidate tip height from the store,
+/// then determine whether the block is in the PPLNS zone.
+///
+/// Returns `Ok(true)` for PPLNS zone (full validation), `Ok(false)` for
+/// prune zone (PoW-only). Returns `Err` if the metadata lookup fails or
+/// the block has no expected_height.
+pub fn check_pplns_zone(
+    blockhash: &BlockHash,
+    chain_store_handle: &ChainStoreHandle,
+) -> Result<bool, String> {
+    let metadata = chain_store_handle
+        .get_block_metadata(blockhash)
+        .map_err(|error| format!("Failed to get block metadata for {blockhash}: {error}"))?;
+    let block_height = metadata
+        .expected_height
+        .ok_or_else(|| format!("Block {blockhash} has no expected_height in metadata"))?;
+    let candidate_tip = chain_store_handle
+        .get_candidate_tip_height()
+        .map_err(|error| format!("Failed to get candidate tip height: {error}"))?
+        .unwrap_or(0);
+    Ok(is_in_pplns_zone(block_height, candidate_tip))
+}
+
 /// Trait for share validation operations.
 ///
 /// Provides methods to validate share headers, share blocks, uncles,
@@ -124,6 +157,17 @@ pub trait ShareValidator {
     /// newly validated parent) to skip redundant validation while still
     /// proceeding through organise_block.
     fn validate_share_block(
+        &self,
+        share: &ShareBlock,
+        chain_store_handle: &ChainStoreHandle,
+    ) -> Result<(), ValidationError>;
+
+    /// Validate a share block that is below the PPLNS depth (in the
+    /// prune zone). Only checks PoW, uncles, block size, and
+    /// transaction count.  Skips coinbase, merkle root, witness
+    /// commitment, transaction structure, and script validation since
+    /// these blocks will not participate in PPLNS accounting.
+    fn validate_below_pplns_depth(
         &self,
         share: &ShareBlock,
         chain_store_handle: &ChainStoreHandle,
@@ -831,6 +875,21 @@ impl ShareValidator for DefaultShareValidator {
         Ok(())
     }
 
+    fn validate_below_pplns_depth(
+        &self,
+        share: &ShareBlock,
+        chain_store_handle: &ChainStoreHandle,
+    ) -> Result<(), ValidationError> {
+        if chain_store_handle.has_status(&share.block_hash(), Status::BlockValid) {
+            return Ok(());
+        }
+        self.validate_with_pool_difficulty(&share.header, chain_store_handle)?;
+        self.validate_uncles(share, chain_store_handle)?;
+        self.validate_block_size(share)?;
+        self.validate_transaction_count(share)?;
+        Ok(())
+    }
+
     fn validate_uncles(
         &self,
         share: &ShareBlock,
@@ -1048,6 +1107,12 @@ mockall::mock! {
         ) -> Result<(), ValidationError>;
 
         fn validate_share_block(
+            &self,
+            share: &ShareBlock,
+            chain_store_handle: &ChainStoreHandle,
+        ) -> Result<(), ValidationError>;
+
+        fn validate_below_pplns_depth(
             &self,
             share: &ShareBlock,
             chain_store_handle: &ChainStoreHandle,
@@ -3441,5 +3506,48 @@ mod tests {
             error.to_string().contains("must have zero value"),
             "Expected zero-value error, got: {error}"
         );
+    }
+
+    #[test]
+    fn test_is_in_pplns_zone_at_tip() {
+        // Block at tip height is in PPLNS zone
+        assert!(is_in_pplns_zone(300_000, 300_000));
+    }
+
+    #[test]
+    fn test_is_in_pplns_zone_within_pplns_depth() {
+        // Block just inside PPLNS window
+        let tip = 300_000u32;
+        let pplns_boundary = tip - MAX_PPLNS_WINDOW_SHARES as u32;
+        assert!(is_in_pplns_zone(pplns_boundary + 1, tip));
+    }
+
+    #[test]
+    fn test_is_in_pplns_zone_at_boundary_is_prune_zone() {
+        // Block exactly at boundary is NOT in PPLNS zone (prune zone)
+        let tip = 300_000u32;
+        let pplns_boundary = tip - MAX_PPLNS_WINDOW_SHARES as u32;
+        assert!(!is_in_pplns_zone(pplns_boundary, tip));
+    }
+
+    #[test]
+    fn test_is_in_pplns_zone_below_boundary_is_prune_zone() {
+        let tip = 300_000u32;
+        let pplns_boundary = tip - MAX_PPLNS_WINDOW_SHARES as u32;
+        assert!(!is_in_pplns_zone(pplns_boundary - 1, tip));
+    }
+
+    #[test]
+    fn test_is_in_pplns_zone_short_chain() {
+        // Chain shorter than PPLNS depth: all blocks are in PPLNS zone
+        assert!(is_in_pplns_zone(1, 100));
+        assert!(is_in_pplns_zone(50, 100));
+    }
+
+    #[test]
+    fn test_is_in_pplns_zone_height_zero() {
+        // Height 0 with any tip is NOT in PPLNS zone (0 > anything is false)
+        assert!(!is_in_pplns_zone(0, 0));
+        assert!(!is_in_pplns_zone(0, 300_000));
     }
 }

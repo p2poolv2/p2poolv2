@@ -36,6 +36,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::ShareBlock;
+use crate::shares::validation::check_pplns_zone;
 use crate::shares::validation::{DefaultShareValidator, ShareValidator};
 use crate::utils::cpu::available_cpus;
 use bitcoin::BlockHash;
@@ -213,9 +214,21 @@ async fn validate_and_emit(
         },
     };
 
-    if let Err(validation_error) =
+    let in_pplns_zone = match check_pplns_zone(&block_hash, &chain_store_handle) {
+        Ok(result) => result,
+        Err(error_message) => {
+            error!("Error checking for pplns zone: {error_message}");
+            return;
+        }
+    };
+
+    let validation_result = if in_pplns_zone {
         share_validator.validate_share_block(&share_block, &chain_store_handle)
-    {
+    } else {
+        share_validator.validate_below_pplns_depth(&share_block, &chain_store_handle)
+    };
+
+    if let Err(validation_error) = validation_result {
         let error_message = validation_error.to_string();
         if error_message.contains("is on confirmed chain") {
             debug!("Share block {block_hash} validation: {error_message}");
@@ -258,9 +271,23 @@ mod tests {
     use super::*;
     use crate::node::organise_worker;
     use crate::shares::chain::chain_store_handle::MockChainStoreHandle;
+    use crate::store::block_tx_metadata::{BlockMetadata, Status};
     use crate::test_utils::TestShareBlockBuilder;
 
+    use bitcoin::Work;
     use std::time::Duration;
+
+    /// Build a BlockMetadata value that places the block inside the PPLNS zone.
+    ///
+    /// Uses height 1 so that `is_in_pplns_zone(1, candidate_tip=1)` returns true,
+    /// causing `validate_share_block` (not `validate_below_pplns_depth`) to run.
+    fn pplns_zone_metadata() -> BlockMetadata {
+        BlockMetadata {
+            expected_height: Some(1),
+            chain_work: Work::from_be_bytes([0u8; 32]),
+            status: Status::Candidate,
+        }
+    }
 
     #[tokio::test]
     async fn test_validation_worker_validates_and_sends_organise_event() {
@@ -276,6 +303,12 @@ mod tests {
         mock_clone
             .expect_get_share()
             .returning(move |_| Some(share_block_clone.clone()));
+        mock_clone
+            .expect_get_block_metadata()
+            .returning(|_| Ok(pplns_zone_metadata()));
+        mock_clone
+            .expect_get_candidate_tip_height()
+            .returning(|| Ok(Some(1)));
         mock_clone.expect_has_status().returning(|_, _| true);
         mock_clone.expect_is_current().returning(|| true);
         mock_chain_handle
@@ -325,6 +358,12 @@ mod tests {
         mock_clone
             .expect_get_share()
             .returning(move |_| Some(share_block_clone.clone()));
+        mock_clone
+            .expect_get_block_metadata()
+            .returning(|_| Ok(pplns_zone_metadata()));
+        mock_clone
+            .expect_get_candidate_tip_height()
+            .returning(|| Ok(Some(1)));
         mock_clone.expect_has_status().returning(|_, _| true);
         mock_clone.expect_is_current().returning(|| true);
         mock_chain_handle
@@ -374,6 +413,12 @@ mod tests {
         mock_clone
             .expect_get_share()
             .returning(move |_| Some(share_block_clone.clone()));
+        mock_clone
+            .expect_get_block_metadata()
+            .returning(|_| Ok(pplns_zone_metadata()));
+        mock_clone
+            .expect_get_candidate_tip_height()
+            .returning(|| Ok(Some(1)));
         mock_clone.expect_has_status().returning(|_, _| true);
         mock_clone.expect_is_current().returning(|| false);
         mock_chain_handle
@@ -428,6 +473,12 @@ mod tests {
 
         let mut mock_clone = MockChainStoreHandle::new();
         mock_clone.expect_get_share().never();
+        mock_clone
+            .expect_get_block_metadata()
+            .returning(|_| Ok(pplns_zone_metadata()));
+        mock_clone
+            .expect_get_candidate_tip_height()
+            .returning(|| Ok(Some(1)));
         mock_clone.expect_has_status().returning(|_, _| true);
         mock_clone.expect_is_current().returning(|| false);
         mock_chain_handle
@@ -540,6 +591,12 @@ mod tests {
             .expect_get_share()
             .withf(move |hash| *hash == uncle_hash)
             .returning(|_| None);
+        mock_clone
+            .expect_get_block_metadata()
+            .returning(|_| Ok(pplns_zone_metadata()));
+        mock_clone
+            .expect_get_candidate_tip_height()
+            .returning(|| Ok(Some(1)));
         // validate_share_block calls has_status
         mock_clone.expect_has_status().returning(|_, _| false);
         mock_chain_handle
@@ -593,6 +650,12 @@ mod tests {
 
         let mut mock_clone = MockChainStoreHandle::new();
         mock_clone.expect_get_share().never();
+        mock_clone
+            .expect_get_block_metadata()
+            .returning(|_| Ok(pplns_zone_metadata()));
+        mock_clone
+            .expect_get_candidate_tip_height()
+            .returning(|| Ok(Some(1)));
         mock_clone.expect_has_status().returning(|_, _| true);
         mock_clone.expect_is_current().returning(|| true);
         mock_chain_handle
@@ -631,6 +694,71 @@ mod tests {
             assert_eq!(broadcast_block.block_hash(), block_hash);
         } else {
             panic!("Expected SwarmSend::BroadcastBlock for prefetched share block");
+        }
+
+        worker_handle.abort();
+    }
+
+    /// Prune-zone block (height 100, candidate tip 300000) is validated
+    /// via the below-PPLNS path. The BlockValid shortcut fires (same as
+    /// PPLNS-zone tests) because test fixture blocks don't carry valid
+    /// PoW against pool difficulty. The test verifies the block reaches
+    /// the organise worker, confirming the below-PPLNS path returns Ok.
+    #[tokio::test]
+    async fn test_validation_worker_successfully_validates_blocks_in_prune_zone() {
+        let (validation_tx, validation_rx) = create_validation_channel();
+        let mut mock_chain_handle = MockChainStoreHandle::new();
+
+        let share_block = TestShareBlockBuilder::new().build();
+        let block_hash = share_block.block_hash();
+        let share_block_clone = share_block.clone();
+
+        let mut mock_clone = MockChainStoreHandle::new();
+        mock_clone
+            .expect_get_share()
+            .returning(move |_| Some(share_block_clone.clone()));
+        mock_clone.expect_get_block_metadata().returning(|_| {
+            Ok(BlockMetadata {
+                expected_height: Some(100),
+                chain_work: Work::from_be_bytes([0u8; 32]),
+                status: Status::Candidate,
+            })
+        });
+        mock_clone
+            .expect_get_candidate_tip_height()
+            .returning(|| Ok(Some(300_000)));
+        // BlockValid shortcut fires in validate_below_pplns_depth
+        mock_clone.expect_has_status().returning(|_, _| true);
+        mock_clone.expect_is_current().returning(|| false);
+        mock_chain_handle
+            .expect_clone()
+            .return_once(move || mock_clone);
+
+        let (organise_tx, mut organise_rx) = organise_worker::create_organise_channel();
+        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
+
+        let worker = ValidationWorker::new(
+            validation_rx,
+            mock_chain_handle,
+            organise_tx,
+            swarm_tx,
+            1,
+            b"P2Poolv2".to_vec(),
+            PoolDifficulty::default(),
+        );
+
+        let worker_handle = tokio::spawn(worker.run());
+
+        validation_tx
+            .send(ValidationEvent::ValidateBlockHash(block_hash))
+            .await
+            .unwrap();
+
+        let organise_event = tokio::time::timeout(Duration::from_secs(2), organise_rx.recv()).await;
+        if let Ok(Some(OrganiseEvent::Block(received_block))) = organise_event {
+            assert_eq!(received_block.block_hash(), block_hash);
+        } else {
+            panic!("Expected OrganiseEvent::Block for prune-zone block");
         }
 
         worker_handle.abort();

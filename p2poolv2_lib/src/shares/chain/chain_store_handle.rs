@@ -725,6 +725,9 @@ impl ChainStoreHandle {
     /// wrote, and a plain WriteBatch is opaque to reads against the DB.
     /// A crash between the two commits leaves a lingering candidate which
     /// the next promote_block call will pick up.
+    ///
+    /// Returns the new chain height, which can be higher than the
+    /// height of the `header`
     pub async fn promote_block(&self, header: ShareHeader) -> Result<Option<u32>, StoreError> {
         let blockhash = header.block_hash();
         let uncle_count = header.uncles.len();
