@@ -550,7 +550,7 @@ impl ChainStoreHandle {
     /// Returns blockhashes on the candidate chain that do not yet have
     /// full block data (status is not BlockValid or Confirmed).
     ///
-    /// When `min_scan_height` is provided, the scan extends down to
+    /// When `fork_height` is provided, the scan extends down to
     /// that height so fork blocks at or below the confirmed tip are
     /// included.
     pub fn get_candidate_blocks_missing_data(

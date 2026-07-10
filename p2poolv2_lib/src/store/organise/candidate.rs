@@ -205,8 +205,8 @@ impl Store {
     /// candidate top that are missing full block data, including any
     /// uncle blocks referenced by candidate headers.
     ///
-    /// When `min_scan_height` is provided, the scan starts from
-    /// `min(min_scan_height, confirmed_top + 1)` instead of
+    /// When `fork_height` is provided, the scan starts from
+    /// `min(fork_height, confirmed_top + 1)` instead of
     /// `confirmed_top + 1`. This allows detection of fork blocks at
     /// or below the confirmed height that need fetching for a
     /// potential reorg.
@@ -1705,13 +1705,13 @@ mod tests {
         );
     }
 
-    /// When min_scan_height is below the confirmed height, blocks at
+    /// When fork_height is below the confirmed height, blocks at
     /// that height should be included in the missing data result.
     ///
     /// Scenario: genesis -> share1(h:1, confirmed) -> share2(h:2, candidate).
     /// fork_block is a competing block at h:1 with Candidate status.
-    /// Without min_scan_height, the scan starts at h:2 and misses
-    /// fork_block. With min_scan_height=1, fork_block is found.
+    /// Without fork_height, the scan starts at h:2 and misses
+    /// fork_block. With fork_height=1, fork_block is found.
     #[test]
     fn test_missing_data_scans_from_min_height_when_below_confirmed() {
         let temp_dir = tempdir().unwrap();
@@ -1743,19 +1743,19 @@ mod tests {
             .build();
         store.push_to_candidate_chain(&share2).unwrap();
 
-        // Without min_scan_height: fork_block at h:1 is skipped
+        // Without fork_height: fork_block at h:1 is skipped
         let missing = store.get_candidate_blocks_missing_data(None).unwrap();
         assert!(
             !missing.contains(&fork_block.block_hash()),
-            "fork_block should NOT be returned without min_scan_height"
+            "fork_block should NOT be returned without fork_height"
         );
         assert!(missing.contains(&share2.block_hash()));
 
-        // With min_scan_height=1: fork_block at h:1 is found
+        // With fork_height=1: fork_block at h:1 is found
         let missing = store.get_candidate_blocks_missing_data(Some(1)).unwrap();
         assert!(
             missing.contains(&fork_block.block_hash()),
-            "fork_block should be returned with min_scan_height=1"
+            "fork_block should be returned with fork_height=1"
         );
         assert!(missing.contains(&share2.block_hash()));
     }
