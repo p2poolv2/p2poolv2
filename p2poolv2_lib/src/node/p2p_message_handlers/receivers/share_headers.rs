@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::accounting::payout::sharechain_pplns::pplns_window::PRUNE_DEPTH;
 use crate::node::p2p_message_handlers::MAX_HEADERS_IN_RESPONSE;
 use crate::node::p2p_message_handlers::senders::send_getheaders;
 use crate::node::request_response_handler::block_fetcher::{BlockFetcherEvent, BlockFetcherHandle};
@@ -539,12 +540,36 @@ async fn trigger_or_request<C: Send + Sync>(
     }
 }
 
+/// Determine the start height for block fetching, clamped to the prune
+/// boundary. Blocks below candidate_tip - PRUNE_DEPTH only need PoW
+/// validation which is already done during header sync, so their bodies
+/// are not fetched.
+fn get_start_height_to_fetch(
+    scan_start_height: Option<u32>,
+    candidate_tip_height: u32,
+) -> Option<u32> {
+    let prune_boundary = candidate_tip_height.saturating_sub(PRUNE_DEPTH as u32);
+
+    match scan_start_height {
+        Some(height) => Some(std::cmp::max(height, prune_boundary)),
+        None => {
+            if prune_boundary > 0 {
+                Some(prune_boundary)
+            } else {
+                None
+            }
+        }
+    }
+}
+
 /// Header sync is complete -- query for candidate blocks missing full
 /// block data and send them to the block fetcher for download.
 ///
 /// When `scan_start_height` is provided, the scan extends down to
 /// that height so fork blocks at or below the confirmed tip are
-/// included in the fetch request.
+/// included in the fetch request. The scan never goes below the prune
+/// boundary (candidate_tip - PRUNE_DEPTH) since prune-zone blocks
+/// only need PoW validation which is already done at header sync time.
 async fn trigger_block_fetch(
     peer_id: libp2p::PeerId,
     chain_store_handle: &ChainStoreHandle,
@@ -552,8 +577,17 @@ async fn trigger_block_fetch(
     scan_start_height: Option<u32>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     debug!("Header sync complete, triggering block fetch for missing data");
+
+    let candidate_tip_height = chain_store_handle
+        .get_candidate_tip_height()
+        .ok()
+        .flatten()
+        .unwrap_or(0);
+
+    let clamped_scan_start = get_start_height_to_fetch(scan_start_height, candidate_tip_height);
+
     let missing_blockhashes =
-        chain_store_handle.get_candidate_blocks_missing_data(scan_start_height)?;
+        chain_store_handle.get_candidate_blocks_missing_data(clamped_scan_start)?;
     if !missing_blockhashes.is_empty() {
         debug!(
             "Requesting {} blocks from block fetcher",
@@ -689,6 +723,9 @@ mod tests {
             .expect_find_fork_point_height()
             .returning(|_| Ok(Some(0)));
         chain_store_handle
+            .expect_get_candidate_tip_height()
+            .returning(|| Ok(Some(100)));
+        chain_store_handle
             .expect_get_candidate_blocks_missing_data()
             .returning(|_| Ok(Vec::new()));
         setup_chain_validation_mocks(&mut chain_store_handle);
@@ -720,6 +757,9 @@ mod tests {
     async fn test_empty_headers_does_not_send_getheaders() {
         let peer_id = libp2p::PeerId::random();
         let mut chain_store_handle = ChainStoreHandle::default();
+        chain_store_handle
+            .expect_get_candidate_tip_height()
+            .returning(|| Ok(Some(100)));
         chain_store_handle
             .expect_get_candidate_blocks_missing_data()
             .returning(|_| Ok(Vec::new()));
@@ -810,6 +850,9 @@ mod tests {
         chain_store_handle
             .expect_find_fork_point_height()
             .returning(|_| Ok(Some(0)));
+        chain_store_handle
+            .expect_get_candidate_tip_height()
+            .returning(|| Ok(Some(100)));
 
         let missing_hash = bitcoin::BlockHash::all_zeros();
         let expected_hashes = vec![missing_hash];
@@ -1573,5 +1616,123 @@ mod tests {
                 .to_string()
                 .contains("External parent(s) not found in store"),
         );
+    }
+
+    #[test]
+    fn test_get_start_height_to_fetch_clamps_to_prune_boundary() {
+        // Candidate tip well above PRUNE_DEPTH: prune boundary is tip - PRUNE_DEPTH
+        let candidate_tip = 300_000u32;
+        let prune_boundary = candidate_tip - PRUNE_DEPTH as u32;
+
+        // scan_start below prune boundary gets clamped up
+        let result = get_start_height_to_fetch(Some(100), candidate_tip);
+        assert_eq!(result, Some(prune_boundary));
+
+        // scan_start above prune boundary stays as-is
+        let result = get_start_height_to_fetch(Some(prune_boundary + 500), candidate_tip);
+        assert_eq!(result, Some(prune_boundary + 500));
+
+        // scan_start exactly at prune boundary stays
+        let result = get_start_height_to_fetch(Some(prune_boundary), candidate_tip);
+        assert_eq!(result, Some(prune_boundary));
+    }
+
+    #[test]
+    fn test_get_start_height_to_fetch_no_hint_uses_prune_boundary() {
+        // With no scan_start_height and candidate tip above PRUNE_DEPTH,
+        // returns the prune boundary
+        let candidate_tip = 300_000u32;
+        let prune_boundary = candidate_tip - PRUNE_DEPTH as u32;
+        let result = get_start_height_to_fetch(None, candidate_tip);
+        assert_eq!(result, Some(prune_boundary));
+    }
+
+    #[test]
+    fn test_get_start_height_to_fetch_short_chain_returns_none() {
+        // Candidate tip below PRUNE_DEPTH: prune boundary is 0, return None
+        let candidate_tip = 1000u32;
+        let result = get_start_height_to_fetch(None, candidate_tip);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_get_start_height_to_fetch_short_chain_with_hint() {
+        // Short chain with scan_start hint: prune boundary is 0,
+        // max(hint, 0) = hint
+        let candidate_tip = 1000u32;
+        let result = get_start_height_to_fetch(Some(50), candidate_tip);
+        assert_eq!(result, Some(50));
+    }
+
+    #[tokio::test]
+    async fn test_handle_share_headers_clamps_block_fetch_to_prune_boundary() {
+        // When the candidate tip is above PRUNE_DEPTH, the block fetch
+        // scan_start should be clamped to the prune boundary. A
+        // fork_point_height below the prune boundary should be raised
+        // to the prune boundary.
+        let peer_id = libp2p::PeerId::random();
+        let candidate_tip = 300_000u32;
+        let prune_boundary = candidate_tip - PRUNE_DEPTH as u32;
+        let fork_point_below_boundary = 100u32;
+
+        let mut chain_store_handle = ChainStoreHandle::default();
+        chain_store_handle
+            .expect_organise_header()
+            .returning(|_| Ok(None));
+        chain_store_handle
+            .expect_find_fork_point_height()
+            .returning(move |_| Ok(Some(fork_point_below_boundary)));
+        chain_store_handle
+            .expect_get_candidate_tip_height()
+            .returning(move || Ok(Some(candidate_tip)));
+
+        // get_candidate_blocks_missing_data must be called with
+        // min_scan_height == prune_boundary (not fork_point 100).
+        let missing_hash = TestShareBlockBuilder::new().nonce(777).build().block_hash();
+        let returned_hashes = vec![missing_hash];
+        chain_store_handle
+            .expect_get_candidate_blocks_missing_data()
+            .withf(move |min_height| *min_height == Some(prune_boundary))
+            .returning(move |_| Ok(returned_hashes.clone()));
+        chain_store_handle.expect_is_current().returning(|| true);
+
+        setup_chain_validation_mocks(&mut chain_store_handle);
+
+        let (swarm_tx, _swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
+        let (block_fetcher_handle, mut block_fetcher_rx) =
+            block_fetcher::create_block_fetcher_channel();
+
+        let mut mock_validator = MockDefaultShareValidator::default();
+        setup_minimum_difficulty_mock(&mut mock_validator);
+
+        let share_headers = vec![build_valid_test_header()];
+
+        let result = handle_share_headers(
+            peer_id,
+            share_headers,
+            chain_store_handle,
+            swarm_tx,
+            block_fetcher_handle,
+            &mock_validator,
+        )
+        .await;
+
+        assert!(result.is_ok(), "Expected Ok, got: {}", result.unwrap_err());
+
+        // Verify the FetchBlocks event was sent with the expected hashes
+        let event = block_fetcher_rx
+            .try_recv()
+            .expect("expected a FetchBlocks event");
+        match event {
+            BlockFetcherEvent::FetchBlocks {
+                blockhashes,
+                peer_id: event_peer_id,
+                ..
+            } => {
+                assert_eq!(blockhashes, vec![missing_hash]);
+                assert_eq!(event_peer_id, peer_id);
+            }
+            other => panic!("expected FetchBlocks event, got: {other}"),
+        }
     }
 }
