@@ -1555,6 +1555,43 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_below_pplns_depth_returns_ok_for_block_valid_status() {
+        let mut chain_store_handle = ChainStoreHandle::default();
+        let share_block = TestShareBlockBuilder::new().build();
+
+        chain_store_handle
+            .expect_has_status()
+            .returning(|_, _| true);
+
+        let result = validator().validate_below_pplns_depth(&share_block, &chain_store_handle);
+        assert!(
+            result.is_ok(),
+            "Expected Ok for BlockValid status, got: {:?}",
+            result.err()
+        );
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_validate_below_pplns_depth_passes_with_fixture_block() {
+        let mut chain_store_handle = ChainStoreHandle::default();
+
+        let share_block = build_block_from_work_components(
+            "../p2poolv2_tests/test_data/validation/stratum/b/",
+            TEST_COINBASE_NSECS,
+        );
+
+        // Mark as BlockValid so validate_with_pool_difficulty is skipped.
+        // The test fixture's bitcoin header doesn't have valid PoW against
+        // pool difficulty. Pool difficulty is tested in dedicated tests.
+        chain_store_handle
+            .expect_has_status()
+            .returning(|_, _| true);
+
+        let result = validator().validate_below_pplns_depth(&share_block, &chain_store_handle);
+        assert!(result.is_ok(), "Expected Ok, got: {:?}", result.err());
+    }
+
+    #[test]
     fn test_validate_share_header_valid() {
         let mut chain_store_handle = ChainStoreHandle::default();
         let mut pool_difficulty = PoolDifficulty::default();
