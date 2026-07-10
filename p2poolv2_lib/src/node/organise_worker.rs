@@ -229,7 +229,7 @@ impl OrganiseWorker {
         let in_pplns_zone = match check_pplns_zone(&blockhash, &self.chain_store_handle) {
             Ok(result) => result,
             Err(error_message) => {
-                error!("Error looking checking for zone: {error_message}");
+                error!("Error checking for zone: {error_message}");
                 return Ok(None);
             }
         };
