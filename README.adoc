@@ -173,3 +173,18 @@ use them in their individual crates.
 link:p2poolv2_api/README.md[API Documentation]
 
 link:p2poolv2_cli/README.md[CLI Documentation]
+
+== Run Nightly Script
+
+We have a script that runs a number of nodes for a period of time with
+simulated hashrate. This helps us continously validate the p2p
+networking, with sync, and maintaining of the DAG is working
+correctly.
+
+[,shell]
+----
+DIAL_FANOUT=3 IDEAL_BLOCK_TIME=1 SHARES_PER_BLOCK=5 NODE_COUNT=10 CONVERGENCE_WAIT_SECONDS=100 LATENCY_MS=100 ./load-tests/sim/nightly.sh
+----
+
+See the link:docs/simulation/ folder for detailed documentation on how
+to run the script and interpret the results.
