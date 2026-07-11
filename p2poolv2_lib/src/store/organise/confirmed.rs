@@ -398,7 +398,9 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shares::share_block::ShareTransaction;
     use crate::test_utils::TestShareBlockBuilder;
+    use bitcoin::hashes::Hash;
     use tempfile::tempdir;
 
     // ── append_to_confirmed tests ─────────────────────────────────────────
@@ -1727,8 +1729,6 @@ mod tests {
     /// it out removes them, re-confirming a replacement re-adds them.
     #[test]
     fn test_spends_index_follows_confirmation_state() {
-        use bitcoin::hashes::Hash;
-
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
@@ -1737,12 +1737,30 @@ mod tests {
         store.setup_genesis(&genesis, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
-        // Build a spending tx whose prevout points at a fabricated
-        // outpoint. SpendsIndex doesn't care whether the prevout
-        // actually exists as an output — it only records the spend.
-        let fabricated_prevout_txid: bitcoin::Txid =
-            bitcoin::hashes::sha256d::Hash::from_byte_array([0xaa; 32]).into();
-        let prevout = bitcoin::OutPoint::new(fabricated_prevout_txid, 0);
+        // Build a funding coinbase tx and store it so its output exists
+        // in the Outputs CF for coinbase_root_height computation.
+        let funding_tx = bitcoin::Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint::new(bitcoin::Txid::all_zeros(), u32::MAX),
+                script_sig: bitcoin::ScriptBuf::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::new(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(1_000),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        };
+        let funding_txid = funding_tx.compute_txid();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_sharechain_txs(&[ShareTransaction(funding_tx)], 0, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let prevout = bitcoin::OutPoint::new(funding_txid, 0);
         let spending_tx = bitcoin::Transaction {
             version: bitcoin::transaction::Version::ONE,
             lock_time: bitcoin::absolute::LockTime::ZERO,
