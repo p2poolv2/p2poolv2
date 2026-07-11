@@ -22,6 +22,7 @@ use crate::shares::share_block::{
 use bitcoin::BlockHash;
 use bitcoin::TxMerkleNode;
 use bitcoin::consensus::{self, Encodable, encode};
+use bitcoin::hashes::Hash;
 use std::collections::{HashMap, HashSet};
 use tracing::debug;
 
@@ -53,13 +54,8 @@ impl Store {
             share.header.get_work()
         );
 
-        // Compute block height from parent metadata for coinbase_root_height
-        let block_height = self
-            .get_block_metadata(&share.header.prev_share_blockhash)
-            .ok()
-            .and_then(|metadata| metadata.expected_height)
-            .map(|parent_height| parent_height + 1)
-            .unwrap_or(0);
+        let block_height =
+            self.compute_block_height_from_parent(&share.header.prev_share_blockhash)?;
 
         // Store transactions and get their metadata
         let txs_metadata = self.add_sharechain_txs(&share.transactions, block_height, batch)?;
@@ -87,6 +83,34 @@ impl Store {
         self.add_share_header(&share.header, batch)?;
 
         Ok(())
+    }
+
+    /// Compute the block height from the parent's metadata.
+    ///
+    /// Genesis (parent all-zeros) has height 0. For all other blocks,
+    /// returns an error if parent metadata is missing to avoid
+    /// permanently persisting height 0 which would make outputs
+    /// unspendable once the chain tip advances.
+    fn compute_block_height_from_parent(
+        &self,
+        parent_blockhash: &BlockHash,
+    ) -> Result<u32, StoreError> {
+        if *parent_blockhash == BlockHash::all_zeros() {
+            return Ok(0);
+        }
+        let parent_metadata = self.get_block_metadata(parent_blockhash).map_err(|error| {
+            StoreError::NotFound(format!(
+                "Parent {parent_blockhash} metadata not found for coinbase_root_height: {error}",
+            ))
+        })?;
+        parent_metadata
+            .expected_height
+            .map(|height| height + 1)
+            .ok_or_else(|| {
+                StoreError::NotFound(format!(
+                    "Parent {parent_blockhash} has no expected_height for coinbase_root_height",
+                ))
+            })
     }
 
     /// Store a share header in the dedicated Header column family.
@@ -615,20 +639,14 @@ mod tests {
             .prev_share_blockhash(genesis_block.block_hash().to_string())
             .nonce(0xe9695792)
             .build();
-
-        let mut batch = Store::get_write_batch();
-        store.add_share_block(&share1, &mut batch).unwrap();
-        store.commit_batch(batch).unwrap();
+        store.store_with_valid_metadata(&share1);
 
         // Create uncle (also child of genesis)
         let uncle1 = TestShareBlockBuilder::new()
             .prev_share_blockhash(genesis_block.block_hash().to_string())
             .nonce(0xe9695793) // Different nonce to get different hash
             .build();
-
-        let mut batch = Store::get_write_batch();
-        store.add_share_block(&uncle1, &mut batch).unwrap();
-        store.commit_batch(batch).unwrap();
+        store.store_with_valid_metadata(&uncle1);
 
         // Create share2 referencing uncle1
         let share2 = TestShareBlockBuilder::new()
@@ -636,11 +654,10 @@ mod tests {
             .uncles(vec![uncle1.block_hash()])
             .nonce(0xe9695794)
             .build();
-
-        let mut batch = Store::get_write_batch();
-        store.add_share_block(&share2, &mut batch).unwrap();
+        store.store_with_valid_metadata(&share2);
         // Uncle block index updates are handled by organise_header, not
-        // add_share_block. Manually register uncle->nephew entries here.
+        // store_with_valid_metadata. Manually register uncle->nephew entries here.
+        let mut batch = Store::get_write_batch();
         for uncle_blockhash in &share2.header.uncles {
             store
                 .update_block_index(uncle_blockhash, &share2.block_hash(), &mut batch)

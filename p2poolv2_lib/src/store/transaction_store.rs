@@ -1034,12 +1034,30 @@ mod tests {
                 script_sig: bitcoin::ScriptBuf::new(),
             }],
             output: vec![
-                bitcoin::TxOut { value: bitcoin::Amount::from_sat(100_000), script_pubkey: bitcoin::ScriptBuf::new() },
-                bitcoin::TxOut { value: bitcoin::Amount::from_sat(100_000), script_pubkey: bitcoin::ScriptBuf::new() },
-                bitcoin::TxOut { value: bitcoin::Amount::from_sat(100_000), script_pubkey: bitcoin::ScriptBuf::new() },
-                bitcoin::TxOut { value: bitcoin::Amount::from_sat(100_000), script_pubkey: bitcoin::ScriptBuf::new() },
-                bitcoin::TxOut { value: bitcoin::Amount::from_sat(100_000), script_pubkey: bitcoin::ScriptBuf::new() },
-                bitcoin::TxOut { value: bitcoin::Amount::from_sat(100_000), script_pubkey: bitcoin::ScriptBuf::new() },
+                bitcoin::TxOut {
+                    value: bitcoin::Amount::from_sat(100_000),
+                    script_pubkey: bitcoin::ScriptBuf::new(),
+                },
+                bitcoin::TxOut {
+                    value: bitcoin::Amount::from_sat(100_000),
+                    script_pubkey: bitcoin::ScriptBuf::new(),
+                },
+                bitcoin::TxOut {
+                    value: bitcoin::Amount::from_sat(100_000),
+                    script_pubkey: bitcoin::ScriptBuf::new(),
+                },
+                bitcoin::TxOut {
+                    value: bitcoin::Amount::from_sat(100_000),
+                    script_pubkey: bitcoin::ScriptBuf::new(),
+                },
+                bitcoin::TxOut {
+                    value: bitcoin::Amount::from_sat(100_000),
+                    script_pubkey: bitcoin::ScriptBuf::new(),
+                },
+                bitcoin::TxOut {
+                    value: bitcoin::Amount::from_sat(100_000),
+                    script_pubkey: bitcoin::ScriptBuf::new(),
+                },
             ],
         };
         let funding_txid_2 = funding_tx_2.compute_txid();
@@ -1055,8 +1073,14 @@ mod tests {
                 script_sig: bitcoin::ScriptBuf::new(),
             }],
             output: vec![
-                bitcoin::TxOut { value: bitcoin::Amount::from_sat(100_000), script_pubkey: bitcoin::ScriptBuf::new() },
-                bitcoin::TxOut { value: bitcoin::Amount::from_sat(100_000), script_pubkey: bitcoin::ScriptBuf::new() },
+                bitcoin::TxOut {
+                    value: bitcoin::Amount::from_sat(100_000),
+                    script_pubkey: bitcoin::ScriptBuf::new(),
+                },
+                bitcoin::TxOut {
+                    value: bitcoin::Amount::from_sat(100_000),
+                    script_pubkey: bitcoin::ScriptBuf::new(),
+                },
             ],
         };
         let funding_txid_3 = funding_tx_3.compute_txid();

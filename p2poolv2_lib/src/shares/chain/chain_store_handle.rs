@@ -1054,7 +1054,10 @@ mod tests {
             .work(1)
             .build();
 
-        chain_handle.add_share_block(share1.clone()).await.unwrap();
+        chain_handle
+            .add_share_block_and_organise_header(share1.clone())
+            .await
+            .unwrap();
 
         let share2 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share1.block_hash().to_string())
@@ -1062,7 +1065,10 @@ mod tests {
             .work(1)
             .build();
 
-        chain_handle.add_share_block(share2).await.unwrap();
+        chain_handle
+            .add_share_block_and_organise_header(share2)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]

@@ -182,18 +182,14 @@ mod tests {
             .prev_share_blockhash(share1.block_hash().to_string())
             .nonce(0xe9695793)
             .build();
-        let mut batch = Store::get_write_batch();
-        store.add_share_block(&share2, &mut batch).unwrap();
-        store.commit_batch(batch).unwrap();
+        store.store_with_valid_metadata(&share2);
 
         // share3 extends share2 and is NOT on candidate chain
         let share3 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share2.block_hash().to_string())
             .nonce(0xe9695794)
             .build();
-        let mut batch = Store::get_write_batch();
-        store.add_share_block(&share3, &mut batch).unwrap();
-        store.commit_batch(batch).unwrap();
+        store.store_with_valid_metadata(&share3);
 
         // Branch from share3 should be [share1, share2, share3]
         let branch = store
@@ -227,9 +223,7 @@ mod tests {
             .prev_share_blockhash(share1.block_hash().to_string())
             .nonce(0xe9695793)
             .build();
-        let mut batch = Store::get_write_batch();
-        store.add_share_block(&share2, &mut batch).unwrap();
-        store.commit_batch(batch).unwrap();
+        store.store_with_valid_metadata(&share2);
 
         // Branch from share2 should be just [share1, share2]
         let branch = store
