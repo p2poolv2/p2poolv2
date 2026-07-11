@@ -64,12 +64,15 @@ impl StoreHandle {
     }
 
     /// Batch-read all outpoints from the Outputs CF.
-    /// Returns an error if any is missing, otherwise returns coinbase outpoints.
+    /// Returns an error if any is missing or has coinbase_root_height
+    /// below min_coinbase_root_height. Returns coinbase outpoints.
     pub fn check_prevouts_and_find_coinbase(
         &self,
         outpoints: &[bitcoin::OutPoint],
+        min_coinbase_root_height: u32,
     ) -> Result<Vec<bitcoin::OutPoint>, StoreError> {
-        self.store.check_prevouts_and_find_coinbase(outpoints)
+        self.store
+            .check_prevouts_and_find_coinbase(outpoints, min_coinbase_root_height)
     }
 
     /// Return the first coinbase outpoint that is not yet mature, or None.

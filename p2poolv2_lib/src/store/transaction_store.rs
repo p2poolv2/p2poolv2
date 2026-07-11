@@ -149,11 +149,14 @@ impl Store {
 
     /// Batch-read all outpoints from the Outputs CF in a single multi_get.
     ///
-    /// Returns an error if any outpoint is missing. On success, returns
-    /// the subset of outpoints that belong to coinbase transactions.
+    /// Returns an error if any outpoint is missing or has a
+    /// coinbase_root_height below `min_coinbase_root_height`. On success,
+    /// returns the subset of outpoints that belong to coinbase
+    /// transactions.
     pub(crate) fn check_prevouts_and_find_coinbase(
         &self,
         outpoints: &[OutPoint],
+        min_coinbase_root_height: u32,
     ) -> Result<Vec<OutPoint>, StoreError> {
         if outpoints.is_empty() {
             return Ok(Vec::new());
@@ -178,6 +181,15 @@ impl Store {
             let stored: StoredTxOut = encode::deserialize(&data).map_err(|_| {
                 StoreError::Serialization("Failed to deserialize output".to_string())
             })?;
+            if stored.coinbase_root_height < min_coinbase_root_height {
+                return Err(StoreError::Database(format!(
+                    "Output {}:{} has coinbase_root_height {} below minimum {}",
+                    outpoints[index].txid,
+                    outpoints[index].vout,
+                    stored.coinbase_root_height,
+                    min_coinbase_root_height,
+                )));
+            }
             if stored.is_coinbase {
                 coinbase_outpoints.push(outpoints[index]);
             }
@@ -1146,7 +1158,7 @@ mod tests {
     fn test_check_prevouts_and_find_coinbase_returns_empty_for_empty_input() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-        let result = store.check_prevouts_and_find_coinbase(&[]).unwrap();
+        let result = store.check_prevouts_and_find_coinbase(&[], 0).unwrap();
         assert!(result.is_empty());
     }
 
@@ -1182,7 +1194,9 @@ mod tests {
             bitcoin::OutPoint::new(funding_txid, 0),
             bitcoin::OutPoint::new(funding_txid, 1),
         ];
-        let coinbase_outpoints = store.check_prevouts_and_find_coinbase(&outpoints).unwrap();
+        let coinbase_outpoints = store
+            .check_prevouts_and_find_coinbase(&outpoints, 0)
+            .unwrap();
         assert!(coinbase_outpoints.is_empty());
     }
 
@@ -1214,7 +1228,7 @@ mod tests {
             bitcoin::OutPoint::new(funding_txid, 0),
             bitcoin::OutPoint::new(unknown_txid, 0),
         ];
-        let result = store.check_prevouts_and_find_coinbase(&outpoints);
+        let result = store.check_prevouts_and_find_coinbase(&outpoints, 0);
         assert!(result.is_err());
     }
 
@@ -1264,9 +1278,61 @@ mod tests {
             bitcoin::OutPoint::new(coinbase_txid, 0),
             bitcoin::OutPoint::new(regular_txid, 0),
         ];
-        let coinbase_outpoints = store.check_prevouts_and_find_coinbase(&outpoints).unwrap();
+        let coinbase_outpoints = store
+            .check_prevouts_and_find_coinbase(&outpoints, 0)
+            .unwrap();
         assert_eq!(coinbase_outpoints.len(), 1);
         assert_eq!(coinbase_outpoints[0].txid, coinbase_txid);
+    }
+
+    #[test]
+    fn test_check_prevouts_rejects_expired_coinbase_root_height() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Store a coinbase tx at height 50
+        let coinbase_tx = Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint::new(bitcoin::Txid::all_zeros(), u32::MAX),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::default(),
+                script_sig: bitcoin::ScriptBuf::new(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(5_000_000),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        };
+        let coinbase_txid = coinbase_tx.compute_txid();
+
+        let mut batch = Store::get_write_batch();
+        store
+            .add_sharechain_txs(&[ShareTransaction(coinbase_tx)], 50, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let outpoints = vec![bitcoin::OutPoint::new(coinbase_txid, 0)];
+
+        // min_coinbase_root_height = 100: output at height 50 is expired
+        let result = store.check_prevouts_and_find_coinbase(&outpoints, 100);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("coinbase_root_height"),
+            "Expected coinbase_root_height error"
+        );
+
+        // min_coinbase_root_height = 50: output at height 50 is exactly at boundary
+        let result = store.check_prevouts_and_find_coinbase(&outpoints, 50);
+        assert!(result.is_ok());
+
+        // min_coinbase_root_height = 0: no filtering
+        let result = store.check_prevouts_and_find_coinbase(&outpoints, 0);
+        assert!(result.is_ok());
     }
 
     #[test]

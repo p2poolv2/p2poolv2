@@ -111,13 +111,15 @@ impl ChainStoreHandle {
     }
 
     /// Batch-read all outpoints from the Outputs CF.
-    /// Returns an error if any is missing, otherwise returns coinbase outpoints.
+    /// Returns an error if any is missing or has coinbase_root_height
+    /// is below min_coinbase_root_height. Returns coinbase outpoints.
     pub fn check_prevouts_and_find_coinbase(
         &self,
         outpoints: &[bitcoin::OutPoint],
+        min_coinbase_root_height: u32,
     ) -> Result<Vec<bitcoin::OutPoint>, StoreError> {
         self.store_handle
-            .check_prevouts_and_find_coinbase(outpoints)
+            .check_prevouts_and_find_coinbase(outpoints, min_coinbase_root_height)
     }
 
     /// Return the first coinbase outpoint that is not yet mature, or None.
@@ -789,7 +791,7 @@ mockall::mock! {
         pub fn get_blockhashes_for_height(&self, height: u32) -> Vec<BlockHash>;
         pub fn network(&self) -> bitcoin::Network;
         pub fn get_all_prevouts(&self, transaction: &bitcoin::Transaction) -> Result<Vec<(usize, bitcoin::TxOut)>, StoreError>;
-        pub fn check_prevouts_and_find_coinbase(&self, outpoints: &[bitcoin::OutPoint]) -> Result<Vec<bitcoin::OutPoint>, StoreError>;
+        pub fn check_prevouts_and_find_coinbase(&self, outpoints: &[bitcoin::OutPoint], min_coinbase_root_height: u32) -> Result<Vec<bitcoin::OutPoint>, StoreError>;
         pub fn find_immature_coinbase_prevout(&self, coinbase_outpoints: &[bitcoin::OutPoint], min_depth: usize) -> Result<Option<bitcoin::OutPoint>, StoreError>;
         pub fn is_any_prevout_spent(&self, outpoints: &[bitcoin::OutPoint]) -> Result<bool, StoreError>;
         pub fn are_all_txids_confirmed(&self, txids: &[bitcoin::Txid]) -> Result<bool, StoreError>;

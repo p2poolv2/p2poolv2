@@ -1062,13 +1062,15 @@ impl DefaultShareValidator {
         {
             return Err(ValidationError::new("prevout not on confirmed chain"));
         }
+        let tip_height = chain_store_handle
+            .get_tip_height()
+            .ok()
+            .flatten()
+            .unwrap_or(0);
+        let min_coinbase_root_height = tip_height.saturating_sub(MAX_PPLNS_WINDOW_SHARES as u32);
         let coinbase_outpoints = chain_store_handle
-            .check_prevouts_and_find_coinbase(&all_outpoints)
-            .map_err(|error| {
-                ValidationError::new(format!(
-                    "One or more prevouts do not exist in the Outputs store: {error}"
-                ))
-            })?;
+            .check_prevouts_and_find_coinbase(&all_outpoints, min_coinbase_root_height)
+            .map_err(|error| ValidationError::new(format!("Prevout check failed: {error}")))?;
         if chain_store_handle
             .is_any_prevout_spent(&all_outpoints)
             .map_err(|error| {
@@ -2195,11 +2197,14 @@ mod tests {
     fn test_validate_prevouts_exist_succeeds_for_coinbase_only() {
         let mut chain_store_handle = ChainStoreHandle::default();
         chain_store_handle
+            .expect_get_tip_height()
+            .returning(|| Ok(Some(100)));
+        chain_store_handle
             .expect_are_all_txids_confirmed()
             .returning(|_txids| Ok(true));
         chain_store_handle
             .expect_check_prevouts_and_find_coinbase()
-            .returning(|_outpoints| Ok(Vec::new()));
+            .returning(|_outpoints, _min_coinbase_root_height| Ok(Vec::new()));
         chain_store_handle
             .expect_is_any_prevout_spent()
             .returning(|_outpoints| Ok(false));
@@ -2216,11 +2221,14 @@ mod tests {
         let (_spent_output, spending_tx) = build_p2sh_op_true_spent_output_and_spending_tx();
 
         chain_store_handle
+            .expect_get_tip_height()
+            .returning(|| Ok(Some(100)));
+        chain_store_handle
             .expect_are_all_txids_confirmed()
             .returning(|_txids| Ok(true));
         chain_store_handle
             .expect_check_prevouts_and_find_coinbase()
-            .returning(|_outpoints| Ok(Vec::new()));
+            .returning(|_outpoints, _min_coinbase_root_height| Ok(Vec::new()));
         chain_store_handle
             .expect_is_any_prevout_spent()
             .returning(|_outpoints| Ok(false));
@@ -2239,6 +2247,9 @@ mod tests {
         let mut chain_store_handle = ChainStoreHandle::default();
         let (_spent_output, spending_tx) = build_p2sh_op_true_spent_output_and_spending_tx();
 
+        chain_store_handle
+            .expect_get_tip_height()
+            .returning(|| Ok(Some(100)));
         chain_store_handle
             .expect_are_all_txids_confirmed()
             .returning(|_txids| Ok(false));
@@ -2263,11 +2274,16 @@ mod tests {
         let (_spent_output, spending_tx) = build_p2sh_op_true_spent_output_and_spending_tx();
 
         chain_store_handle
+            .expect_get_tip_height()
+            .returning(|| Ok(Some(100)));
+        chain_store_handle
             .expect_are_all_txids_confirmed()
             .returning(|_txids| Ok(true));
         chain_store_handle
             .expect_check_prevouts_and_find_coinbase()
-            .returning(|_outpoints| Err(StoreError::NotFound("Output not found".to_string())));
+            .returning(|_outpoints, _min_coinbase_root_height| {
+                Err(StoreError::NotFound("Output not found".to_string()))
+            });
 
         let share = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
@@ -2277,7 +2293,10 @@ mod tests {
         let error = validator()
             .validate_prevouts(&share, &chain_store_handle)
             .unwrap_err();
-        assert!(error.to_string().contains("do not exist"), "got: {error}");
+        assert!(
+            error.to_string().contains("Prevout check failed"),
+            "got: {error}"
+        );
     }
 
     #[test]
@@ -2286,11 +2305,14 @@ mod tests {
         let (_spent_output, spending_tx) = build_p2sh_op_true_spent_output_and_spending_tx();
 
         chain_store_handle
+            .expect_get_tip_height()
+            .returning(|| Ok(Some(100)));
+        chain_store_handle
             .expect_are_all_txids_confirmed()
             .returning(|_txids| Ok(true));
         chain_store_handle
             .expect_check_prevouts_and_find_coinbase()
-            .returning(|_outpoints| Ok(Vec::new()));
+            .returning(|_outpoints, _min_coinbase_root_height| Ok(Vec::new()));
         chain_store_handle
             .expect_is_any_prevout_spent()
             .returning(|_outpoints| Ok(true));
@@ -2309,6 +2331,9 @@ mod tests {
     #[test]
     fn test_validate_prevouts_exist_skips_in_block_source_tx() {
         let mut chain_store_handle = ChainStoreHandle::default();
+        chain_store_handle
+            .expect_get_tip_height()
+            .returning(|| Ok(Some(100)));
 
         let producing_tx = bitcoin::Transaction {
             version: bitcoin::transaction::Version::ONE,
@@ -2359,7 +2384,7 @@ mod tests {
             .returning(|_txids| Ok(true));
         chain_store_handle
             .expect_check_prevouts_and_find_coinbase()
-            .withf(move |outpoints| {
+            .withf(move |outpoints, _min_coinbase_root_height| {
                 outpoints.len() == 2
                     && outpoints
                         .iter()
@@ -2368,7 +2393,7 @@ mod tests {
                         .iter()
                         .any(|outpoint| outpoint.txid == producing_txid_for_check)
             })
-            .returning(|_outpoints| Ok(Vec::new()));
+            .returning(|_outpoints, _min_coinbase_root_height| Ok(Vec::new()));
         chain_store_handle
             .expect_is_any_prevout_spent()
             .withf(move |outpoints| outpoints.len() == 2)
@@ -2387,6 +2412,9 @@ mod tests {
     #[test]
     fn test_validate_prevouts_fails_when_in_block_spend_references_missing_vout() {
         let mut chain_store_handle = ChainStoreHandle::default();
+        chain_store_handle
+            .expect_get_tip_height()
+            .returning(|| Ok(Some(100)));
 
         let producing_tx = bitcoin::Transaction {
             version: bitcoin::transaction::Version::ONE,
@@ -2435,7 +2463,9 @@ mod tests {
         // a non-existent vout.
         chain_store_handle
             .expect_check_prevouts_and_find_coinbase()
-            .returning(|_outpoints| Err(StoreError::NotFound("Output not found".to_string())));
+            .returning(|_outpoints, _min_coinbase_root_height| {
+                Err(StoreError::NotFound("Output not found".to_string()))
+            });
 
         let share = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
@@ -2446,12 +2476,18 @@ mod tests {
         let error = validator()
             .validate_prevouts(&share, &chain_store_handle)
             .unwrap_err();
-        assert!(error.to_string().contains("do not exist"), "got: {error}");
+        assert!(
+            error.to_string().contains("Prevout check failed"),
+            "got: {error}"
+        );
     }
 
     #[test]
     fn test_validate_prevouts_fails_when_two_inputs_spend_same_prevout() {
-        let chain_store_handle = ChainStoreHandle::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
+        chain_store_handle
+            .expect_get_tip_height()
+            .returning(|| Ok(Some(100)));
 
         let shared_prevout = bitcoin::OutPoint {
             txid: bitcoin::Txid::all_zeros(),
@@ -2508,13 +2544,16 @@ mod tests {
     fn test_validate_prevouts_rejects_immature_coinbase_spend() {
         let mut chain_store_handle = ChainStoreHandle::default();
         chain_store_handle
+            .expect_get_tip_height()
+            .returning(|| Ok(Some(100)));
+        chain_store_handle
             .expect_are_all_txids_confirmed()
             .returning(|_txids| Ok(true));
 
         let coinbase_outpoint = bitcoin::OutPoint::new(bitcoin::Txid::all_zeros(), 0);
         chain_store_handle
             .expect_check_prevouts_and_find_coinbase()
-            .returning(move |_outpoints| Ok(vec![coinbase_outpoint]));
+            .returning(move |_outpoints, _min_coinbase_root_height| Ok(vec![coinbase_outpoint]));
         chain_store_handle
             .expect_is_any_prevout_spent()
             .returning(|_outpoints| Ok(false));
@@ -2552,13 +2591,16 @@ mod tests {
     fn test_validate_prevouts_accepts_mature_coinbase_spend() {
         let mut chain_store_handle = ChainStoreHandle::default();
         chain_store_handle
+            .expect_get_tip_height()
+            .returning(|| Ok(Some(100)));
+        chain_store_handle
             .expect_are_all_txids_confirmed()
             .returning(|_txids| Ok(true));
 
         let coinbase_outpoint = bitcoin::OutPoint::new(bitcoin::Txid::all_zeros(), 0);
         chain_store_handle
             .expect_check_prevouts_and_find_coinbase()
-            .returning(move |_outpoints| Ok(vec![coinbase_outpoint]));
+            .returning(move |_outpoints, _min_coinbase_root_height| Ok(vec![coinbase_outpoint]));
         chain_store_handle
             .expect_is_any_prevout_spent()
             .returning(|_outpoints| Ok(false));
