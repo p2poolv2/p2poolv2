@@ -27,11 +27,19 @@ use tracing::debug;
 const OUTPOINT_SIZE: usize = 36;
 
 /// A TxOut stored in the Outputs CF together with a flag indicating
-/// whether it belongs to a coinbase transaction.
+/// whether it belongs to a coinbase transaction and the height of the
+/// oldest coinbase ancestor in the output's spending chain.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct StoredTxOut {
     pub tx_out: bitcoin::TxOut,
     pub is_coinbase: bool,
+    /// Height of the oldest coinbase in this output's ancestry chain.
+    /// For coinbase outputs, this is the block height where the coinbase
+    /// was mined. For spending tx outputs, this is the minimum
+    /// coinbase_root_height across all inputs. Used to enforce the rule
+    /// that outputs whose coinbase root is deeper than PPLNS_DEPTH from
+    /// tip cannot be spent.
+    pub coinbase_root_height: u32,
 }
 
 impl Encodable for StoredTxOut {
@@ -41,6 +49,7 @@ impl Encodable for StoredTxOut {
     ) -> Result<usize, bitcoin::io::Error> {
         let mut length = self.tx_out.consensus_encode(writer)?;
         length += self.is_coinbase.consensus_encode(writer)?;
+        length += self.coinbase_root_height.consensus_encode(writer)?;
         Ok(length)
     }
 }
@@ -51,9 +60,11 @@ impl Decodable for StoredTxOut {
     ) -> Result<Self, bitcoin::consensus::encode::Error> {
         let tx_out = bitcoin::TxOut::consensus_decode(reader)?;
         let is_coinbase = bool::consensus_decode(reader)?;
+        let coinbase_root_height = u32::consensus_decode(reader)?;
         Ok(StoredTxOut {
             tx_out,
             is_coinbase,
+            coinbase_root_height,
         })
     }
 }
@@ -318,16 +329,21 @@ impl Store {
     ///
     /// Writes transaction metadata, each input, and each output into
     /// their respective column families. This function is pure tx
-    /// storage and does not touch the `SpendsIndex` — chain-state
+    /// storage and does not touch the `SpendsIndex` -- chain-state
     /// bookkeeping of spends is the responsibility of the confirmation
     /// path (`put_confirmed_entry` / `remove_spends_for_block`).
     ///
     /// The block -> txids association is stored separately via
     /// `add_txids_to_blocks_index`, allowing this function to persist
     /// transactions outside of a block context.
+    ///
+    /// `block_height` is used to set `coinbase_root_height` on outputs:
+    /// coinbase outputs get the block height directly, spending tx
+    /// outputs get the minimum coinbase_root_height across their inputs.
     pub(crate) fn add_sharechain_txs(
         &self,
         transactions: &[ShareTransaction],
+        block_height: u32,
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<Vec<TxMetadata>, StoreError> {
         let inputs_cf = self.db.cf_handle(&ColumnFamily::Inputs).unwrap();
@@ -348,17 +364,51 @@ impl Store {
             }
 
             let is_coinbase = tx.0.is_coinbase();
+            let coinbase_root_height = if is_coinbase {
+                block_height
+            } else {
+                self.min_coinbase_root_height_for_inputs(tx, &outputs_cf)
+            };
+
             for (i, output) in tx.output.iter().enumerate() {
                 let output_key = format!("{txid}:{i}");
                 let stored = StoredTxOut {
                     tx_out: output.clone(),
                     is_coinbase,
+                    coinbase_root_height,
                 };
                 let serialized = consensus::serialize(&stored);
                 batch.put_cf::<&[u8], Vec<u8>>(&outputs_cf, output_key.as_ref(), serialized);
             }
         }
         Ok(txs_metadata)
+    }
+
+    /// Compute the minimum coinbase_root_height across all inputs of a
+    /// non-coinbase transaction by reading each input's output from the
+    /// Outputs CF.
+    fn min_coinbase_root_height_for_inputs(
+        &self,
+        tx: &ShareTransaction,
+        outputs_cf: &impl rocksdb::AsColumnFamilyRef,
+    ) -> u32 {
+        let mut min_height = u32::MAX;
+        for input in &tx.0.input {
+            let outpoint_key = format!(
+                "{}:{}",
+                input.previous_output.txid, input.previous_output.vout
+            );
+            if let Ok(Some(bytes)) = self.db.get_cf(outputs_cf, outpoint_key.as_bytes()) {
+                if let Ok(stored_out) = consensus::deserialize::<StoredTxOut>(&bytes) {
+                    min_height = std::cmp::min(min_height, stored_out.coinbase_root_height);
+                }
+            }
+        }
+        if min_height == u32::MAX {
+            0
+        } else {
+            min_height
+        }
     }
 
     /// Marks the transaction as successfully validated, this prevents us validating it again.
@@ -910,7 +960,7 @@ mod tests {
         let mut batch = Store::get_write_batch();
 
         let metadata = store
-            .add_sharechain_txs(&block.transactions, &mut batch)
+            .add_sharechain_txs(&block.transactions, 1, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -988,6 +1038,7 @@ mod tests {
                     ShareTransaction(tx_a.clone()),
                     ShareTransaction(tx_b.clone()),
                 ],
+                1,
                 &mut batch,
             )
             .unwrap();
@@ -1040,7 +1091,7 @@ mod tests {
 
         let mut batch = Store::get_write_batch();
         store
-            .add_sharechain_txs(&[ShareTransaction(funding_tx)], &mut batch)
+            .add_sharechain_txs(&[ShareTransaction(funding_tx)], 1, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -1123,7 +1174,7 @@ mod tests {
 
         let mut batch = Store::get_write_batch();
         store
-            .add_sharechain_txs(&[ShareTransaction(funding_tx)], &mut batch)
+            .add_sharechain_txs(&[ShareTransaction(funding_tx)], 1, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -1153,7 +1204,7 @@ mod tests {
 
         let mut batch = Store::get_write_batch();
         store
-            .add_sharechain_txs(&[ShareTransaction(funding_tx)], &mut batch)
+            .add_sharechain_txs(&[ShareTransaction(funding_tx)], 1, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -1203,6 +1254,7 @@ mod tests {
         store
             .add_sharechain_txs(
                 &[ShareTransaction(coinbase_tx), ShareTransaction(regular_tx)],
+                1,
                 &mut batch,
             )
             .unwrap();
@@ -1403,7 +1455,7 @@ mod tests {
         let txid = tx.compute_txid();
         let mut batch = Store::get_write_batch();
         store
-            .add_sharechain_txs(&[ShareTransaction(tx)], &mut batch)
+            .add_sharechain_txs(&[ShareTransaction(tx)], 1, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -1673,7 +1725,9 @@ mod tests {
 
         // Add transactions to store
         let mut batch = rocksdb::WriteBatch::default();
-        store.add_sharechain_txs(&transactions, &mut batch).unwrap();
+        store
+            .add_sharechain_txs(&transactions, 1, &mut batch)
+            .unwrap();
         store.db.write(batch).unwrap();
 
         // Verify transactions were stored correctly by retrieving them by txid
@@ -1715,7 +1769,7 @@ mod tests {
         let txid = tx.compute_txid();
         let mut batch = rocksdb::WriteBatch::default();
         let res = store
-            .add_sharechain_txs(&[ShareTransaction(tx.clone())], &mut batch)
+            .add_sharechain_txs(&[ShareTransaction(tx.clone())], 1, &mut batch)
             .unwrap();
         store.db.write(batch).unwrap();
 
@@ -2169,5 +2223,169 @@ mod tests {
             .find_immature_coinbase_prevout(&outpoints, 6048, 10000)
             .unwrap();
         assert_eq!(result, Some(bitcoin::OutPoint::new(immature_txid, 0)));
+    }
+
+    #[test]
+    fn test_min_coinbase_root_height_returns_min_across_inputs() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Store two funding coinbase txs at different heights
+        let funding_tx_a = Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint::null(),
+                ..Default::default()
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(1_000_000),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        };
+        let txid_a = funding_tx_a.compute_txid();
+
+        let funding_tx_b = Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint::null(),
+                script_sig: bitcoin::ScriptBuf::from_bytes(vec![0x01]),
+                ..Default::default()
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(2_000_000),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        };
+        let txid_b = funding_tx_b.compute_txid();
+
+        // Store at heights 100 and 500
+        let mut batch = Store::get_write_batch();
+        store
+            .add_sharechain_txs(&[ShareTransaction(funding_tx_a)], 100, &mut batch)
+            .unwrap();
+        store
+            .add_sharechain_txs(&[ShareTransaction(funding_tx_b)], 500, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Spending tx consumes one output from each funding tx
+        let spending_tx = Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![
+                bitcoin::TxIn {
+                    previous_output: bitcoin::OutPoint::new(txid_a, 0),
+                    ..Default::default()
+                },
+                bitcoin::TxIn {
+                    previous_output: bitcoin::OutPoint::new(txid_b, 0),
+                    ..Default::default()
+                },
+            ],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(2_900_000),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        };
+
+        let outputs_cf = store.db.cf_handle(&ColumnFamily::Outputs).unwrap();
+        let result =
+            store.min_coinbase_root_height_for_inputs(&ShareTransaction(spending_tx), &outputs_cf);
+
+        assert_eq!(
+            result, 100,
+            "Should return the minimum height across inputs"
+        );
+    }
+
+    #[test]
+    fn test_min_coinbase_root_height_returns_zero_when_no_inputs_found() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Spending tx references outputs not in the store
+        let spending_tx = Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint::new(Txid::all_zeros(), 0),
+                ..Default::default()
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(1_000_000),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        };
+
+        let outputs_cf = store.db.cf_handle(&ColumnFamily::Outputs).unwrap();
+        let result =
+            store.min_coinbase_root_height_for_inputs(&ShareTransaction(spending_tx), &outputs_cf);
+
+        assert_eq!(result, 0, "Should return 0 when no inputs found in store");
+    }
+
+    #[test]
+    fn test_coinbase_root_height_propagates_through_spending_chain() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Store a coinbase tx at height 200
+        let coinbase_tx = Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint::null(),
+                ..Default::default()
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(5_000_000),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        };
+        let coinbase_txid = coinbase_tx.compute_txid();
+
+        let mut batch = Store::get_write_batch();
+        store
+            .add_sharechain_txs(&[ShareTransaction(coinbase_tx)], 200, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Store a spending tx at height 300 that spends the coinbase
+        let spending_tx = Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint::new(coinbase_txid, 0),
+                ..Default::default()
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(4_000_000),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        };
+        let spending_txid = spending_tx.compute_txid();
+
+        let mut batch = Store::get_write_batch();
+        store
+            .add_sharechain_txs(&[ShareTransaction(spending_tx)], 300, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Verify the spending tx's output inherited coinbase_root_height = 200
+        let output_key = format!("{spending_txid}:0");
+        let outputs_cf = store.db.cf_handle(&ColumnFamily::Outputs).unwrap();
+        let bytes = store
+            .db
+            .get_cf(&outputs_cf, output_key.as_bytes())
+            .unwrap()
+            .unwrap();
+        let stored_out = consensus::deserialize::<StoredTxOut>(&bytes).unwrap();
+
+        assert_eq!(
+            stored_out.coinbase_root_height, 200,
+            "Spending tx output should inherit coinbase_root_height from input"
+        );
     }
 }
