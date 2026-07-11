@@ -379,7 +379,7 @@ impl Store {
             let coinbase_root_height = if is_coinbase {
                 block_height
             } else {
-                self.min_coinbase_root_height_for_inputs(tx, &outputs_cf)
+                self.min_coinbase_root_height_for_inputs(tx, &outputs_cf)?
             };
 
             for (i, output) in tx.output.iter().enumerate() {
@@ -398,29 +398,38 @@ impl Store {
 
     /// Compute the minimum coinbase_root_height across all inputs of a
     /// non-coinbase transaction by reading each input's output from the
-    /// Outputs CF.
+    /// Outputs CF. Returns an error if any input's output is missing or
+    /// cannot be deserialized, to avoid permanently persisting height 0
+    /// which would make outputs unspendable.
     fn min_coinbase_root_height_for_inputs(
         &self,
         tx: &ShareTransaction,
         outputs_cf: &impl rocksdb::AsColumnFamilyRef,
-    ) -> u32 {
+    ) -> Result<u32, StoreError> {
         let mut min_height = u32::MAX;
         for input in &tx.0.input {
             let outpoint_key = format!(
                 "{}:{}",
                 input.previous_output.txid, input.previous_output.vout
             );
-            if let Ok(Some(bytes)) = self.db.get_cf(outputs_cf, outpoint_key.as_bytes()) {
-                if let Ok(stored_out) = consensus::deserialize::<StoredTxOut>(&bytes) {
-                    min_height = std::cmp::min(min_height, stored_out.coinbase_root_height);
-                }
-            }
+            let bytes = self
+                .db
+                .get_cf(outputs_cf, outpoint_key.as_bytes())?
+                .ok_or_else(|| {
+                    StoreError::NotFound(format!(
+                        "Input output not found for coinbase_root_height: {}",
+                        outpoint_key
+                    ))
+                })?;
+            let stored_out: StoredTxOut = consensus::deserialize(&bytes).map_err(|_| {
+                StoreError::Serialization(format!(
+                    "Failed to deserialize output for coinbase_root_height: {}",
+                    outpoint_key
+                ))
+            })?;
+            min_height = std::cmp::min(min_height, stored_out.coinbase_root_height);
         }
-        if min_height == u32::MAX {
-            0
-        } else {
-            min_height
-        }
+        Ok(min_height)
     }
 
     /// Marks the transaction as successfully validated, this prevents us validating it again.
@@ -995,14 +1004,83 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
+        // Store three funding coinbase transactions so that spending inputs
+        // can find their outputs in the Outputs CF.
+        let funding_coinbase_input = bitcoin::TxIn {
+            previous_output: bitcoin::OutPoint::new(bitcoin::Txid::all_zeros(), u32::MAX),
+            sequence: bitcoin::Sequence::default(),
+            witness: bitcoin::Witness::default(),
+            script_sig: bitcoin::ScriptBuf::new(),
+        };
+        let funding_tx_1 = Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![funding_coinbase_input.clone()],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(1_000_000),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        };
+        let funding_txid_1 = funding_tx_1.compute_txid();
+
+        // funding_tx_2 needs at least 6 outputs (index 5 is used by tx_b)
+        let funding_tx_2 = Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint::new(bitcoin::Txid::all_zeros(), u32::MAX),
+                sequence: bitcoin::Sequence(1),
+                witness: bitcoin::Witness::default(),
+                script_sig: bitcoin::ScriptBuf::new(),
+            }],
+            output: vec![
+                bitcoin::TxOut { value: bitcoin::Amount::from_sat(100_000), script_pubkey: bitcoin::ScriptBuf::new() },
+                bitcoin::TxOut { value: bitcoin::Amount::from_sat(100_000), script_pubkey: bitcoin::ScriptBuf::new() },
+                bitcoin::TxOut { value: bitcoin::Amount::from_sat(100_000), script_pubkey: bitcoin::ScriptBuf::new() },
+                bitcoin::TxOut { value: bitcoin::Amount::from_sat(100_000), script_pubkey: bitcoin::ScriptBuf::new() },
+                bitcoin::TxOut { value: bitcoin::Amount::from_sat(100_000), script_pubkey: bitcoin::ScriptBuf::new() },
+                bitcoin::TxOut { value: bitcoin::Amount::from_sat(100_000), script_pubkey: bitcoin::ScriptBuf::new() },
+            ],
+        };
+        let funding_txid_2 = funding_tx_2.compute_txid();
+
+        // funding_tx_3 needs at least 2 outputs (index 1 is used by tx_b)
+        let funding_tx_3 = Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint::new(bitcoin::Txid::all_zeros(), u32::MAX),
+                sequence: bitcoin::Sequence(2),
+                witness: bitcoin::Witness::default(),
+                script_sig: bitcoin::ScriptBuf::new(),
+            }],
+            output: vec![
+                bitcoin::TxOut { value: bitcoin::Amount::from_sat(100_000), script_pubkey: bitcoin::ScriptBuf::new() },
+                bitcoin::TxOut { value: bitcoin::Amount::from_sat(100_000), script_pubkey: bitcoin::ScriptBuf::new() },
+            ],
+        };
+        let funding_txid_3 = funding_tx_3.compute_txid();
+
+        let mut batch = Store::get_write_batch();
+        store
+            .add_sharechain_txs(
+                &[
+                    ShareTransaction(funding_tx_1),
+                    ShareTransaction(funding_tx_2),
+                    ShareTransaction(funding_tx_3),
+                ],
+                1,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Now create spending transactions that reference the funding outputs.
         let tx_a = Transaction {
             version: bitcoin::transaction::Version(1),
             lock_time: bitcoin::absolute::LockTime::ZERO,
             input: vec![bitcoin::TxIn {
-                previous_output: bitcoin::OutPoint::new(
-                    bitcoin::hashes::sha256d::Hash::from_byte_array([0x01; 32]).into(),
-                    0,
-                ),
+                previous_output: bitcoin::OutPoint::new(funding_txid_1, 0),
                 ..Default::default()
             }],
             output: vec![
@@ -1021,17 +1099,11 @@ mod tests {
             lock_time: bitcoin::absolute::LockTime::ZERO,
             input: vec![
                 bitcoin::TxIn {
-                    previous_output: bitcoin::OutPoint::new(
-                        bitcoin::hashes::sha256d::Hash::from_byte_array([0x02; 32]).into(),
-                        5,
-                    ),
+                    previous_output: bitcoin::OutPoint::new(funding_txid_2, 5),
                     ..Default::default()
                 },
                 bitcoin::TxIn {
-                    previous_output: bitcoin::OutPoint::new(
-                        bitcoin::hashes::sha256d::Hash::from_byte_array([0x03; 32]).into(),
-                        1,
-                    ),
+                    previous_output: bitcoin::OutPoint::new(funding_txid_3, 1),
                     ..Default::default()
                 },
             ],
@@ -1050,7 +1122,7 @@ mod tests {
                     ShareTransaction(tx_a.clone()),
                     ShareTransaction(tx_b.clone()),
                 ],
-                1,
+                2,
                 &mut batch,
             )
             .unwrap();
@@ -1812,16 +1884,34 @@ mod tests {
         let script_true = bitcoin::Script::builder()
             .push_opcode(bitcoin::opcodes::all::OP_PUSHNUM_1)
             .into_script();
+
+        // Store a funding coinbase tx so the spending tx can find its input
+        let funding_tx = Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint::new(bitcoin::Txid::all_zeros(), u32::MAX),
+                sequence: bitcoin::Sequence::default(),
+                witness: bitcoin::Witness::default(),
+                script_sig: script_true.clone(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(1000000),
+                script_pubkey: script_true.clone(),
+            }],
+        };
+        let funding_txid = funding_tx.compute_txid();
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_sharechain_txs(&[ShareTransaction(funding_tx)], 1, &mut batch)
+            .unwrap();
+        store.db.write(batch).unwrap();
+
         let tx = Transaction {
             version: bitcoin::transaction::Version(1),
             lock_time: bitcoin::absolute::LockTime::ZERO,
             input: vec![bitcoin::TxIn {
-                previous_output: bitcoin::OutPoint::new(
-                    "0101010101010101010101010101010101010101010101010101010101010101"
-                        .parse()
-                        .unwrap(),
-                    0,
-                ),
+                previous_output: bitcoin::OutPoint::new(funding_txid, 0),
                 sequence: bitcoin::Sequence::default(),
                 witness: bitcoin::Witness::default(),
                 script_sig: script_true.clone(),
@@ -1835,7 +1925,7 @@ mod tests {
         let txid = tx.compute_txid();
         let mut batch = rocksdb::WriteBatch::default();
         let res = store
-            .add_sharechain_txs(&[ShareTransaction(tx.clone())], 1, &mut batch)
+            .add_sharechain_txs(&[ShareTransaction(tx.clone())], 2, &mut batch)
             .unwrap();
         store.db.write(batch).unwrap();
 
@@ -1847,12 +1937,7 @@ mod tests {
         assert_eq!(tx.input.len(), 1);
         assert_eq!(
             tx.input[0].previous_output,
-            bitcoin::OutPoint::new(
-                "0101010101010101010101010101010101010101010101010101010101010101"
-                    .parse()
-                    .unwrap(),
-                0,
-            )
+            bitcoin::OutPoint::new(funding_txid, 0)
         );
         assert_eq!(tx.input[0].script_sig, script_true);
         assert_eq!(tx.output.len(), 1);
@@ -2357,8 +2442,9 @@ mod tests {
         };
 
         let outputs_cf = store.db.cf_handle(&ColumnFamily::Outputs).unwrap();
-        let result =
-            store.min_coinbase_root_height_for_inputs(&ShareTransaction(spending_tx), &outputs_cf);
+        let result = store
+            .min_coinbase_root_height_for_inputs(&ShareTransaction(spending_tx), &outputs_cf)
+            .unwrap();
 
         assert_eq!(
             result, 100,
@@ -2389,7 +2475,10 @@ mod tests {
         let result =
             store.min_coinbase_root_height_for_inputs(&ShareTransaction(spending_tx), &outputs_cf);
 
-        assert_eq!(result, 0, "Should return 0 when no inputs found in store");
+        assert!(
+            result.is_err(),
+            "Should return error when input outputs not found in store"
+        );
     }
 
     #[test]
