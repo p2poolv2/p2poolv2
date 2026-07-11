@@ -53,8 +53,16 @@ impl Store {
             share.header.get_work()
         );
 
+        // Compute block height from parent metadata for coinbase_root_height
+        let block_height = self
+            .get_block_metadata(&share.header.prev_share_blockhash)
+            .ok()
+            .and_then(|metadata| metadata.expected_height)
+            .map(|parent_height| parent_height + 1)
+            .unwrap_or(0);
+
         // Store transactions and get their metadata
-        let txs_metadata = self.add_sharechain_txs(&share.transactions, batch)?;
+        let txs_metadata = self.add_sharechain_txs(&share.transactions, block_height, batch)?;
 
         let txids = Txids(txs_metadata.iter().map(|t| t.txid).collect());
         // Store block -> txids index
