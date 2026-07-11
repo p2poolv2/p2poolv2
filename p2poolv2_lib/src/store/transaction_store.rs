@@ -2591,7 +2591,7 @@ mod tests {
     }
 
     #[test]
-    fn test_min_coinbase_root_height_returns_zero_when_no_inputs_found() {
+    fn test_min_coinbase_root_height_errors_when_input_outputs_missing() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
