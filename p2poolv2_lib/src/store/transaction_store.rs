@@ -361,6 +361,11 @@ impl Store {
         let inputs_cf = self.db.cf_handle(&ColumnFamily::Inputs).unwrap();
         let outputs_cf = self.db.cf_handle(&ColumnFamily::Outputs).unwrap();
         let mut txs_metadata = Vec::new();
+        // Track coinbase_root_height for outputs written in this batch
+        // so in-block spending chains can look up earlier outputs.
+        let mut batch_heights: HashMap<String, u32> =
+            HashMap::with_capacity(transactions.len() * 2);
+
         for tx in transactions {
             let txid = tx.compute_txid();
             let metadata = self.add_tx_metadata(txid, tx, false, batch)?;
@@ -379,11 +384,12 @@ impl Store {
             let coinbase_root_height = if is_coinbase {
                 block_height
             } else {
-                self.min_coinbase_root_height_for_inputs(tx, &outputs_cf)?
+                self.min_coinbase_root_height_for_inputs(tx, &outputs_cf, &batch_heights)?
             };
 
             for (i, output) in tx.output.iter().enumerate() {
                 let output_key = format!("{txid}:{i}");
+                batch_heights.insert(output_key.clone(), coinbase_root_height);
                 let stored = StoredTxOut {
                     tx_out: output.clone(),
                     is_coinbase,
@@ -397,14 +403,15 @@ impl Store {
     }
 
     /// Compute the minimum coinbase_root_height across all inputs of a
-    /// non-coinbase transaction by reading each input's output from the
-    /// Outputs CF. Returns an error if any input's output is missing or
-    /// cannot be deserialized, to avoid permanently persisting height 0
-    /// which would make outputs unspendable.
+    /// non-coinbase transaction. Checks the in-batch cache first (for
+    /// in-block spending chains), then falls back to the Outputs CF.
+    /// Returns an error if any input's output is missing or cannot be
+    /// deserialized.
     fn min_coinbase_root_height_for_inputs(
         &self,
         tx: &ShareTransaction,
         outputs_cf: &impl rocksdb::AsColumnFamilyRef,
+        batch_heights: &HashMap<String, u32>,
     ) -> Result<u32, StoreError> {
         let mut min_height = u32::MAX;
         for input in &tx.0.input {
@@ -412,22 +419,28 @@ impl Store {
                 "{}:{}",
                 input.previous_output.txid, input.previous_output.vout
             );
-            let bytes = self
-                .db
-                .get_cf(outputs_cf, outpoint_key.as_bytes())?
-                .ok_or_else(|| {
-                    StoreError::NotFound(format!(
-                        "Input output not found for coinbase_root_height: {}",
+
+            let height = if let Some(cached_height) = batch_heights.get(&outpoint_key) {
+                *cached_height
+            } else {
+                let bytes = self
+                    .db
+                    .get_cf(outputs_cf, outpoint_key.as_bytes())?
+                    .ok_or_else(|| {
+                        StoreError::NotFound(format!(
+                            "Input output not found for coinbase_root_height: {}",
+                            outpoint_key
+                        ))
+                    })?;
+                let stored_out: StoredTxOut = consensus::deserialize(&bytes).map_err(|_| {
+                    StoreError::Serialization(format!(
+                        "Failed to deserialize output for coinbase_root_height: {}",
                         outpoint_key
                     ))
                 })?;
-            let stored_out: StoredTxOut = consensus::deserialize(&bytes).map_err(|_| {
-                StoreError::Serialization(format!(
-                    "Failed to deserialize output for coinbase_root_height: {}",
-                    outpoint_key
-                ))
-            })?;
-            min_height = std::cmp::min(min_height, stored_out.coinbase_root_height);
+                stored_out.coinbase_root_height
+            };
+            min_height = std::cmp::min(min_height, height);
         }
         Ok(min_height)
     }
@@ -1428,6 +1441,102 @@ mod tests {
 
         // min_coinbase_root_height = 0: no filtering
         let result = store.check_prevouts_and_find_coinbase(&outpoints, 0);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_check_prevouts_rejects_expired_root_through_in_block_spend_chain() {
+        // A coinbase at height 50 is spent by spend1 and spend2 within
+        // the same block at height 60. The chain is:
+        //   coinbase(h:50) -> spend1(h:60) -> spend2(h:60)
+        // Both spend1 and spend2 inherit coinbase_root_height = 50.
+        // Checking spend2's output with min = 100 should reject it.
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Coinbase at height 50 (stored in a previous block)
+        let coinbase_tx = Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint::new(bitcoin::Txid::all_zeros(), u32::MAX),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::default(),
+                script_sig: bitcoin::ScriptBuf::new(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(5_000_000),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        };
+        let coinbase_txid = coinbase_tx.compute_txid();
+
+        let mut batch = Store::get_write_batch();
+        store
+            .add_sharechain_txs(&[ShareTransaction(coinbase_tx)], 50, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // spend1 and spend2 in the same block at height 60
+        let spend1 = Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint::new(coinbase_txid, 0),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::default(),
+                script_sig: bitcoin::ScriptBuf::new(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(4_000_000),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        };
+        let spend1_txid = spend1.compute_txid();
+
+        let spend2 = Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint::new(spend1_txid, 0),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::default(),
+                script_sig: bitcoin::ScriptBuf::new(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(3_000_000),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        };
+        let spend2_txid = spend2.compute_txid();
+
+        // Store both in the same block at height 60
+        let mut batch = Store::get_write_batch();
+        store
+            .add_sharechain_txs(
+                &[ShareTransaction(spend1), ShareTransaction(spend2)],
+                60,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // spend2's output inherits coinbase_root_height = 50 from the
+        // chain: coinbase(50) -> spend1(inherits 50) -> spend2(inherits 50)
+        let outpoints = vec![bitcoin::OutPoint::new(spend2_txid, 0)];
+
+        // min = 100: root height 50 is expired
+        let result = store.check_prevouts_and_find_coinbase(&outpoints, 100);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("coinbase_root_height"),
+        );
+
+        // min = 50: root height 50 is at boundary, passes
+        let result = store.check_prevouts_and_find_coinbase(&outpoints, 50);
         assert!(result.is_ok());
     }
 
@@ -2466,8 +2575,13 @@ mod tests {
         };
 
         let outputs_cf = store.db.cf_handle(&ColumnFamily::Outputs).unwrap();
+        let empty_cache: HashMap<String, u32> = HashMap::new();
         let result = store
-            .min_coinbase_root_height_for_inputs(&ShareTransaction(spending_tx), &outputs_cf)
+            .min_coinbase_root_height_for_inputs(
+                &ShareTransaction(spending_tx),
+                &outputs_cf,
+                &empty_cache,
+            )
             .unwrap();
 
         assert_eq!(
@@ -2496,8 +2610,12 @@ mod tests {
         };
 
         let outputs_cf = store.db.cf_handle(&ColumnFamily::Outputs).unwrap();
-        let result =
-            store.min_coinbase_root_height_for_inputs(&ShareTransaction(spending_tx), &outputs_cf);
+        let empty_cache: HashMap<String, u32> = HashMap::new();
+        let result = store.min_coinbase_root_height_for_inputs(
+            &ShareTransaction(spending_tx),
+            &outputs_cf,
+            &empty_cache,
+        );
 
         assert!(
             result.is_err(),
