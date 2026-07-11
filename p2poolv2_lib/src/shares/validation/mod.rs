@@ -1064,9 +1064,7 @@ impl DefaultShareValidator {
         }
         let tip_height = chain_store_handle
             .get_tip_height()
-            .map_err(|error| {
-                ValidationError::new(format!("Failed to get tip height: {error}"))
-            })?
+            .map_err(|error| ValidationError::new(format!("Failed to get tip height: {error}")))?
             .unwrap_or(0);
         let min_coinbase_root_height = tip_height.saturating_sub(MAX_PPLNS_WINDOW_SHARES as u32);
         let coinbase_outpoints = chain_store_handle
