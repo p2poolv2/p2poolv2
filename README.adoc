@@ -186,5 +186,5 @@ correctly.
 DIAL_FANOUT=3 IDEAL_BLOCK_TIME=1 SHARES_PER_BLOCK=5 NODE_COUNT=10 CONVERGENCE_WAIT_SECONDS=100 LATENCY_MS=100 ./load-tests/sim/nightly.sh
 ----
 
-See the link:docs/simulation/ folder for detailed documentation on how
-to run the script and interpret the results.
+See the link:docs/simulation/[docs/simulation] directory for detailed
+documentation on how to run the script and interpret the results.
