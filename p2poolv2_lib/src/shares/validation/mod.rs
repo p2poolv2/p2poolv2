@@ -43,6 +43,7 @@ use crate::shares::transactions::coinbase::{compute_commitment_hash, compute_wit
 use crate::shares::witness_commitment::WITNESS_COMMITMENT_LENGTH;
 use crate::sim_overrides;
 use crate::store::block_tx_metadata::Status;
+use crate::store::writer::StoreError;
 use crate::stratum::work::coinbase::build_bitcoin_coinbase_transaction;
 use crate::stratum::work::gbt::compute_merkle_root_from_branches;
 use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
@@ -103,18 +104,26 @@ pub fn is_in_pplns_zone(block_height: u32, tip_height: u32) -> bool {
 /// then determine whether the block is in the PPLNS zone.
 ///
 /// Returns `Ok(true)` for PPLNS zone (full validation), `Ok(false)` for
-/// prune zone (PoW-only). Returns `Err` if the metadata lookup fails or
-/// the block has no expected_height.
+/// prune zone (PoW-only). Defaults to PPLNS zone when metadata is not
+/// yet available (race with async store writes for locally mined or
+/// recently received blocks). Returns `Err` only for real store
+/// failures (Database, ChannelClosed, Serialization).
 pub fn check_pplns_zone(
     blockhash: &BlockHash,
     chain_store_handle: &ChainStoreHandle,
 ) -> Result<bool, String> {
-    let metadata = chain_store_handle
-        .get_block_metadata(blockhash)
-        .map_err(|error| format!("Failed to get block metadata for {blockhash}: {error}"))?;
-    let block_height = metadata
-        .expected_height
-        .ok_or_else(|| format!("Block {blockhash} has no expected_height in metadata"))?;
+    let block_height = match chain_store_handle.get_block_metadata(blockhash) {
+        Ok(metadata) => match metadata.expected_height {
+            Some(height) => height,
+            None => return Ok(true),
+        },
+        Err(StoreError::NotFound(_)) => return Ok(true),
+        Err(error) => {
+            return Err(format!(
+                "Failed to get block metadata for {blockhash}: {error}"
+            ));
+        }
+    };
     let candidate_tip = chain_store_handle
         .get_candidate_tip_height()
         .map_err(|error| format!("Failed to get candidate tip height: {error}"))?
@@ -3586,5 +3595,65 @@ mod tests {
         // Height 0 with any tip is NOT in PPLNS zone (0 > anything is false)
         assert!(!is_in_pplns_zone(0, 0));
         assert!(!is_in_pplns_zone(0, 300_000));
+    }
+
+    #[test]
+    fn test_check_pplns_zone_defaults_to_pplns_when_metadata_not_found() {
+        // Locally mined or recently received blocks may not have
+        // metadata stored yet. check_pplns_zone should default to
+        // PPLNS zone (full validation) rather than returning an error.
+        let mut chain_store_handle = ChainStoreHandle::default();
+        chain_store_handle
+            .expect_get_block_metadata()
+            .returning(|_| Err(StoreError::NotFound("not found".into())));
+
+        let blockhash = TestShareBlockBuilder::new().build().block_hash();
+        let result = check_pplns_zone(&blockhash, &chain_store_handle);
+
+        assert!(result.is_ok());
+        assert!(
+            result.unwrap(),
+            "Expected PPLNS zone (true) for missing metadata"
+        );
+    }
+
+    #[test]
+    fn test_check_pplns_zone_defaults_to_pplns_when_height_is_none() {
+        let mut chain_store_handle = ChainStoreHandle::default();
+        chain_store_handle
+            .expect_get_block_metadata()
+            .returning(|_| {
+                Ok(BlockMetadata {
+                    expected_height: None,
+                    chain_work: Work::from_hex("0x00").unwrap(),
+                    status: Status::Candidate,
+                })
+            });
+
+        let blockhash = TestShareBlockBuilder::new().build().block_hash();
+        let result = check_pplns_zone(&blockhash, &chain_store_handle);
+
+        assert!(result.is_ok());
+        assert!(
+            result.unwrap(),
+            "Expected PPLNS zone (true) for missing height"
+        );
+    }
+
+    #[test]
+    fn test_check_pplns_zone_propagates_real_store_errors() {
+        let mut chain_store_handle = ChainStoreHandle::default();
+        chain_store_handle
+            .expect_get_block_metadata()
+            .returning(|_| Err(StoreError::Database("disk failure".into())));
+
+        let blockhash = TestShareBlockBuilder::new().build().block_hash();
+        let result = check_pplns_zone(&blockhash, &chain_store_handle);
+
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().contains("disk failure"),
+            "Expected database error to propagate"
+        );
     }
 }
