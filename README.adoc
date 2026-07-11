@@ -177,7 +177,7 @@ link:p2poolv2_cli/README.md[CLI Documentation]
 == Run Nightly Script
 
 We have a script that runs a number of nodes for a period of time with
-simulated hashrate. This helps us continously validate the p2p
+simulated hashrate. This helps us continuously validate the p2p
 networking, with sync, and maintaining of the DAG is working
 correctly.
 
