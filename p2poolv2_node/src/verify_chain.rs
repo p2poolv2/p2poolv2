@@ -21,6 +21,7 @@
 
 use bitcoin::BlockHash;
 use bitcoin::hashes::Hash;
+use p2poolv2_lib::accounting::payout::sharechain_pplns::pplns_window::PRUNE_DEPTH;
 use p2poolv2_lib::shares::validation::MAX_UNCLES;
 use p2poolv2_lib::store::Store;
 use p2poolv2_lib::store::block_tx_metadata::Status;
@@ -102,6 +103,9 @@ fn main() {
 
     println!("Top confirmed height: {top_height}");
 
+    let prune_boundary = top_height.saturating_sub(PRUNE_DEPTH as u32);
+    println!("Prune boundary: {prune_boundary} (blocks above this must have full data)");
+
     let mut summary = VerificationSummary::new();
 
     // Track confirmed hashes by height for parent linkage checks
@@ -154,28 +158,32 @@ fn main() {
             }
         };
 
-        // 3. Verify full block data exists
-        if !store.share_block_exists(&blockhash) {
-            summary.error(format!(
-                "h:{height} {blockhash} - block data missing (no txids in BlockTxids CF)"
-            ));
-        }
+        // 3. Verify full block data for blocks above prune boundary.
+        // Blocks below the boundary may or may not have data (pruning
+        // not yet implemented), so no check is performed for those.
+        if height >= prune_boundary {
+            if !store.share_block_exists(&blockhash) {
+                summary.error(format!(
+                    "h:{height} {blockhash} - block data missing (no txids in BlockTxids CF)"
+                ));
+            }
 
-        // 4. Verify share can be fully reconstructed
-        let share = store.get_share(&blockhash);
-        match &share {
-            Some(share_block) => {
-                // 5. Verify transactions non-empty (at least coinbase)
-                if share_block.transactions.is_empty() {
+            // 4. Verify share can be fully reconstructed
+            let share = store.get_share(&blockhash);
+            match &share {
+                Some(share_block) => {
+                    // 5. Verify transactions non-empty (at least coinbase)
+                    if share_block.transactions.is_empty() {
+                        summary.error(format!(
+                            "h:{height} {blockhash} - share has zero transactions (expected at least coinbase)"
+                        ));
+                    }
+                }
+                None => {
                     summary.error(format!(
-                        "h:{height} {blockhash} - share has zero transactions (expected at least coinbase)"
+                        "h:{height} {blockhash} - failed to reconstruct ShareBlock from store"
                     ));
                 }
-            }
-            None => {
-                summary.error(format!(
-                    "h:{height} {blockhash} - failed to reconstruct ShareBlock from store"
-                ));
             }
         }
 
