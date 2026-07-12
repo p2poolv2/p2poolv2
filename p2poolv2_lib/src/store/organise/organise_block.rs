@@ -52,7 +52,8 @@ impl Store {
         };
         let prune_height = candidate_tip_height.saturating_sub(PRUNE_DEPTH as u32);
 
-        let candidates = self.find_promotable_candidates(&top_confirmed, prune_height)?;
+        let candidates =
+            self.find_promotable_candidates(&top_confirmed, candidate_tip_height, prune_height)?;
 
         if !candidates.is_empty() {
             let promotable_height = candidates.last().unwrap().0;
@@ -121,19 +122,16 @@ impl Store {
     fn find_promotable_candidates(
         &self,
         top_confirmed: &TopResult,
+        candidate_tip_height: u32,
         prune_height: u32,
     ) -> Result<Chain, StoreError> {
-        let Ok(top_candidate) = self.get_top_candidate() else {
-            return Ok(Vec::new());
-        };
-
         debug!(
-            "Finding promotable candidates: top_confirmed {:?}, top_candidate {:?}",
-            top_confirmed, top_candidate
+            "Finding promotable candidates: top_confirmed {:?}, candidate_tip_height {}",
+            top_confirmed, candidate_tip_height
         );
 
         let scan_limit = top_confirmed.height + 1 + FETCH_BATCH_SIZE as u32;
-        let scan_end = std::cmp::min(scan_limit, top_candidate.height);
+        let scan_end = std::cmp::min(scan_limit, candidate_tip_height);
         let all_candidates = self.get_candidates(top_confirmed.height + 1, scan_end)?;
         Ok(self.contiguous_candidates_with_block_data(&all_candidates, prune_height))
     }
