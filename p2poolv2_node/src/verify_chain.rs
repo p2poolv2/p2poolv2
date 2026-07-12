@@ -280,7 +280,7 @@ fn main() {
                 }
             };
 
-            if !store.share_block_exists(uncle_hash) {
+            if height >= prune_boundary && !store.share_block_exists(uncle_hash) {
                 summary.warn(format!(
                     "h:{height} {blockhash} - uncle {uncle_hash} block data missing (header-only)"
                 ));

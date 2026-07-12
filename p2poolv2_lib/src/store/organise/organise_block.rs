@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use super::{Chain, Height, Store, TopResult};
+use crate::accounting::payout::sharechain_pplns::pplns_window::PRUNE_DEPTH;
 use crate::node::request_response_handler::block_fetcher::FETCH_BATCH_SIZE;
 use crate::store::writer::StoreError;
 use tracing::debug;
@@ -44,6 +45,13 @@ impl Store {
             StoreError::Database("organise_block called without a genesis block".into())
         })?;
 
+        let candidate_tip_height = match self.get_top_candidate_height() {
+            Ok(height) => height,
+            Err(StoreError::NotFound(_)) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let prune_height = candidate_tip_height.saturating_sub(PRUNE_DEPTH as u32);
+
         let candidates = self.find_promotable_candidates(&top_confirmed)?;
 
         if !candidates.is_empty() {
@@ -53,16 +61,17 @@ impl Store {
                 &candidates,
                 top_confirmed.height,
                 top_confirmed.hash,
+                prune_height,
             )? {
                 return self.extend_confirmed(promotable_height, &candidates, batch);
             }
 
             if self.should_reorg_confirmed(&top_confirmed, &candidates) {
-                return self.reorg_confirmed(&top_confirmed, &candidates, batch);
+                return self.reorg_confirmed(&top_confirmed, &candidates, prune_height, batch);
             }
         }
 
-        self.try_fallback_confirmation(&top_confirmed, batch)
+        self.try_fallback_confirmation(&top_confirmed, prune_height, batch)
     }
 
     /// Fallback: when no candidate chain blocks can be promoted, look
@@ -71,6 +80,7 @@ impl Store {
     fn try_fallback_confirmation(
         &self,
         top_confirmed: &TopResult,
+        prune_height: u32,
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<Option<Height>, StoreError> {
         let next_height = top_confirmed.height + 1;
@@ -84,7 +94,7 @@ impl Store {
                 if header.prev_share_blockhash != top_confirmed.hash {
                     continue;
                 }
-                if !self.all_block_and_uncle_data_available(&[*blockhash]) {
+                if !self.all_block_and_uncle_data_available(&[*blockhash], prune_height)? {
                     continue;
                 }
                 debug!(
@@ -99,11 +109,15 @@ impl Store {
         Ok(None)
     }
 
-    /// Find the contiguous prefix of candidates with block data that
-    /// are eligible for promotion to confirmed.
+    /// Find the contiguous prefix of candidates that are eligible for
+    /// promotion to confirmed.
+    ///
+    /// Blocks below the prune boundary (candidate_tip - PRUNE_DEPTH) do
+    /// not require block body data -- they are promoted header-only.
+    /// Blocks at or above the boundary require full block data.
     ///
     /// Returns an empty vec when no candidate chain exists or when the
-    /// first candidate lacks block data.
+    /// first block above the prune boundary lacks block data.
     fn find_promotable_candidates(&self, top_confirmed: &TopResult) -> Result<Chain, StoreError> {
         let Ok(top_candidate) = self.get_top_candidate() else {
             return Ok(Vec::new());
@@ -114,19 +128,27 @@ impl Store {
             top_confirmed, top_candidate
         );
 
+        let prune_height = top_candidate.height.saturating_sub(PRUNE_DEPTH as u32);
         let scan_limit = top_confirmed.height + 1 + FETCH_BATCH_SIZE as u32;
         let scan_end = std::cmp::min(scan_limit, top_candidate.height);
         let all_candidates = self.get_candidates(top_confirmed.height + 1, scan_end)?;
-        Ok(self.contiguous_candidates_with_block_data(&all_candidates))
+        Ok(self.contiguous_candidates_with_block_data(&all_candidates, prune_height))
     }
 
-    /// Return the contiguous prefix of candidates that have full block
-    /// data stored. Stops at the first candidate where
-    /// `share_block_exists` returns false.
-    fn contiguous_candidates_with_block_data(&self, candidates: &Chain) -> Chain {
+    /// Return the contiguous prefix of candidates eligible for promotion.
+    ///
+    /// Blocks below `prune_height` are allowed without body data (their
+    /// PoW was validated at header time). Blocks at or above the boundary
+    /// must have full block data stored. Stops at the first block above
+    /// the boundary that lacks data.
+    fn contiguous_candidates_with_block_data(
+        &self,
+        candidates: &Chain,
+        prune_height: u32,
+    ) -> Chain {
         let mut result = Vec::with_capacity(candidates.len());
         for (height, blockhash) in candidates {
-            if !self.share_block_exists(blockhash) {
+            if *height >= prune_height && !self.share_block_exists(blockhash) {
                 debug!(
                     "Candidate at height {} ({}) missing block data, stopping promotion",
                     height, blockhash
@@ -1205,6 +1227,115 @@ mod tests {
         assert_eq!(
             store.get_confirmed_at_height(2).unwrap(),
             local_block.block_hash()
+        );
+    }
+
+    /// contiguous_candidates_with_block_data allows blocks below
+    /// prune_height without body data. Test by calling it directly with
+    /// an artificial prune_height.
+    #[test]
+    fn test_contiguous_candidates_allows_prune_zone_blocks_without_body() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Build 3 candidates: header-only (no body)
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        store.push_to_candidate_chain(&share1).unwrap();
+
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(0xe9695793)
+            .build();
+        store.push_to_candidate_chain(&share2).unwrap();
+
+        let share3 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share2.block_hash().to_string())
+            .nonce(0xe9695794)
+            .build();
+        store.push_to_candidate_chain(&share3).unwrap();
+
+        let candidates: Chain = vec![
+            (1, share1.block_hash()),
+            (2, share2.block_hash()),
+            (3, share3.block_hash()),
+        ];
+
+        // prune_height = 4: all blocks (1,2,3) below boundary, no body needed
+        let result = store.contiguous_candidates_with_block_data(&candidates, 4);
+        assert_eq!(result.len(), 3, "All 3 should pass when below prune_height");
+
+        // prune_height = 2: block at height 1 is below (OK), height 2 needs body
+        let result = store.contiguous_candidates_with_block_data(&candidates, 2);
+        assert_eq!(
+            result.len(),
+            1,
+            "Only block at height 1 should pass (below 2), height 2 needs body"
+        );
+
+        // prune_height = 0: all blocks need body, none have it
+        let result = store.contiguous_candidates_with_block_data(&candidates, 0);
+        assert_eq!(
+            result.len(),
+            0,
+            "No blocks should pass when all need body data"
+        );
+    }
+
+    /// contiguous_candidates_with_block_data stops at the first block
+    /// above prune_height that lacks body, even if later blocks have it.
+    #[test]
+    fn test_contiguous_candidates_stops_at_first_gap_above_prune_height() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // share1: header only (no body)
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        store.push_to_candidate_chain(&share1).unwrap();
+
+        // share2: header only (no body)
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(0xe9695793)
+            .build();
+        store.push_to_candidate_chain(&share2).unwrap();
+
+        // share3: has full body
+        let share3 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share2.block_hash().to_string())
+            .nonce(0xe9695794)
+            .build();
+        store.store_with_valid_metadata(&share3);
+
+        let candidates: Chain = vec![
+            (1, share1.block_hash()),
+            (2, share2.block_hash()),
+            (3, share3.block_hash()),
+        ];
+
+        // prune_height = 2: height 1 is below (OK without body),
+        // height 2 is at boundary (needs body, missing) -> stops
+        // share3 at height 3 has body but is never reached
+        let result = store.contiguous_candidates_with_block_data(&candidates, 2);
+        assert_eq!(
+            result.len(),
+            1,
+            "Should stop at height 2 (missing body at boundary)"
         );
     }
 }

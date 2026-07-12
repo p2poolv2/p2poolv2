@@ -31,29 +31,44 @@ const CONFIRMED_SUFFIX: &str = ":f";
 const TOP_CONFIRMED_KEY: &str = "meta:top_confirmed_height";
 
 impl Store {
-    /// Check that every block in the list has its body stored and that
-    /// all uncles referenced by each block also have their bodies stored.
+    /// Check that every block in the list has its body stored and
+    /// that all uncles referenced by each block also have their
+    /// bodies stored. Skip blocks below `prune_height` in the check
+    /// as they are organised by header only.
     ///
     /// Returns false (with a debug log) on the first missing block body
     /// or uncle body. Used by both `should_extend_confirmed` and
     /// `reorg_confirmed` to ensure PPLNS can resolve all uncle data
     /// before a block is promoted.
-    pub(super) fn all_block_and_uncle_data_available(&self, blockhashes: &[BlockHash]) -> bool {
+    pub(super) fn all_block_and_uncle_data_available(
+        &self,
+        blockhashes: &[BlockHash],
+        prune_height: u32,
+    ) -> Result<bool, StoreError> {
         for blockhash in blockhashes {
+            let metadata = self.get_block_metadata(blockhash)?;
+            let block_height = metadata.expected_height.ok_or_else(|| {
+                StoreError::NotFound(format!(
+                    "Block {blockhash} has no expected_height in all_block_and_uncle_data_available"
+                ))
+            })?;
+            if block_height < prune_height {
+                continue;
+            }
             if !self.share_block_exists(blockhash) {
                 debug!("Block {blockhash} missing block data");
-                return false;
+                return Ok(false);
             }
             if let Ok(Some(header)) = self.get_share_header(blockhash) {
                 for uncle in &header.uncles {
                     if !self.share_block_exists(uncle) {
                         debug!("Uncle {uncle} of block {blockhash} missing block data");
-                        return false;
+                        return Ok(false);
                     }
                 }
             }
         }
-        true
+        Ok(true)
     }
     /// Check if the candidate chain should reorg the confirmed chain.
     ///
@@ -111,6 +126,7 @@ impl Store {
         &self,
         top_confirmed: &TopResult,
         candidates: &Chain,
+        prune_height: u32,
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<Option<Height>, StoreError> {
         let (_, tip_hash) = candidates
@@ -129,9 +145,9 @@ impl Store {
             StoreError::NotFound("Empty branch returned from get_branch_to_chain.".into())
         })?;
 
-        // Do not reorg if any block or its uncles lack block data
+        // Do not reorg if any block above the prune boundary lacks body data.
         let fork_hashes: Vec<BlockHash> = fork_branch.iter().copied().collect();
-        if !self.all_block_and_uncle_data_available(&fork_hashes) {
+        if !self.all_block_and_uncle_data_available(&fork_hashes, prune_height)? {
             debug!("Reorg skipped: block or uncle missing block data");
             return Ok(None);
         }
@@ -185,6 +201,11 @@ impl Store {
     /// `get_txs_by_blockhash_index`. Callers must ensure the
     /// block's tx data has already been committed in a prior batch - the
     /// read against a pending `WriteBatch` will not see its contents.
+    ///
+    /// For blocks with body data, fetches transactions and records
+    /// spends. For prune-zone blocks without body data, only writes the
+    /// confirmed height index (SpendsIndex not needed because their
+    /// outputs are unspendable via coinbase_root_height check).
     pub(super) fn put_confirmed_entry(
         &self,
         height: Height,
@@ -196,8 +217,11 @@ impl Store {
         let serialized = consensus::serialize(blockhash);
         batch.put_cf(&block_height_cf, key, serialized);
 
-        let txs = self.get_txs_by_blockhash_index(blockhash)?;
-        self.add_spends_for_block(&txs, batch)?;
+        // a check for existing share block captures check for blocks in pplns zone
+        if self.share_block_exists(blockhash) {
+            let txs = self.get_txs_by_blockhash_index(blockhash)?;
+            self.add_spends_for_block(&txs, batch)?;
+        }
         Ok(())
     }
 
@@ -344,6 +368,7 @@ impl Store {
         candidates: &Chain,
         top_confirmed_height: Height,
         top_confirmed_hash: BlockHash,
+        prune_height: u32,
     ) -> Result<bool, StoreError> {
         debug!(
             "top confirmed height {}, top confirmed hash {}",
@@ -370,7 +395,7 @@ impl Store {
         }
 
         let candidate_hashes: Vec<BlockHash> = candidates.iter().map(|(_, hash)| *hash).collect();
-        Ok(self.all_block_and_uncle_data_available(&candidate_hashes))
+        self.all_block_and_uncle_data_available(&candidate_hashes, prune_height)
     }
 
     /// Promote candidates to confirmed.
@@ -1278,7 +1303,7 @@ mod tests {
         let candidates = vec![(1, fork_share.block_hash())];
         let mut batch = Store::get_write_batch();
         let result = store
-            .reorg_confirmed(&top_confirmed, &candidates, &mut batch)
+            .reorg_confirmed(&top_confirmed, &candidates, 0, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -1412,7 +1437,7 @@ mod tests {
         let candidates = vec![(1, fork_1.block_hash()), (2, fork_2.block_hash())];
         let mut batch = Store::get_write_batch();
         let result = store
-            .reorg_confirmed(&top_confirmed, &candidates, &mut batch)
+            .reorg_confirmed(&top_confirmed, &candidates, 0, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -1555,7 +1580,7 @@ mod tests {
         let candidates = vec![(1, fork_share.block_hash())];
         let mut batch = Store::get_write_batch();
         let result = store
-            .reorg_confirmed(&top_confirmed, &candidates, &mut batch)
+            .reorg_confirmed(&top_confirmed, &candidates, 0, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -1670,7 +1695,7 @@ mod tests {
         let candidates = vec![(2, fork_share.block_hash())];
         let mut batch = Store::get_write_batch();
         let result = store
-            .reorg_confirmed(&top_confirmed, &candidates, &mut batch)
+            .reorg_confirmed(&top_confirmed, &candidates, 0, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -1718,7 +1743,7 @@ mod tests {
         let candidates: Chain = Vec::new();
 
         let mut batch = Store::get_write_batch();
-        let result = store.reorg_confirmed(&top_confirmed, &candidates, &mut batch);
+        let result = store.reorg_confirmed(&top_confirmed, &candidates, 0, &mut batch);
         assert!(result.is_err());
     }
 
@@ -1832,7 +1857,7 @@ mod tests {
         let candidates = vec![(1, fork_1.block_hash())];
         let mut batch = Store::get_write_batch();
         store
-            .reorg_confirmed(&top_confirmed, &candidates, &mut batch)
+            .reorg_confirmed(&top_confirmed, &candidates, 0, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -1921,7 +1946,7 @@ mod tests {
 
         let mut batch = Store::get_write_batch();
         let result = store
-            .reorg_confirmed(&top_confirmed, &candidates, &mut batch)
+            .reorg_confirmed(&top_confirmed, &candidates, 0, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
