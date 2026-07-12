@@ -158,7 +158,7 @@ fn main() {
             }
         };
 
-        // 3. Verify full block data for blocks above prune boundary.
+        // 3. Verify full block data for blocks at or above prune boundary.
         // Blocks below the boundary may or may not have data (pruning
         // not yet implemented), so no check is performed for those.
         if height >= prune_boundary {
