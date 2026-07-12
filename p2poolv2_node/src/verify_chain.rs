@@ -104,7 +104,7 @@ fn main() {
     println!("Top confirmed height: {top_height}");
 
     let prune_boundary = top_height.saturating_sub(PRUNE_DEPTH as u32);
-    println!("Prune boundary: {prune_boundary} (blocks above this must have full data)");
+    println!("Prune boundary: {prune_boundary} (blocks at or above this must have full data)");
 
     let mut summary = VerificationSummary::new();
 

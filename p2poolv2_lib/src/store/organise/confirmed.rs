@@ -36,8 +36,9 @@ impl Store {
     /// bodies stored. Skip blocks below `prune_height` in the check
     /// as they are organised by header only.
     ///
-    /// Returns false (with a debug log) on the first missing block body
-    /// or uncle body. Used by both `should_extend_confirmed` and
+    /// Returns `Ok(false)` (with a debug log) on the first missing block
+    /// body or uncle body. Returns `Err` if block metadata is missing or
+    /// has no expected_height. Used by both `should_extend_confirmed` and
     /// `reorg_confirmed` to ensure PPLNS can resolve all uncle data
     /// before a block is promoted.
     pub(super) fn all_block_and_uncle_data_available(
@@ -217,7 +218,7 @@ impl Store {
         let serialized = consensus::serialize(blockhash);
         batch.put_cf(&block_height_cf, key, serialized);
 
-        // a check for existing share block captures check for blocks in pplns zone
+        // If a block body exists, it means the block is in PPLNS zone
         if self.share_block_exists(blockhash) {
             let txs = self.get_txs_by_blockhash_index(blockhash)?;
             self.add_spends_for_block(&txs, batch)?;
@@ -359,10 +360,11 @@ impl Store {
     /// Check if the confirmed chain can be extended by the local candidate chain.
     ///
     /// Returns true when the first candidate is a child of the top
-    /// confirmed AND all candidates (plus their uncles) have block
-    /// body data available in the store. The uncle check ensures the
-    /// PPLNS window can resolve all uncle entries when computing
-    /// payout distributions.
+    /// confirmed AND all candidates at or above `prune_height` (plus
+    /// their uncles) have block body data available in the store.
+    /// Candidates below `prune_height` are promoted header-only since
+    /// their PoW was validated at header sync time and their outputs
+    /// are unspendable.
     pub(super) fn should_extend_confirmed(
         &self,
         candidates: &Chain,
