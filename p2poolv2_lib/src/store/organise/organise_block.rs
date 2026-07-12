@@ -52,7 +52,7 @@ impl Store {
         };
         let prune_height = candidate_tip_height.saturating_sub(PRUNE_DEPTH as u32);
 
-        let candidates = self.find_promotable_candidates(&top_confirmed)?;
+        let candidates = self.find_promotable_candidates(&top_confirmed, prune_height)?;
 
         if !candidates.is_empty() {
             let promotable_height = candidates.last().unwrap().0;
@@ -118,7 +118,11 @@ impl Store {
     ///
     /// Returns an empty vec when no candidate chain exists or when the
     /// first block above the prune boundary lacks block data.
-    fn find_promotable_candidates(&self, top_confirmed: &TopResult) -> Result<Chain, StoreError> {
+    fn find_promotable_candidates(
+        &self,
+        top_confirmed: &TopResult,
+        prune_height: u32,
+    ) -> Result<Chain, StoreError> {
         let Ok(top_candidate) = self.get_top_candidate() else {
             return Ok(Vec::new());
         };
@@ -128,7 +132,6 @@ impl Store {
             top_confirmed, top_candidate
         );
 
-        let prune_height = top_candidate.height.saturating_sub(PRUNE_DEPTH as u32);
         let scan_limit = top_confirmed.height + 1 + FETCH_BATCH_SIZE as u32;
         let scan_end = std::cmp::min(scan_limit, top_candidate.height);
         let all_candidates = self.get_candidates(top_confirmed.height + 1, scan_end)?;
