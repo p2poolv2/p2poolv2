@@ -60,12 +60,15 @@ impl Store {
                 debug!("Block {blockhash} missing block data");
                 return Ok(false);
             }
-            if let Ok(Some(header)) = self.get_share_header(blockhash) {
-                for uncle in &header.uncles {
-                    if !self.share_block_exists(uncle) {
-                        debug!("Uncle {uncle} of block {blockhash} missing block data");
-                        return Ok(false);
-                    }
+            let header = self.get_share_header(blockhash)?.ok_or_else(|| {
+                StoreError::NotFound(format!(
+                    "Header missing for candidate {blockhash} in uncle data check"
+                ))
+            })?;
+            for uncle in &header.uncles {
+                if !self.share_block_exists(uncle) {
+                    debug!("Uncle {uncle} of block {blockhash} missing block data");
+                    return Ok(false);
                 }
             }
         }
