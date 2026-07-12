@@ -146,6 +146,49 @@ Relevant code:
 - `store/share_store.rs` (`compute_block_height_from_parent`)
 - `shares/validation/mod.rs` (`validate_prevouts`)
 
+## Confirmation Pipeline (prune-zone promotion)
+
+The confirmation pipeline (`organise_block`) promotes candidate blocks
+to confirmed status. Blocks below the prune boundary are promoted
+without requiring block body data.
+
+### Flow
+
+`organise_block` computes `prune_height = candidate_tip - PRUNE_DEPTH`
+once from a single candidate tip snapshot, then passes it to all
+downstream functions to avoid inconsistency from concurrent updates.
+
+### Gates modified for pruning
+
+1. **`contiguous_candidates_with_block_data`**: blocks with
+   `height < prune_height` pass without `share_block_exists` check.
+   Blocks at or above require full body data.
+
+2. **`all_block_and_uncle_data_available`**: blocks below prune_height
+   skip body and uncle body checks. Returns `Result<bool>` to
+   propagate metadata errors (expected_height must always exist for
+   candidates).
+
+3. **`put_confirmed_entry`**: only calls `add_spends_for_block` when
+   `share_block_exists` returns true. Prune-zone blocks without body
+   data get the confirmed height index entry but no SpendsIndex
+   population.
+
+### Safety
+
+Prune-zone blocks without SpendsIndex entries cannot cause
+double-spend acceptance:
+- Their outputs have `coinbase_root_height` below `tip - PPLNS_DEPTH`
+- `check_prevouts_and_find_coinbase` rejects spending those outputs
+- SpendsIndex is only needed for outputs that CAN be spent
+
+Relevant code:
+- `store/organise/organise_block.rs` (`organise_block`,
+  `find_promotable_candidates`, `contiguous_candidates_with_block_data`)
+- `store/organise/confirmed.rs` (`put_confirmed_entry`,
+  `all_block_and_uncle_data_available`, `should_extend_confirmed`,
+  `reorg_confirmed`)
+
 ## Constants
 
 | Constant | Value | Meaning |
