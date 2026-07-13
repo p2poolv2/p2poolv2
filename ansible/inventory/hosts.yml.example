@@ -1,0 +1,61 @@
+---
+# P2Poolv2 inventory example
+#
+# Copy this file to get started:
+#   cp hosts.yml.example hosts.yml
+#
+# Secrets (RPC passwords, API auth) are in group_vars/vault.yml.
+# See group_vars/vault.yml.example for setup instructions.
+
+all:
+  children:
+    p2poolv2_nodes:
+      hosts:
+        your-server.example.com:
+          ansible_user: ubuntu
+
+          p2poolv2_version: "0.12.0"
+          p2poolv2_certbot_email: "you@example.com"
+
+          p2poolv2_instances:
+            # --- Mainnet instance ---
+            - instance: main
+              p2p_listen_address: "/ip4/0.0.0.0/tcp/6884"
+              stratum_port: 3333
+              start_difficulty: 10000
+              minimum_difficulty: 100
+              solo_address: "YOUR_MAINNET_ADDRESS"
+              bootstrap_address: "YOUR_MAINNET_ADDRESS"
+              bitcoin_network: main
+              bitcoin_rpc_url: "http://127.0.0.1:8332"
+              bitcoin_rpc_user: "{{ vault_bitcoin_rpc_user }}"
+              bitcoin_rpc_pass: "{{ vault_bitcoin_rpc_pass }}"
+              zmq_endpoint: "tcp://127.0.0.1:28332"
+              api_port: 46884
+              # api_auth_user: "{{ vault_api_auth_user }}"
+              # api_auth_pass: "{{ vault_api_auth_pass }}"
+              # api_auth_token: "{{ vault_api_auth_token }}"
+              pool_signature: "P2Poolv2"
+              domain: mainnet.example.com
+              redirect_domains: []
+
+            # --- Testnet4 instance ---
+            - instance: testnet4
+              p2p_listen_address: "/ip4/0.0.0.0/tcp/6885"
+              stratum_port: 3334
+              start_difficulty: 125000
+              minimum_difficulty: 1000
+              solo_address: "YOUR_TESTNET4_ADDRESS"
+              bootstrap_address: "YOUR_TESTNET4_ADDRESS"
+              bitcoin_network: testnet4
+              bitcoin_rpc_url: "http://127.0.0.1:48332"
+              bitcoin_rpc_user: "{{ vault_bitcoin_rpc_user }}"
+              bitcoin_rpc_pass: "{{ vault_bitcoin_rpc_pass }}"
+              zmq_endpoint: "tcp://127.0.0.1:28333"
+              api_port: 46885
+              # api_auth_user: "{{ vault_api_auth_user }}"
+              # api_auth_pass: "{{ vault_api_auth_pass }}"
+              # api_auth_token: "{{ vault_api_auth_token }}"
+              pool_signature: "P2Poolv2"
+              domain: testnet4.example.com
+              redirect_domains: []

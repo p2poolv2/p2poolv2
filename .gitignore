@@ -27,6 +27,10 @@ spec/**/*out
 spec/**/*ps
 spec/**/states
 
+# Ansible inventory and vault (contain hostnames, credentials)
+ansible/inventory/hosts.yml
+ansible/inventory/group_vars/all/vault.yml
+
 # Editors
 .zed/
 .vscode/

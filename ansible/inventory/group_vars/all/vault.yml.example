@@ -1,0 +1,28 @@
+---
+# P2Poolv2 secrets -- managed with ansible-vault
+#
+# Copy this file to vault.yml and fill in real values:
+#   cp vault.yml.example vault.yml
+#
+# Then encrypt it:
+#   ansible-vault encrypt inventory/group_vars/all/vault.yml
+#
+# Run playbooks with:
+#   ansible-playbook -i inventory/hosts.yml playbook.yml --ask-vault-pass
+#
+# To edit later:
+#   ansible-vault edit inventory/group_vars/all/vault.yml
+#
+# Ansible auto-loads all YAML files in group_vars/all/, so vault.yml
+# variables are available to all hosts without any extra include directives.
+
+# Bitcoin RPC credentials (shared across instances on the same host)
+vault_bitcoin_rpc_user: "your_rpc_user"
+vault_bitcoin_rpc_pass: "your_rpc_password"
+
+# API authentication (optional)
+# Generate the auth_token with: p2poolv2_cli gen-auth <username> <password>
+# The nginx basic auth header is derived automatically from user + pass.
+# vault_api_auth_user: "admin"
+# vault_api_auth_pass: "your_api_password"
+# vault_api_auth_token: "salt:password-hmac"

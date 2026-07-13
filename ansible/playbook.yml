@@ -1,0 +1,50 @@
+---
+# P2Poolv2 deployment playbook
+#
+# Supports multiple instances (e.g. mainnet + testnet4) on the same host.
+# Each instance gets its own config, systemd unit, and data dir.
+# Nginx is not managed -- configure it separately on each host.
+#
+# Usage:
+#   ansible-playbook -i inventory/hosts.yml playbook.yml --ask-vault-pass
+
+- name: Deploy P2Poolv2
+  hosts: p2poolv2_nodes
+  become: true
+
+  tasks:
+    - name: Deploy p2poolv2 instance
+      ansible.builtin.include_role:
+        name: p2poolv2
+      vars:
+        p2poolv2_instance: "{{ instance.instance }}"
+        p2poolv2_p2p_listen_address: "{{ instance.p2p_listen_address }}"
+        p2poolv2_stratum_port: "{{ instance.stratum_port }}"
+        p2poolv2_start_difficulty: "{{ instance.start_difficulty }}"
+        p2poolv2_minimum_difficulty: "{{ instance.minimum_difficulty }}"
+        p2poolv2_solo_address: "{{ instance.solo_address }}"
+        p2poolv2_bootstrap_address: "{{ instance.bootstrap_address }}"
+        p2poolv2_bitcoin_network: "{{ instance.bitcoin_network }}"
+        p2poolv2_bitcoin_rpc_url: "{{ instance.bitcoin_rpc_url }}"
+        p2poolv2_bitcoin_rpc_user: "{{ instance.bitcoin_rpc_user }}"
+        p2poolv2_bitcoin_rpc_pass: "{{ instance.bitcoin_rpc_pass }}"
+        p2poolv2_zmq_endpoint: "{{ instance.zmq_endpoint }}"
+        p2poolv2_api_hostname: "{{ instance.api_hostname | default('127.0.0.1') }}"
+        p2poolv2_api_port: "{{ instance.api_port }}"
+        p2poolv2_pool_signature: "{{ instance.pool_signature | default(omit) }}"
+        p2poolv2_pool_mode: "{{ instance.pool_mode | default('p2poolv2') }}"
+        p2poolv2_dial_peers: "{{ instance.dial_peers | default([]) }}"
+        p2poolv2_blocked_ips: "{{ instance.blocked_ips | default([]) }}"
+        p2poolv2_max_established_incoming: "{{ instance.max_established_incoming | default(100) }}"
+        p2poolv2_max_established_outgoing: "{{ instance.max_established_outgoing | default(100) }}"
+        p2poolv2_max_established_per_peer: "{{ instance.max_established_per_peer | default(1) }}"
+        p2poolv2_difficulty_multiplier: "{{ instance.difficulty_multiplier | default(1.0) }}"
+        p2poolv2_api_auth_user: "{{ instance.api_auth_user | default(omit) }}"
+        p2poolv2_api_auth_token: "{{ instance.api_auth_token | default(omit) }}"
+        p2poolv2_external_address: "{{ instance.external_address | default(omit) }}"
+        p2poolv2_wait_for_chain_sync: "{{ instance.wait_for_chain_sync | default(true) }}"
+      loop: "{{ p2poolv2_instances }}"
+      loop_control:
+        loop_var: instance
+        label: "{{ instance.instance }}"
+      when: instance.enabled | default(true)

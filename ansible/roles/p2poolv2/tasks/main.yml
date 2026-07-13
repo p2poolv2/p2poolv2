@@ -1,0 +1,131 @@
+---
+# P2Poolv2 role -- install and configure p2poolv2 node
+
+- name: Create p2poolv2 system group
+  ansible.builtin.group:
+    name: "{{ p2poolv2_group }}"
+    system: true
+    state: present
+
+- name: Create p2poolv2 system user
+  ansible.builtin.user:
+    name: "{{ p2poolv2_user }}"
+    group: "{{ p2poolv2_group }}"
+    system: true
+    shell: /bin/false
+    home: "/var/lib/p2poolv2"
+    create_home: false
+
+- name: Create installation directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ p2poolv2_bin_dir }}"
+    - "{{ p2poolv2_static_dir }}"
+
+- name: Create config directory
+  ansible.builtin.file:
+    path: "{{ p2poolv2_config_dir }}"
+    state: directory
+    owner: "{{ p2poolv2_user }}"
+    group: "{{ p2poolv2_group }}"
+    mode: "0750"
+
+- name: Create state directory
+  ansible.builtin.file:
+    path: "{{ p2poolv2_state_dir }}"
+    state: directory
+    owner: "{{ p2poolv2_user }}"
+    group: "{{ p2poolv2_group }}"
+    mode: "0750"
+
+- name: Create log directory
+  ansible.builtin.file:
+    path: "{{ p2poolv2_log_dir }}"
+    state: directory
+    owner: "{{ p2poolv2_user }}"
+    group: "{{ p2poolv2_group }}"
+    mode: "0750"
+
+- name: Create stats directory
+  ansible.builtin.file:
+    path: "{{ p2poolv2_stats_dir }}"
+    state: directory
+    owner: "{{ p2poolv2_user }}"
+    group: "{{ p2poolv2_group }}"
+    mode: "0750"
+
+# --- Install binaries via official installer script ---
+# The installer auto-detects architecture and verifies checksums.
+# P2POOLV2_NODE_UNMANAGED_INSTALL sets the install dir and skips PATH modification.
+
+- name: Check installed p2poolv2 version
+  ansible.builtin.command:
+    cmd: "{{ p2poolv2_bin_dir }}/p2poolv2 --version"
+  register: p2poolv2_installed_version
+  changed_when: false
+  failed_when: false
+
+- name: Install p2poolv2 binaries
+  ansible.builtin.shell:
+    cmd: |
+      curl --proto '=https' --tlsv1.2 -LsSf \
+        {{ p2poolv2_release_url }}/p2poolv2_node-installer.sh | \
+        P2POOLV2_NODE_UNMANAGED_INSTALL={{ p2poolv2_bin_dir }} sh
+  when: >
+    p2poolv2_installed_version.rc != 0 or
+    p2poolv2_version not in p2poolv2_installed_version.stdout
+  notify: restart p2poolv2
+
+# --- Download and install dashboard ---
+
+- name: Download dashboard archive
+  ansible.builtin.get_url:
+    url: "{{ p2poolv2_release_url }}/dashboard.tar.gz"
+    dest: "/tmp/p2poolv2-dashboard-{{ p2poolv2_version }}.tar.gz"
+    mode: "0644"
+  register: dashboard_download
+
+- name: Extract dashboard to static directory
+  ansible.builtin.unarchive:
+    src: "/tmp/p2poolv2-dashboard-{{ p2poolv2_version }}.tar.gz"
+    dest: "{{ p2poolv2_static_dir }}"
+    remote_src: true
+    owner: root
+    group: "{{ p2poolv2_group }}"
+  when: dashboard_download.changed and not ansible_check_mode
+
+# --- Deploy configuration ---
+
+- name: Deploy p2poolv2 config
+  ansible.builtin.template:
+    src: config.toml.j2
+    dest: "{{ p2poolv2_config_dir }}/config-{{ p2poolv2_instance }}.toml"
+    owner: "{{ p2poolv2_user }}"
+    group: "{{ p2poolv2_group }}"
+    mode: "0640"
+  notify: restart p2poolv2
+
+# --- Deploy systemd unit ---
+
+- name: Deploy systemd template unit
+  ansible.builtin.template:
+    src: p2poolv2@.service.j2
+    dest: /etc/systemd/system/p2poolv2@.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - reload systemd
+    - restart p2poolv2
+
+- name: Enable and start p2poolv2 service
+  ansible.builtin.systemd:
+    name: "p2poolv2@{{ p2poolv2_instance }}"
+    enabled: true
+    state: started
+    daemon_reload: true

@@ -1,0 +1,87 @@
+# P2Poolv2 role defaults
+# Override these in inventory group_vars or host_vars.
+
+# Version and instance
+p2poolv2_version: "0.12.0"
+p2poolv2_instance: "main"
+
+# GitHub release URL base
+# The installer script auto-detects architecture.
+p2poolv2_release_url: "https://github.com/p2poolv2/p2poolv2/releases/download/v{{ p2poolv2_version }}"
+
+# Installation paths (match existing server layout)
+p2poolv2_bin_dir: "/opt/p2poolv2/bin"
+p2poolv2_static_dir: "/opt/p2poolv2/share/static"
+p2poolv2_config_dir: "/etc/p2poolv2"
+p2poolv2_state_dir: "/var/lib/p2poolv2/{{ p2poolv2_instance }}"
+p2poolv2_log_dir: "/var/log/p2poolv2/{{ p2poolv2_instance }}"
+
+# System user
+p2poolv2_user: "p2poolv2"
+p2poolv2_group: "p2poolv2"
+
+# --- Network config ---
+p2poolv2_p2p_listen_address: "/ip4/0.0.0.0/tcp/6884"
+p2poolv2_dial_peers: []
+p2poolv2_blocked_ips: []
+p2poolv2_max_pending_incoming: 10
+p2poolv2_max_pending_outgoing: 10
+p2poolv2_max_established_incoming: 100
+p2poolv2_max_established_outgoing: 100
+p2poolv2_max_established_per_peer: 1
+p2poolv2_max_workbase_per_second: 10
+p2poolv2_max_userworkbase_per_second: 10
+p2poolv2_max_miningshare_per_second: 100
+p2poolv2_max_inventory_per_second: 100
+p2poolv2_max_transaction_per_second: 100
+p2poolv2_max_requests_per_second: 100
+p2poolv2_dial_timeout_secs: 30
+# Optional: set to advertise a specific address to peers (for NAT)
+# p2poolv2_external_address: "/ip4/203.0.113.1/tcp/6884"
+
+# --- Store config ---
+p2poolv2_store_path: "{{ p2poolv2_state_dir }}/store.db"
+p2poolv2_background_task_frequency_hours: 24
+p2poolv2_pplns_ttl_days: 7
+
+# --- Stratum config ---
+p2poolv2_stratum_hostname: "0.0.0.0"
+p2poolv2_stratum_port: 3333
+p2poolv2_start_difficulty: 10000
+p2poolv2_minimum_difficulty: 100
+# p2poolv2_maximum_difficulty:
+p2poolv2_solo_address: ""
+p2poolv2_bootstrap_address: ""
+# p2poolv2_donation_address: ""
+# p2poolv2_donation: 0
+# p2poolv2_fee_address: ""
+# p2poolv2_fee: 0
+# ZMQ always binds to localhost -- never expose to the network
+p2poolv2_zmq_endpoint: "tcp://127.0.0.1:28332"
+p2poolv2_bitcoin_network: "main"
+p2poolv2_version_mask: "1fffe000"
+p2poolv2_difficulty_multiplier: 1.0
+# p2poolv2_pool_signature: "P2Poolv2"
+# p2poolv2_max_connections: 1000
+p2poolv2_pool_mode: "p2poolv2"
+p2poolv2_wait_for_chain_sync: true
+
+# --- Bitcoin RPC config ---
+# Always localhost -- never bind to 0.0.0.0
+p2poolv2_bitcoin_rpc_url: "http://127.0.0.1:8332"
+p2poolv2_bitcoin_rpc_user: ""
+p2poolv2_bitcoin_rpc_pass: ""
+
+# --- Logging config ---
+p2poolv2_log_file: "{{ p2poolv2_log_dir }}/p2poolv2.log"
+p2poolv2_log_level: "info"
+p2poolv2_log_console: false
+p2poolv2_stats_dir: "{{ p2poolv2_state_dir }}/stats"
+
+# --- API config ---
+# Bind to localhost only -- nginx proxies public access
+p2poolv2_api_hostname: "127.0.0.1"
+p2poolv2_api_port: 46884
+# p2poolv2_api_auth_user: ""
+# p2poolv2_api_auth_token: ""
+p2poolv2_api_cors_allowed: false

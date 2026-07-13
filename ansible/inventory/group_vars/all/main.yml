@@ -1,0 +1,4 @@
+---
+# Shared defaults for all P2Poolv2 nodes
+# Host-specific overrides go in hosts.yml
+# Role defaults are in roles/p2poolv2/defaults/main.yml
