@@ -164,15 +164,27 @@ downstream functions to avoid inconsistency from concurrent updates.
    `height < prune_height` pass without `share_block_exists` check.
    Blocks at or above require full body data.
 
-2. **`all_block_and_uncle_data_available`**: blocks below prune_height
-   skip body and uncle body checks. Returns `Result<bool>` to
-   propagate metadata errors (expected_height must always exist for
-   candidates).
+2. **`all_block_and_uncle_data_available`**: both blocks and their
+   uncles are checked against prune_height using
+   `get_block_height_from_metadata`. Blocks or uncles below
+   prune_height skip the body check. Returns `Result<bool, StoreError>`
+   -- propagates errors when metadata or expected_height is missing
+   (these indicate store corruption for candidates that went through
+   organise_header). Missing headers also error rather than silently
+   assuming no uncles.
 
 3. **`put_confirmed_entry`**: only calls `add_spends_for_block` when
    `share_block_exists` returns true. Prune-zone blocks without body
    data get the confirmed height index entry but no SpendsIndex
    population.
+
+### Consistency
+
+`organise_block` reads candidate_tip_height once and derives
+prune_height from it. This single snapshot is passed to
+`find_promotable_candidates`, `should_extend_confirmed`,
+`reorg_confirmed`, and `try_fallback_confirmation` to avoid divergence
+from concurrent header arrivals advancing the candidate tip.
 
 ### Safety
 
