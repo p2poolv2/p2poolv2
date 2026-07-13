@@ -31,9 +31,7 @@
   ansible.builtin.file:
     path: "/etc/nginx/sites-enabled/{{ item }}"
     state: absent
-  loop:
-    - default
-    - testnet4.conf
+  loop: "{{ p2poolv2_nginx_remove_sites }}"
   notify: reload nginx
 
 # --- Bootstrap: HTTP-only config for cert acquisition ---

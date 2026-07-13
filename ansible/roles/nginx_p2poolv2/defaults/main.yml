@@ -11,3 +11,7 @@ p2poolv2_certbot_email: ""
 # Grafana reverse proxy (optional, set domain to enable)
 # p2poolv2_grafana_domain: "grafana.example.com"
 p2poolv2_grafana_port: 3000
+
+# Nginx site configs to remove from sites-enabled (e.g. old configs being replaced)
+p2poolv2_nginx_remove_sites:
+  - default
