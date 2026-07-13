@@ -280,10 +280,19 @@ fn main() {
                 }
             };
 
-            if height >= prune_boundary && !store.share_block_exists(uncle_hash) {
-                summary.warn(format!(
-                    "h:{height} {blockhash} - uncle {uncle_hash} block data missing (header-only)"
-                ));
+            match store.get_block_height_from_metadata(uncle_hash) {
+                Ok(uncle_height) => {
+                    if uncle_height >= prune_boundary && !store.share_block_exists(uncle_hash) {
+                        summary.warn(format!(
+                            "h:{height} {blockhash} - uncle {uncle_hash} (uncle h:{uncle_height}) block data missing (header-only)"
+                        ));
+                    }
+                }
+                Err(error) => {
+                    summary.error(format!(
+                        "h:{height} {blockhash} - uncle {uncle_hash} metadata error: {error}"
+                    ));
+                }
             }
 
             // 10b. Uncle not referenced by another confirmed nephew
