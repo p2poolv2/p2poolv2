@@ -47,12 +47,7 @@ impl Store {
         prune_height: u32,
     ) -> Result<bool, StoreError> {
         for blockhash in blockhashes {
-            let metadata = self.get_block_metadata(blockhash)?;
-            let block_height = metadata.expected_height.ok_or_else(|| {
-                StoreError::NotFound(format!(
-                    "Block {blockhash} has no expected_height in all_block_and_uncle_data_available"
-                ))
-            })?;
+            let block_height = self.get_block_height_from_metadata(blockhash)?;
             if block_height < prune_height {
                 continue;
             }
@@ -222,6 +217,8 @@ impl Store {
         batch.put_cf(&block_height_cf, key, serialized);
 
         // If a block body exists, it means the block is in PPLNS zone
+        // and we need to add transactions to store and update spends
+        // index.
         if self.share_block_exists(blockhash) {
             let txs = self.get_txs_by_blockhash_index(blockhash)?;
             self.add_spends_for_block(&txs, batch)?;

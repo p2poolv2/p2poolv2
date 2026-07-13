@@ -426,6 +426,18 @@ impl Store {
         self.get_shares(&blockhashes)
     }
 
+    /// Get the expected height for a block from its metadata.
+    ///
+    /// Returns an error if metadata is missing or has no expected_height.
+    pub fn get_block_height_from_metadata(&self, blockhash: &BlockHash) -> Result<u32, StoreError> {
+        let metadata = self.get_block_metadata(blockhash)?;
+        metadata.expected_height.ok_or_else(|| {
+            StoreError::NotFound(format!(
+                "Block {blockhash} has no expected_height"
+            ))
+        })
+    }
+
     /// Get the block metadata for a blockhash
     pub fn get_block_metadata(&self, blockhash: &BlockHash) -> Result<BlockMetadata, StoreError> {
         let block_metadata_cf = self.db.cf_handle(&ColumnFamily::BlockMetadata).unwrap();
