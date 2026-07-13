@@ -87,7 +87,7 @@
   when: >
     p2poolv2_installed_version.rc != 0 or
     p2poolv2_version not in p2poolv2_installed_version.stdout
-  notify: restart p2poolv2
+  register: p2poolv2_binary_changed
 
 # --- Download and install dashboard ---
 
@@ -116,7 +116,7 @@
     owner: "{{ p2poolv2_user }}"
     group: "{{ p2poolv2_group }}"
     mode: "0640"
-  notify: restart p2poolv2
+  register: p2poolv2_config_changed
 
 # --- Deploy systemd unit ---
 
@@ -127,13 +127,24 @@
     owner: root
     group: root
     mode: "0644"
-  notify:
-    - reload systemd
-    - restart p2poolv2
+  register: p2poolv2_unit_changed
+
+- name: Reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: p2poolv2_unit_changed.changed
 
 - name: Enable and start p2poolv2 service
   ansible.builtin.systemd:
     name: "p2poolv2@{{ p2poolv2_instance }}"
     enabled: true
     state: started
-    daemon_reload: true
+
+- name: Restart p2poolv2 service
+  ansible.builtin.systemd:
+    name: "p2poolv2@{{ p2poolv2_instance }}"
+    state: restarted
+  when: >
+    (p2poolv2_binary_changed is defined and p2poolv2_binary_changed.changed) or
+    p2poolv2_config_changed.changed or
+    p2poolv2_unit_changed.changed

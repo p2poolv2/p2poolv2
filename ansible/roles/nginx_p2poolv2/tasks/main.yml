@@ -86,7 +86,12 @@
     creates: "/etc/letsencrypt/live/{{ p2poolv2_grafana_domain }}/fullchain.pem"
   when: p2poolv2_grafana_domain is defined and p2poolv2_certbot_email | default('') | length > 0
 
-# --- Deploy full SSL config ---
+# --- Deploy full SSL config (only when certs exist) ---
+
+- name: Re-check if SSL certificate exists
+  ansible.builtin.stat:
+    path: "/etc/letsencrypt/live/{{ p2poolv2_domain }}/fullchain.pem"
+  register: ssl_cert_after
 
 - name: Deploy full nginx config with SSL
   ansible.builtin.template:
@@ -95,4 +100,5 @@
     owner: root
     group: root
     mode: "0644"
+  when: ssl_cert_after.stat.exists
   notify: reload nginx
