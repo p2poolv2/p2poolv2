@@ -220,9 +220,8 @@ impl Store {
         let serialized = consensus::serialize(blockhash);
         batch.put_cf(&block_height_cf, key, serialized);
 
-        // If a block body exists, it means the block is in PPLNS zone
-        // and we need to add transactions to store and update spends
-        // index.
+        // If block body data exists, we can fetch transactions and update the spends index.
+        // (Blocks promoted header-only in the prune zone will not have body data.)
         if self.share_block_exists(blockhash) {
             let txs = self.get_txs_by_blockhash_index(blockhash)?;
             self.add_spends_for_block(&txs, batch)?;
@@ -1963,5 +1962,120 @@ mod tests {
             store.get_confirmed_at_height(1).unwrap(),
             share1.block_hash()
         );
+    }
+
+    // -- all_block_and_uncle_data_available prune_height tests --
+
+    #[test]
+    fn test_block_below_prune_height_passes_without_body() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Header-only block at height 1 (no body)
+        let share = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        store.push_to_candidate_chain(&share).unwrap();
+        assert!(!store.share_block_exists(&share.block_hash()));
+
+        // prune_height = 2: block at height 1 is below, body not required
+        let result = store
+            .all_block_and_uncle_data_available(&[share.block_hash()], 2)
+            .unwrap();
+        assert!(result, "Block below prune_height should pass without body");
+    }
+
+    #[test]
+    fn test_block_at_prune_height_fails_without_body() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Header-only block at height 1 (no body)
+        let share = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        store.push_to_candidate_chain(&share).unwrap();
+
+        // prune_height = 1: block at height 1 is at boundary, body required
+        let result = store
+            .all_block_and_uncle_data_available(&[share.block_hash()], 1)
+            .unwrap();
+        assert!(!result, "Block at prune_height should fail without body");
+    }
+
+    #[test]
+    fn test_uncle_below_prune_height_passes_without_body() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Uncle at height 1 (header-only, no body)
+        let uncle = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695793)
+            .build();
+        store.push_to_candidate_chain(&uncle).unwrap();
+
+        // Main block at height 1 referencing the uncle, with full body
+        let main_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .uncles(vec![uncle.block_hash()])
+            .nonce(0xe9695792)
+            .build();
+        store.store_with_valid_metadata(&main_block);
+
+        // prune_height = 2: both blocks at height 1 are below boundary
+        let result = store
+            .all_block_and_uncle_data_available(&[main_block.block_hash()], 2)
+            .unwrap();
+        assert!(result, "Uncle below prune_height should pass without body");
+    }
+
+    #[test]
+    fn test_uncle_at_prune_height_fails_without_body() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Uncle at height 1 (header-only, no body)
+        let uncle = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695793)
+            .build();
+        store.push_to_candidate_chain(&uncle).unwrap();
+
+        // Main block at height 1 referencing the uncle, with full body
+        let main_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .uncles(vec![uncle.block_hash()])
+            .nonce(0xe9695792)
+            .build();
+        store.store_with_valid_metadata(&main_block);
+
+        // prune_height = 1: uncle at height 1 is at boundary, body required
+        let result = store
+            .all_block_and_uncle_data_available(&[main_block.block_hash()], 1)
+            .unwrap();
+        assert!(!result, "Uncle at prune_height should fail without body");
     }
 }
