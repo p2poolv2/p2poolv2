@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Ansible deployment: Add playbook and roles to deploy P2Poolv2 nodes.
+  Supports multiple instances (e.g. mainnet + testnet4) on the same
+  host with per-instance configs, systemd services, and data
+  directories. Includes nginx reverse proxy role with rate limiting,
+  WebSocket support, Let's Encrypt certificates, and optional Grafana
+  proxy. Credentials managed via ansible-vault. See ansible/README.adoc
+  for setup instructions.
+
 - Pruning support: Add two-zone block body validation, PPLNS zone and
   Prune Zone. Full block bodies are required for PPLNS zone at sync
   time. We fetch and retain only headers in the prune zone. All blocks

@@ -34,13 +34,13 @@ ansible-playbook -i inventory/hosts.yml playbook.yml --tags nginx --ask-vault-pa
 
 == What it does
 
-The playbook deploys one or more P2Poolv2 instances to a host. Each instance gets its own config, systemd service, data directory, and nginx vhost.
+The playbook deploys one or more P2Poolv2 instances to a host. Each instance gets its own config, systemd service, and data directory. Nginx is configured once per host as a reverse proxy.
 
 Two roles:
 
-*p2poolv2*:: Installs the p2poolv2 binary and CLI (auto-detects architecture), deploys the dashboard static files, templates the TOML config, and manages the systemd service.
+*p2poolv2*:: Installs the p2poolv2 binary and CLI using the official installer script (auto-detects architecture), deploys the dashboard static files, templates the TOML config, and manages the systemd service.
 
-*nginx_p2poolv2*:: Installs nginx as a reverse proxy in front of the API, sets up rate limiting, WebSocket support, and obtains Let's Encrypt certificates via certbot.
+*nginx_p2poolv2*:: Installs nginx as a reverse proxy in front of the API with rate limiting, WebSocket support, and Let's Encrypt certificates via certbot. Optionally proxies Grafana.
 
 == Directory layout
 
@@ -64,9 +64,9 @@ ansible/
       handlers/main.yml                 # Restart/reload handlers
     nginx_p2poolv2/
       defaults/main.yml                 # Nginx-specific defaults
-      tasks/main.yml                    # Install nginx, deploy vhost, certbot
+      tasks/main.yml                    # Install nginx, deploy site, certbot
       templates/
-        p2poolv2_site.conf.j2           # Nginx vhost config
+        p2poolv2_site.conf.j2           # Nginx site config
       handlers/main.yml                 # Reload handler
 ----
 
@@ -84,11 +84,12 @@ The roles deploy to the following paths on the target host:
 | `/var/lib/p2poolv2/<instance>/` | RocksDB store and stats
 | `/var/log/p2poolv2/<instance>/` | Log files
 | `/etc/systemd/system/p2poolv2@.service` | Systemd template unit
+| `/etc/nginx/sites-available/p2poolv2.conf` | Nginx reverse proxy config
 |===
 
 == Multiple instances
 
-Define multiple entries in `p2poolv2_instances` in your inventory to run mainnet and testnet4 (or any combination) on the same host. Each instance needs unique ports:
+Define multiple entries in `p2poolv2_instances` in your inventory to run mainnet and testnet4 (or any combination) on the same host. Each instance needs unique ports. Set `enabled: false` on an instance to skip it during deployment.
 
 [cols="1,1,1"]
 |===
@@ -99,6 +100,17 @@ Define multiple entries in `p2poolv2_instances` in your inventory to run mainnet
 | API | 46884 | 46885
 | ZMQ | 28332 | 28333
 |===
+
+== Nginx
+
+Nginx is configured once per host (not per instance). The config includes:
+
+- Reverse proxy to the P2Poolv2 API with rate limiting and WebSocket support
+- HTTP to HTTPS redirect
+- Optional redirect domains (e.g. p2poolv2.org -> testnet4.p2poolv2.org)
+- Optional Grafana reverse proxy (set `p2poolv2_grafana_domain`)
+- Let's Encrypt certificates via certbot
+- Basic auth header injection toward the API backend (derived from vault credentials)
 
 == Secrets
 

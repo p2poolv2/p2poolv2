@@ -2,11 +2,14 @@
 # P2Poolv2 deployment playbook
 #
 # Supports multiple instances (e.g. mainnet + testnet4) on the same host.
-# Each instance gets its own config, systemd unit, and data dir.
-# Nginx is not managed -- configure it separately on each host.
+# Each instance gets its own config, systemd unit, data dir, and nginx vhost.
 #
 # Usage:
-#   ansible-playbook -i inventory/hosts.yml playbook.yml --ask-vault-pass
+#   ansible-playbook -i inventory/hosts.yml playbook.yml
+#
+# To deploy only a specific role:
+#   ansible-playbook -i inventory/hosts.yml playbook.yml --tags p2poolv2
+#   ansible-playbook -i inventory/hosts.yml playbook.yml --tags nginx
 
 - name: Deploy P2Poolv2
   hosts: p2poolv2_nodes
@@ -48,3 +51,9 @@
         loop_var: instance
         label: "{{ instance.instance }}"
       when: instance.enabled | default(true)
+      tags: [p2poolv2]
+
+    - name: Deploy nginx
+      ansible.builtin.include_role:
+        name: nginx_p2poolv2
+      tags: [nginx]
