@@ -61,6 +61,10 @@ impl Store {
                 ))
             })?;
             for uncle in &header.uncles {
+                let uncle_height = self.get_block_height_from_metadata(uncle)?;
+                if uncle_height < prune_height {
+                    continue;
+                }
                 if !self.share_block_exists(uncle) {
                     debug!("Uncle {uncle} of block {blockhash} missing block data");
                     return Ok(false);

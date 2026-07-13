@@ -432,9 +432,7 @@ impl Store {
     pub fn get_block_height_from_metadata(&self, blockhash: &BlockHash) -> Result<u32, StoreError> {
         let metadata = self.get_block_metadata(blockhash)?;
         metadata.expected_height.ok_or_else(|| {
-            StoreError::NotFound(format!(
-                "Block {blockhash} has no expected_height"
-            ))
+            StoreError::NotFound(format!("Block {blockhash} has no expected_height"))
         })
     }
 
