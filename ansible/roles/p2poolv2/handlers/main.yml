@@ -1,0 +1,9 @@
+---
+- name: reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: restart p2poolv2
+  ansible.builtin.systemd:
+    name: "p2poolv2@{{ p2poolv2_instance }}"
+    state: restarted

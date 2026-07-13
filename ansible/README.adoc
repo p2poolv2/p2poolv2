@@ -1,0 +1,122 @@
+= P2Poolv2 Ansible Deployment
+
+== Quick start
+
+[source,bash]
+----
+cd ansible
+
+# 1. Create inventory and vault from examples
+cp inventory/hosts.yml.example inventory/hosts.yml
+cp inventory/group_vars/all/vault.yml.example inventory/group_vars/all/vault.yml
+
+# 2. Edit both files with your values
+$EDITOR inventory/hosts.yml
+$EDITOR inventory/group_vars/all/vault.yml
+
+# 3. Encrypt the vault
+ansible-vault encrypt inventory/group_vars/all/vault.yml
+
+# 4. Dry run to verify
+ansible-playbook -i inventory/hosts.yml playbook.yml --check --diff --ask-vault-pass
+
+# 5. Deploy
+ansible-playbook -i inventory/hosts.yml playbook.yml --ask-vault-pass
+----
+
+Deploy only a specific role:
+
+[source,bash]
+----
+ansible-playbook -i inventory/hosts.yml playbook.yml --tags p2poolv2 --ask-vault-pass
+ansible-playbook -i inventory/hosts.yml playbook.yml --tags nginx --ask-vault-pass
+----
+
+== What it does
+
+The playbook deploys one or more P2Poolv2 instances to a host. Each instance gets its own config, systemd service, data directory, and nginx vhost.
+
+Two roles:
+
+*p2poolv2*:: Installs the p2poolv2 binary and CLI (auto-detects architecture), deploys the dashboard static files, templates the TOML config, and manages the systemd service.
+
+*nginx_p2poolv2*:: Installs nginx as a reverse proxy in front of the API, sets up rate limiting, WebSocket support, and obtains Let's Encrypt certificates via certbot.
+
+== Directory layout
+
+[source]
+----
+ansible/
+  playbook.yml                          # Top-level playbook
+  inventory/
+    hosts.yml.example                   # Inventory template (copy to hosts.yml)
+    group_vars/
+      all/
+        main.yml                        # Shared defaults
+        vault.yml.example               # Secrets template (copy to vault.yml)
+  roles/
+    p2poolv2/
+      defaults/main.yml                 # All configurable variables with defaults
+      tasks/main.yml                    # Install, configure, enable service
+      templates/
+        config.toml.j2                  # P2Poolv2 TOML config
+        p2poolv2@.service.j2            # Systemd template unit
+      handlers/main.yml                 # Restart/reload handlers
+    nginx_p2poolv2/
+      defaults/main.yml                 # Nginx-specific defaults
+      tasks/main.yml                    # Install nginx, deploy vhost, certbot
+      templates/
+        p2poolv2_site.conf.j2           # Nginx vhost config
+      handlers/main.yml                 # Reload handler
+----
+
+== Server layout
+
+The roles deploy to the following paths on the target host:
+
+[cols="1,2"]
+|===
+| Path | Purpose
+
+| `/opt/p2poolv2/bin/` | p2poolv2 and p2poolv2_cli binaries
+| `/opt/p2poolv2/share/static/` | Dashboard static files
+| `/etc/p2poolv2/config-<instance>.toml` | Instance config (mode 0640)
+| `/var/lib/p2poolv2/<instance>/` | RocksDB store and stats
+| `/var/log/p2poolv2/<instance>/` | Log files
+| `/etc/systemd/system/p2poolv2@.service` | Systemd template unit
+|===
+
+== Multiple instances
+
+Define multiple entries in `p2poolv2_instances` in your inventory to run mainnet and testnet4 (or any combination) on the same host. Each instance needs unique ports:
+
+[cols="1,1,1"]
+|===
+| Port | Mainnet | Testnet4
+
+| Stratum | 3333 | 3334
+| P2P | 6884 | 6885
+| API | 46884 | 46885
+| ZMQ | 28332 | 28333
+|===
+
+== Secrets
+
+All credentials are stored in `inventory/group_vars/all/vault.yml`, encrypted with ansible-vault. The vault file is gitignored.
+
+To generate an API auth token:
+
+[source,bash]
+----
+p2poolv2_cli gen-auth <username> <password>
+----
+
+Store the username, password, and resulting token in the vault. The nginx basic auth header is derived automatically from the username and password.
+
+== Prerequisites
+
+* Ansible 2.12+
+* A target host running Ubuntu (tested on 22.04)
+* SSH access with sudo privileges
+* A running Bitcoin Core node on the target (not managed by this playbook)
+* DNS records pointing your domain(s) to the target host (for Let's Encrypt)

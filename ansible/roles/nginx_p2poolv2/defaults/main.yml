@@ -1,0 +1,18 @@
+---
+# Nginx reverse proxy for P2Poolv2
+#
+# Most values are passed per-instance from the playbook loop.
+# These are shared defaults.
+
+# Rate limiting
+p2poolv2_nginx_rate_limit: "10r/s"
+p2poolv2_nginx_rate_burst: 20
+
+# Let's Encrypt email for certificate registration
+p2poolv2_certbot_email: ""
+
+# Whether to set up HTTPS with certbot
+p2poolv2_nginx_https: true
+
+# Site name suffix for config files (set per-instance by playbook)
+p2poolv2_nginx_site_name: "default"

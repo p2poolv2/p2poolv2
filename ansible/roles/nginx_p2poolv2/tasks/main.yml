@@ -1,0 +1,60 @@
+---
+# Nginx reverse proxy for P2Poolv2
+#
+# This role is called once per instance via include_role in the playbook.
+# p2poolv2_nginx_site_name distinguishes config files per instance.
+
+- name: Install nginx
+  ansible.builtin.apt:
+    name: nginx
+    state: present
+    update_cache: true
+
+- name: Install certbot and nginx plugin
+  ansible.builtin.apt:
+    name:
+      - certbot
+      - python3-certbot-nginx
+    state: present
+  when: p2poolv2_nginx_https
+
+- name: Deploy nginx site config for {{ p2poolv2_nginx_site_name }}
+  ansible.builtin.template:
+    src: p2poolv2_site.conf.j2
+    dest: "/etc/nginx/sites-available/p2poolv2-{{ p2poolv2_nginx_site_name }}.conf"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: reload nginx
+
+- name: Enable nginx site for {{ p2poolv2_nginx_site_name }}
+  ansible.builtin.file:
+    src: "/etc/nginx/sites-available/p2poolv2-{{ p2poolv2_nginx_site_name }}.conf"
+    dest: "/etc/nginx/sites-enabled/p2poolv2-{{ p2poolv2_nginx_site_name }}.conf"
+    state: link
+  notify: reload nginx
+
+- name: Remove default nginx site
+  ansible.builtin.file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  notify: reload nginx
+
+- name: Obtain Let's Encrypt certificate for {{ p2poolv2_domain }}
+  ansible.builtin.command:
+    cmd: >
+      certbot certonly --nginx
+      --non-interactive
+      --agree-tos
+      --email {{ p2poolv2_certbot_email }}
+      -d {{ p2poolv2_domain }}
+      {% for d in p2poolv2_redirect_domains %}-d {{ d }} {% endfor %}
+    creates: "/etc/letsencrypt/live/{{ p2poolv2_domain }}/fullchain.pem"
+  when: p2poolv2_nginx_https and p2poolv2_certbot_email | length > 0
+  notify: reload nginx
+
+- name: Enable and start nginx
+  ansible.builtin.systemd:
+    name: nginx
+    enabled: true
+    state: started
