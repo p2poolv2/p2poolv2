@@ -1,9 +1,3 @@
 ---
-- name: reload systemd
-  ansible.builtin.systemd:
-    daemon_reload: true
-
-- name: restart p2poolv2
-  ansible.builtin.systemd:
-    name: "p2poolv2@{{ p2poolv2_instance }}"
-    state: restarted
+# Handlers not used -- restart logic is inline in tasks to ensure
+# correct p2poolv2_instance scoping in multi-instance loops.
