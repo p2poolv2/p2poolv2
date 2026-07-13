@@ -1,0 +1,58 @@
+# P2Poolv2 nginx config (HTTP only, for bootstrap) -- managed by Ansible
+
+limit_req_zone $binary_remote_addr zone=p2poolv2_api:10m rate={{ p2poolv2_nginx_rate_limit }};
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name {{ p2poolv2_domain }}{% for d in p2poolv2_redirect_domains %} {{ d }}{% endfor %};
+
+    location = / {
+        return 302 /dashboard;
+    }
+
+    location / {
+        limit_req zone=p2poolv2_api burst={{ p2poolv2_nginx_rate_burst }} nodelay;
+        limit_req_status 429;
+
+{% if p2poolv2_api_auth_user is defined and p2poolv2_api_auth_pass is defined %}
+        proxy_set_header Authorization "Basic {{ (p2poolv2_api_auth_user ~ ':' ~ p2poolv2_api_auth_pass) | b64encode }}";
+{% endif %}
+
+        proxy_pass http://127.0.0.1:{{ p2poolv2_api_port }}/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_connect_timeout 10s;
+        proxy_read_timeout 60s;
+
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+
+    access_log /var/log/nginx/p2poolv2_access.log;
+    error_log /var/log/nginx/p2poolv2_error.log;
+}
+
+{% if p2poolv2_grafana_domain is defined %}
+server {
+    listen 80;
+    listen [::]:80;
+    server_name {{ p2poolv2_grafana_domain }};
+
+    location / {
+        proxy_pass http://127.0.0.1:{{ p2poolv2_grafana_port | default(3000) }};
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+
+    access_log /var/log/nginx/grafana_access.log;
+    error_log /var/log/nginx/grafana_error.log;
+}
+{% endif %}
