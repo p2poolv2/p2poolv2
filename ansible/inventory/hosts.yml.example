@@ -4,8 +4,8 @@
 # Copy this file to get started:
 #   cp hosts.yml.example hosts.yml
 #
-# Secrets (RPC passwords, API auth) are in group_vars/vault.yml.
-# See group_vars/vault.yml.example for setup instructions.
+# Secrets (RPC passwords, API auth) are in group_vars/all/vault.yml.
+# See group_vars/all/vault.yml.example for setup instructions.
 
 all:
   children:
@@ -16,6 +16,14 @@ all:
 
           p2poolv2_version: "0.12.0"
           p2poolv2_certbot_email: "you@example.com"
+
+          # Nginx -- host-level config
+          p2poolv2_domain: your-domain.example.com
+          p2poolv2_redirect_domains: []
+          p2poolv2_api_port: 46884
+          # p2poolv2_api_auth_user: "{{ vault_api_auth_user }}"
+          # p2poolv2_api_auth_pass: "{{ vault_api_auth_pass }}"
+          # p2poolv2_grafana_domain: grafana.example.com
 
           p2poolv2_instances:
             # --- Mainnet instance ---
@@ -33,11 +41,8 @@ all:
               zmq_endpoint: "tcp://127.0.0.1:28332"
               api_port: 46884
               # api_auth_user: "{{ vault_api_auth_user }}"
-              # api_auth_pass: "{{ vault_api_auth_pass }}"
               # api_auth_token: "{{ vault_api_auth_token }}"
               pool_signature: "P2Poolv2"
-              domain: mainnet.example.com
-              redirect_domains: []
 
             # --- Testnet4 instance ---
             - instance: testnet4
@@ -54,8 +59,5 @@ all:
               zmq_endpoint: "tcp://127.0.0.1:28333"
               api_port: 46885
               # api_auth_user: "{{ vault_api_auth_user }}"
-              # api_auth_pass: "{{ vault_api_auth_pass }}"
               # api_auth_token: "{{ vault_api_auth_token }}"
               pool_signature: "P2Poolv2"
-              domain: testnet4.example.com
-              redirect_domains: []

@@ -1,25 +1,18 @@
-# P2Poolv2 nginx vhost for {{ p2poolv2_nginx_site_name }} -- managed by Ansible
+# P2Poolv2 nginx config -- managed by Ansible
 
-# Rate limiting zone (per-instance name to avoid conflicts)
-limit_req_zone $binary_remote_addr zone=p2poolv2_{{ p2poolv2_nginx_site_name }}:10m rate={{ p2poolv2_nginx_rate_limit }};
+limit_req_zone $binary_remote_addr zone=p2poolv2_api:10m rate={{ p2poolv2_nginx_rate_limit }};
+
+# --- P2Poolv2 API and dashboard ---
 
 server {
-    listen 80;
-    listen [::]:80;
-    server_name {{ p2poolv2_domain }}{% for d in p2poolv2_redirect_domains %} {{ d }}{% endfor %};
+    server_name {{ p2poolv2_domain }};
 
-{% if p2poolv2_nginx_https %}
-    # Redirect all HTTP to HTTPS (certbot will manage certs)
-    location / {
-        return 301 https://{{ p2poolv2_domain }}$request_uri;
-    }
-{% else %}
     location = / {
         return 302 /dashboard;
     }
 
     location / {
-        limit_req zone=p2poolv2_{{ p2poolv2_nginx_site_name }} burst={{ p2poolv2_nginx_rate_burst }} nodelay;
+        limit_req zone=p2poolv2_api burst={{ p2poolv2_nginx_rate_burst }} nodelay;
         limit_req_status 429;
 
 {% if p2poolv2_api_auth_user is defined and p2poolv2_api_auth_pass is defined %}
@@ -40,55 +33,29 @@ server {
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
     }
-{% endif %}
 
-    access_log /var/log/nginx/p2poolv2_{{ p2poolv2_nginx_site_name }}_access.log;
-    error_log /var/log/nginx/p2poolv2_{{ p2poolv2_nginx_site_name }}_error.log;
-}
-
-{% if p2poolv2_nginx_https %}
-server {
+    listen [::]:443 ssl ipv6only=on;
     listen 443 ssl;
-    listen [::]:443 ssl;
-    server_name {{ p2poolv2_domain }};
-
     ssl_certificate /etc/letsencrypt/live/{{ p2poolv2_domain }}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/{{ p2poolv2_domain }}/privkey.pem;
     include /etc/letsencrypt/options-ssl-nginx.conf;
     ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
 
-    location = / {
-        return 302 /dashboard;
-    }
-
-    location / {
-        limit_req zone=p2poolv2_{{ p2poolv2_nginx_site_name }} burst={{ p2poolv2_nginx_rate_burst }} nodelay;
-        limit_req_status 429;
-
-{% if p2poolv2_api_auth_user is defined and p2poolv2_api_auth_pass is defined %}
-        proxy_set_header Authorization "Basic {{ (p2poolv2_api_auth_user ~ ':' ~ p2poolv2_api_auth_pass) | b64encode }}";
-{% endif %}
-
-        proxy_pass http://127.0.0.1:{{ p2poolv2_api_port }}/;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-
-        proxy_connect_timeout 10s;
-        proxy_read_timeout 60s;
-
-        # WebSocket support
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-    }
-
-    access_log /var/log/nginx/p2poolv2_{{ p2poolv2_nginx_site_name }}_access.log;
-    error_log /var/log/nginx/p2poolv2_{{ p2poolv2_nginx_site_name }}_error.log;
+    access_log /var/log/nginx/p2poolv2_access.log;
+    error_log /var/log/nginx/p2poolv2_error.log;
 }
 
+server {
+    listen 80;
+    listen [::]:80;
+    server_name {{ p2poolv2_domain }};
+
+    return 301 https://{{ p2poolv2_domain }}$request_uri;
+}
+
+# --- Redirect domains ---
 {% for d in p2poolv2_redirect_domains %}
+
 server {
     listen 443 ssl;
     listen [::]:443 ssl;
@@ -102,5 +69,45 @@ server {
     return 301 https://{{ p2poolv2_domain }}$request_uri;
 }
 
+server {
+    listen 80;
+    listen [::]:80;
+    server_name {{ d }};
+
+    return 301 https://{{ p2poolv2_domain }}$request_uri;
+}
 {% endfor %}
+
+{% if p2poolv2_grafana_domain is defined %}
+# --- Grafana reverse proxy ---
+
+server {
+    listen 443 ssl;
+    server_name {{ p2poolv2_grafana_domain }};
+
+    location / {
+        proxy_pass http://127.0.0.1:{{ p2poolv2_grafana_port | default(3000) }};
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+
+    ssl_certificate /etc/letsencrypt/live/{{ p2poolv2_grafana_domain }}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/{{ p2poolv2_grafana_domain }}/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    access_log /var/log/nginx/grafana_access.log;
+    error_log /var/log/nginx/grafana_error.log;
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name {{ p2poolv2_grafana_domain }};
+
+    return 301 https://{{ p2poolv2_grafana_domain }}$request_uri;
+}
 {% endif %}
