@@ -37,7 +37,7 @@
 
 - name: Create state directory
   ansible.builtin.file:
-    path: "{{ p2poolv2_state_dir }}"
+    path: "/var/lib/p2poolv2/{{ p2poolv2_instance }}"
     state: directory
     owner: "{{ p2poolv2_user }}"
     group: "{{ p2poolv2_group }}"
@@ -45,7 +45,7 @@
 
 - name: Create log directory
   ansible.builtin.file:
-    path: "{{ p2poolv2_log_dir }}"
+    path: "/var/log/p2poolv2/{{ p2poolv2_instance }}"
     state: directory
     owner: "{{ p2poolv2_user }}"
     group: "{{ p2poolv2_group }}"
@@ -70,12 +70,20 @@
   changed_when: false
   failed_when: false
 
+- name: Download p2poolv2 installer script
+  ansible.builtin.get_url:
+    url: "{{ p2poolv2_release_url }}/p2poolv2_node-installer.sh"
+    dest: "/tmp/p2poolv2_node-installer-{{ p2poolv2_version }}.sh"
+    mode: "0755"
+  when: >
+    p2poolv2_installed_version.rc != 0 or
+    p2poolv2_version not in p2poolv2_installed_version.stdout
+
 - name: Install p2poolv2 binaries
-  ansible.builtin.shell:
-    cmd: |
-      curl --proto '=https' --tlsv1.2 -LsSf \
-        {{ p2poolv2_release_url }}/p2poolv2_node-installer.sh | \
-        P2POOLV2_NODE_UNMANAGED_INSTALL={{ p2poolv2_bin_dir }} sh
+  ansible.builtin.command:
+    cmd: "/tmp/p2poolv2_node-installer-{{ p2poolv2_version }}.sh"
+  environment:
+    P2POOLV2_NODE_UNMANAGED_INSTALL: "{{ p2poolv2_bin_dir }}"
   when: >
     p2poolv2_installed_version.rc != 0 or
     p2poolv2_version not in p2poolv2_installed_version.stdout

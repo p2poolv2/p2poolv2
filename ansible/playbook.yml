@@ -2,7 +2,8 @@
 # P2Poolv2 deployment playbook
 #
 # Supports multiple instances (e.g. mainnet + testnet4) on the same host.
-# Each instance gets its own config, systemd unit, data dir, and nginx vhost.
+# Each instance gets its own config, systemd unit, and data dir.
+# Nginx is configured once per host as a reverse proxy.
 #
 # Usage:
 #   ansible-playbook -i inventory/hosts.yml playbook.yml

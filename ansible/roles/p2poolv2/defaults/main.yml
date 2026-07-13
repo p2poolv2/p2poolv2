@@ -9,12 +9,10 @@ p2poolv2_instance: "main"
 # The installer script auto-detects architecture.
 p2poolv2_release_url: "https://github.com/p2poolv2/p2poolv2/releases/download/v{{ p2poolv2_version }}"
 
-# Installation paths (match existing server layout)
+# Installation paths
 p2poolv2_bin_dir: "/opt/p2poolv2/bin"
 p2poolv2_static_dir: "/opt/p2poolv2/share/static"
 p2poolv2_config_dir: "/etc/p2poolv2"
-p2poolv2_state_dir: "/var/lib/p2poolv2/{{ p2poolv2_instance }}"
-p2poolv2_log_dir: "/var/log/p2poolv2/{{ p2poolv2_instance }}"
 
 # System user
 p2poolv2_user: "p2poolv2"
@@ -40,7 +38,7 @@ p2poolv2_dial_timeout_secs: 30
 # p2poolv2_external_address: "/ip4/203.0.113.1/tcp/6884"
 
 # --- Store config ---
-p2poolv2_store_path: "{{ p2poolv2_state_dir }}/store.db"
+p2poolv2_store_path: "/var/lib/p2poolv2/{{ p2poolv2_instance }}/store.db"
 p2poolv2_background_task_frequency_hours: 24
 p2poolv2_pplns_ttl_days: 7
 
@@ -73,10 +71,10 @@ p2poolv2_bitcoin_rpc_user: ""
 p2poolv2_bitcoin_rpc_pass: ""
 
 # --- Logging config ---
-p2poolv2_log_file: "{{ p2poolv2_log_dir }}/p2poolv2.log"
+p2poolv2_log_file: "/var/log/p2poolv2/{{ p2poolv2_instance }}/p2poolv2.log"
 p2poolv2_log_level: "info"
 p2poolv2_log_console: false
-p2poolv2_stats_dir: "{{ p2poolv2_state_dir }}/stats"
+p2poolv2_stats_dir: "/var/lib/p2poolv2/{{ p2poolv2_instance }}/stats"
 
 # --- API config ---
 # Bind to localhost only -- nginx proxies public access
