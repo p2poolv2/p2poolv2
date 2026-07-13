@@ -9,6 +9,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Pruning support: Add two-zone block body validation, PPLNS zone and
+  Prune Zone. Full block bodies are required for PPLNS zone at sync
+  time. We fetch and retain only headers in the prune zone. All blocks
+  below the prune zone will be deleted in a future PR. See wiki page
+  on Pruning and/or the LLM architecture docs in docs/architecture for
+  more details.
+  - Block bodies are only fetched within PRUNE_DEPTH of the candidate
+    tip. Blocks below this are validated header-only with PoW at sync
+    time.
+  - `validate_below_pplns_depth`: lightweight validation for
+    prune-zone blocks, including PoW, uncles check, block size, tx
+    count.
+  - `coinbase_root_height` stored in StoredTxOut: tracks oldest
+    coinbase ancestor. Outputs deeper than PPLNS_DEPTH from tip are
+    unspendable.
+  - Confirmation pipeline promotes prune-zone blocks without body
+    data.  SpendsIndex skipped for these blocks as outputs are
+    unspendable anyway.
+  - `verify_chain` tool respects prune boundary. There are no body
+    checks below it.
+  - Constants: `PPLNS_DEPTH=120960`, `PRUNE_DEPTH=241920`,
+    `PRUNE_INTERVAL=360`.
+
 - ShareBlock relay: blocks are now pushed directly as full ShareBlocks
   instead of the Inv-then-fetch protocol, reducing propagation latency.
   Blocks are relayed on validation and broadcast only when the chain is

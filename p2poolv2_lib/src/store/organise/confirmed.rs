@@ -57,7 +57,7 @@ impl Store {
             }
             let header = self.get_share_header(blockhash)?.ok_or_else(|| {
                 StoreError::NotFound(format!(
-                    "Header missing for candidate {blockhash} in uncle data check"
+                    "Header missing for {blockhash} in uncle data check"
                 ))
             })?;
             for uncle in &header.uncles {
