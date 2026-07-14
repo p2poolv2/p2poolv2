@@ -3,9 +3,6 @@
     "list": [
       {
         "builtIn": 1,
-        "datasource": {
-          "type": "grafana"
-        },
         "enable": true,
         "hide": true,
         "iconColor": "rgba(0, 211, 255, 1)",
@@ -17,8 +14,7 @@
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
-  "id": 2,
-  "links": [],
+  "liveNow": false,
   "panels": [
     {
       "datasource": {
@@ -63,7 +59,6 @@
               "mode": "off"
             }
           },
-          "mappings": [],
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -77,9 +72,8 @@
               }
             ]
           },
-          "unit": "sishort"
-        },
-        "overrides": []
+          "unit": "Hs"
+        }
       },
       "gridPos": {
         "h": 9,
@@ -89,6 +83,10 @@
       },
       "id": 1,
       "options": {
+        "annotations": {
+          "clustering": -1,
+          "multiLane": false
+        },
         "legend": {
           "calcs": [],
           "displayMode": "list",
@@ -101,7 +99,7 @@
           "sort": "none"
         }
       },
-      "pluginVersion": "12.2.0",
+      "pluginVersion": "13.0.1",
       "targets": [
         {
           "datasource": {
@@ -121,7 +119,6 @@
           },
           "editorMode": "builder",
           "expr": "sum by(btcaddress) (rate(worker_shares_valid_total{btcaddress=\"$user_address\"}[1h]))",
-          "hide": false,
           "instant": false,
           "legendFormat": "Hashrate (1h)",
           "range": true,
@@ -133,7 +130,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus"
+        "type": "prometheus",
+        "uid": "cflknknanka9sd"
       },
       "fieldConfig": {
         "defaults": {
@@ -174,23 +172,17 @@
               "mode": "off"
             }
           },
-          "mappings": [],
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
                 "color": "green",
                 "value": 0
-              },
-              {
-                "color": "red",
-                "value": 80
               }
             ]
           },
-          "unit": "sishort"
-        },
-        "overrides": []
+          "unit": "Hs"
+        }
       },
       "gridPos": {
         "h": 10,
@@ -200,6 +192,10 @@
       },
       "id": 2,
       "options": {
+        "annotations": {
+          "clustering": -1,
+          "multiLane": false
+        },
         "legend": {
           "calcs": [],
           "displayMode": "list",
@@ -212,46 +208,33 @@
           "sort": "none"
         }
       },
-      "pluginVersion": "12.2.0",
+      "pluginVersion": "13.0.1",
       "repeat": "workername",
       "repeatDirection": "h",
       "targets": [
         {
-          "editorMode": "builder",
-          "expr": "rate(worker_shares_valid_total{btcaddress=\"$user_address\", workername=\"$workername\"}[5m])",
-          "instant": false,
-          "legendFormat": "{{workername}} (5m)",
-          "range": true,
-          "refId": "A"
-        },
-        {
           "datasource": {
-            "type": "prometheus"
+            "type": "prometheus",
+            "uid": "cflknknanka9sd"
           },
           "editorMode": "builder",
           "exemplar": false,
-          "expr": "rate(worker_shares_valid_total{btcaddress=\"$user_address\", workername=\"$workername\"}[1h])",
-          "hide": false,
+          "expr": "rate(worker_shares_valid_total{btcaddress=~\"$user_address\", workername=~\"$workername\"}[5m])",
           "instant": false,
-          "interval": "",
-          "legendFormat": "{{workername}} (1h)",
+          "legendFormat": "{{workername}}",
           "range": true,
-          "refId": "B"
+          "refId": "A"
         }
       ],
       "title": "Worker Hashrate",
       "type": "timeseries"
     },
     {
-      "datasource": {
-        "type": "prometheus"
-      },
       "fieldConfig": {
         "defaults": {
           "color": {
             "mode": "thresholds"
           },
-          "mappings": [],
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -266,8 +249,7 @@
             ]
           },
           "unit": "sishort"
-        },
-        "overrides": []
+        }
       },
       "gridPos": {
         "h": 10,
@@ -283,9 +265,7 @@
         "orientation": "auto",
         "percentChangeColorMode": "standard",
         "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
+          "calcs": ["lastNotNull"],
           "fields": "",
           "values": false
         },
@@ -293,7 +273,7 @@
         "textMode": "value_and_name",
         "wideLayout": true
       },
-      "pluginVersion": "12.2.0",
+      "pluginVersion": "13.0.1",
       "repeat": "workername",
       "repeatDirection": "h",
       "targets": [
@@ -313,8 +293,8 @@
     }
   ],
   "preload": false,
+  "refresh": "",
   "schemaVersion": 42,
-  "tags": [],
   "templating": {
     "list": [
       {
@@ -323,8 +303,14 @@
           "text": "bc1qu784gk8czv5kwm9pwssk53e0q9trpkec85r0t2",
           "value": "bc1qu784gk8czv5kwm9pwssk53e0q9trpkec85r0t2"
         },
+        "datasource": {
+          "type": "prometheus"
+        },
         "definition": "label_values(worker_shares_valid_total,btcaddress)",
+        "hide": 0,
+        "includeAll": false,
         "label": "User's BTC Address",
+        "multi": false,
         "name": "user_address",
         "options": [],
         "query": {
@@ -334,18 +320,23 @@
         },
         "refresh": 1,
         "regex": "",
+        "regexApplyTo": "value",
+        "skipUrlSync": false,
+        "sort": 0,
         "type": "query"
       },
       {
         "allowCustomValue": false,
         "current": {
           "text": "All",
-          "value": [
-            "$__all"
-          ]
+          "value": ["$__all"]
+        },
+        "datasource": {
+          "type": "prometheus"
         },
         "definition": "label_values(worker_shares_valid_total{btcaddress=\"$user_address\"},workername)",
         "description": "The worker name for the metric",
+        "hide": 0,
         "includeAll": true,
         "label": "Worker Name",
         "multi": true,
@@ -358,7 +349,9 @@
         },
         "refresh": 1,
         "regex": "",
-        "sort": 5,
+        "regexApplyTo": "value",
+        "skipUrlSync": false,
+        "sort": 0,
         "type": "query"
       }
     ]
@@ -367,9 +360,23 @@
     "from": "now-6h",
     "to": "now"
   },
-  "timepicker": {},
+  "timepicker": {
+    "refresh_intervals": [
+      "5s",
+      "10s",
+      "30s",
+      "1m",
+      "5m",
+      "15m",
+      "30m",
+      "1h",
+      "2h",
+      "1d"
+    ]
+  },
   "timezone": "browser",
   "title": "Users and Workers",
+  "version": 6,
   "uid": "adnhx6x",
-  "version": 10
+  "id": 2
 }
