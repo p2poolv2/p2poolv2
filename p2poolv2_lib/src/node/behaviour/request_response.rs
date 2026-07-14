@@ -16,11 +16,12 @@
 
 use async_trait::async_trait;
 use bitcoin::consensus::{Decodable, Encodable};
+use bitcoin::hashes::{Hash, sha256d};
 use libp2p::futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use libp2p::request_response::{Codec, OutboundFailure};
 use std::io;
 
-use crate::node::messages::{Message, RawMessage, network_magic};
+use crate::node::messages::{Message, RawMessage};
 
 /// Build the network-aware libp2p protocol string for a given bitcoin network.
 ///
@@ -51,44 +52,44 @@ impl AsRef<str> for P2PoolRequestResponseProtocol {
 
 // Consensus codec implementation using RawMessage for request-response protocols
 #[derive(Clone)]
-pub struct ConsensusCodec {
-    magic: [u8; 4],
-}
-
-impl ConsensusCodec {
-    pub fn new(magic: [u8; 4]) -> Self {
-        Self { magic }
-    }
-}
-
-impl Default for ConsensusCodec {
-    fn default() -> Self {
-        Self {
-            magic: network_magic::REGTEST,
-        }
-    }
-}
+pub struct ConsensusCodec;
 
 impl ConsensusCodec {
     async fn read_message<T>(&self, io: &mut T) -> io::Result<Message>
     where
         T: AsyncRead + Unpin + Send,
     {
-        // Read header: magic (4) + payload_len (4) + checksum (4) = 12 bytes
-        let mut header_bytes = [0u8; 12];
+        // Read header: payload_len (4) + checksum (4) = 8 bytes
+        let mut header_bytes = [0u8; 8];
         io.read_exact(&mut header_bytes).await?;
 
-        // Parse payload length from header
+        // Parse payload length and checksum from header
         let payload_len = u32::from_le_bytes([
+            header_bytes[0],
+            header_bytes[1],
+            header_bytes[2],
+            header_bytes[3],
+        ]);
+        let expected_checksum = [
             header_bytes[4],
             header_bytes[5],
             header_bytes[6],
             header_bytes[7],
-        ]);
+        ];
 
         // Read exactly payload_len bytes
         let mut payload_bytes = vec![0u8; payload_len as usize];
         io.read_exact(&mut payload_bytes).await?;
+
+        // Verify the payload checksum before decoding
+        let hash = sha256d::Hash::hash(&payload_bytes);
+        let actual_checksum = [hash[0], hash[1], hash[2], hash[3]];
+        if actual_checksum != expected_checksum {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Checksum mismatch",
+            ));
+        }
 
         let message = Message::consensus_decode(&mut &payload_bytes[..])
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
@@ -100,7 +101,7 @@ impl ConsensusCodec {
     where
         T: AsyncWrite + Unpin + Send,
     {
-        let raw_msg = RawMessage::new(self.magic, msg);
+        let raw_msg = RawMessage::new(msg);
         let mut bytes = Vec::new();
         raw_msg
             .consensus_encode(&mut bytes)

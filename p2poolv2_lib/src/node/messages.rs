@@ -49,19 +49,6 @@ mod getdata_discriminants {
     pub const TXID: u8 = 1;
 }
 
-/// Network magic bytes for different P2Poolv2 networks
-/// Chosen at random.
-pub mod network_magic {
-    /// Mainnet P2Poolv2
-    pub const MAINNET: [u8; 4] = [0x5a, 0xf0, 0x19, 0x13];
-    /// Testnet P2Poolv2
-    pub const TESTNET: [u8; 4] = [0xbc, 0xc7, 0x13, 0xc6];
-    /// Signet P2Poolv2
-    pub const SIGNET: [u8; 4] = [0x44, 0xe0, 0x9a, 0x44];
-    /// Regtest P2Poolv2
-    pub const REGTEST: [u8; 4] = [0x3f, 0x8e, 0xa2, 0xd8];
-}
-
 /// P2P network messages, encoded using bitcoin consensus_encode
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Message {
@@ -92,11 +79,13 @@ pub struct HandshakeData {
     pub tip_hash: BlockHash,
 }
 
-/// A complete P2P network message with protocol framing
+/// A complete P2P network message with protocol framing.
+///
+/// Network isolation is enforced at the libp2p protocol negotiation and Noise
+/// prologue layers (see `behaviour::request_response::protocol_string`), so the
+/// wire framing carries no network magic bytes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RawMessage {
-    /// Network magic bytes (4 bytes identifier)
-    pub magic: [u8; 4],
     /// The actual message payload
     pub payload: Message,
     /// Length of the payload in bytes
@@ -106,9 +95,9 @@ pub struct RawMessage {
 }
 
 impl RawMessage {
-    /// Create a new RawMessage from magic bytes and a Message
+    /// Create a new RawMessage from a Message
     /// Automatically computes payload_len and checksum
-    pub fn new(magic: [u8; 4], payload: Message) -> Self {
+    pub fn new(payload: Message) -> Self {
         // Encode payload to calculate length and checksum
         let mut engine = sha256d::Hash::engine();
         let payload_len = payload
@@ -121,7 +110,6 @@ impl RawMessage {
         let checksum = [hash[0], hash[1], hash[2], hash[3]];
 
         Self {
-            magic,
             payload,
             payload_len,
             checksum,
@@ -137,16 +125,11 @@ impl RawMessage {
     pub fn payload(&self) -> &Message {
         &self.payload
     }
-
-    /// Get the magic bytes
-    pub fn magic(&self) -> &[u8; 4] {
-        &self.magic
-    }
 }
 
 impl Display for RawMessage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "RawMessage(magic: {:?}, {})", self.magic, self.payload)
+        write!(f, "RawMessage({})", self.payload)
     }
 }
 
@@ -318,7 +301,6 @@ impl Decodable for Message {
 impl Encodable for RawMessage {
     fn consensus_encode<W: Write + ?Sized>(&self, w: &mut W) -> Result<usize, bitcoin::io::Error> {
         let mut len = 0;
-        len += self.magic.consensus_encode(w)?;
         len += self.payload_len.consensus_encode(w)?;
         len += self.checksum.consensus_encode(w)?;
         len += self.payload.consensus_encode(w)?;
@@ -329,7 +311,6 @@ impl Encodable for RawMessage {
 impl Decodable for RawMessage {
     fn consensus_decode<R: Read + ?Sized>(r: &mut R) -> Result<Self, encode::Error> {
         // Read header
-        let magic: [u8; 4] = Decodable::consensus_decode(r)?;
         let payload_len: u32 = Decodable::consensus_decode(r)?;
         let expected_checksum: [u8; 4] = Decodable::consensus_decode(r)?;
 
@@ -347,7 +328,6 @@ impl Decodable for RawMessage {
         let payload = Message::consensus_decode(&mut &payload_bytes[..])?;
 
         Ok(RawMessage {
-            magic,
             payload_len,
             checksum: expected_checksum,
             payload,
@@ -449,7 +429,7 @@ mod tests {
                 .unwrap(),
         ];
         let msg = Message::Inventory(InventoryMessage::BlockHashes(block_hashes.clone()));
-        let raw = RawMessage::new(network_magic::REGTEST, msg.clone());
+        let raw = RawMessage::new(msg.clone());
 
         // Test encoding
         let mut encoded = Vec::new();
@@ -458,7 +438,6 @@ mod tests {
         // Test decoding
         let decoded = RawMessage::consensus_decode(&mut &encoded[..]).unwrap();
 
-        assert_eq!(decoded.magic, network_magic::REGTEST);
         assert_eq!(decoded.payload, msg);
         assert_eq!(decoded.payload_len, raw.payload_len);
         assert_eq!(decoded.checksum, raw.checksum);
@@ -467,32 +446,18 @@ mod tests {
     #[test]
     fn test_raw_message_checksum_verification() {
         let msg = Message::NotFound(GetData::Block(BlockHash::all_zeros()));
-        let raw = RawMessage::new(network_magic::MAINNET, msg);
+        let raw = RawMessage::new(msg);
 
         let mut encoded = Vec::new();
         raw.consensus_encode(&mut encoded).unwrap();
 
-        // Corrupt the checksum
-        encoded[8] ^= 0xFF;
+        // Corrupt the checksum. The header is now payload_len (4 bytes) followed
+        // by the checksum (4 bytes), so the checksum starts at byte 4.
+        encoded[4] ^= 0xFF;
 
         // Decoding should fail
         let result = RawMessage::consensus_decode(&mut &encoded[..]);
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_raw_message_different_networks() {
-        let msg = Message::NotFound(GetData::Block(BlockHash::all_zeros()));
-
-        let raw_mainnet = RawMessage::new(network_magic::MAINNET, msg.clone());
-        let raw_testnet = RawMessage::new(network_magic::TESTNET, msg.clone());
-        let raw_signet = RawMessage::new(network_magic::SIGNET, msg.clone());
-        let raw_regtest = RawMessage::new(network_magic::REGTEST, msg);
-
-        assert_eq!(raw_mainnet.magic, network_magic::MAINNET);
-        assert_eq!(raw_testnet.magic, network_magic::TESTNET);
-        assert_eq!(raw_signet.magic, network_magic::SIGNET);
-        assert_eq!(raw_regtest.magic, network_magic::REGTEST);
     }
 
     #[test]

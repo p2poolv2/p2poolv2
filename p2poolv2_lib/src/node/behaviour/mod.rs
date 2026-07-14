@@ -16,7 +16,6 @@
 
 pub mod request_response;
 use crate::config::Config;
-use crate::node::messages::network_magic;
 use libp2p::connection_limits;
 use libp2p::ping;
 use libp2p::request_response::ProtocolSupport;
@@ -89,17 +88,6 @@ impl P2PoolBehaviour {
             .with_max_established_per_peer(Some(config.network.max_established_per_peer));
         let limits = connection_limits::Behaviour::new(limits_config);
 
-        // Select the appropriate network magic based on the bitcoin network
-        let magic = match config.stratum.network {
-            bitcoin::Network::Bitcoin => network_magic::MAINNET,
-            bitcoin::Network::Testnet => network_magic::TESTNET,
-            bitcoin::Network::Signet => network_magic::SIGNET,
-            bitcoin::Network::Regtest => network_magic::REGTEST,
-            _ => network_magic::REGTEST, // Default to regtest for unknown networks
-        };
-
-        let codec = ConsensusCodec::new(magic);
-
         let ping_config =
             ping::Config::new().with_interval(Duration::from_secs(PING_INTERVAL_SECS));
         let ping_behaviour = ping::Behaviour::new(ping_config);
@@ -109,7 +97,7 @@ impl P2PoolBehaviour {
             identify: identify_behaviour,
             ping: ping_behaviour,
             request_response: RequestResponseBehaviour::with_codec(
-                codec,
+                ConsensusCodec,
                 std::iter::once((
                     P2PoolRequestResponseProtocol::new(config.stratum.network),
                     ProtocolSupport::Full,
