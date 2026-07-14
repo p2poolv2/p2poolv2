@@ -25,7 +25,9 @@ use libp2p::{
     kad::{self, store::MemoryStore},
     swarm::NetworkBehaviour,
 };
-use request_response::{ConsensusCodec, P2PoolRequestResponseProtocol, protocol_string};
+use request_response::{
+    ConsensusCodec, P2PoolRequestResponseProtocol, kad_protocol_string, protocol_string,
+};
 use request_response::{RequestResponseBehaviour, RequestResponseEvent};
 use std::error::Error;
 use std::time::Duration;
@@ -63,11 +65,8 @@ impl P2PoolBehaviour {
         let mut kad_config = kad::Config::default();
         kad_config.set_query_timeout(tokio::time::Duration::from_secs(60));
         kad_config.set_protocol_names(vec![
-            libp2p::StreamProtocol::try_from_owned(format!(
-                "/p2pool/{}/kad/1.0.0",
-                config.stratum.network.to_core_arg()
-            ))
-            .expect("valid protocol"),
+            libp2p::StreamProtocol::try_from_owned(kad_protocol_string(config.stratum.network))
+                .expect("valid protocol"),
         ]);
 
         let mut kademlia_behaviour =
