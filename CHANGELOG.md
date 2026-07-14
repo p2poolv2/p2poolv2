@@ -7,7 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.13.0] - 2026-07-14
+
 ### Added
+
+- Network isolation for P2P: the bitcoin network name is now embedded
+  in the libp2p protocol strings (request-response, Kademlia, and
+  Identify) and in the Noise handshake prologue. Nodes on different
+  networks (main, testnet4, signet, regtest) derive different protocol
+  strings and fail to negotiate. This results in so cross-network
+  connections being dropped during the Noise handshake before any
+  P2Poolv2 messages are exchanged or peer slots are allocated.
 
 - Ansible deployment: Add playbook and roles to deploy P2Poolv2 nodes.
   Supports multiple instances (e.g. mainnet + testnet4) on the same
@@ -119,6 +129,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Do not advertise observed address with ephemeral source port to
   peers, which caused unreachable address entries in peer routing
   tables.
+
+- Reject inbound messages whose advertised payload length exceeds the
+  maximum message size before allocating the payload buffer. Closes a
+  DoS/OOM vector where a malicious peer could advertise a large length
+  prefix to exhaust memory.
 
 ## [v0.12.0] - 2026-06-12
 
@@ -711,7 +726,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 We used tags like hydrapool.v0.x.0 and we didn't keep a changelog.
 
-[Unreleased]: https://github.com/p2poolv2/p2poolv2/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/p2poolv2/p2poolv2/compare/v0.13.0...HEAD
+[v0.13.0]: https://github.com/p2poolv2/p2poolv2/compare/v0.12.0...v0.13.0
 [v0.12.0]: https://github.com/p2poolv2/p2poolv2/compare/v0.11.2...v0.12.0
 [v0.11.2]: https://github.com/p2poolv2/p2poolv2/compare/v0.11.0...v0.11.2
 [v0.11.0]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.15...v0.11.0
