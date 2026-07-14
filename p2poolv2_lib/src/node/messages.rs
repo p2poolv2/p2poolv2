@@ -18,6 +18,7 @@ use crate::shares::share_block::{ShareBlock, ShareHeader, Txids};
 use bitcoin::consensus::{Decodable, Encodable, encode};
 use bitcoin::hashes::{Hash, sha256d};
 use bitcoin::io::{Read, Write};
+use bitcoin::p2p::message::MAX_MSG_SIZE;
 use bitcoin::{BlockHash, Txid, VarInt};
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
@@ -199,9 +200,7 @@ impl Decodable for ShareHeaderDeserializationWrapper {
 
     #[inline]
     fn consensus_decode<R: Read + ?Sized>(r: &mut R) -> Result<Self, encode::Error> {
-        Self::consensus_decode_from_finite_reader(
-            &mut r.take(bitcoin::p2p::message::MAX_MSG_SIZE as u64),
-        )
+        Self::consensus_decode_from_finite_reader(&mut r.take(MAX_MSG_SIZE as u64))
     }
 }
 
@@ -313,6 +312,14 @@ impl Decodable for RawMessage {
         // Read header
         let payload_len: u32 = Decodable::consensus_decode(r)?;
         let expected_checksum: [u8; 4] = Decodable::consensus_decode(r)?;
+
+        // Reject an oversized advertised length before allocating, so a
+        // malicious peer cannot trigger a multi-gigabyte allocation / OOM.
+        if payload_len as usize > MAX_MSG_SIZE {
+            return Err(encode::Error::ParseFailed(
+                "Payload length exceeds maximum message size",
+            ));
+        }
 
         // Read payload into buffer
         let mut payload_bytes = vec![0u8; payload_len as usize];
@@ -456,6 +463,19 @@ mod tests {
         encoded[4] ^= 0xFF;
 
         // Decoding should fail
+        let result = RawMessage::consensus_decode(&mut &encoded[..]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_raw_message_rejects_oversized_payload_len() {
+        // A malicious peer advertises a payload length larger than the maximum
+        // message size. Decoding must reject it without allocating the buffer.
+        let payload_len = (MAX_MSG_SIZE as u32) + 1;
+        let mut encoded = Vec::new();
+        encoded.extend_from_slice(&payload_len.to_le_bytes());
+        encoded.extend_from_slice(&[0u8; 4]); // checksum placeholder
+
         let result = RawMessage::consensus_decode(&mut &encoded[..]);
         assert!(result.is_err());
     }
