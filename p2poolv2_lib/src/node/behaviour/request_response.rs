@@ -28,10 +28,19 @@ use crate::node::messages::{Message, RawMessage};
 /// Network isolation is enforced through protocol negotiation: nodes on
 /// different networks derive different protocol strings and therefore fail to
 /// negotiate a shared protocol. Centralizing construction here keeps the string
-/// consistent across the request-response protocol, Kademlia, Identify, and the
-/// Noise prologue, and gives a single place to extend for a future network_id.
+/// consistent across the request-response protocol, Identify, and the Noise
+/// prologue, and gives a single place to extend for a future network_id.
 pub fn protocol_string(network: bitcoin::Network) -> String {
     format!("/p2pool/{}/1.0.0", network.to_core_arg())
+}
+
+/// Build the network-aware Kademlia protocol string for a given bitcoin network.
+///
+/// Kademlia uses a distinct protocol name from [`protocol_string`] but shares
+/// the same per-network segment, so it is derived here to keep both in step for
+/// a future network_id.
+pub fn kad_protocol_string(network: bitcoin::Network) -> String {
+    format!("/p2pool/{}/kad/1.0.0", network.to_core_arg())
 }
 
 // Protocol name for our request-response protocol
