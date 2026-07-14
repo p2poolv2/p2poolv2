@@ -64,10 +64,9 @@ impl P2PoolBehaviour {
         let store = MemoryStore::new(local_key.public().to_peer_id());
         let mut kad_config = kad::Config::default();
         kad_config.set_query_timeout(tokio::time::Duration::from_secs(60));
-        kad_config.set_protocol_names(vec![
-            libp2p::StreamProtocol::try_from_owned(kad_protocol_string(config.stratum.network))
-                .expect("valid protocol"),
-        ]);
+        kad_config.set_protocol_names(vec![libp2p::StreamProtocol::try_from_owned(
+            kad_protocol_string(config.stratum.network),
+        )?]);
 
         let mut kademlia_behaviour =
             kad::Behaviour::with_config(local_key.public().to_peer_id(), store, kad_config);
