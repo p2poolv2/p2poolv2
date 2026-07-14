@@ -43,6 +43,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::ShareBlock;
 use crate::shares::validation::ShareValidator;
+use behaviour::request_response::protocol_string;
 use behaviour::{P2PoolBehaviour, P2PoolBehaviourEvent};
 use bitcoin::BlockHash;
 use libp2p::PeerId;
@@ -145,7 +146,8 @@ impl Node {
 
         let tcp_config = TcpConfig::default().nodelay(true);
         let noise_config = match libp2p::noise::Config::new(&id_keys) {
-            Ok(cfg) => cfg,
+            //* Bind the handshake to this network via a prologue
+            Ok(cfg) => cfg.with_prologue(protocol_string(config.stratum.network).into_bytes()),
             Err(err) => {
                 error!("Failed to create Noise config: {}", err);
                 return Err(Box::new(err));
