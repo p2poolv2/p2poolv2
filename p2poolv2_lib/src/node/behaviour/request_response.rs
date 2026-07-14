@@ -22,19 +22,24 @@ use std::io;
 
 use crate::node::messages::{Message, RawMessage, network_magic};
 
+/// Build the network-aware libp2p protocol string for a given bitcoin network.
+///
+/// Network isolation is enforced through protocol negotiation: nodes on
+/// different networks derive different protocol strings and therefore fail to
+/// negotiate a shared protocol. Centralizing construction here keeps the string
+/// consistent across the request-response protocol, Kademlia, Identify, and the
+/// Noise prologue, and gives a single place to extend for a future network_id.
+pub fn protocol_string(network: bitcoin::Network) -> String {
+    format!("/p2pool/{}/1.0.0", network.to_core_arg())
+}
+
 // Protocol name for our request-response protocol
 #[derive(Debug, Clone)]
 pub struct P2PoolRequestResponseProtocol(String);
 
 impl P2PoolRequestResponseProtocol {
-    pub fn new() -> Self {
-        Self("/p2pool/1.0.0".to_string())
-    }
-}
-
-impl Default for P2PoolRequestResponseProtocol {
-    fn default() -> Self {
-        Self::new()
+    pub fn new(network: bitcoin::Network) -> Self {
+        Self(protocol_string(network))
     }
 }
 
