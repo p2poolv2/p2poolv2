@@ -26,7 +26,7 @@ use libp2p::{
     kad::{self, store::MemoryStore},
     swarm::NetworkBehaviour,
 };
-use request_response::{ConsensusCodec, P2PoolRequestResponseProtocol};
+use request_response::{ConsensusCodec, P2PoolRequestResponseProtocol, protocol_string};
 use request_response::{RequestResponseBehaviour, RequestResponseEvent};
 use std::error::Error;
 use std::time::Duration;
@@ -63,14 +63,20 @@ impl P2PoolBehaviour {
         let store = MemoryStore::new(local_key.public().to_peer_id());
         let mut kad_config = kad::Config::default();
         kad_config.set_query_timeout(tokio::time::Duration::from_secs(60));
-        kad_config.set_protocol_names(vec![libp2p::StreamProtocol::new("/p2pool/kad/1.0.0")]);
+        kad_config.set_protocol_names(vec![
+            libp2p::StreamProtocol::try_from_owned(format!(
+                "/p2pool/{}/kad/1.0.0",
+                config.stratum.network.to_core_arg()
+            ))
+            .expect("valid protocol"),
+        ]);
 
         let mut kademlia_behaviour =
             kad::Behaviour::with_config(local_key.public().to_peer_id(), store, kad_config);
         kademlia_behaviour.set_mode(Some(kad::Mode::Server));
 
         let identify_config =
-            identify::Config::new("/p2pool/1.0.0".to_string(), local_key.public())
+            identify::Config::new(protocol_string(config.stratum.network), local_key.public())
                 .with_agent_version(format!("p2poolv2/{}", env!("CARGO_PKG_VERSION")))
                 .with_push_listen_addr_updates(true);
         let identify_behaviour = identify::Behaviour::new(identify_config);
@@ -104,7 +110,10 @@ impl P2PoolBehaviour {
             ping: ping_behaviour,
             request_response: RequestResponseBehaviour::with_codec(
                 codec,
-                std::iter::once((P2PoolRequestResponseProtocol::new(), ProtocolSupport::Full)),
+                std::iter::once((
+                    P2PoolRequestResponseProtocol::new(config.stratum.network),
+                    ProtocolSupport::Full,
+                )),
                 libp2p::request_response::Config::default(),
             ),
             limits,
