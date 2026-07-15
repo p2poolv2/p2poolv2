@@ -132,6 +132,18 @@ impl JobTracker {
         self.job_details.get(&job_id).map(|r| r.clone())
     }
 
+    /// Current bitcoin network difficulty derived from the latest job's
+    /// block template `bits`. Returns None when there is no job yet or the
+    /// `bits` field cannot be parsed. Uses the mainnet-relative difficulty
+    /// (`difficulty_float`) so it shares units with the pool's truediffone
+    /// share difficulties. This lets Grafana divide work by this value.
+    pub fn get_network_difficulty(&self) -> Option<f64> {
+        let job = self.get_job(self.get_latest_job_id())?;
+        let compact_target =
+            bitcoin::pow::CompactTarget::from_unprefixed_hex(&job.blocktemplate.bits).ok()?;
+        Some(bitcoin::Target::from_compact(compact_target).difficulty_float())
+    }
+
     /// Remove job details that are older than the specified duration in seconds
     /// Returns the number of jobs that were removed
     pub fn cleanup_old_jobs(&self, max_age_secs: u64) -> usize {
@@ -238,6 +250,38 @@ mod tests {
         // Multiple calls should continue incrementing
         let next_job_id2 = tracker.get_next_job_id();
         assert_eq!(next_job_id2.0, next_job_id.0 + 1);
+    }
+
+    #[tokio::test]
+    async fn test_get_network_difficulty() {
+        let tracker = start_tracker_actor();
+
+        // No job inserted yet -> no difficulty available
+        assert!(tracker.get_network_difficulty().is_none());
+
+        let template_str = include_str!(
+            "../../../../../p2poolv2_tests/test_data/gbt/signet/gbt-no-transactions.json"
+        );
+        let template: BlockTemplate = serde_json::from_str(template_str).unwrap();
+        let expected = bitcoin::Target::from_compact(
+            bitcoin::pow::CompactTarget::from_unprefixed_hex(&template.bits).unwrap(),
+        )
+        .difficulty_float();
+
+        let job_id = tracker.get_next_job_id();
+        tracker.insert_job(
+            Arc::new(template),
+            "cb1".to_string(),
+            "cb2".to_string(),
+            Some(create_test_commitment()),
+            TEST_COINBASE_NSECS,
+            vec![],
+            job_id,
+        );
+
+        let difficulty = tracker.get_network_difficulty().unwrap();
+        assert_eq!(difficulty, expected);
+        assert!(difficulty > 0.0);
     }
 
     #[tokio::test]
