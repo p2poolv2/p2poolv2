@@ -186,13 +186,16 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
         nonce.to_string(),
     );
 
-    let extranonce = Extranonce::from_enonce_hex(&session.enonce1_hex, extranonce2)
-        .map_err(|error| Error::SubmitFailure(format!("Failed to build extranonce: {error}")))?;
-
     // Only emit to the share chain when the share meets the pool difficulty
     // target. Shares below the pool target still count toward hashrate and
     // vardiff below, but are not part of the share chain / PPLNS accounting.
+    // The extranonce is only needed for the emission, so build it here to avoid
+    // wasted hex parsing when the share does not meet the pool target.
     if meets_pool_target {
+        let extranonce =
+            Extranonce::from_enonce_hex(&session.enonce1_hex, extranonce2).map_err(|error| {
+                Error::SubmitFailure(format!("Failed to build extranonce: {error}"))
+            })?;
         stratum_context
             .emissions_tx
             .send(Emission {
