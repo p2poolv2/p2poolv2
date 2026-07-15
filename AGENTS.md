@@ -37,6 +37,7 @@ Read `docs/architecture/` when working in the relevant area:
 - `store-schema.md` -- RocksDB column families, key encoding, merge ops
 - `store-architecture.md` -- read/write separation, StoreWriter thread
 - `pruning.md` -- TTL-based share pruning
+- `metrics.md` -- Prometheus exposition, metric sources, Grafana panels
 
 Also: `docs/simulation/` (sim feature), `docs/difficulty_adjustment/`
 (ASERT algorithm).
