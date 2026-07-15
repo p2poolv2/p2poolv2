@@ -107,9 +107,13 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
             }
         };
 
+    // Compute the block hash once; it is reused for dedup, the pool-target
+    // check, and the true-difficulty calculation on this hot path.
+    let block_hash = validation_result.header.block_hash();
+
     let is_new_share = stratum_context
         .tracker_handle
-        .add_share(JobId(job_id), validation_result.header.block_hash());
+        .add_share(JobId(job_id), block_hash);
 
     if !is_new_share {
         return Ok(vec![Message::Response(Response::new_error(
@@ -146,12 +150,11 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
     let meets_pool_target = match (stratum_context.mode, &job.share_commitment) {
         (PoolMode::P2poolv2, Some(commitment)) => {
             let pool_target = bitcoin::Target::from_compact(commitment.bits);
-            let met = pool_target.is_met_by(validation_result.header.block_hash());
+            let met = pool_target.is_met_by(block_hash);
             if !met {
                 debug!(
                     "Share does not meet pool difficulty, not emitting to share chain: hash {} target {:?}",
-                    validation_result.header.block_hash(),
-                    commitment.bits
+                    block_hash, commitment.bits
                 );
             }
             met
@@ -160,7 +163,7 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
     };
 
     // Mining difficulties are tracked as `truediffone`, i.e. difficulty is computed relative to mainnet
-    let truediff = get_true_difficulty(&validation_result.header.block_hash());
+    let truediff = get_true_difficulty(&block_hash);
     debug!("True difficulty: {}", truediff);
 
     let timestamp = std::time::SystemTime::now()
