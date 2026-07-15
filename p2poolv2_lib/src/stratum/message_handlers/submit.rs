@@ -135,26 +135,29 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
         submit_block(&block, &stratum_context.bitcoindrpc_client).await;
     }
 
-    // In P2Poolv2 mode, reject shares that do not meet the pool difficulty target.
-    // The share commitment carries the ASERT-computed pool target (bits).
-    // In Hydrapool mode this check is skipped so that low-hashrate miners
-    // are not rejected when a high-hashrate miner raises the ASERT difficulty.
-    if stratum_context.mode == PoolMode::P2poolv2
-        && let Some(commitment) = &job.share_commitment
-    {
-        let pool_target = bitcoin::Target::from_compact(commitment.bits);
-        if !pool_target.is_met_by(validation_result.header.block_hash()) {
-            debug!(
-                "Share does not meet pool difficulty: hash {} target {:?}",
-                validation_result.header.block_hash(),
-                commitment.bits
-            );
-            return Ok(vec![Message::Response(Response::new_error(
-                message.id,
-                StratumErrorCode::LowDifficultyShare,
-            ))]);
+    // In P2Poolv2 mode, only shares meeting the pool difficulty target are
+    // eligible for the share chain. The share commitment carries the
+    // ASERT-computed pool target (bits). This gate controls ONLY whether the
+    // share is emitted to the share chain; the hashrate and vardiff accounting
+    // below run on the full vardiff share stream, so a miner whose session
+    // difficulty is below the pool target is still measured accurately instead
+    // of being under-reported. In Hydrapool mode there is no pool target and
+    // every share is eligible.
+    let meets_pool_target = match (stratum_context.mode, &job.share_commitment) {
+        (PoolMode::P2poolv2, Some(commitment)) => {
+            let pool_target = bitcoin::Target::from_compact(commitment.bits);
+            let met = pool_target.is_met_by(validation_result.header.block_hash());
+            if !met {
+                debug!(
+                    "Share does not meet pool difficulty, not emitting to share chain: hash {} target {:?}",
+                    validation_result.header.block_hash(),
+                    commitment.bits
+                );
+            }
+            met
         }
-    }
+        _ => true,
+    };
 
     // Mining difficulties are tracked as `truediffone`, i.e. difficulty is computed relative to mainnet
     let truediff = get_true_difficulty(&validation_result.header.block_hash());
@@ -186,19 +189,24 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
     let extranonce = Extranonce::from_enonce_hex(&session.enonce1_hex, extranonce2)
         .map_err(|error| Error::SubmitFailure(format!("Failed to build extranonce: {error}")))?;
 
-    stratum_context
-        .emissions_tx
-        .send(Emission {
-            pplns: stratum_share.clone(),
-            header: validation_result.header,
-            blocktemplate: job.blocktemplate.clone(),
-            share_commitment: job.share_commitment.clone(),
-            coinbase_nsecs: job.coinbase_nsecs,
-            template_merkle_branches: job.template_merkle_branches.clone(),
-            extranonce,
-        })
-        .await
-        .map_err(|e| Error::SubmitFailure(format!("Failed to send share to store: {e}")))?;
+    // Only emit to the share chain when the share meets the pool difficulty
+    // target. Shares below the pool target still count toward hashrate and
+    // vardiff below, but are not part of the share chain / PPLNS accounting.
+    if meets_pool_target {
+        stratum_context
+            .emissions_tx
+            .send(Emission {
+                pplns: stratum_share.clone(),
+                header: validation_result.header,
+                blocktemplate: job.blocktemplate.clone(),
+                share_commitment: job.share_commitment.clone(),
+                coinbase_nsecs: job.coinbase_nsecs,
+                template_merkle_branches: job.template_merkle_branches.clone(),
+                extranonce,
+            })
+            .await
+            .map_err(|e| Error::SubmitFailure(format!("Failed to send share to store: {e}")))?;
+    }
 
     session.last_share_time = Some(SystemTime::now());
 
@@ -1507,8 +1515,14 @@ mod handle_submit_tests {
         commitment
     }
 
+    /// A share that meets the miner's session difficulty but not the pool
+    /// difficulty target must still be accepted (the miner met its assigned
+    /// difficulty) and counted toward hashrate metrics, but must NOT be emitted
+    /// to the share chain. This keeps hashrate reporting accurate for miners
+    /// whose session difficulty is below the pool target.
     #[tokio::test]
-    async fn test_p2poolv2_mode_rejects_share_not_meeting_pool_difficulty() {
+    async fn test_p2poolv2_mode_accepts_and_accounts_share_below_pool_difficulty_without_emitting()
+    {
         let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
         session.subscribed = true;
         let tracker_handle = start_tracker_actor();
@@ -1543,7 +1557,7 @@ mod handle_submit_tests {
             job_id,
         );
 
-        let (emissions_tx, _emissions_rx) = mpsc::channel(10);
+        let (emissions_tx, mut emissions_rx) = mpsc::channel(10);
         let stats_dir = tempfile::tempdir().unwrap();
         let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
             .await
@@ -1567,7 +1581,7 @@ mod handle_submit_tests {
             validate_addresses: true,
             emissions_tx,
             network: bitcoin::network::Network::Signet,
-            metrics: metrics_handle,
+            metrics: metrics_handle.clone(),
             chain_store_handle,
             mode: PoolMode::P2poolv2,
         };
@@ -1577,9 +1591,18 @@ mod handle_submit_tests {
             [Message::Response(r)] => r,
             _ => panic!("expected Response"),
         };
-        assert_eq!(response.result, None, "should be an error, not a result");
-        let err = response.error.as_ref().unwrap();
-        assert_eq!(err.code, 23, "should be LowDifficultyShare (code 23)");
+        // Share met the miner's session difficulty, so it is accepted.
+        assert_eq!(response.result, Some(json!(true)));
+
+        // Share must NOT be emitted to the share chain: it does not meet the
+        // pool difficulty target.
+        assert!(
+            emissions_rx.try_recv().is_err(),
+            "share below pool difficulty must not be emitted to the share chain"
+        );
+
+        // Share must still be counted toward hashrate metrics.
+        assert_eq!(metrics_handle.get_metrics().await.accepted_total, 1);
     }
 
     #[tokio::test]
