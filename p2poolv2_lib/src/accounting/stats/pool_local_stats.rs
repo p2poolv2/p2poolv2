@@ -125,7 +125,7 @@ struct FilteredPoolMetrics<'a> {
 
 impl Serialize for FilteredPoolMetrics<'_> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut state = serializer.serialize_struct("PoolMetrics", 9)?;
+        let mut state = serializer.serialize_struct("PoolMetrics", 12)?;
         state.serialize_field("start_time", &self.metrics.start_time)?;
         state.serialize_field("lastupdate", &self.metrics.lastupdate)?;
         state.serialize_field("accepted_total", &self.metrics.accepted_total)?;
@@ -144,6 +144,9 @@ impl Serialize for FilteredPoolMetrics<'_> {
             },
         )?;
         state.serialize_field("pool_difficulty", &self.metrics.pool_difficulty)?;
+        state.serialize_field("blocks_found_total", &self.metrics.blocks_found_total)?;
+        state.serialize_field("blocks_found", &self.metrics.blocks_found)?;
+        state.serialize_field("work_since_last_block", &self.metrics.work_since_last_block)?;
         state.end()
     }
 }
@@ -264,6 +267,9 @@ mod tests {
             best_share_ever: 0,
             users: HashMap::with_capacity(100),
             pool_difficulty: 500000,
+            blocks_found_total: 0,
+            blocks_found: Default::default(),
+            work_since_last_block: 0,
         };
 
         // Save stats
@@ -309,6 +315,9 @@ mod tests {
             best_share_ever: 0,
             users: HashMap::with_capacity(100),
             pool_difficulty: 500000,
+            blocks_found_total: 0,
+            blocks_found: Default::default(),
+            work_since_last_block: 0,
         };
 
         // Save should fail because directory doesn't exist
