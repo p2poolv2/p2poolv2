@@ -28,6 +28,7 @@
 use crate::accounting::payout::sharechain_pplns::PplnsWindow;
 #[cfg(not(test))]
 use crate::accounting::payout::sharechain_pplns::PplnsWindow;
+use crate::accounting::stats::metrics::MetricsHandle;
 use crate::monitoring_events::{MonitoringEvent, MonitoringEventSender};
 #[cfg(test)]
 #[mockall_double::double]
@@ -102,6 +103,7 @@ pub struct OrganiseWorker {
     notify_tx: NotifySender,
     pplns_window: Arc<RwLock<PplnsWindow>>,
     share_validator: Arc<dyn ShareValidator + Send + Sync>,
+    metrics: MetricsHandle,
     /// Blocks whose parent height exceeds the confirmed tip, keyed by the
     /// parent's expected height. Multiple blocks may share the same parent
     /// height during forks or rapid sync.
@@ -115,6 +117,7 @@ impl OrganiseWorker {
         chain_store_handle: ChainStoreHandle,
         monitoring_event_sender: MonitoringEventSender,
         notify_tx: NotifySender,
+        metrics: MetricsHandle,
         pplns_window: Arc<RwLock<PplnsWindow>>,
         share_validator: Arc<dyn ShareValidator + Send + Sync>,
     ) -> Self {
@@ -125,6 +128,7 @@ impl OrganiseWorker {
             notify_tx,
             pplns_window,
             share_validator,
+            metrics,
             pending_blocks: BTreeMap::new(),
         }
     }
@@ -265,10 +269,26 @@ impl OrganiseWorker {
         }
     }
 
-    /// Run post-promotion actions: update PPLNS, optionally send new
-    /// notify, and emit a monitoring event.
+    /// Run post-promotion actions: update PPLNS, record confirmed work for
+    /// the effort metric, optionally send new notify, and emit a monitoring
+    /// event.
     async fn post_promote(&self, share_block: &ShareBlock, height: u32) {
         self.update_pplns_window();
+
+        // Feed the block effort accumulator with this confirmed share's pool
+        // difficulty. Uncles are excluded so the effort numerator tracks the
+        // same confirmed-chain work as the hashrate (derived from chain work).
+        //
+        // Skip while syncing: during sync post_promote replays the whole
+        // backlog, and work_since_last_block never resets (no real bitcoin
+        // block is found during replay), so it would balloon to the entire
+        // chain's work and report an absurd effort. Only real-time confirmed
+        // shares count toward effort.
+        if self.chain_store_handle.is_current() {
+            let share_difficulty =
+                bitcoin::Target::from_compact(share_block.header.bits).difficulty_float();
+            let _ = self.metrics.record_confirmed_share(share_difficulty).await;
+        }
 
         match self.chain_store_handle.get_candidate_tip_height() {
             Ok(Some(candidate_tip_height)) if height >= candidate_tip_height => {
@@ -456,6 +476,11 @@ mod tests {
         Arc::new(RwLock::new(mock_window))
     }
 
+    /// Spawn a throwaway metrics actor and return its handle for tests.
+    fn create_test_metrics_handle() -> MetricsHandle {
+        crate::accounting::stats::metrics::spawn_test_metrics_handle()
+    }
+
     /// Build a stub share validator that approves every chain-context check.
     fn stub_share_validator_with_success() -> Arc<dyn ShareValidator + Send + Sync> {
         let mut mock_validator = MockDefaultShareValidator::new();
@@ -479,6 +504,7 @@ mod tests {
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
+            create_test_metrics_handle(),
             create_test_pplns_window(),
             stub_share_validator_with_success(),
         );
@@ -508,6 +534,7 @@ mod tests {
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
+            create_test_metrics_handle(),
             create_test_pplns_window(),
             stub_share_validator_with_success(),
         );
@@ -556,6 +583,7 @@ mod tests {
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
+            create_test_metrics_handle(),
             create_test_pplns_window(),
             stub_share_validator_with_success(),
         );
@@ -606,6 +634,7 @@ mod tests {
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
+            create_test_metrics_handle(),
             create_test_pplns_window(),
             share_validator,
         );
@@ -651,6 +680,7 @@ mod tests {
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
+            create_test_metrics_handle(),
             create_test_pplns_window(),
             stub_share_validator_with_success(),
         );
@@ -696,6 +726,7 @@ mod tests {
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
+            create_test_metrics_handle(),
             create_test_pplns_window(),
             stub_share_validator_with_success(),
         );
@@ -734,6 +765,7 @@ mod tests {
         mock_chain_handle
             .expect_get_candidate_tip_height()
             .returning(|| Ok(Some(5)));
+        mock_chain_handle.expect_is_current().returning(|| true);
         mock_chain_handle
             .expect_get_uncle_infos()
             .returning(|_| Vec::new());
@@ -745,6 +777,7 @@ mod tests {
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
+            create_test_metrics_handle(),
             create_test_pplns_window(),
             stub_share_validator_with_success(),
         );
@@ -788,6 +821,7 @@ mod tests {
         mock_chain_handle
             .expect_get_candidate_tip_height()
             .returning(|| Ok(Some(5)));
+        mock_chain_handle.expect_is_current().returning(|| true);
         mock_chain_handle
             .expect_get_uncle_infos()
             .returning(|_| Vec::new());
@@ -799,6 +833,7 @@ mod tests {
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
+            create_test_metrics_handle(),
             create_test_pplns_window(),
             stub_share_validator_with_success(),
         );
@@ -845,6 +880,7 @@ mod tests {
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
+            create_test_metrics_handle(),
             create_test_pplns_window(),
             stub_share_validator_with_success(),
         );
@@ -882,6 +918,7 @@ mod tests {
         mock_chain_handle
             .expect_get_candidate_tip_height()
             .returning(|| Ok(Some(6)));
+        mock_chain_handle.expect_is_current().returning(|| true);
         mock_chain_handle
             .expect_get_uncle_infos()
             .returning(|_| Vec::new());
@@ -893,6 +930,7 @@ mod tests {
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
+            create_test_metrics_handle(),
             create_test_pplns_window(),
             stub_share_validator_with_success(),
         );
@@ -903,6 +941,64 @@ mod tests {
 
         let result = worker.run().await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_post_promote_skips_effort_while_syncing() {
+        let (organise_tx, organise_rx) = create_organise_channel();
+        let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_clone()
+            .return_once(MockChainStoreHandle::new);
+        mock_chain_handle
+            .expect_get_block_metadata()
+            .returning(|_| {
+                Ok(BlockMetadata {
+                    expected_height: Some(5),
+                    chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
+                    status: crate::store::block_tx_metadata::Status::Confirmed,
+                })
+            });
+        mock_chain_handle
+            .expect_get_tip_height()
+            .returning(|| Ok(Some(5)));
+        mock_chain_handle
+            .expect_promote_block()
+            .returning(|_| Ok(Some(6)));
+        mock_chain_handle
+            .expect_get_candidate_tip_height()
+            .returning(|| Ok(Some(6)));
+        // Not current: the node is still syncing, so effort must not be recorded.
+        mock_chain_handle.expect_is_current().returning(|| false);
+        mock_chain_handle
+            .expect_get_uncle_infos()
+            .returning(|_| Vec::new());
+
+        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let (notify_tx, _notify_rx) = create_test_notify_channel();
+        // Hold a metrics handle so we can inspect it after the worker runs.
+        let metrics = create_test_metrics_handle();
+        let worker = OrganiseWorker::new(
+            organise_rx,
+            mock_chain_handle,
+            monitoring_tx,
+            notify_tx,
+            metrics.clone(),
+            create_test_pplns_window(),
+            stub_share_validator_with_success(),
+        );
+
+        let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        organise_tx.send(OrganiseEvent::Block(share)).await.unwrap();
+        drop(organise_tx);
+
+        let result = worker.run().await;
+        assert!(result.is_ok());
+
+        // The block was promoted, but because the chain was not current no
+        // confirmed-share work was accumulated into the effort numerator.
+        let pool_metrics = metrics.get_metrics().await;
+        assert_eq!(pool_metrics.work_since_last_block, 0.0);
     }
 
     #[tokio::test]
@@ -953,6 +1049,7 @@ mod tests {
         mock_chain_handle
             .expect_get_candidate_tip_height()
             .returning(|| Ok(Some(100)));
+        mock_chain_handle.expect_is_current().returning(|| true);
         mock_chain_handle
             .expect_get_uncle_infos()
             .returning(|_| Vec::new());
@@ -964,6 +1061,7 @@ mod tests {
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
+            create_test_metrics_handle(),
             create_test_pplns_window(),
             stub_share_validator_with_success(),
         );
@@ -1037,6 +1135,7 @@ mod tests {
         mock_chain_handle
             .expect_get_candidate_tip_height()
             .returning(|| Ok(Some(10)));
+        mock_chain_handle.expect_is_current().returning(|| true);
         mock_chain_handle
             .expect_get_uncle_infos()
             .returning(|_| Vec::new());
@@ -1048,6 +1147,7 @@ mod tests {
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
+            create_test_metrics_handle(),
             create_test_pplns_window(),
             stub_share_validator_with_success(),
         );

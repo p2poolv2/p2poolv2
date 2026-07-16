@@ -28,7 +28,7 @@ const METRICS_MESSAGE_BUFFER_SIZE: usize = 1000;
 pub const INITIAL_USER_MAP_CAPACITY: usize = 1000;
 const METRICS_SAVE_INTERVAL: u64 = 5;
 /// Maximum number of recently found blocks retained for the block-found
-/// metric. Bounds the label cardinality of `bitcoin_block_found_info`.
+/// metric. Bounds the label cardinality of `bitcoin_block_found_time_seconds`.
 pub const MAX_BLOCKS_FOUND_TRACKED: usize = 20;
 
 /// A bitcoin block found by the pool, retained for the block-found metric.
@@ -75,10 +75,13 @@ pub struct PoolMetrics {
     /// Grafana block explorer links.
     #[serde(default)]
     pub blocks_found: VecDeque<BlockFound>,
-    /// Accumulated accepted share difficulty since the last block was found.
-    /// Numerator of the block effort metric; reset to zero on each block find.
+    /// Confirmed sharechain pool difficulty since the last bitcoin block was
+    /// found; reset to zero on each block find. Numerator of the block effort
+    /// metric (`work_since_last_block / network_difficulty`). Runtime-only (not
+    /// persisted), mainnet-relative units matching network_difficulty. Pool
+    /// hashrate is derived separately from confirmed-chain total work.
     #[serde(default)]
-    pub work_since_last_block: u64,
+    pub work_since_last_block: f64,
 }
 
 impl Default for PoolMetrics {
@@ -98,7 +101,7 @@ impl Default for PoolMetrics {
             pool_difficulty: 0,
             blocks_found_total: 0,
             blocks_found: VecDeque::with_capacity(MAX_BLOCKS_FOUND_TRACKED),
-            work_since_last_block: 0,
+            work_since_last_block: 0.0,
         }
     }
 }
@@ -114,7 +117,6 @@ impl PoolMetrics {
             users: pool_stats.users,
             blocks_found_total: pool_stats.blocks_found_total,
             blocks_found: pool_stats.blocks_found,
-            work_since_last_block: pool_stats.work_since_last_block,
             ..Default::default()
         })
     }
@@ -136,6 +138,10 @@ pub enum MetricsMessage {
     RecordBlockFound {
         blockhash: String,
         height: u32,
+        response: oneshot::Sender<()>,
+    },
+    RecordConfirmedShare {
+        difficulty: f64,
         response: oneshot::Sender<()>,
     },
     IncrementWorkerCount {
@@ -215,6 +221,13 @@ impl MetricsActor {
                 self.record_block_found(blockhash, height);
                 let _ = response.send(());
             }
+            MetricsMessage::RecordConfirmedShare {
+                difficulty,
+                response,
+            } => {
+                self.record_confirmed_share(difficulty);
+                let _ = response.send(());
+            }
             MetricsMessage::IncrementWorkerCount {
                 btcaddress,
                 workername,
@@ -262,7 +275,6 @@ impl MetricsActor {
             .unwrap_or(0);
         self.metrics.accepted_total += 1;
         self.metrics.accepted_difficulty_total += difficulty;
-        self.metrics.work_since_last_block += difficulty;
         self.metrics.lastupdate = Some(current_unix_timestamp);
         self.metrics.best_share = self.metrics.best_share.max(truediff);
         self.metrics.best_share_ever = self.metrics.best_share_ever.max(truediff);
@@ -296,7 +308,14 @@ impl MetricsActor {
         while self.metrics.blocks_found.len() > MAX_BLOCKS_FOUND_TRACKED {
             self.metrics.blocks_found.pop_front();
         }
-        self.metrics.work_since_last_block = 0;
+        self.metrics.work_since_last_block = 0.0;
+    }
+
+    /// Record the pool difficulty of a confirmed sharechain share for the
+    /// per-block effort accumulator. Hashrate is derived separately from
+    /// confirmed-chain total work.
+    fn record_confirmed_share(&mut self, difficulty: f64) {
+        self.metrics.work_since_last_block += difficulty;
     }
 
     /// Increment worker counts - called after worker has authorised successfully.
@@ -405,6 +424,23 @@ impl MetricsHandle {
         response_rx.await
     }
 
+    /// Record the pool difficulty of a confirmed sharechain share for the
+    /// block effort metric.
+    pub async fn record_confirmed_share(
+        &self,
+        difficulty: f64,
+    ) -> Result<(), tokio::sync::oneshot::error::RecvError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.sender
+            .send(MetricsMessage::RecordConfirmedShare {
+                difficulty,
+                response: response_tx,
+            })
+            .await
+            .expect("Error recording confirmed share");
+        response_rx.await
+    }
+
     /// Increment worker count
     pub async fn increment_worker_count(
         &self,
@@ -480,6 +516,19 @@ impl MetricsHandle {
             .expect("Error setting last update");
         response_rx.await
     }
+}
+
+/// Spawn a metrics actor with default metrics and return its handle.
+///
+/// Test-only helper for wiring components that require a `MetricsHandle`
+/// without touching disk or the stats saver.
+#[cfg(test)]
+pub(crate) fn spawn_test_metrics_handle() -> MetricsHandle {
+    let (sender, receiver) = mpsc::channel(METRICS_MESSAGE_BUFFER_SIZE);
+    tokio::spawn(async move {
+        MetricsActor::new(receiver).run().await;
+    });
+    MetricsHandle { sender }
 }
 
 /// Construct a new metrics actor with existing metrics and return its handle
@@ -594,34 +643,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_record_block_found_resets_effort() {
+    async fn test_confirmed_share_and_block_found_reset() {
         let log_dir = tempfile::tempdir().unwrap();
         let handle = start_metrics(log_dir.path().to_str().unwrap().to_string())
             .await
             .unwrap();
 
-        let _ = handle
-            .increment_worker_count("miner1".to_string(), "rig1".to_string())
-            .await;
-        let _ = handle
-            .record_share_accepted(
-                SimplePplnsShare {
-                    user_id: 1,
-                    difficulty: 500,
-                    btcaddress: Some("miner1".to_string()),
-                    workername: Some("rig1".to_string()),
-                    n_time: 1000,
-                    job_id: "job1".to_string(),
-                    extranonce2: "extra1".to_string(),
-                    nonce: "nonce1".to_string(),
-                },
-                600,
-            )
-            .await;
+        // Confirmed sharechain work accumulates into the effort numerator.
+        let _ = handle.record_confirmed_share(500.0).await;
+        let _ = handle.record_confirmed_share(250.0).await;
 
-        // Effort accumulates the accepted share difficulty
         let metrics = handle.get_metrics().await;
-        assert_eq!(metrics.work_since_last_block, 500);
+        assert_eq!(metrics.work_since_last_block, 750.0);
 
         let _ = handle
             .record_block_found(
@@ -640,8 +673,8 @@ mod tests {
         );
         assert_eq!(found.height, 840000);
         assert!(found.timestamp > 0);
-        // Finding a block resets effort toward the next block
-        assert_eq!(metrics.work_since_last_block, 0);
+        // Finding a block resets effort toward the next block.
+        assert_eq!(metrics.work_since_last_block, 0.0);
     }
 
     #[tokio::test]

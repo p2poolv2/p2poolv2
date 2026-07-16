@@ -240,7 +240,39 @@ async fn metrics(State(state): State<Arc<AppState>>) -> String {
         exposition.push_str(&format!("network_difficulty {network_difficulty}\n"));
     }
 
+    // Cumulative confirmed sharechain work at the tip. Read live from the store
+    // so it is reorg- and restart-safe (it always reflects the canonical
+    // confirmed chain). Pool hashrate on Grafana is rate(sharechain_work_total),
+    // since chain work is measured in expected hashes.
+    //
+    // Only emitted while the chain is current. During sync the confirmed tip
+    // advances by the whole backlog in a short wall-clock window, which would
+    // make rate() report replay speed as an inflated hashrate. Suppressing the
+    // sample during sync leaves a gap instead; Prometheus staleness then keeps
+    // rate() from bridging the sync jump when work resumes.
+    if state.chain_store_handle.is_current() {
+        if let Ok(total_work) = state.chain_store_handle.get_total_work() {
+            exposition.push_str(
+                "# HELP sharechain_work_total Cumulative confirmed sharechain work in expected hashes; pool hashrate is rate() of this\n",
+            );
+            exposition.push_str("# TYPE sharechain_work_total counter\n");
+            exposition.push_str(&format!(
+                "sharechain_work_total {}\n",
+                work_to_f64(total_work)
+            ));
+        }
+    }
+
     exposition
+}
+
+/// Convert 256-bit chain work to an f64 for Prometheus exposition. Lossy in the
+/// low bits but monotonic, which is all rate() needs for a hashrate.
+fn work_to_f64(work: bitcoin::Work) -> f64 {
+    work.to_le_bytes()
+        .iter()
+        .rev()
+        .fold(0.0_f64, |acc, &byte| acc * 256.0 + byte as f64)
 }
 
 /// Response type for the /peers endpoint.
@@ -374,6 +406,22 @@ async fn pplns_shares(
 mod tests {
     use super::*;
     use axum::extract::State;
+
+    #[test]
+    fn test_work_to_f64() {
+        // Little-endian bytes for 256 (0x0100).
+        let mut le = [0u8; 32];
+        le[1] = 1;
+        assert_eq!(work_to_f64(bitcoin::Work::from_le_bytes(le)), 256.0);
+
+        // 65536 (0x010000) is larger.
+        let mut le_larger = [0u8; 32];
+        le_larger[2] = 1;
+        let larger = bitcoin::Work::from_le_bytes(le_larger);
+        assert_eq!(work_to_f64(larger), 65536.0);
+        assert!(work_to_f64(larger) > work_to_f64(bitcoin::Work::from_le_bytes(le)));
+    }
+
     use base64::Engine;
     use bitcoin::{Amount, Network, TxOut};
     use p2poolv2_lib::accounting::stats::metrics;
