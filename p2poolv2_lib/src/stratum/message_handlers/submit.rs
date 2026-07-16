@@ -137,12 +137,6 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
             &job.blocktemplate,
         );
         submit_block(&block, &stratum_context.bitcoindrpc_client).await;
-        // Record the block find for metrics. block_hash was already computed
-        // above and equals block.header.block_hash().
-        let _ = stratum_context
-            .metrics
-            .record_block_found(block_hash.to_string(), job.blocktemplate.height)
-            .await;
     }
 
     // In P2Poolv2 mode, only shares meeting the pool difficulty target are

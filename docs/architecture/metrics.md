@@ -92,13 +92,19 @@ contributed work.
 | `bitcoin_blocks_found_total` | counter | actor |
 | `bitcoin_block_found_time_seconds{blockhash,height}` | gauge | actor |
 
-Recorded in the stratum submit handler
-(`stratum/message_handlers/submit.rs`) right after a share meets the
-bitcoin network target and the block is submitted to bitcoind. The
-counter is monotonic; the info gauge holds the Unix timestamp the block
-was found and carries `blockhash` and `height` labels. The set of info
-series is bounded by `MAX_BLOCKS_FOUND_TRACKED`
-(`accounting/stats/metrics.rs`) and persists across restarts.
+Recorded **pool-wide** from the share chain: when the organise worker
+promotes a confirmed share whose bitcoin header meets the network target
+(`ShareBlock::is_bitcoin_block`), it records the find in `post_promote`.
+This counts blocks found by any node's miners, not just locally connected
+ones -- every node sees the block-finding share on the chain. (The stratum
+submit handler still submits the block to bitcoind on a local find, but no
+longer records the metric.) The counter is monotonic; the gauge holds the
+Unix time the block was found and carries `blockhash` and `height` labels.
+The set of gauge series is bounded by `MAX_BLOCKS_FOUND_TRACKED`
+(`accounting/stats/metrics.rs`) and persists across restarts. Recording is
+gated on `is_current` so sync replay does not backfill finds with a
+now() timestamp, and a blockhash already in the ring is ignored so a
+reorg re-promotion does not double-count.
 
 **Grafana:**
 - *Block-find timeline*: a Time series or State timeline of
@@ -163,11 +169,16 @@ periods.
 
 `work_since_last_block` accumulates the pool difficulty of each confirmed
 sharechain share (via `MetricsMessage::RecordConfirmedShare` from the
-organise worker's `post_promote`) and resets to zero when a bitcoin block
-is found. It is runtime-only (not persisted): a fresh or pruned node
-cannot reconstruct work-since-last-block from history, and it resets each
-block anyway. Uncles are excluded so it tracks the same confirmed-chain
-work basis as `sharechain_work_total`. `network_difficulty` is the
+organise worker's `post_promote`) and resets to zero when the **pool**
+finds a bitcoin block. The reset is driven by the same pool-wide
+share-chain signal as the block-found metric (a confirmed share that
+`is_bitcoin_block`), so it fires for a block found by any node's miners,
+not just local ones -- this makes it a true pool "round luck" metric
+(>100% means the pool is overdue for a block). It is runtime-only (not
+persisted): a fresh or pruned node cannot reconstruct
+work-since-last-block from history. Uncles are excluded so it tracks the
+same confirmed-chain work basis as `sharechain_work_total`.
+`network_difficulty` is the
 mainnet-relative difficulty (`difficulty_float`) from the latest job
 template `bits`, sharing units with the accumulated share difficulty. The
 numerator and denominator are emitted separately so the effort formula

@@ -288,6 +288,20 @@ impl OrganiseWorker {
             let share_difficulty =
                 bitcoin::Target::from_compact(share_block.header.bits).difficulty_float();
             let _ = self.metrics.record_confirmed_share(share_difficulty).await;
+
+            // If this confirmed share is itself a bitcoin block, record the
+            // find pool-wide (any node's miners) and reset the effort
+            // accumulator toward the next block.
+            if share_block.is_bitcoin_block() {
+                let bitcoin_header = &share_block.header.bitcoin_header;
+                let _ = self
+                    .metrics
+                    .record_block_found(
+                        bitcoin_header.block_hash().to_string(),
+                        share_block.header.bitcoin_height,
+                    )
+                    .await;
+            }
         }
 
         match self.chain_store_handle.get_candidate_tip_height() {
@@ -998,6 +1012,68 @@ mod tests {
         // The block was promoted, but because the chain was not current no
         // confirmed-share work was accumulated into the effort numerator.
         let pool_metrics = metrics.get_metrics().await;
+        assert_eq!(pool_metrics.work_since_last_block, 0.0);
+    }
+
+    #[tokio::test]
+    async fn test_post_promote_records_pool_block_find() {
+        let (organise_tx, organise_rx) = create_organise_channel();
+        let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_clone()
+            .return_once(MockChainStoreHandle::new);
+        mock_chain_handle
+            .expect_get_block_metadata()
+            .returning(|_| {
+                Ok(BlockMetadata {
+                    expected_height: Some(5),
+                    chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
+                    status: crate::store::block_tx_metadata::Status::Confirmed,
+                })
+            });
+        mock_chain_handle
+            .expect_get_tip_height()
+            .returning(|| Ok(Some(5)));
+        mock_chain_handle
+            .expect_promote_block()
+            .returning(|_| Ok(Some(6)));
+        mock_chain_handle
+            .expect_get_candidate_tip_height()
+            .returning(|| Ok(Some(6)));
+        mock_chain_handle.expect_is_current().returning(|| true);
+        mock_chain_handle
+            .expect_get_uncle_infos()
+            .returning(|_| Vec::new());
+
+        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let (notify_tx, _notify_rx) = create_test_notify_channel();
+        let metrics = create_test_metrics_handle();
+        let worker = OrganiseWorker::new(
+            organise_rx,
+            mock_chain_handle,
+            monitoring_tx,
+            notify_tx,
+            metrics.clone(),
+            create_test_pplns_window(),
+            stub_share_validator_with_success(),
+        );
+
+        // Make the confirmed share a real bitcoin block: the regtest genesis
+        // header meets its own target, so is_bitcoin_block() is true.
+        let mut share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        share.header.bitcoin_header =
+            bitcoin::blockdata::constants::genesis_block(bitcoin::Network::Regtest).header;
+        organise_tx.send(OrganiseEvent::Block(share)).await.unwrap();
+        drop(organise_tx);
+
+        let result = worker.run().await;
+        assert!(result.is_ok());
+
+        // The block find is recorded pool-wide from the share chain, and the
+        // effort accumulator is reset by it.
+        let pool_metrics = metrics.get_metrics().await;
+        assert_eq!(pool_metrics.blocks_found_total, 1);
+        assert_eq!(pool_metrics.blocks_found.len(), 1);
         assert_eq!(pool_metrics.work_since_last_block, 0.0);
     }
 

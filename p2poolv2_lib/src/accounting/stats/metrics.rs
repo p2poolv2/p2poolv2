@@ -41,7 +41,7 @@ pub struct BlockFound {
     /// Block hash as a hex string, used as a Grafana data-link label
     pub blockhash: String,
     /// Bitcoin block height
-    pub height: u32,
+    pub height: u64,
     /// Unix timestamp in seconds when the block was found
     pub timestamp: u64,
 }
@@ -137,7 +137,7 @@ pub enum MetricsMessage {
     },
     RecordBlockFound {
         blockhash: String,
-        height: u32,
+        height: u64,
         response: oneshot::Sender<()>,
     },
     RecordConfirmedShare {
@@ -294,7 +294,18 @@ impl MetricsActor {
     /// recently found blocks (evicting the oldest past MAX_BLOCKS_FOUND_TRACKED).
     /// Also resets the block effort accumulator since work now targets the
     /// next block.
-    fn record_block_found(&mut self, blockhash: String, height: u32) {
+    ///
+    /// A blockhash already present in the ring is ignored, so a share that is
+    /// re-promoted after a reorg does not double-count or reset effort twice.
+    fn record_block_found(&mut self, blockhash: String, height: u64) {
+        if self
+            .metrics
+            .blocks_found
+            .iter()
+            .any(|block| block.blockhash == blockhash)
+        {
+            return;
+        }
         let timestamp = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
             .map(|d| d.as_secs())
@@ -410,7 +421,7 @@ impl MetricsHandle {
     pub async fn record_block_found(
         &self,
         blockhash: String,
-        height: u32,
+        height: u64,
     ) -> Result<(), tokio::sync::oneshot::error::RecvError> {
         let (response_tx, response_rx) = oneshot::channel();
         self.sender
@@ -684,7 +695,7 @@ mod tests {
             .await
             .unwrap();
 
-        let overflow = MAX_BLOCKS_FOUND_TRACKED as u32 + 5;
+        let overflow = MAX_BLOCKS_FOUND_TRACKED as u64 + 5;
         for height in 0..overflow {
             let _ = handle
                 .record_block_found(format!("hash{height:064x}"), height)
@@ -693,7 +704,7 @@ mod tests {
 
         let metrics = handle.get_metrics().await;
         // Counter is monotonic and counts every find
-        assert_eq!(metrics.blocks_found_total, overflow as u64);
+        assert_eq!(metrics.blocks_found_total, overflow);
         // Ring is capped and holds only the most recent finds
         assert_eq!(metrics.blocks_found.len(), MAX_BLOCKS_FOUND_TRACKED);
         assert_eq!(metrics.blocks_found.front().unwrap().height, 5);
