@@ -117,6 +117,30 @@ export P2POOL_STATIC_DIR=/path/to/static
 If `P2POOL_STATIC_DIR` is not set, the dashboard is not available when
 running from a release binary.
 
+=== Grafana dashboards
+
+Prometheus + Grafana dashboards for a P2Poolv2 node's `/metrics`.
+
+==== Run the metrics stack (Docker)
+
+[,shell]
+----
+cd docker
+docker compose -f docker-compose.metrics.yml up -d
+----
+
+Grafana at http://localhost:3000 (admin/admin). The `*-provision.json` files in
+`dashboards/` are auto-provisioned; Prometheus scrapes the node on `:46884`.
+
+=== Use in your own Grafana
+
+Import the JSON from link:./prometheus/grafana/dashboards-public/[`dashboards-public/`] (choose your
+Prometheus datasource at the prompt). These variable-free copies can also be
+shared read-only via Grafana's *Share externally*.
+
+Full guide: link:https://github.com/wiki/Dashboards.adoc[`Dashboards.adoc`].
+
+
 === Setup Systemd Service
 
 To setup as a systemd service, use the systemd service file provided
