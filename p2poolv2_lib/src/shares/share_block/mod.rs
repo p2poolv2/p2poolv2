@@ -318,6 +318,15 @@ impl ShareBlock {
         self.header.bitcoin_header.difficulty(network)
     }
 
+    /// True when this share's bitcoin header meets the bitcoin network
+    /// target, i.e. the share found a bitcoin block. Detected from the share
+    /// itself so it holds pool-wide (every node sees the share on the chain),
+    /// not just for blocks found by locally connected miners.
+    pub fn is_bitcoin_block(&self) -> bool {
+        let header = &self.header.bitcoin_header;
+        Target::from_compact(header.bits).is_met_by(header.block_hash())
+    }
+
     /// Compute and return the block hash for this share block
     pub fn block_hash(&self) -> BlockHash {
         self.header.block_hash()
@@ -569,6 +578,21 @@ mod tests {
     use bitcoin::transaction::Version;
     use std::collections::HashMap;
     use std::str::FromStr;
+
+    #[test]
+    fn test_is_bitcoin_block() {
+        // A default test share is not a mined bitcoin block: its bitcoin
+        // header hash does not meet the network target.
+        let share = TestShareBlockBuilder::new().build();
+        assert!(!share.is_bitcoin_block());
+
+        // The regtest genesis header meets its own (easy) target by
+        // construction, so it reads as a found bitcoin block.
+        let mut block_share = TestShareBlockBuilder::new().build();
+        block_share.header.bitcoin_header =
+            bitcoin::blockdata::constants::genesis_block(bitcoin::Network::Regtest).header;
+        assert!(block_share.is_bitcoin_block());
+    }
 
     #[test]
     fn test_build_genesis_share_header() {
