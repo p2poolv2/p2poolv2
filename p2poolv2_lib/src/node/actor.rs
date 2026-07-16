@@ -369,6 +369,7 @@ impl NodeActor {
             chain_store_handle.clone(),
             monitoring_event_sender,
             notify_tx,
+            metrics.clone(),
             pplns_window.clone(),
             share_validator.clone(),
         );

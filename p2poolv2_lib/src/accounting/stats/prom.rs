@@ -73,7 +73,7 @@ impl PoolMetrics {
         output.push_str(&self.get_blocks_found_exposition());
 
         output.push_str(
-            "# HELP work_since_last_block Accumulated accepted share difficulty since the last bitcoin block was found\n",
+            "# HELP work_since_last_block Confirmed sharechain pool difficulty since the last bitcoin block was found\n",
         );
         output.push_str("# TYPE work_since_last_block gauge\n");
         output.push_str(&format!(
@@ -105,12 +105,12 @@ impl PoolMetrics {
         output.push('\n');
 
         output.push_str(
-            "# HELP bitcoin_block_found_info Unix timestamp when a bitcoin block was found, labeled with blockhash and height\n",
+            "# HELP bitcoin_block_found_time_seconds Unix time a bitcoin block was found, labeled with blockhash and height\n",
         );
-        output.push_str("# TYPE bitcoin_block_found_info gauge\n");
+        output.push_str("# TYPE bitcoin_block_found_time_seconds gauge\n");
         for block in &self.blocks_found {
             output.push_str(&format!(
-                "bitcoin_block_found_info{{blockhash=\"{}\",height=\"{}\"}} {}\n",
+                "bitcoin_block_found_time_seconds{{blockhash=\"{}\",height=\"{}\"}} {}\n",
                 block.blockhash, block.height, block.timestamp
             ));
         }
@@ -307,7 +307,7 @@ mod tests {
         let metrics = PoolMetrics {
             blocks_found_total: 3,
             blocks_found,
-            work_since_last_block: 12345,
+            work_since_last_block: 12345.0,
             ..Default::default()
         };
 
@@ -316,9 +316,9 @@ mod tests {
         assert!(exposition.contains("# TYPE bitcoin_blocks_found_total counter"));
         assert!(exposition.contains("bitcoin_blocks_found_total 3"));
 
-        assert!(exposition.contains("# TYPE bitcoin_block_found_info gauge"));
+        assert!(exposition.contains("# TYPE bitcoin_block_found_time_seconds gauge"));
         assert!(exposition.contains(
-            "bitcoin_block_found_info{blockhash=\"00000000000000000000abcdef0123456789abcdef0123456789abcdef012345\",height=\"840000\"} 1700000000"
+            "bitcoin_block_found_time_seconds{blockhash=\"00000000000000000000abcdef0123456789abcdef0123456789abcdef012345\",height=\"840000\"} 1700000000"
         ));
 
         assert!(exposition.contains("# TYPE work_since_last_block gauge"));
