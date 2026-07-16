@@ -3,6 +3,10 @@
     "list": [
       {
         "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
         "enable": true,
         "hide": true,
         "iconColor": "rgba(0, 211, 255, 1)",
@@ -11,15 +15,19 @@
       }
     ]
   },
+  "description": "Stats for the entire pool, not of your local mining. A node with no miners attached can use this dashboard to monitor the P2Poolv2 sharechain.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
-  "liveNow": false,
+  "id": null,
+  "links": [],
   "panels": [
     {
       "datasource": {
-        "type": "prometheus"
+        "type": "prometheus",
+        "uid": "${datasource}"
       },
+      "description": "Hashrate of the pool as derived from the sharechain.\n\nTo see your node and miners hashrate, go to the Node Dashboard.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -59,6 +67,7 @@
               "mode": "off"
             }
           },
+          "mappings": [],
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -73,20 +82,17 @@
             ]
           },
           "unit": "Hs"
-        }
+        },
+        "overrides": []
       },
       "gridPos": {
-        "h": 7,
+        "h": 10,
         "w": 24,
         "x": 0,
         "y": 0
       },
-      "id": 1,
+      "id": 2,
       "options": {
-        "annotations": {
-          "clustering": -1,
-          "multiLane": false
-        },
         "legend": {
           "calcs": [],
           "displayMode": "list",
@@ -99,240 +105,36 @@
           "sort": "none"
         }
       },
-      "pluginVersion": "13.0.1",
+      "pluginVersion": "12.2.0",
       "targets": [
         {
-          "datasource": {
-            "type": "prometheus"
-          },
           "editorMode": "builder",
-          "expr": "rate(accepted_difficulty_total[5m]) * 4294967296",
-          "instant": false,
-          "key": "Q-c238c236-797e-41c6-8283-e14666e6caea-0",
-          "legendFormat": "Pool Hashrate (5m)",
-          "range": true,
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus"
-          },
-          "editorMode": "builder",
-          "expr": "rate(accepted_difficulty_total[1h]) * 4294967296",
-          "instant": false,
-          "key": "Q-8109a187-b827-4133-ade2-e87cffe41af4-1",
-          "legendFormat": "Pool Hashrate (1h)",
-          "range": true,
-          "refId": "B"
-        }
-      ],
-      "title": "Node Hashrate",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "barWidthFactor": 0.6,
-            "drawStyle": "line",
-            "fillOpacity": 0,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "insertNulls": false,
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "auto",
-            "showValues": false,
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": 0
-              },
-              {
-                "color": "red",
-                "value": 80
-              }
-            ]
-          }
-        }
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 7
-      },
-      "id": 6,
-      "options": {
-        "annotations": {
-          "clustering": -1,
-          "multiLane": false
-        },
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": false
-        },
-        "tooltip": {
-          "hideZeros": false,
-          "mode": "single",
-          "sort": "none"
-        }
-      },
-      "pluginVersion": "13.0.1",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus"
-          },
-          "editorMode": "code",
-          "exemplar": false,
-          "expr": "count((sum by (btcaddress) (rate(worker_shares_valid_total[5m])) > 0))",
-          "instant": false,
-          "legendFormat": "Users",
+          "expr": "rate(sharechain_work_total[5m])",
+          "legendFormat": "Pool Hashrate",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "Users",
-      "type": "timeseries"
-    },
-    {
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "barWidthFactor": 0.6,
-            "drawStyle": "line",
-            "fillOpacity": 0,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "insertNulls": false,
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "auto",
-            "showValues": false,
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": 0
-              },
-              {
-                "color": "red",
-                "value": 80
-              }
-            ]
-          }
-        }
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 7
-      },
-      "id": 7,
-      "options": {
-        "annotations": {
-          "clustering": -1,
-          "multiLane": false
-        },
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": false
-        },
-        "tooltip": {
-          "hideZeros": false,
-          "mode": "single",
-          "sort": "none"
-        }
-      },
-      "pluginVersion": "13.0.1",
-      "targets": [
-        {
-          "editorMode": "code",
-          "exemplar": false,
-          "expr": "count((sum by (btcaddress, workername) (rate(worker_shares_valid_total[5m])) > 0))",
-          "instant": false,
-          "legendFormat": "Workers",
-          "range": true,
-          "refId": "A"
-        }
-      ],
-      "title": "Workers",
+      "title": "Pool Hashrate",
       "type": "timeseries"
     },
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "cflknknanka9sd"
+        "uid": "${datasource}"
       },
+      "description": "Total work done since last block divided by the current network difficulty",
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "thresholds"
+            "mode": "continuous-RdYlGr"
           },
+          "decimals": 2,
+          "displayName": "Effort",
+          "fieldMinMax": true,
+          "mappings": [],
+          "max": 1,
+          "min": 0,
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -346,153 +148,117 @@
               }
             ]
           },
-          "unit": "s"
-        }
+          "unit": "percentunit"
+        },
+        "overrides": []
       },
       "gridPos": {
-        "h": 10,
-        "w": 6,
+        "h": 13,
+        "w": 7,
         "x": 0,
-        "y": 15
+        "y": 10
       },
-      "id": 5,
+      "id": 3,
       "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
+        "minVizHeight": 75,
+        "minVizWidth": 75,
         "orientation": "auto",
-        "percentChangeColorMode": "standard",
         "reduceOptions": {
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": "",
           "values": false
         },
-        "showPercentChange": false,
-        "textMode": "auto",
-        "wideLayout": true
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "sizing": "auto"
       },
-      "pluginVersion": "13.0.1",
+      "pluginVersion": "12.2.0",
       "targets": [
+        {
+          "editorMode": "builder",
+          "expr": "work_since_last_block",
+          "hide": true,
+          "legendFormat": "work since last block",
+          "range": true,
+          "refId": "A"
+        },
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "cflknknanka9sd"
+            "uid": "${datasource}"
           },
           "editorMode": "builder",
-          "exemplar": false,
-          "expr": "time() - start_time_seconds{job=\"p2pool\"}",
-          "instant": true,
-          "legendFormat": "Uptime",
-          "range": false,
-          "refId": "A"
+          "expr": "network_difficulty",
+          "hide": true,
+          "instant": false,
+          "legendFormat": "__auto",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "name": "Expression",
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "expression": "$A / $B",
+          "hide": false,
+          "refId": "C",
+          "type": "math"
         }
       ],
-      "title": "Uptime",
-      "type": "stat"
+      "title": "Effort",
+      "type": "gauge"
     },
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "cflknknanka9sd"
+        "uid": "${datasource}"
       },
+      "description": "The coinbase from the latest share on the chain",
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "thresholds"
+            "mode": "palette-classic"
           },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": 0
-              }
-            ]
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            }
           },
-          "unit": "sishort"
-        }
+          "decimals": 8,
+          "mappings": []
+        },
+        "overrides": []
       },
       "gridPos": {
-        "h": 10,
-        "w": 6,
-        "x": 6,
-        "y": 15
+        "h": 13,
+        "w": 10,
+        "x": 7,
+        "y": 10
       },
       "id": 4,
       "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "percentChangeColorMode": "standard",
-        "reduceOptions": {
-          "calcs": ["lastNotNull"],
-          "fields": "",
-          "values": false
-        },
-        "showPercentChange": false,
-        "textMode": "auto",
-        "wideLayout": true
-      },
-      "pluginVersion": "13.0.1",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "cflknknanka9sd"
-          },
-          "editorMode": "builder",
-          "exemplar": false,
-          "expr": "best_share_ever{job=\"p2pool\"}",
-          "instant": true,
-          "legendFormat": "__auto",
-          "range": false,
-          "refId": "A"
-        }
-      ],
-      "title": "Best Share Difficulty",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "cflknknanka9sd"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            }
-          },
-          "unit": "sishort"
-        }
-      },
-      "gridPos": {
-        "h": 10,
-        "w": 12,
-        "x": 12,
-        "y": 15
-      },
-      "id": 9,
-      "options": {
-        "displayLabels": ["name"],
+        "displayLabels": [],
         "legend": {
-          "displayMode": "list",
+          "displayMode": "table",
           "placement": "right",
           "showLegend": true,
-          "values": ["percent"]
+          "values": [
+            "value"
+          ]
         },
         "pieType": "pie",
         "reduceOptions": {
-          "calcs": [],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": "",
-          "values": false
+          "values": true
         },
         "sort": "desc",
         "tooltip": {
@@ -501,69 +267,58 @@
           "sort": "none"
         }
       },
-      "pluginVersion": "13.0.1",
+      "pluginVersion": "12.2.0",
       "targets": [
         {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "cflknknanka9sd"
-          },
-          "editorMode": "code",
-          "expr": "sum by (btcshort) (\n  label_replace(\n    worker_shares_valid_total,\n    \"btcshort\", \"$1...$2\", \"btcaddress\", \"^(....).*(........)$\"\n  )\n)",
-          "instant": false,
+          "editorMode": "builder",
+          "exemplar": false,
+          "expr": "coinbase_output / 100000000",
+          "format": "table",
+          "instant": true,
           "legendFormat": "__auto",
-          "range": true,
+          "range": false,
           "refId": "A"
         }
       ],
-      "title": "Hashrate Distribution",
+      "title": "Latest Coinbase",
+      "transformations": [
+        {
+          "id": "labelsToFields",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "index": true,
+              "instance": true,
+              "job": true
+            },
+            "includeByName": {},
+            "indexByName": {},
+            "renameByName": {
+              "Value": "",
+              "address": "Address"
+            }
+          }
+        }
+      ],
       "type": "piechart"
     },
     {
       "datasource": {
-        "type": "mixed",
-        "uid": "-- Mixed --"
+        "type": "prometheus",
+        "uid": "${datasource}"
       },
-      "description": "Share acceptance rate across the pool",
+      "description": "Blocks found since this node started\nEvery time you restart the node, this will go back down to 0. It only tracks blocks found since you last started your node.",
       "fieldConfig": {
         "defaults": {
           "color": {
-            "mode": "palette-classic"
+            "mode": "thresholds"
           },
-          "custom": {
-            "axisBorderShow": false,
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "barWidthFactor": 0.6,
-            "drawStyle": "line",
-            "fillOpacity": 0,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "insertNulls": false,
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "auto",
-            "showValues": false,
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
+          "mappings": [],
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -576,100 +331,85 @@
                 "value": 80
               }
             ]
-          },
-          "unit": "percent"
-        }
+          }
+        },
+        "overrides": []
       },
       "gridPos": {
-        "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 25
+        "h": 13,
+        "w": 7,
+        "x": 17,
+        "y": 10
       },
-      "id": 10,
+      "id": 1,
       "options": {
-        "annotations": {
-          "clustering": -1,
-          "multiLane": false
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "percentChangeColorMode": "standard",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
         },
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "hideZeros": false,
-          "mode": "single",
-          "sort": "none"
-        }
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
       },
-      "pluginVersion": "13.0.1",
+      "pluginVersion": "12.2.0",
       "targets": [
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "cflknknanka9sd"
+            "uid": "${datasource}"
           },
           "editorMode": "builder",
-          "expr": "rate(shares_rejected_total{job=\"p2pool\"}[$__rate_interval])",
-          "hide": true,
-          "instant": false,
-          "legendFormat": "rejected",
+          "expr": "bitcoin_blocks_found_total",
+          "legendFormat": "__auto",
           "range": true,
           "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "cflknknanka9sd"
-          },
-          "editorMode": "builder",
-          "expr": "rate(shares_accepted_total{job=\"p2pool\"}[$__rate_interval])",
-          "hide": true,
-          "instant": false,
-          "legendFormat": "accepted",
-          "range": true,
-          "refId": "B"
-        },
-        {
-          "datasource": {
-            "type": "__expr__",
-            "uid": "__expr__"
-          },
-          "expression": "$A / ($A + $B) * 100",
-          "refId": "C",
-          "type": "math"
         }
       ],
-      "title": "Rejection Rate",
-      "type": "timeseries"
+      "title": "Blocks found since restart",
+      "type": "stat"
     }
   ],
   "preload": false,
-  "refresh": "",
   "schemaVersion": 42,
-  "time": {
-    "from": "now-6h",
-    "to": "now"
-  },
-  "timepicker": {
-    "refresh_intervals": [
-      "5s",
-      "10s",
-      "30s",
-      "1m",
-      "5m",
-      "15m",
-      "30m",
-      "1h",
-      "2h",
-      "1d"
+  "tags": [],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": true,
+          "text": "Prometheus",
+          "value": "prometheus"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Data source",
+        "multi": false,
+        "name": "datasource",
+        "options": [],
+        "query": "prometheus",
+        "queryValue": "",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "datasource"
+      }
     ]
   },
+  "time": {
+    "from": "now-5m",
+    "to": "now"
+  },
+  "timepicker": {},
   "timezone": "browser",
-  "title": "Pool",
-  "version": 19,
-  "uid": "ad4559x",
-  "id": 3
+  "title": "Pool Stats",
+  "uid": "adwz884",
+  "version": 11
 }
