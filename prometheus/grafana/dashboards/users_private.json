@@ -17,12 +17,13 @@
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
-  "id": 3,
+  "id": null,
   "links": [],
   "panels": [
     {
       "datasource": {
-        "type": "prometheus"
+        "type": "prometheus",
+        "uid": "${datasource}"
       },
       "fieldConfig": {
         "defaults": {
@@ -105,7 +106,8 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus"
+            "type": "prometheus",
+            "uid": "${datasource}"
           },
           "editorMode": "builder",
           "exemplar": false,
@@ -117,7 +119,8 @@
         },
         {
           "datasource": {
-            "type": "prometheus"
+            "type": "prometheus",
+            "uid": "${datasource}"
           },
           "editorMode": "builder",
           "expr": "sum by(btcaddress) (rate(worker_shares_valid_total{btcaddress=\"$user_address\"}[1h]))",
@@ -133,7 +136,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus"
+        "type": "prometheus",
+        "uid": "${datasource}"
       },
       "fieldConfig": {
         "defaults": {
@@ -226,7 +230,8 @@
         },
         {
           "datasource": {
-            "type": "prometheus"
+            "type": "prometheus",
+            "uid": "${datasource}"
           },
           "editorMode": "builder",
           "exemplar": false,
@@ -244,7 +249,8 @@
     },
     {
       "datasource": {
-        "type": "prometheus"
+        "type": "prometheus",
+        "uid": "${datasource}"
       },
       "fieldConfig": {
         "defaults": {
@@ -319,19 +325,32 @@
     "list": [
       {
         "current": {
+          "selected": true,
+          "text": "Prometheus",
+          "value": "prometheus"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Data source",
+        "multi": false,
+        "name": "datasource",
+        "options": [],
+        "query": "prometheus",
+        "queryValue": "",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "datasource"
+      },
+      {
+        "current": {
           "text": "",
           "value": ""
         },
         "description": "The user's bitcoin address for searching workers",
         "label": "User's BTC Address",
         "name": "user_address",
-        "options": [
-          {
-            "selected": true,
-            "text": "",
-            "value": ""
-          }
-        ],
+        "options": [],
         "query": "",
         "type": "textbox"
       },
@@ -358,7 +377,11 @@
         "refresh": 1,
         "regex": "",
         "sort": 5,
-        "type": "query"
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        }
       }
     ]
   },
@@ -368,7 +391,7 @@
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "Users and Workers",
-  "uid": "adnhx6x",
+  "title": "Users and Workers (Private)",
+  "uid": "adnhx6xp",
   "version": 6
 }

@@ -18,7 +18,8 @@
   "panels": [
     {
       "datasource": {
-        "type": "prometheus"
+        "type": "prometheus",
+        "uid": "${datasource}"
       },
       "fieldConfig": {
         "defaults": {
@@ -103,7 +104,8 @@
       "targets": [
         {
           "datasource": {
-            "type": "prometheus"
+            "type": "prometheus",
+            "uid": "${datasource}"
           },
           "editorMode": "builder",
           "exemplar": false,
@@ -115,7 +117,8 @@
         },
         {
           "datasource": {
-            "type": "prometheus"
+            "type": "prometheus",
+            "uid": "${datasource}"
           },
           "editorMode": "builder",
           "expr": "sum by(btcaddress) (rate(worker_shares_valid_total{btcaddress=\"$user_address\"}[1h]))",
@@ -131,7 +134,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "cflknknanka9sd"
+        "uid": "${datasource}"
       },
       "fieldConfig": {
         "defaults": {
@@ -215,7 +218,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "cflknknanka9sd"
+            "uid": "${datasource}"
           },
           "editorMode": "builder",
           "exemplar": false,
@@ -265,7 +268,9 @@
         "orientation": "auto",
         "percentChangeColorMode": "standard",
         "reduceOptions": {
-          "calcs": ["lastNotNull"],
+          "calcs": [
+            "lastNotNull"
+          ],
           "fields": "",
           "values": false
         },
@@ -298,13 +303,33 @@
   "templating": {
     "list": [
       {
+        "current": {
+          "selected": true,
+          "text": "Prometheus",
+          "value": "prometheus"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Data source",
+        "multi": false,
+        "name": "datasource",
+        "options": [],
+        "query": "prometheus",
+        "queryValue": "",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "datasource"
+      },
+      {
         "allowCustomValue": false,
         "current": {
-          "text": "bc1qu784gk8czv5kwm9pwssk53e0q9trpkec85r0t2",
-          "value": "bc1qu784gk8czv5kwm9pwssk53e0q9trpkec85r0t2"
+          "text": "",
+          "value": ""
         },
         "datasource": {
-          "type": "prometheus"
+          "type": "prometheus",
+          "uid": "${datasource}"
         },
         "definition": "label_values(worker_shares_valid_total,btcaddress)",
         "hide": 0,
@@ -329,10 +354,13 @@
         "allowCustomValue": false,
         "current": {
           "text": "All",
-          "value": ["$__all"]
+          "value": [
+            "$__all"
+          ]
         },
         "datasource": {
-          "type": "prometheus"
+          "type": "prometheus",
+          "uid": "${datasource}"
         },
         "definition": "label_values(worker_shares_valid_total{btcaddress=\"$user_address\"},workername)",
         "description": "The worker name for the metric",
@@ -378,5 +406,5 @@
   "title": "Users and Workers",
   "version": 6,
   "uid": "adnhx6x",
-  "id": 2
+  "id": null
 }
