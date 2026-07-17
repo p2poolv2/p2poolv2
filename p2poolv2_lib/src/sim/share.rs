@@ -232,7 +232,9 @@ mod tests {
 
         // Run through the real pipeline to produce the ShareBlock peers see.
         let mut store = ChainStoreHandle::default();
-        store.expect_add_share_block().returning(|_| Ok(()));
+        store
+            .expect_add_share_block_and_organise_header()
+            .returning(|_| Ok(None));
         let share_block = handle_stratum_share(emission, &store)
             .await
             .expect("handle ok")
