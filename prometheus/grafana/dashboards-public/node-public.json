@@ -17,6 +17,22 @@
   "liveNow": false,
   "panels": [
     {
+      "id": 100,
+      "type": "text",
+      "title": "",
+      "transparent": true,
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "options": {
+        "mode": "html",
+        "content": "<ul>\n  <li><a href=\"https://grafana.p2poolv2.org/public-dashboards/9c5354852ba648b6926bb2adde0e3b83\" target=\"_blank\" rel=\"noopener\"><strong>Pool Stats</strong></a> \u2014 pool-wide hashrate, block effort, blocks found, and coinbase split</li>\n  <li><a href=\"https://grafana.p2poolv2.org/public-dashboards/92528dc7b7394a43bfb3a9513f390b7b\" target=\"_blank\" rel=\"noopener\"><strong>Node</strong></a> \u2014 local node view, hashrate, users, workers, uptime, etc.</li>\n  <li><a href=\"https://grafana.p2poolv2.org/public-dashboards/8583b50e898649978e468da111f14cd9\" target=\"_blank\" rel=\"noopener\"><strong>Miner leaderboard</strong></a> \u2014 every miner's hashrate and best share</li>\n</ul>"
+      }
+    },
+    {
       "datasource": {
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
@@ -80,7 +96,7 @@
         "h": 7,
         "w": 24,
         "x": 0,
-        "y": 0
+        "y": 4
       },
       "id": 1,
       "options": {
@@ -195,7 +211,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 7
+        "y": 11
       },
       "id": 6,
       "options": {
@@ -293,7 +309,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 7
+        "y": 11
       },
       "id": 7,
       "options": {
@@ -366,7 +382,7 @@
         "h": 10,
         "w": 6,
         "x": 0,
-        "y": 15
+        "y": 19
       },
       "id": 5,
       "options": {
@@ -431,7 +447,7 @@
         "h": 10,
         "w": 6,
         "x": 6,
-        "y": 15
+        "y": 19
       },
       "id": 4,
       "options": {
@@ -494,7 +510,7 @@
         "h": 10,
         "w": 12,
         "x": 12,
-        "y": 15
+        "y": 19
       },
       "id": 9,
       "options": {
@@ -605,7 +621,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 25
+        "y": 29
       },
       "id": 10,
       "options": {
