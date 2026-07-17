@@ -20,6 +20,8 @@ use crate::node::SwarmSend;
 use crate::service::p2p_service::{P2PService, RequestContext};
 use crate::utils::time_provider::TimeProvider;
 use libp2p::PeerId;
+use std::error::Error;
+use std::fmt::Debug;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tower::limit::RateLimit;
@@ -173,10 +175,12 @@ async fn run_peer_service<C, T>(
 mod tests {
     use super::*;
     use crate::node::SwarmSend;
+    use crate::node::connection_tracker::ConnectionTrackerHandle;
     use crate::node::messages::{GetData, Message};
     use crate::node::p2p_message_handlers::receivers::block_receiver::create_block_receiver_channel;
     use crate::node::request_response_handler::block_fetcher;
     use crate::node::validation_worker;
+    use crate::service::p2p_service::{P2PService, RequestContext};
     #[mockall_double::double]
     use crate::shares::chain::chain_store_handle::ChainStoreHandle;
     use crate::shares::validation::MockDefaultShareValidator;
@@ -203,9 +207,10 @@ mod tests {
         let (block_fetcher_tx, _) = block_fetcher::create_block_fetcher_channel();
         let (validation_tx, _) = validation_worker::create_validation_channel();
         let (block_receiver_handle, _) = create_block_receiver_channel();
+        let (cmd_tx, _cmd_rx) = mpsc::channel(1);
 
         RequestContext {
-            peer: peer_id,
+            peer_id,
             request: Message::NotFound(GetData::Block(BlockHash::all_zeros())),
             chain_store_handle,
             response_channel,
@@ -215,6 +220,7 @@ mod tests {
             validation_tx,
             block_receiver_handle,
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            connection_tracker_handle: ConnectionTrackerHandle::new(cmd_tx),
         }
     }
 

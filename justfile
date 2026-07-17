@@ -1,4 +1,4 @@
-set unstable := true
+set unstable
 
 dev_config := "." / "config-dev.toml"
 default_config := "." / "config.toml"
@@ -104,6 +104,11 @@ bench-flamegraph package="p2poolv2_lib" name="pplns_window" function="get_addres
 # Verify chain integrity in a store.db
 verify_chain db_path:
     cargo run --release --bin verify_chain --features debug-tools -- {{ db_path }}
+
+# lint files with clippy
+lint:
+    tombi lint
+    cargo clippy --all -- -D warnings
 
 # fix common warnings
 fix:

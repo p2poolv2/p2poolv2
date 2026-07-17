@@ -21,7 +21,9 @@ use self::block_fetcher::{BlockFetcherEvent, BlockFetcherHandle};
 use self::peer_block_knowledge::PeerBlockKnowledge;
 use crate::config::NetworkConfig;
 use crate::node::SwarmSend;
+use crate::node::actor::NodeHandle;
 use crate::node::behaviour::request_response::RequestResponseEvent;
+use crate::node::connection_tracker::ConnectionTrackerHandle;
 use crate::node::messages::{InventoryMessage, Message};
 use crate::node::p2p_message_handlers::handle_response;
 use crate::node::p2p_message_handlers::receivers::block_receiver::BlockReceiverHandle;
@@ -69,6 +71,7 @@ pub struct RequestResponseHandler<C: Send + Sync> {
     block_receiver_handle: BlockReceiverHandle,
     peer_block_knowledge: PeerBlockKnowledge,
     share_validator: Arc<dyn ShareValidator + Send + Sync>,
+    connection_tracker_handle: ConnectionTrackerHandle,
 }
 
 /// Implementation of ResponseChannel<Message>, used in production.
@@ -84,6 +87,8 @@ impl RequestResponseHandler<ResponseChannel<Message>> {
         validation_tx: ValidationSender,
         block_receiver_handle: BlockReceiverHandle,
         share_validator: Arc<dyn ShareValidator + Send + Sync>,
+        _node_handle: NodeHandle,
+        connection_tracker_channels: ConnectionTrackerHandle,
     ) -> Self {
         Self {
             peer_handles: HashMap::new(),
@@ -95,6 +100,7 @@ impl RequestResponseHandler<ResponseChannel<Message>> {
             block_receiver_handle,
             peer_block_knowledge: PeerBlockKnowledge::default(),
             share_validator,
+            connection_tracker_handle: connection_tracker_channels,
         }
     }
 
@@ -111,6 +117,17 @@ impl RequestResponseHandler<ResponseChannel<Message>> {
         event: RequestResponseEvent,
     ) -> Result<(), Box<dyn Error>> {
         match event {
+            RequestResponseEvent::Message {
+                peer,
+                message:
+                    libp2p::request_response::Message::Response {
+                        request_id: _,
+                        response: Message::SendCompact(_, _),
+                    },
+            } => {
+                debug!(%peer, "Received SendCompact acknowledgment");
+                Ok(())
+            }
             RequestResponseEvent::Message {
                 peer,
                 message:
@@ -246,7 +263,7 @@ impl<C: Send + Sync + 'static> RequestResponseHandler<C> {
         self.record_peer_knowledge(&peer, &request);
 
         let ctx = RequestContext::<C, _> {
-            peer,
+            peer_id: peer,
             request,
             chain_store_handle: self.chain_store_handle.clone(),
             response_channel: channel,
@@ -256,6 +273,7 @@ impl<C: Send + Sync + 'static> RequestResponseHandler<C> {
             validation_tx: self.validation_tx.clone(),
             block_receiver_handle: self.block_receiver_handle.clone(),
             share_validator: self.share_validator.clone(),
+            connection_tracker_handle: self.connection_tracker_handle.clone(),
         };
 
         let peer_handle = match self.peer_handles.get(&peer) {
@@ -358,6 +376,8 @@ mod tests {
         let (validation_tx, _validation_rx) =
             crate::node::validation_worker::create_validation_channel();
         let (block_receiver_handle, _block_receiver_rx) = create_block_receiver_channel();
+        let (cmd_tx, _cmd_rx) = mpsc::channel(1);
+        let connection_tracker_channels = ConnectionTrackerHandle::new(cmd_tx);
         RequestResponseHandler {
             peer_handles: HashMap::new(),
             max_requests_per_second: TEST_RATE_LIMIT,
@@ -368,6 +388,7 @@ mod tests {
             block_receiver_handle,
             peer_block_knowledge: PeerBlockKnowledge::default(),
             share_validator,
+            connection_tracker_handle: connection_tracker_channels,
         }
     }
 
@@ -409,7 +430,7 @@ mod tests {
             Arc::new(mock_validator),
         );
 
-        let peer_id = libp2p::PeerId::random();
+        let peer_id = PeerId::random();
         let mut header1 = TestShareBlockBuilder::new().build().header;
         header1.bits = CompactTarget::from_consensus(crate::shares::share_block::MAX_POOL_TARGET);
         let mut header2 = TestShareBlockBuilder::new()
@@ -437,7 +458,7 @@ mod tests {
 
         let mut handler = build_test_handler(chain_store_handle, swarm_tx);
 
-        let peer_id = libp2p::PeerId::random();
+        let peer_id = PeerId::random();
 
         let result = handler
             .dispatch_response(
@@ -459,7 +480,7 @@ mod tests {
 
         let mut handler = build_test_handler(chain_store_handle, swarm_tx);
 
-        let peer_id = libp2p::PeerId::random();
+        let peer_id = PeerId::random();
         let block_hashes = vec![
             "0000000000000000000000000000000000000000000000000000000000000001"
                 .parse::<BlockHash>()
@@ -484,7 +505,7 @@ mod tests {
 
         let mut handler = build_test_handler(chain_store_handle, swarm_tx);
 
-        let peer_id = libp2p::PeerId::random();
+        let peer_id = PeerId::random();
         let result = handler
             .dispatch_response(
                 peer_id,
@@ -672,7 +693,7 @@ mod tests {
             Arc::new(mock_validator),
         );
 
-        let peer_id = libp2p::PeerId::random();
+        let peer_id = PeerId::random();
         let block = valid_share_block_from_fixture();
         let block_hash = block.block_hash();
 
@@ -699,7 +720,7 @@ mod tests {
 
         let mut handler = build_test_handler(chain_store_handle, swarm_tx);
 
-        let peer_id = libp2p::PeerId::random();
+        let peer_id = PeerId::random();
         let block_hash = BlockHash::all_zeros();
         let inventory = InventoryMessage::BlockHashes(vec![block_hash]);
 

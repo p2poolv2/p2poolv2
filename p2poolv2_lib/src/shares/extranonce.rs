@@ -28,7 +28,7 @@ pub const EXTRANONCE_LENGTH: usize = EXTRANONCE1_SIZE + EXTRANONCE2_SIZE;
 /// Stores the concatenated extranonce bytes that replace the placeholder
 /// separator in the coinbase transaction. Validators use this to
 /// reconstruct the exact coinbase txid for merkle root verification.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Extranonce([u8; EXTRANONCE_LENGTH]);
 
 impl Default for Extranonce {

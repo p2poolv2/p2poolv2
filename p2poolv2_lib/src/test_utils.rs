@@ -15,85 +15,57 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 // Imports for setup_test_chain_store_handle (available with test-utils feature)
-#[cfg(any(test, feature = "test-utils"))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
-#[cfg(any(test, feature = "test-utils"))]
 use crate::store::Store;
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(test)]
+use crate::store::block_tx_metadata::{BlockMetadata, Status};
 use crate::store::writer::{StoreHandle, StoreWriter, write_channel};
-#[cfg(any(test, feature = "test-utils"))]
 use std::sync::Arc;
-#[cfg(any(test, feature = "test-utils"))]
 use tempfile::{TempDir, tempdir};
 
 // Imports for TestShareBlockBuilder and related helpers (available with test-utils feature)
-#[cfg(any(test, feature = "test-utils"))]
+use crate::node::compact_block_relay::ShareHeaderAndShortIds;
 use crate::pool_difficulty::PoolDifficulty;
-#[cfg(any(test, feature = "test-utils"))]
 use crate::shares::extranonce::Extranonce;
-#[cfg(any(test, feature = "test-utils"))]
 use crate::shares::share_block::{ShareBlock, ShareHeader, ShareTransaction};
-#[cfg(any(test, feature = "test-utils"))]
 use crate::shares::transactions::coinbase::build_sharechain_coinbase_transaction;
-#[cfg(any(test, feature = "test-utils"))]
-use bitcoin::hashes::Hash;
-#[cfg(any(test, feature = "test-utils"))]
 use bitcoin::{
-    Address, Block, BlockHash, CompactTarget, CompressedPublicKey, Transaction, block::Header,
+    Address, Amount, Block, BlockHash, CompactTarget, CompressedPublicKey, OutPoint, ScriptBuf,
+    Sequence, Transaction, TxIn, TxOut, Witness,
+    bip152::{HeaderAndShortIds, PrefilledTransaction, ShortId},
+    block::Header,
+    hashes::Hash,
 };
-#[cfg(any(test, feature = "test-utils"))]
 use std::str::FromStr;
 
 // Imports only needed for internal tests
-#[cfg(any(test, feature = "test-utils"))]
 use crate::accounting::OutputPair;
 #[cfg(test)]
 use crate::pool_difficulty::MockPoolDifficulty;
 #[cfg(test)]
 use crate::shares::chain::chain_store_handle::MockChainStoreHandle;
-#[cfg(test)]
 use crate::shares::coinbaseaux_flags::CoinbaseAuxFlags;
-#[cfg(any(test, feature = "test-utils"))]
 use crate::shares::share_commitment::ShareCommitment;
-#[cfg(any(test, feature = "test-utils"))]
 use crate::shares::witness_commitment::WitnessCommitment;
-#[cfg(test)]
-use crate::store::block_tx_metadata::{BlockMetadata, Status};
-#[cfg(test)]
 use crate::stratum;
-#[cfg(test)]
 use crate::stratum::messages::Notify;
-#[cfg(test)]
 use crate::stratum::messages::Response;
-#[cfg(test)]
 use crate::stratum::messages::SimpleRequest;
-#[cfg(test)]
 use crate::stratum::work::block_template::BlockTemplate;
-#[cfg(any(test, feature = "test-utils"))]
 use crate::stratum::work::coinbase::build_bitcoin_coinbase_transaction;
-#[cfg(test)]
 use crate::stratum::work::gbt::build_merkle_branches_for_template;
-#[cfg(test)]
 use bitcoin::TxMerkleNode;
-#[cfg(any(test, feature = "test-utils"))]
 use bitcoin::script::PushBytesBuf;
-#[cfg(test)]
 use rand::{Rng, thread_rng};
 
 /// Well-known secp256k1 compressed public keys (multiples of the generator G).
 /// Use these when constructing test share blocks that need distinct, valid miner keys.
-#[cfg(any(test, feature = "test-utils"))]
 pub const PUBKEY_G: &str = "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
-#[cfg(any(test, feature = "test-utils"))]
 pub const PUBKEY_2G: &str = "02c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5";
-#[cfg(any(test, feature = "test-utils"))]
 pub const PUBKEY_3G: &str = "02f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9";
-#[cfg(any(test, feature = "test-utils"))]
 pub const PUBKEY_4G: &str = "02e493dbf1c10d80f3581e4904930b1404cc6c13900ee0758474fa94abe8c4cd13";
-#[cfg(any(test, feature = "test-utils"))]
 pub const PUBKEY_5G: &str = "022f8bde4d1a07209355b4a7250a5c5128e88b84bddc619ab7cba8d569b240efe4";
 
-#[cfg(any(test, feature = "test-utils"))]
 pub fn make_test_address(index: usize) -> Address {
     let pubkey_hex = match index {
         1 => PUBKEY_G,
@@ -106,7 +78,6 @@ pub fn make_test_address(index: usize) -> Address {
     Address::p2wpkh(&pubkey, bitcoin::Network::Regtest)
 }
 
-#[cfg(any(test, feature = "test-utils"))]
 pub fn test_coinbase_transaction(index: usize) -> bitcoin::Transaction {
     let address = make_test_address(index);
     build_sharechain_coinbase_transaction(&address, &[])
@@ -117,7 +88,6 @@ pub fn test_coinbase_transaction(index: usize) -> bitcoin::Transaction {
 /// Optionally starts the writer background task. Some tests that use
 /// single threaded tokio runtime for timeout testing don't want to
 /// start the bg task
-#[cfg(any(test, feature = "test-utils"))]
 pub async fn setup_test_chain_store_handle(start_writer: bool) -> (ChainStoreHandle, TempDir) {
     let temp_dir = tempdir().unwrap();
     let store = Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap());
@@ -134,13 +104,11 @@ pub async fn setup_test_chain_store_handle(start_writer: bool) -> (ChainStoreHan
     (chain_handle, temp_dir)
 }
 
-#[cfg(any(test, feature = "test-utils"))]
 pub fn genesis_for_tests() -> ShareBlock {
     TestShareBlockBuilder::new().build()
 }
 
 /// Build a share header with a specific miner pubkey and work level.
-#[cfg(any(test, feature = "test-utils"))]
 pub fn build_test_header(
     prev_hash: &str,
     miner_pubkey: &str,
@@ -155,7 +123,6 @@ pub fn build_test_header(
 }
 
 /// Build a share header that references uncles.
-#[cfg(any(test, feature = "test-utils"))]
 pub fn build_test_header_with_uncles(
     prev_hash: &str,
     miner_pubkey: &str,
@@ -172,7 +139,6 @@ pub fn build_test_header_with_uncles(
 }
 
 /// Parse a bitcoin address string into a checked Address for tests.
-#[cfg(any(test, feature = "test-utils"))]
 pub fn parse_address_from_string(address_str: &str) -> bitcoin::Address {
     address_str
         .parse::<bitcoin::Address<_>>()
@@ -180,20 +146,16 @@ pub fn parse_address_from_string(address_str: &str) -> bitcoin::Address {
         .assume_checked()
 }
 
-#[cfg(any(test, feature = "test-utils"))]
 pub const TEST_ANCHOR_TIME: u32 = 1_700_000_000;
 
 /// On-schedule tip time for height 1: anchor_time + ideal_block_time * (height_delta + 1) = anchor_time + 20
-#[cfg(any(test, feature = "test-utils"))]
 pub const TEST_TIP_TIME: u32 = TEST_ANCHOR_TIME + 20;
 
 /// Realistic coinbase timestamp for tests: Jan 1 2020 00:00:00 UTC in nanoseconds
-#[cfg(any(test, feature = "test-utils"))]
 pub const TEST_COINBASE_NSECS: u64 = 1_577_836_800_000_000_000;
 
 /// Build a PoolDifficulty anchored on-schedule so that
 /// calculate_target(TEST_TIP_TIME, 1) returns the anchor target (0x1b4188f5).
-#[cfg(any(test, feature = "test-utils"))]
 pub fn on_schedule_pool_difficulty() -> PoolDifficulty {
     PoolDifficulty::new(
         CompactTarget::from_consensus(0x1b4188f5),
@@ -237,7 +199,6 @@ pub fn setup_pool_difficulty_mocks(
         .returning(move |_, _| CompactTarget::from_consensus(target_bits));
 }
 
-#[cfg(test)]
 use crate::shares::share_block::MAX_POOL_TARGET;
 
 /// Set up mock expectations on a MockChainStoreHandle for
@@ -290,7 +251,6 @@ pub fn setup_header_chain_validation_mocks(chain_store_handle: &mut MockChainSto
         });
 }
 
-#[cfg(test)]
 pub fn create_test_commitment() -> ShareCommitment {
     let pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
         .parse::<CompressedPublicKey>()
@@ -316,7 +276,6 @@ pub fn create_test_commitment() -> ShareCommitment {
     }
 }
 
-#[cfg(test)]
 /// Generate a random hex string of specified length (defaults to 64 characters)
 pub fn random_hex_string(length: usize, leading_zeroes: usize) -> String {
     let mut rng = thread_rng();
@@ -330,10 +289,9 @@ pub fn random_hex_string(length: usize, leading_zeroes: usize) -> String {
         .collect()
 }
 
-#[cfg(test)]
 pub fn load_valid_stratum_work_components(
-    path: &str,
-) -> (BlockTemplate, Notify, SimpleRequest, Response<'static>) {
+    path: &'_ str,
+) -> (BlockTemplate, Notify, SimpleRequest<'_>, Response<'static>) {
     let notify_file = std::fs::File::open(format!("{path}/notify.json")).unwrap();
     let notify: Notify = serde_json::from_reader(notify_file).unwrap();
 
@@ -371,7 +329,6 @@ pub fn load_valid_stratum_work_components(
     (template, notify, submit, authorize_response)
 }
 
-#[cfg(test)]
 pub fn build_block_from_work_components(path: &str, nsecs: u64) -> ShareBlock {
     let (template, _notify, submit, _authorize) = load_valid_stratum_work_components(path);
 
@@ -486,7 +443,6 @@ pub fn build_block_from_work_components(path: &str, nsecs: u64) -> ShareBlock {
     }
 }
 
-#[cfg(any(test, feature = "test-utils"))]
 #[derive(Debug, Clone, Default)]
 pub struct TestShareBlockBuilder {
     bitcoin_block: Option<Block>,
@@ -500,7 +456,6 @@ pub struct TestShareBlockBuilder {
     time: Option<u32>,
 }
 
-#[cfg(any(test, feature = "test-utils"))]
 impl TestShareBlockBuilder {
     pub fn new() -> Self {
         Self::default()
@@ -556,6 +511,35 @@ impl TestShareBlockBuilder {
         self.bits(easy_target)
     }
 
+    pub fn random(mut self) -> Self {
+        let mut rng = thread_rng();
+        if self.bitcoin_block.is_none() {
+            self.bitcoin_block = Some(random_block(&mut rng, 2));
+        }
+        if self.prev_share_blockhash.is_none() {
+            self.prev_share_blockhash = Some(random_block_hash(&mut rng).to_string());
+        }
+        if self.uncles.is_empty() {
+            self.uncles = vec![random_block_hash(&mut rng)];
+        }
+        if self.miner_pubkey.is_none() {
+            let idx = rng.gen_range(1..=5);
+            let key = match idx {
+                1 => PUBKEY_G,
+                2 => PUBKEY_2G,
+                3 => PUBKEY_3G,
+                4 => PUBKEY_4G,
+                _ => PUBKEY_5G,
+            };
+            self.miner_pubkey = Some(key.to_string());
+        }
+        if self.transactions.is_empty() {
+            let n = rng.gen_range(1..=2);
+            self.transactions = (0..n).map(|_| random_transaction(&mut rng)).collect();
+        }
+        self
+    }
+
     pub fn build(self) -> ShareBlock {
         let default_pubkey_hex =
             "020202020202020202020202020202020202020202020202020202020202020202";
@@ -593,7 +577,6 @@ impl TestShareBlockBuilder {
 }
 
 /// Load share headers test data from the JSON fixture file.
-#[cfg(test)]
 pub fn load_share_headers_test_data() -> serde_json::Value {
     let json_string =
         std::fs::read_to_string("../p2poolv2_tests/test_data/validation/share_headers.json")
@@ -602,7 +585,6 @@ pub fn load_share_headers_test_data() -> serde_json::Value {
 }
 
 /// Build a ShareBlock from a header with empty transactions.
-#[cfg(test)]
 pub fn empty_share_block_from_header(header: ShareHeader) -> ShareBlock {
     ShareBlock {
         header,
@@ -612,7 +594,6 @@ pub fn empty_share_block_from_header(header: ShareHeader) -> ShareBlock {
 }
 
 /// Build a ShareBlock with valid PoW from the fixture "valid_header".
-#[cfg(test)]
 pub fn valid_share_block_from_fixture() -> ShareBlock {
     let test_data = load_share_headers_test_data();
     let header: ShareHeader = serde_json::from_value(test_data["valid_header"].clone()).unwrap();
@@ -623,12 +604,10 @@ pub fn valid_share_block_from_fixture() -> ShareBlock {
     }
 }
 
-#[cfg(test)]
 pub fn multiplied_compact_target_as_work(bits: u32, multiplier: u32) -> bitcoin::Work {
     bitcoin::Target::from_compact(CompactTarget::from_consensus(bits * multiplier)).to_work()
 }
 
-#[cfg(any(test, feature = "test-utils"))]
 fn test_share_block(
     bitcoin_block: Option<Block>,
     prev_share_blockhash: &str,
@@ -733,8 +712,56 @@ fn test_share_block(
     }
 }
 
+fn random_block_hash(rng: &mut impl Rng) -> BlockHash {
+    BlockHash::from_byte_array(rng.r#gen())
+}
+
+fn random_transaction(rng: &mut impl Rng) -> Transaction {
+    Transaction {
+        version: bitcoin::transaction::Version::TWO,
+        lock_time: bitcoin::absolute::LockTime::ZERO,
+        input: vec![TxIn {
+            previous_output: OutPoint::null(),
+            script_sig: ScriptBuf::from_bytes(vec![rng.r#gen(); 8]),
+            sequence: Sequence::MAX,
+            witness: Witness::new(),
+        }],
+        output: vec![TxOut {
+            value: Amount::from_sat(rng.gen_range(1000..1_000_000)),
+            script_pubkey: ScriptBuf::new(),
+        }],
+    }
+}
+
+fn random_block_header(rng: &mut impl Rng) -> Header {
+    Header {
+        version: bitcoin::block::Version::TWO,
+        prev_blockhash: random_block_hash(rng),
+        merkle_root: TxMerkleNode::from_byte_array(rng.r#gen()),
+        time: rng.r#gen(),
+        bits: CompactTarget::from_consensus(0x1b4188f5),
+        nonce: rng.r#gen(),
+    }
+}
+
+fn random_block(rng: &mut impl Rng, n_extra_txs: usize) -> Block {
+    let mut txdata = vec![test_coinbase_transaction(1)];
+    for _ in 0..n_extra_txs {
+        txdata.push(random_transaction(rng));
+    }
+    Block {
+        header: random_block_header(rng),
+        txdata,
+    }
+}
+
+fn random_header_and_short_ids(rng: &mut impl Rng, n_txs: usize) -> HeaderAndShortIds {
+    let block = random_block(rng, n_txs);
+    HeaderAndShortIds::from_block(&block, rng.r#gen(), 2, &[]).unwrap()
+}
+
 /// Builder for creating test ShareHeader instances
-#[cfg(test)]
+#[derive(Default)]
 pub struct TestShareHeaderBuilder {
     prev_share_blockhash: Option<BlockHash>,
     uncles: Vec<BlockHash>,
@@ -742,19 +769,6 @@ pub struct TestShareHeaderBuilder {
     transactions: Vec<Transaction>,
 }
 
-#[cfg(test)]
-impl Default for TestShareHeaderBuilder {
-    fn default() -> Self {
-        Self {
-            prev_share_blockhash: None,
-            uncles: Vec::new(),
-            btcaddress: None,
-            transactions: Vec::new(),
-        }
-    }
-}
-
-#[cfg(test)]
 impl TestShareHeaderBuilder {
     pub fn new() -> Self {
         Self::default()
@@ -783,6 +797,28 @@ impl TestShareHeaderBuilder {
     pub fn transactions(mut self, transactions: Vec<Transaction>) -> Self {
         self.transactions = transactions;
         self
+    }
+
+    pub fn random(self) -> Self {
+        let mut rng = thread_rng();
+        let mut builder = self;
+        if builder.prev_share_blockhash.is_none() {
+            builder = builder.prev_share_blockhash(random_block_hash(&mut rng));
+        }
+        if builder.uncles.is_empty() {
+            let n = rng.gen_range(1..=2);
+            let uncles: Vec<BlockHash> = (0..n).map(|_| random_block_hash(&mut rng)).collect();
+            builder = builder.uncles(uncles);
+        }
+        if builder.btcaddress.is_none() {
+            builder = builder.btcaddress(make_test_address(rng.gen_range(1..=4)));
+        }
+        if builder.transactions.is_empty() {
+            let n = rng.gen_range(1..=2);
+            let txs: Vec<Transaction> = (0..n).map(|_| random_transaction(&mut rng)).collect();
+            builder = builder.transactions(txs);
+        }
+        builder
     }
 
     pub fn build(self) -> ShareHeader {
@@ -826,6 +862,99 @@ impl TestShareHeaderBuilder {
             bitcoin_height: 1,
             coinbase_nsecs: TEST_COINBASE_NSECS,
             extranonce: Extranonce::default(),
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct TestShareHeaderAndShortIdsBuilder {
+    bitcoin_header: Option<HeaderAndShortIds>,
+    sharechain_header: Option<ShareHeader>,
+    sharechain_short_ids: Option<Vec<ShortId>>,
+    sharechain_prefilled_txs: Option<Vec<PrefilledTransaction>>,
+}
+
+impl TestShareHeaderAndShortIdsBuilder {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn bitcoin_header(mut self, h: HeaderAndShortIds) -> Self {
+        self.bitcoin_header = Some(h);
+        self
+    }
+
+    pub fn sharechain_header(mut self, h: ShareHeader) -> Self {
+        self.sharechain_header = Some(h);
+        self
+    }
+
+    pub fn sharechain_short_ids(mut self, ids: Vec<ShortId>) -> Self {
+        self.sharechain_short_ids = Some(ids);
+        self
+    }
+
+    pub fn sharechain_prefilled_txs(mut self, txs: Vec<PrefilledTransaction>) -> Self {
+        self.sharechain_prefilled_txs = Some(txs);
+        self
+    }
+
+    pub fn random(self) -> Self {
+        let mut rng = thread_rng();
+        let mut builder = self;
+
+        let sharechain_header = match builder.sharechain_header {
+            Some(h) => h,
+            None => TestShareHeaderBuilder::new().random().build(),
+        };
+
+        let bitcoin_header = match builder.bitcoin_header {
+            Some(h) => h,
+            None => random_header_and_short_ids(&mut rng, 3),
+        };
+
+        let (short_ids, prefilled) = match (
+            &builder.sharechain_short_ids,
+            &builder.sharechain_prefilled_txs,
+        ) {
+            (Some(_), Some(_)) => (None, None),
+            _ => {
+                let txs: Vec<Transaction> = (0..3).map(|_| random_transaction(&mut rng)).collect();
+                let n_prefill = rng.gen_range(1..=2).min(txs.len());
+                let keys =
+                    ShortId::calculate_siphash_keys(&sharechain_header.bitcoin_header, rng.r#gen());
+                let short_ids: Vec<ShortId> = txs[n_prefill..]
+                    .iter()
+                    .map(|tx| ShortId::with_siphash_keys(&tx.compute_txid(), keys))
+                    .collect();
+                let prefilled: Vec<PrefilledTransaction> = (0..n_prefill)
+                    .map(|i| PrefilledTransaction {
+                        idx: i as u16,
+                        tx: txs[i].clone(),
+                    })
+                    .collect();
+                (Some(short_ids), Some(prefilled))
+            }
+        };
+
+        builder.sharechain_header = Some(sharechain_header);
+        builder.bitcoin_header = Some(bitcoin_header);
+        builder.sharechain_short_ids = builder.sharechain_short_ids.or(short_ids);
+        builder.sharechain_prefilled_txs = builder.sharechain_prefilled_txs.or(prefilled);
+
+        builder
+    }
+
+    pub fn build(self) -> ShareHeaderAndShortIds {
+        ShareHeaderAndShortIds {
+            bitcoin_header: self
+                .bitcoin_header
+                .unwrap_or_else(|| random_header_and_short_ids(&mut thread_rng(), 1)),
+            sharechain_header: self
+                .sharechain_header
+                .unwrap_or_else(|| TestShareHeaderBuilder::new().build()),
+            sharechain_short_ids: self.sharechain_short_ids.unwrap_or_default(),
+            sharechain_prefilled_txs: self.sharechain_prefilled_txs.unwrap_or_default(),
         }
     }
 }

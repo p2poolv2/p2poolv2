@@ -20,26 +20,28 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use futures::Future;
+use libp2p::PeerId;
 use tokio::sync::mpsc;
 use tower::Service;
 
 use crate::node::SwarmSend;
+use crate::node::connection_tracker::ConnectionTrackerHandle;
 use crate::node::messages::Message;
 use crate::node::p2p_message_handlers::handle_request;
 use crate::node::p2p_message_handlers::receivers::block_receiver::BlockReceiverHandle;
 use crate::node::request_response_handler::block_fetcher::BlockFetcherHandle;
 use crate::node::validation_worker::ValidationSender;
+#[cfg(not(test))]
+use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(test)]
 #[mockall_double::double]
-use crate::shares::chain::chain_store_handle::ChainStoreHandle;
-#[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::validation::ShareValidator;
 use crate::utils::time_provider::TimeProvider;
 
 /// Request context wrapping all inputs for the service call.
 pub struct RequestContext<C, T> {
-    pub peer: libp2p::PeerId,
+    pub peer_id: PeerId,
     pub request: Message,
     pub chain_store_handle: ChainStoreHandle,
     pub response_channel: C,
@@ -49,6 +51,7 @@ pub struct RequestContext<C, T> {
     pub validation_tx: ValidationSender,
     pub block_receiver_handle: BlockReceiverHandle,
     pub share_validator: Arc<dyn ShareValidator + Send + Sync>,
+    pub connection_tracker_handle: ConnectionTrackerHandle,
 }
 
 /// The Tower service that processes inbound P2P requests.
@@ -61,8 +64,10 @@ impl P2PService {
     }
 }
 
-impl<C: 'static + Send + Sync, T: TimeProvider + Send + Sync + 'static>
-    Service<RequestContext<C, T>> for P2PService
+impl<C, T> Service<RequestContext<C, T>> for P2PService
+where
+    C: 'static + Send + Sync,
+    T: TimeProvider + Send + Sync + 'static,
 {
     type Response = ();
     type Error = Box<dyn Error + Send + Sync>;

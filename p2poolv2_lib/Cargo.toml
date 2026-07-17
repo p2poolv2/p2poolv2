@@ -56,6 +56,7 @@ chrono = { workspace = true }
 dashmap = { workspace = true }
 uint = { workspace = true }
 rlimit = "0.11.0"
+parking_lot = "0.12.5"
 
 [dev-dependencies]
 bitcoindrpc = { path = "../bitcoindrpc", features = ["test-utils"] }
