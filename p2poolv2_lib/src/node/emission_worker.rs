@@ -205,8 +205,8 @@ mod tests {
 
         let mut mock_chain_store = ChainStoreHandle::default();
         mock_chain_store
-            .expect_add_share_block()
-            .returning(|_| Ok(()));
+            .expect_add_share_block_and_organise_header()
+            .returning(|_| Ok(None));
 
         let worker = EmissionWorker::new(emissions_rx, mock_chain_store, validation_tx);
         let worker_handle = tokio::spawn(worker.run());
@@ -269,9 +269,9 @@ mod tests {
             .times(1)
             .returning(|_| Err(StoreError::ChannelClosed));
         mock_chain_store
-            .expect_add_share_block()
+            .expect_add_share_block_and_organise_header()
             .times(1)
-            .returning(|_| Ok(()));
+            .returning(|_| Ok(None));
 
         let worker = EmissionWorker::new(emissions_rx, mock_chain_store, validation_tx);
         let worker_handle = tokio::spawn(worker.run());
