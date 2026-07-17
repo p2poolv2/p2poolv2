@@ -24,9 +24,14 @@ _default:
     echo 'Edit the ./config-dev.toml file for your specific needs'
     echo 'You can easily run a local cluster with `just compose`'
 
-# Run tests for entire workspace or a specific package
+# Run tests for entire workspace or a specific package.
+# The full-workspace run (no package arg) adds a second pass that runs only
+# the `sim`-feature-gated tests (compiled with --features sim), so the default
+# pass above is not re-run. CI's --all-features coverage job runs the whole
+# suite in sim mode; this just catches sim-gated test breakage locally.
 test package="":
     cargo nextest run {{ if package == "" { "" } else { "-p " + package } }}
+    {{ if package == "" { "cargo nextest run -p p2poolv2_lib --features sim sim::" } else { "true" } }}
 
 # Run a specific test in a package with debug logging and no output capture
 debug-test package="p2poolv2_tests" testname="":

@@ -48,6 +48,9 @@ jobs:
       - name: Run tests
         run: cargo nextest run --workspace
 
+      - name: Run sim-feature tests
+        run: "cargo nextest run -p p2poolv2_lib --features sim sim::"
+
   coverage:
     name: Code Coverage
     runs-on: ubuntu-latest
