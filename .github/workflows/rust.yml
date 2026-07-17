@@ -49,7 +49,7 @@ jobs:
         run: cargo nextest run --workspace
 
       - name: Run sim-feature tests
-        run: "cargo nextest run -p p2poolv2_lib --features sim sim::"
+        run: cargo nextest run -p p2poolv2_lib --features sim
 
   coverage:
     name: Code Coverage
