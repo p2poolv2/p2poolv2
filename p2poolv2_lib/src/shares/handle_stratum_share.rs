@@ -99,10 +99,11 @@ pub async fn handle_stratum_share(
             share_block.transactions.len()
         );
 
-        // Store share block via ChainStoreHandle. This is later
-        // organised in emission worker once this function returns.
+        // Persist the share block and organise its header onto the
+        // candidate chain in a single atomic write, matching the block
+        // receiver path.
         chain_store_handle
-            .add_share_block(share_block.clone())
+            .add_share_block_and_organise_header(share_block.clone())
             .await
             .map_err(|e| format!("Failed to add share to chain: {e}"))?;
 
@@ -251,8 +252,8 @@ mod tests {
 
         // Mock add_share to succeed
         mock_chain_store
-            .expect_add_share_block()
-            .returning(|_| Ok(()));
+            .expect_add_share_block_and_organise_header()
+            .returning(|_| Ok(None));
 
         let emission = create_test_emission_with_commitment();
 
@@ -265,6 +266,35 @@ mod tests {
         let share_block = share_block.unwrap();
         // Verify the share block has the expected structure
         assert_eq!(share_block.transactions.len(), 1); // One share coinbase
+    }
+
+    /// Regression test: a locally mined share must be persisted and have
+    /// its header organised onto the candidate chain atomically, exactly
+    /// like the block receiver path.
+    ///
+    /// Organising the header writes the block metadata up front. If the
+    /// share were persisted without it (the body-only `add_share_block`
+    /// path), a chain-context validation rejection in the organise worker
+    /// would leave the share in the DAG with a parent->child edge but no
+    /// metadata. A later share building on it would drive the confirm walk
+    /// into `get_block_metadata` -> NotFound and wedge the confirmed chain
+    /// permanently. No expectation is set for the body-only path, so
+    /// reverting to it would panic this test.
+    #[tokio::test]
+    async fn test_handle_stratum_share_organises_header_atomically() {
+        let mut mock_chain_store = ChainStoreHandle::default();
+
+        mock_chain_store
+            .expect_add_share_block_and_organise_header()
+            .times(1)
+            .returning(|_| Ok(None));
+
+        let emission = create_test_emission_with_commitment();
+
+        let result = handle_stratum_share(emission, &mock_chain_store).await;
+
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_some());
     }
 
     #[tokio::test]
@@ -291,8 +321,8 @@ mod tests {
 
         // Mock add_share to succeed
         mock_chain_store
-            .expect_add_share_block()
-            .returning(|_| Ok(()));
+            .expect_add_share_block_and_organise_header()
+            .returning(|_| Ok(None));
 
         let emission = create_test_emission_with_commitment();
         let expected_commitment = emission.share_commitment.clone().unwrap();
@@ -329,8 +359,8 @@ mod tests {
 
         // Mock add_share to succeed
         mock_chain_store
-            .expect_add_share_block()
-            .returning(|_| Ok(()));
+            .expect_add_share_block_and_organise_header()
+            .returning(|_| Ok(None));
 
         // Create emission with some bitcoin transactions
         let pplns = SimplePplnsShare {
