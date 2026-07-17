@@ -684,5 +684,43 @@
         "type": "datasource"
       }
     ]
-  }
+  },
+  "links": [
+    {
+      "title": "Pool Stats",
+      "type": "link",
+      "url": "/d/adwz884",
+      "icon": "external link",
+      "tooltip": "Pool-wide hashrate, effort, blocks found, coinbase split",
+      "targetBlank": true,
+      "keepTime": true,
+      "includeVars": false,
+      "asDropdown": false,
+      "tags": []
+    },
+    {
+      "title": "Users and Workers",
+      "type": "link",
+      "url": "/d/adnhx6x",
+      "icon": "external link",
+      "tooltip": "Per-miner drill-down (pick an address)",
+      "targetBlank": true,
+      "keepTime": true,
+      "includeVars": false,
+      "asDropdown": false,
+      "tags": []
+    },
+    {
+      "title": "Users and Workers (Private)",
+      "type": "link",
+      "url": "/d/adnhx6xp",
+      "icon": "external link",
+      "tooltip": "Look up your own address",
+      "targetBlank": true,
+      "keepTime": true,
+      "includeVars": false,
+      "asDropdown": false,
+      "tags": []
+    }
+  ]
 }

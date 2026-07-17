@@ -406,5 +406,43 @@
   "title": "Users and Workers",
   "version": 6,
   "uid": "adnhx6x",
-  "id": null
+  "id": null,
+  "links": [
+    {
+      "title": "Pool Stats",
+      "type": "link",
+      "url": "/d/adwz884",
+      "icon": "external link",
+      "tooltip": "Pool-wide hashrate, effort, blocks found, coinbase split",
+      "targetBlank": true,
+      "keepTime": true,
+      "includeVars": false,
+      "asDropdown": false,
+      "tags": []
+    },
+    {
+      "title": "Node",
+      "type": "link",
+      "url": "/d/ad4559x",
+      "icon": "external link",
+      "tooltip": "This node's shares, uptime, best share, connected workers",
+      "targetBlank": true,
+      "keepTime": true,
+      "includeVars": false,
+      "asDropdown": false,
+      "tags": []
+    },
+    {
+      "title": "Users and Workers (Private)",
+      "type": "link",
+      "url": "/d/adnhx6xp",
+      "icon": "external link",
+      "tooltip": "Look up your own address",
+      "targetBlank": true,
+      "keepTime": true,
+      "includeVars": false,
+      "asDropdown": false,
+      "tags": []
+    }
+  ]
 }

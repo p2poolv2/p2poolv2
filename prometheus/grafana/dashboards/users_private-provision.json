@@ -18,7 +18,44 @@
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
   "id": null,
-  "links": [],
+  "links": [
+    {
+      "title": "Pool Stats",
+      "type": "link",
+      "url": "/d/adwz884",
+      "icon": "external link",
+      "tooltip": "Pool-wide hashrate, effort, blocks found, coinbase split",
+      "targetBlank": true,
+      "keepTime": true,
+      "includeVars": false,
+      "asDropdown": false,
+      "tags": []
+    },
+    {
+      "title": "Node",
+      "type": "link",
+      "url": "/d/ad4559x",
+      "icon": "external link",
+      "tooltip": "This node's shares, uptime, best share, connected workers",
+      "targetBlank": true,
+      "keepTime": true,
+      "includeVars": false,
+      "asDropdown": false,
+      "tags": []
+    },
+    {
+      "title": "Users and Workers",
+      "type": "link",
+      "url": "/d/adnhx6x",
+      "icon": "external link",
+      "tooltip": "Per-miner drill-down (pick an address)",
+      "targetBlank": true,
+      "keepTime": true,
+      "includeVars": false,
+      "asDropdown": false,
+      "tags": []
+    }
+  ],
   "panels": [
     {
       "datasource": {
