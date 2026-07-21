@@ -376,6 +376,11 @@ where
             }
         }
     }
+    // Close the TCP writer before awaiting accounting. If accounting is
+    // delayed, retaining the write half leaves the socket in CLOSE_WAIT.
+    let _ = writer.shutdown().await;
+    drop(writer);
+
     let _ = ctx
         .metrics
         .decrement_worker_count(
