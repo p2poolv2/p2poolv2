@@ -851,6 +851,7 @@ dependencies = [
  "nom",
  "pathdiff",
  "serde",
+ "serde_json",
  "toml 0.5.11",
 ]
 
@@ -3273,6 +3274,7 @@ dependencies = [
  "bitcoindrpc",
  "config",
  "serde",
+ "serde_json",
  "temp-env",
  "tokio-test",
 ]
