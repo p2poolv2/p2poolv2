@@ -382,6 +382,23 @@ pub struct MetricsHandle {
 }
 
 impl MetricsHandle {
+    #[cfg(test)]
+    pub(crate) fn delayed_for_test() -> (Self, oneshot::Receiver<()>, oneshot::Sender<()>) {
+        let (sender, mut receiver) = mpsc::channel(1);
+        let (received_tx, received_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+
+        tokio::spawn(async move {
+            if let Some(message) = receiver.recv().await {
+                let _ = received_tx.send(());
+                let _ = release_rx.await;
+                drop(message);
+            }
+        });
+
+        (Self { sender }, received_rx, release_tx)
+    }
+
     /// Record an accepted share with the given difficulty
     pub async fn record_share_accepted(
         &self,

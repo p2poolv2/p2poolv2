@@ -600,6 +600,11 @@ where
             }
         }
     }
+    // Close the TCP writer before awaiting accounting. If accounting is
+    // delayed, retaining the write half leaves the socket in CLOSE_WAIT.
+    let _ = writer.shutdown().await;
+    drop(writer);
+
     let _ = ctx
         .metrics
         .decrement_worker_count(
@@ -678,6 +683,7 @@ mod stratum_server_tests {
     use bitcoindrpc::test_utils::setup_mock_bitcoin_rpc;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use std::sync::Arc;
+    use tokio::io::AsyncReadExt;
     use tokio::sync::mpsc;
 
     #[tokio::test]
@@ -753,6 +759,75 @@ mod stratum_server_tests {
 
         // Wait for the task to complete
         let _ = server_handle.await;
+    }
+
+    #[tokio::test]
+    async fn test_handle_connection_closes_writer_before_accounting() {
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8080);
+        let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        let (message_tx, message_rx) = mpsc::channel(1);
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        let (notify_tx, _notify_rx) = mpsc::channel(1);
+        let (emissions_tx, _emissions_rx) = mpsc::channel(1);
+        let tracker_handle = start_tracker_actor();
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let (metrics_handle, accounting_started_rx, release_accounting_tx) =
+            metrics::MetricsHandle::delayed_for_test();
+        let ctx = StratumContext {
+            notify_tx,
+            tracker_handle,
+            bitcoindrpc_client: BitcoindRpcClient::new(
+                &bitcoinrpc_config.url,
+                &bitcoinrpc_config.username,
+                &bitcoinrpc_config.password,
+            )
+            .unwrap(),
+            start_difficulty: 1,
+            minimum_difficulty: 1,
+            maximum_difficulty: Some(2),
+            ignore_difficulty: false,
+            validate_addresses: true,
+            emissions_tx,
+            network: bitcoin::Network::Regtest,
+            metrics: metrics_handle,
+            chain_store_handle,
+            mode: PoolMode::P2poolv2,
+        };
+        let (template_tx, template_rx) = watch::channel(None);
+        let (writer, mut peer) = tokio::io::duplex(64);
+
+        let handler = tokio::spawn(async move {
+            let _message_tx = message_tx;
+            let _shutdown_tx = shutdown_tx;
+            let _template_tx = template_tx;
+            handle_connection(
+                tokio::io::empty(),
+                writer,
+                addr,
+                message_rx,
+                shutdown_rx,
+                0x1fffe000,
+                ctx,
+                &SystemTimeProvider {},
+                template_rx,
+            )
+            .await
+        });
+
+        accounting_started_rx
+            .await
+            .expect("worker accounting should start");
+
+        let mut byte = [0u8; 1];
+        let bytes_read =
+            tokio::time::timeout(tokio::time::Duration::from_secs(1), peer.read(&mut byte))
+                .await
+                .expect("writer should close before accounting finishes")
+                .expect("peer read should succeed");
+        assert_eq!(bytes_read, 0, "peer should observe EOF");
+
+        let _ = release_accounting_tx.send(());
+        assert!(handler.await.unwrap().is_ok());
     }
 
     #[tokio::test]
