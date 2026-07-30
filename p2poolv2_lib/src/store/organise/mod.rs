@@ -17,6 +17,7 @@
 use super::{ColumnFamily, Store, writer::StoreError};
 use bitcoin::{BlockHash, Work, consensus::encode};
 use std::collections::VecDeque;
+use tracing::{info, warn};
 
 mod candidate;
 mod confirmed;
@@ -24,6 +25,10 @@ pub mod organise_block;
 pub mod organise_header;
 
 const BRANCH_INITIAL_CAPACITY: usize = 16;
+
+/// Reorgs at least this deep are logged at `warn!` (shallower at `info!`).
+/// Mirrors bitcoind's "more than 6 blocks" threshold for deep chain divergence.
+const DEEP_REORG_DEPTH: u32 = 6;
 
 /// Type to capture candidate and confirmed chains as vector of
 /// height, blockhash pairs
@@ -43,6 +48,36 @@ pub(crate) struct TopResult {
 /// Returns key for height with provided suffix
 pub(super) fn height_to_key_with_suffix(height: Height, suffix: &str) -> Vec<u8> {
     [&height.to_be_bytes(), suffix.as_bytes()].concat()
+}
+
+/// Number of blocks unwound from the old tip back to the fork point.
+fn reorg_depth(old_tip_height: Height, fork_point_height: Height) -> u32 {
+    old_tip_height.saturating_sub(fork_point_height)
+}
+
+/// Log a sharechain reorg. Shallow reorgs use `info!`; deep reorgs
+/// (depth >= [`DEEP_REORG_DEPTH`]) use `warn!` with a bitcoind-style hint.
+fn log_reorg(
+    kind: &str,
+    depth: u32,
+    fork_height: Height,
+    old_tip: &BlockHash,
+    old_tip_height: Height,
+    new_tip: &BlockHash,
+    new_tip_height: Height,
+) {
+    if depth >= DEEP_REORG_DEPTH {
+        warn!(
+            "Share chain reorg detected: kind={kind} depth={depth} fork_height={fork_height} \
+             old_tip={old_tip} (height {old_tip_height}) new_tip={new_tip} (height {new_tip_height}). \
+             Deep reorg may indicate database corruption or consensus incompatibility with peers."
+        );
+    } else {
+        info!(
+            "Share chain reorg detected: kind={kind} depth={depth} fork_height={fork_height} \
+             old_tip={old_tip} (height {old_tip_height}) new_tip={new_tip} (height {new_tip_height})"
+        );
+    }
 }
 
 impl Store {
@@ -131,6 +166,31 @@ mod tests {
     use super::*;
     use crate::test_utils::TestShareBlockBuilder;
     use tempfile::tempdir;
+
+    // ── reorg_depth tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_reorg_depth_zero_when_fork_at_tip() {
+        assert_eq!(reorg_depth(10, 10), 0);
+    }
+
+    #[test]
+    fn test_reorg_depth_shallow() {
+        assert_eq!(reorg_depth(13, 12), 1);
+        assert_eq!(reorg_depth(15, 10), 5);
+    }
+
+    #[test]
+    fn test_reorg_depth_at_and_above_deep_threshold() {
+        assert_eq!(reorg_depth(16, 10), DEEP_REORG_DEPTH);
+        assert_eq!(reorg_depth(20, 10), 10);
+        assert!(reorg_depth(20, 10) >= DEEP_REORG_DEPTH);
+    }
+
+    #[test]
+    fn test_reorg_depth_saturates_when_fork_above_tip() {
+        assert_eq!(reorg_depth(5, 10), 0);
+    }
 
     // ── get_branch_to_chain tests ─────────────────────────────────────────
 
