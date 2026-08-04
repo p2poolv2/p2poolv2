@@ -482,11 +482,17 @@ pub struct Config {
 #[allow(dead_code)]
 impl Config {
     pub fn load(path: &str) -> Result<Self, config::ConfigError> {
-        config::Config::builder()
+        let mut cfg: Config = config::Config::builder()
             .add_source(config::File::with_name(path))
             .add_source(config::Environment::with_prefix("P2POOL").separator("_"))
             .build()?
-            .try_deserialize()
+            .try_deserialize()?;
+
+        if cfg.bitcoinrpc.network.is_none() {
+            cfg.bitcoinrpc.network = Some(cfg.stratum.network);
+        }
+
+        Ok(cfg)
     }
 
     pub fn with_listen_address(mut self, listen_address: String) -> Self {
@@ -600,12 +606,22 @@ impl Config {
     }
 
     pub fn with_bitcoinrpc_username(mut self, bitcoin_username: String) -> Self {
-        self.bitcoinrpc.username = bitcoin_username;
+        self.bitcoinrpc.username = Some(bitcoin_username);
         self
     }
 
     pub fn with_bitcoinrpc_password(mut self, bitcoin_password: String) -> Self {
-        self.bitcoinrpc.password = bitcoin_password;
+        self.bitcoinrpc.password = Some(bitcoin_password);
+        self
+    }
+
+    pub fn with_bitcoinrpc_cookie_file(mut self, cookie_file: String) -> Self {
+        self.bitcoinrpc.cookie_file = Some(cookie_file);
+        self
+    }
+
+    pub fn with_bitcoinrpc_datadir(mut self, datadir: String) -> Self {
+        self.bitcoinrpc.datadir = Some(datadir);
         self
     }
 
@@ -714,8 +730,8 @@ mod tests {
         );
 
         assert_eq!(config.bitcoinrpc.url, "http://localhost:8332");
-        assert_eq!(config.bitcoinrpc.username, "testuser");
-        assert_eq!(config.bitcoinrpc.password, "testpass");
+        assert_eq!(config.bitcoinrpc.username, Some("testuser".to_string()));
+        assert_eq!(config.bitcoinrpc.password, Some("testpass".to_string()));
 
         assert_eq!(config.network.max_pending_incoming, 10);
         assert_eq!(config.network.max_pending_outgoing, 10);
@@ -744,6 +760,18 @@ mod tests {
 
         assert_eq!(config.store.background_task_frequency_hours, 2);
         assert_eq!(config.store.pplns_ttl_days, 7);
+    }
+
+    #[test]
+    fn test_config_cookie_file_setting() {
+        let config = Config::load("../config.sample.toml")
+            .unwrap()
+            .with_bitcoinrpc_cookie_file("/path/to/.cookie".to_string());
+
+        assert_eq!(
+            config.bitcoinrpc.cookie_file,
+            Some("/path/to/.cookie".to_string())
+        );
     }
 
     #[test]

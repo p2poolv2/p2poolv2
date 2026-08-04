@@ -19,11 +19,7 @@ use bitcoindrpc::{BitcoinRpcConfig, BitcoindRpcClient};
 pub async fn ensure_bitcoin_node_synced(
     bitcoinrpc_config: &BitcoinRpcConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let bitcoind = BitcoindRpcClient::new(
-        &bitcoinrpc_config.url,
-        &bitcoinrpc_config.username,
-        &bitcoinrpc_config.password,
-    )?;
+    let bitcoind = BitcoindRpcClient::from_config(bitcoinrpc_config)?;
 
     let is_in_ibd = bitcoind.getblockchaininfo().await?.initial_block_download;
 
@@ -47,8 +43,11 @@ mod tests {
         let mock_server = MockServer::start().await;
         let config = BitcoinRpcConfig {
             url: mock_server.uri(),
-            username: "testuser".to_string(),
-            password: "testpass".to_string(),
+            username: Some("testuser".to_string()),
+            password: Some("testpass".to_string()),
+            cookie_file: None,
+            datadir: None,
+            network: None,
         };
         (mock_server, config)
     }

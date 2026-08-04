@@ -54,10 +54,11 @@ pool_signature = "P2Poolv2"
 # max_connections = 1000
 
 [bitcoinrpc]
-# RPC credentials are loaded from env vars
+# Specify either username/password OR cookie_file for RPC authentication
 url = "http://127.0.0.1:38332"
 username = "p2pool"
 password = "p2pool"
+# cookie_file = "/path/to/.cookie"
 
 [logging]
 # Specify a file path for the log file, if no log file is specified, console logging will be used

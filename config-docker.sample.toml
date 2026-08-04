@@ -49,9 +49,11 @@ difficulty_multiplier = 1.0
 pool_signature = "P2Poolv2"
 
 [bitcoinrpc]
+# Specify either username/password OR cookie_file for RPC authentication
 url = "http://bitcoind:38332"
 username = "p2pool"
 password = "p2pool"
+# cookie_file = "/path/to/.cookie"
 
 [logging]
 file = "/p2poolv2/logs/p2pool.log"

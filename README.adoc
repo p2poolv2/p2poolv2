@@ -46,8 +46,7 @@ docker compose up -d bitcoind
 
 The important details you want from your bitcoin.conf are:
 
-. rpcuser
-. rpcpassword
+. rpcuser and rpcpassword (or use `.cookie` file authentication via `cookie_file` in `config.toml`)
 
 Another important detail is to set your bitcoin config file to allow
 for 500 coinbase outputs. This is required before we ship our atomic

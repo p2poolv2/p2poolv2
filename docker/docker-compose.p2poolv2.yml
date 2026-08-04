@@ -33,6 +33,8 @@ services:
     volumes:
       - p2poolv2_data:/p2poolv2
       - ../${P2POOL_CONFIG:-config.toml}:/etc/p2poolv2/config.toml:ro
+      # Optional: Mount bitcoind data directory for .cookie file RPC authentication
+      # - bitcoin_data:/data:ro
     restart: unless-stopped
     logging:
       driver: "json-file"

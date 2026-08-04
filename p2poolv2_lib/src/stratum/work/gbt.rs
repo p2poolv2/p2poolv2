@@ -116,11 +116,7 @@ pub async fn start_gbt(
     mut zmq_trigger_rx: tokio::sync::mpsc::Receiver<()>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Create the RPC client once and reuse it for all requests
-    let bitcoind = match BitcoindRpcClient::new(
-        &bitcoin_config.url,
-        &bitcoin_config.username,
-        &bitcoin_config.password,
-    ) {
+    let bitcoind = match BitcoindRpcClient::from_config(&bitcoin_config) {
         Ok(client) => client,
         Err(e) => {
             error!("Failed to connect to bitcoind: {}", e);
@@ -221,12 +217,7 @@ mod gbt_load_tests {
         )
         .await;
 
-        let bitcoind = BitcoindRpcClient::new(
-            &bitcoinrpc_config.url,
-            &bitcoinrpc_config.username,
-            &bitcoinrpc_config.password,
-        )
-        .unwrap();
+        let bitcoind = BitcoindRpcClient::from_config(&bitcoinrpc_config).unwrap();
         let result = get_block_template(&bitcoind, bitcoin::Network::Signet).await;
 
         assert!(result.is_ok());
