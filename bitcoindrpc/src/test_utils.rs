@@ -32,8 +32,11 @@ pub async fn setup_mock_bitcoin_rpc() -> (MockServer, BitcoinRpcConfig) {
     // Create test config
     let config = BitcoinRpcConfig {
         url: mock_server.uri(),
-        username: "testuser".to_string(),
-        password: "testpass".to_string(),
+        username: Some("testuser".to_string()),
+        password: Some("testpass".to_string()),
+        cookie_file: None,
+        datadir: None,
+        network: None,
     };
 
     (mock_server, config)

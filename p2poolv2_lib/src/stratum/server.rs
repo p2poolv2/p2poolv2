@@ -253,17 +253,14 @@ impl StratumServer {
     ) -> Result<(), Box<dyn std::error::Error + Send>> {
         info!("Starting Stratum server at {}:{}", self.hostname, self.port);
 
-        let bitcoindrpc_client = BitcoindRpcClient::new(
-            &bitcoinrpc_config.url,
-            &bitcoinrpc_config.username,
-            &bitcoinrpc_config.password,
-        )
-        .map_err(|e| -> Box<dyn std::error::Error + Send> {
-            Box::new(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("Failed to create BitcoindRpcClient: {}", e),
-            ))
-        })?;
+        let bitcoindrpc_client = BitcoindRpcClient::from_config(&bitcoinrpc_config).map_err(
+            |e| -> Box<dyn std::error::Error + Send> {
+                Box::new(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("Failed to create BitcoindRpcClient: {}", e),
+                ))
+            },
+        )?;
 
         if !wait_for_chain_sync(
             &self.chain_store_handle,
@@ -782,12 +779,7 @@ mod stratum_server_tests {
         let ctx = StratumContext {
             notify_tx,
             tracker_handle: tracker_handle.clone(),
-            bitcoindrpc_client: BitcoindRpcClient::new(
-                &bitcoinrpc_config.url,
-                &bitcoinrpc_config.username,
-                &bitcoinrpc_config.password,
-            )
-            .unwrap(),
+            bitcoindrpc_client: BitcoindRpcClient::from_config(&bitcoinrpc_config).unwrap(),
             metrics: metrics_handle,
             start_difficulty: 10000,
             minimum_difficulty: 1,
@@ -905,12 +897,7 @@ mod stratum_server_tests {
         let ctx = StratumContext {
             notify_tx,
             tracker_handle: tracker_handle.clone(),
-            bitcoindrpc_client: BitcoindRpcClient::new(
-                &bitcoinrpc_config.url,
-                &bitcoinrpc_config.username,
-                &bitcoinrpc_config.password,
-            )
-            .unwrap(),
+            bitcoindrpc_client: BitcoindRpcClient::from_config(&bitcoinrpc_config).unwrap(),
             metrics: metrics_handle,
             start_difficulty: 10000,
             minimum_difficulty: 1,
@@ -989,12 +976,7 @@ mod stratum_server_tests {
         let ctx = StratumContext {
             notify_tx,
             tracker_handle: tracker_handle.clone(),
-            bitcoindrpc_client: BitcoindRpcClient::new(
-                &bitcoinrpc_config.url,
-                &bitcoinrpc_config.username,
-                &bitcoinrpc_config.password,
-            )
-            .unwrap(),
+            bitcoindrpc_client: BitcoindRpcClient::from_config(&bitcoinrpc_config).unwrap(),
             start_difficulty: 10000,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
@@ -1071,12 +1053,7 @@ mod stratum_server_tests {
         let ctx = StratumContext {
             notify_tx,
             tracker_handle: tracker_handle.clone(),
-            bitcoindrpc_client: BitcoindRpcClient::new(
-                &bitcoinrpc_config.url,
-                &bitcoinrpc_config.username,
-                &bitcoinrpc_config.password,
-            )
-            .unwrap(),
+            bitcoindrpc_client: BitcoindRpcClient::from_config(&bitcoinrpc_config).unwrap(),
             start_difficulty: 10000,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
@@ -1173,12 +1150,7 @@ mod stratum_server_tests {
         let ctx = StratumContext {
             notify_tx,
             tracker_handle: tracker_handle.clone(),
-            bitcoindrpc_client: BitcoindRpcClient::new(
-                &bitcoinrpc_config.url,
-                &bitcoinrpc_config.username,
-                &bitcoinrpc_config.password,
-            )
-            .unwrap(),
+            bitcoindrpc_client: BitcoindRpcClient::from_config(&bitcoinrpc_config).unwrap(),
             start_difficulty: 10000,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
@@ -1294,12 +1266,7 @@ mod stratum_server_tests {
         let ctx = StratumContext {
             notify_tx,
             tracker_handle: tracker_handle.clone(),
-            bitcoindrpc_client: BitcoindRpcClient::new(
-                &bitcoinrpc_config.url,
-                &bitcoinrpc_config.username,
-                &bitcoinrpc_config.password,
-            )
-            .unwrap(),
+            bitcoindrpc_client: BitcoindRpcClient::from_config(&bitcoinrpc_config).unwrap(),
             start_difficulty: 10000,
             minimum_difficulty: 1,
             maximum_difficulty: Some(2),
@@ -1405,12 +1372,7 @@ mod stratum_server_tests {
             let ctx = StratumContext {
                 notify_tx,
                 tracker_handle: tracker_handle.clone(),
-                bitcoindrpc_client: BitcoindRpcClient::new(
-                    &bitcoinrpc_config.url,
-                    &bitcoinrpc_config.username,
-                    &bitcoinrpc_config.password,
-                )
-                .unwrap(),
+                bitcoindrpc_client: BitcoindRpcClient::from_config(&bitcoinrpc_config).unwrap(),
                 metrics: metrics_handle,
                 start_difficulty: 10000,
                 minimum_difficulty: 1,
@@ -1488,12 +1450,7 @@ mod stratum_server_tests {
             let ctx = StratumContext {
                 notify_tx,
                 tracker_handle: tracker_handle.clone(),
-                bitcoindrpc_client: BitcoindRpcClient::new(
-                    &bitcoinrpc_config.url,
-                    &bitcoinrpc_config.username,
-                    &bitcoinrpc_config.password,
-                )
-                .unwrap(),
+                bitcoindrpc_client: BitcoindRpcClient::from_config(&bitcoinrpc_config).unwrap(),
                 metrics: metrics_handle,
                 start_difficulty: 10000,
                 minimum_difficulty: 1,
@@ -1628,12 +1585,7 @@ mod stratum_server_tests {
         let ctx = StratumContext {
             notify_tx,
             tracker_handle: tracker_handle.clone(),
-            bitcoindrpc_client: BitcoindRpcClient::new(
-                &bitcoinrpc_config.url,
-                &bitcoinrpc_config.username,
-                &bitcoinrpc_config.password,
-            )
-            .unwrap(),
+            bitcoindrpc_client: BitcoindRpcClient::from_config(&bitcoinrpc_config).unwrap(),
             metrics: metrics_handle,
             start_difficulty: 10000,
             minimum_difficulty: 1,
@@ -1758,12 +1710,7 @@ mod stratum_server_tests {
         let ctx = StratumContext {
             notify_tx,
             tracker_handle: tracker_handle.clone(),
-            bitcoindrpc_client: BitcoindRpcClient::new(
-                &bitcoinrpc_config.url,
-                &bitcoinrpc_config.username,
-                &bitcoinrpc_config.password,
-            )
-            .unwrap(),
+            bitcoindrpc_client: BitcoindRpcClient::from_config(&bitcoinrpc_config).unwrap(),
             metrics: metrics_handle,
             start_difficulty: 10000,
             minimum_difficulty: 1,
@@ -1898,12 +1845,7 @@ mod stratum_server_tests {
         let ctx = StratumContext {
             notify_tx,
             tracker_handle: tracker_handle.clone(),
-            bitcoindrpc_client: BitcoindRpcClient::new(
-                &bitcoinrpc_config.url,
-                &bitcoinrpc_config.username,
-                &bitcoinrpc_config.password,
-            )
-            .unwrap(),
+            bitcoindrpc_client: BitcoindRpcClient::from_config(&bitcoinrpc_config).unwrap(),
             metrics: metrics_handle,
             start_difficulty: 10000,
             minimum_difficulty: 1,

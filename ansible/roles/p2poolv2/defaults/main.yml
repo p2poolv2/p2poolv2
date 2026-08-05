@@ -69,6 +69,9 @@ p2poolv2_wait_for_chain_sync: true
 p2poolv2_bitcoin_rpc_url: "http://127.0.0.1:8332"
 p2poolv2_bitcoin_rpc_user: ""
 p2poolv2_bitcoin_rpc_pass: ""
+# Optional: path to a bitcoind .cookie file for RPC authentication.
+# When set, cookie_file is used only if username/password are not both specified.
+# p2poolv2_bitcoin_rpc_cookie_file: "/path/to/.cookie"
 
 # --- Logging config ---
 p2poolv2_log_file: "/var/log/p2poolv2/{{ p2poolv2_instance }}/p2poolv2.log"

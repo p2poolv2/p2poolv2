@@ -21,7 +21,7 @@ use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
@@ -54,8 +54,16 @@ struct JsonRpcError {
 #[allow(dead_code)]
 pub struct BitcoinRpcConfig {
     pub url: String,
-    pub username: String,
-    pub password: String,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub password: Option<String>,
+    #[serde(default, alias = "cookiefile", alias = "cookie")]
+    pub cookie_file: Option<String>,
+    #[serde(default)]
+    pub datadir: Option<String>,
+    #[serde(default)]
+    pub network: Option<bitcoin::Network>,
 }
 
 /// Custom Debug to redact passwords
@@ -66,7 +74,80 @@ impl std::fmt::Debug for BitcoinRpcConfig {
             .field("url", &self.url)
             .field("username", &self.username)
             .field("password", &"[redacted]")
+            .field("cookie_file", &self.cookie_file)
+            .field("datadir", &self.datadir)
+            .field("network", &self.network)
             .finish()
+    }
+}
+
+impl BitcoinRpcConfig {
+    /// Returns authentication credentials. Static username and password
+    /// take precedence, followed by an explicit `cookie_file` path, followed
+    /// by an auto-detected `.cookie` from the datadir or `$HOME/.bitcoin`.
+    pub fn get_credentials(&self) -> Result<(String, String), BitcoindRpcError> {
+        // Static credentials take precedence over cookie_file
+        if let (Some(u), Some(p)) = (&self.username, &self.password) {
+            return Ok((u.clone(), p.clone()));
+        }
+
+        // Explicit cookie_file path
+        if let Some(ref cookie_path) = self.cookie_file {
+            return Self::read_cookie_file(cookie_path);
+        }
+
+        // Auto-detect .cookie from datadir or $HOME/.bitcoin
+        if let Some(auto_path) = self.default_cookie_path() {
+            if auto_path.exists() {
+                return Self::read_cookie_file(&auto_path);
+            }
+        }
+
+        Err(BitcoindRpcError::Other(
+            "RPC authentication error: no username/password or cookie_file specified, and default .cookie file not found".to_string(),
+        ))
+    }
+
+    /// Default .cookie path from datadir or `$HOME/.bitcoin` for the given network.
+    pub fn default_cookie_path(&self) -> Option<std::path::PathBuf> {
+        let base_dir = if let Some(ref d) = self.datadir {
+            std::path::PathBuf::from(d)
+        } else if let Ok(home) = std::env::var("HOME") {
+            std::path::PathBuf::from(home).join(".bitcoin")
+        } else {
+            return None;
+        };
+
+        let network = self.network.unwrap_or(bitcoin::Network::Bitcoin);
+        let path = match network {
+            bitcoin::Network::Bitcoin => base_dir.join(".cookie"),
+            bitcoin::Network::Testnet4 => base_dir.join("testnet4").join(".cookie"),
+            bitcoin::Network::Signet => base_dir.join("signet").join(".cookie"),
+            bitcoin::Network::Regtest => base_dir.join("regtest").join(".cookie"),
+            _ => base_dir.join(".cookie"),
+        };
+        Some(path)
+    }
+
+    /// Reads credentials from a .cookie file (format: `username:password`)
+    pub fn read_cookie_file<P: AsRef<std::path::Path>>(
+        path: P,
+    ) -> Result<(String, String), BitcoindRpcError> {
+        let content = std::fs::read_to_string(path.as_ref()).map_err(|e| {
+            BitcoindRpcError::Other(format!(
+                "Failed to read cookie file '{}': {e}",
+                path.as_ref().display()
+            ))
+        })?;
+        let trimmed = content.trim();
+        if let Some((user, pass)) = trimmed.split_once(':') {
+            Ok((user.to_string(), pass.to_string()))
+        } else {
+            Err(BitcoindRpcError::Other(format!(
+                "Invalid cookie file format in '{}': expected 'username:password'",
+                path.as_ref().display()
+            )))
+        }
     }
 }
 
@@ -120,30 +201,53 @@ pub struct GetBlockchainInfo {
 pub struct BitcoindRpcClient {
     client: reqwest::Client,
     url: String,
+    auth_header: Arc<std::sync::RwLock<String>>,
+    cookie_file: Option<std::path::PathBuf>,
     request_id: Arc<AtomicU64>,
 }
 
 impl BitcoindRpcClient {
     pub fn new(url: &str, username: &str, password: &str) -> Result<Self, BitcoindRpcError> {
-        let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert(
-            reqwest::header::AUTHORIZATION,
-            format!(
-                "Basic {}",
-                STANDARD.encode(format!("{username}:{password}"))
-            )
-            .parse()
-            .map_err(|e| BitcoindRpcError::Other(format!("Invalid header: {e}")))?,
+        let auth_header = format!(
+            "Basic {}",
+            STANDARD.encode(format!("{username}:{password}"))
         );
-
         let client = reqwest::Client::builder()
-            .default_headers(headers)
             .build()
             .map_err(|e| BitcoindRpcError::Other(format!("Failed to create HTTP client: {e}")))?;
 
         Ok(Self {
             client,
             url: url.to_string(),
+            auth_header: Arc::new(std::sync::RwLock::new(auth_header)),
+            cookie_file: None,
+            request_id: Arc::new(AtomicU64::new(0)),
+        })
+    }
+
+    pub fn from_config(config: &BitcoinRpcConfig) -> Result<Self, BitcoindRpcError> {
+        let (username, password) = config.get_credentials()?;
+        let auth_header = format!(
+            "Basic {}",
+            STANDARD.encode(format!("{username}:{password}"))
+        );
+        let client = reqwest::Client::builder()
+            .build()
+            .map_err(|e| BitcoindRpcError::Other(format!("Failed to create HTTP client: {e}")))?;
+
+        let cookie_file = if let (Some(_), Some(_)) = (&config.username, &config.password) {
+            None
+        } else if let Some(ref path) = config.cookie_file {
+            Some(std::path::PathBuf::from(path))
+        } else {
+            config.default_cookie_path()
+        };
+
+        Ok(Self {
+            client,
+            url: config.url.clone(),
+            auth_header: Arc::new(std::sync::RwLock::new(auth_header)),
+            cookie_file,
             request_id: Arc::new(AtomicU64::new(0)),
         })
     }
@@ -161,7 +265,20 @@ impl BitcoindRpcClient {
             id,
         };
 
-        let response = match self.client.post(&self.url).json(&request).send().await {
+        let mut current_auth = self
+            .auth_header
+            .read()
+            .map_err(|e| BitcoindRpcError::Other(format!("Lock error: {e}")))?
+            .clone();
+
+        let mut response = match self
+            .client
+            .post(&self.url)
+            .header(reqwest::header::AUTHORIZATION, &current_auth)
+            .json(&request)
+            .send()
+            .await
+        {
             Ok(resp) => resp,
             Err(e) => {
                 let status_code = e.status().map(|s| s.as_u16());
@@ -172,6 +289,42 @@ impl BitcoindRpcClient {
                 return Err(BitcoindRpcError::Other(format!("HTTP request failed: {e}")));
             }
         };
+
+        // On 401 Unauthorized, re-read the cookie file and retry the request once
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            if let Some(ref cookie_path) = self.cookie_file {
+                match BitcoinRpcConfig::read_cookie_file(cookie_path) {
+                    Ok((new_user, new_pass)) => {
+                        let new_auth = format!(
+                            "Basic {}",
+                            STANDARD.encode(format!("{new_user}:{new_pass}"))
+                        );
+                        if let Ok(mut lock) = self.auth_header.write() {
+                            *lock = new_auth.clone();
+                        }
+                        current_auth = new_auth;
+
+                        // Retry request once with new credentials
+                        if let Ok(retry_resp) = self
+                            .client
+                            .post(&self.url)
+                            .header(reqwest::header::AUTHORIZATION, &current_auth)
+                            .json(&request)
+                            .send()
+                            .await
+                        {
+                            response = retry_resp;
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Received 401 Unauthorized, but failed to re-read cookie file '{}': {e}",
+                            cookie_path.display()
+                        );
+                    }
+                }
+            }
+        }
 
         let status = response.status();
 
@@ -748,5 +901,193 @@ mod tests {
         } else {
             panic!("Expected BitcoindRpcError::HttpError, got {result:?}");
         }
+    }
+
+    #[tokio::test]
+    async fn test_cookie_file_auth() {
+        let mock_server = MockServer::start().await;
+        let temp_dir = tempfile::tempdir().unwrap();
+        let cookie_path = temp_dir.path().join(".cookie");
+        std::fs::write(&cookie_path, "__cookie__:secret123\n").unwrap();
+
+        let auth_header = format!("Basic {}", STANDARD.encode("__cookie__:secret123"));
+
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(header("Authorization", auth_header))
+            .and(body_json(serde_json::json!({
+                "method": "getdifficulty",
+                "params": [],
+                "id": 0
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": 500.0,
+                "error": null,
+                "id": 0
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let config = BitcoinRpcConfig {
+            url: mock_server.uri(),
+            username: None,
+            password: None,
+            cookie_file: Some(cookie_path.to_str().unwrap().to_string()),
+            datadir: None,
+            network: None,
+        };
+
+        let client = BitcoindRpcClient::from_config(&config).unwrap();
+        let diff = client.get_difficulty().await.unwrap();
+        assert_eq!(diff, 500.0);
+    }
+
+    #[tokio::test]
+    async fn test_cookie_file_auto_reload_on_401() {
+        let mock_server = MockServer::start().await;
+        let temp_dir = tempfile::tempdir().unwrap();
+        let cookie_path = temp_dir.path().join(".cookie");
+        std::fs::write(&cookie_path, "__cookie__:old_secret\n").unwrap();
+
+        let old_auth = format!("Basic {}", STANDARD.encode("__cookie__:old_secret"));
+        let new_auth = format!("Basic {}", STANDARD.encode("__cookie__:new_secret"));
+
+        // First call with old auth gets 401
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(header("Authorization", old_auth))
+            .respond_with(ResponseTemplate::new(401).set_body_string("Unauthorized"))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        // Second call with new auth gets 200
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(header("Authorization", new_auth))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": 1000.0,
+                "error": null,
+                "id": 0
+            })))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let config = BitcoinRpcConfig {
+            url: mock_server.uri(),
+            username: None,
+            password: None,
+            cookie_file: Some(cookie_path.to_str().unwrap().to_string()),
+            datadir: None,
+            network: None,
+        };
+
+        let client = BitcoindRpcClient::from_config(&config).unwrap();
+
+        // Update cookie file before making request (simulating bitcoind restart)
+        std::fs::write(&cookie_path, "__cookie__:new_secret\n").unwrap();
+
+        let diff = client.get_difficulty().await.unwrap();
+        assert_eq!(diff, 1000.0);
+    }
+
+    #[test]
+    fn test_cookie_file_parsing_errors() {
+        let temp_dir = tempfile::tempdir().unwrap();
+
+        // Missing file
+        let missing_path = temp_dir.path().join("nonexistent.cookie");
+        assert!(BitcoinRpcConfig::read_cookie_file(&missing_path).is_err());
+
+        // Invalid format (no colon)
+        let invalid_path = temp_dir.path().join("invalid.cookie");
+        std::fs::write(&invalid_path, "invalid_content_without_colon\n").unwrap();
+        assert!(BitcoinRpcConfig::read_cookie_file(&invalid_path).is_err());
+
+        // Valid format
+        let valid_path = temp_dir.path().join("valid.cookie");
+        std::fs::write(&valid_path, "user:pass\n").unwrap();
+        let (u, p) = BitcoinRpcConfig::read_cookie_file(&valid_path).unwrap();
+        assert_eq!(u, "user");
+        assert_eq!(p, "pass");
+    }
+
+    #[test]
+    fn test_from_config_missing_cookie_file_errors() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let missing_path = temp_dir.path().join("missing.cookie");
+
+        let config = BitcoinRpcConfig {
+            url: "http://localhost:8332".to_string(),
+            username: None,
+            password: None,
+            cookie_file: Some(missing_path.to_str().unwrap().to_string()),
+            datadir: None,
+            network: None,
+        };
+
+        assert!(BitcoindRpcClient::from_config(&config).is_err());
+    }
+
+    #[test]
+    fn test_get_credentials_static_credentials_win_over_cookie() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let cookie_path = temp_dir.path().join(".cookie");
+        std::fs::write(&cookie_path, "cookie_user:cookie_pass\n").unwrap();
+
+        let config = BitcoinRpcConfig {
+            url: "http://localhost:8332".to_string(),
+            username: Some("static_user".to_string()),
+            password: Some("static_pass".to_string()),
+            cookie_file: Some(cookie_path.to_str().unwrap().to_string()),
+            datadir: None,
+            network: None,
+        };
+
+        // Static credentials take precedence over cookie_file
+        let (user, pass) = config.get_credentials().unwrap();
+        assert_eq!(user, "static_user");
+        assert_eq!(pass, "static_pass");
+    }
+
+    #[test]
+    fn test_get_credentials_auto_discovery() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let signet_dir = temp_dir.path().join("signet");
+        std::fs::create_dir_all(&signet_dir).unwrap();
+        let cookie_path = signet_dir.join(".cookie");
+        std::fs::write(&cookie_path, "__cookie__:auto_secret123\n").unwrap();
+
+        let config = BitcoinRpcConfig {
+            url: "http://localhost:8332".to_string(),
+            username: None,
+            password: None,
+            cookie_file: None,
+            datadir: Some(temp_dir.path().to_str().unwrap().to_string()),
+            network: Some(bitcoin::Network::Signet),
+        };
+
+        let (user, pass) = config.get_credentials().unwrap();
+        assert_eq!(user, "__cookie__");
+        assert_eq!(pass, "auto_secret123");
+    }
+
+    #[test]
+    fn test_get_credentials_missing_auth_errors() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let missing_datadir = temp_dir.path().join("nonexistent_datadir");
+
+        let config = BitcoinRpcConfig {
+            url: "http://localhost:8332".to_string(),
+            username: None,
+            password: None,
+            cookie_file: None,
+            datadir: Some(missing_datadir.to_str().unwrap().to_string()),
+            network: None,
+        };
+
+        let err = config.get_credentials().unwrap_err();
+        assert!(err.to_string().contains("default .cookie file not found"));
     }
 }

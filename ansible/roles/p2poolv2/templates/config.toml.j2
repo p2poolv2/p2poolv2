@@ -61,8 +61,12 @@ mode = "{{ p2poolv2_pool_mode }}"
 
 [bitcoinrpc]
 url = "{{ p2poolv2_bitcoin_rpc_url }}"
+{% if p2poolv2_bitcoin_rpc_cookie_file is defined and p2poolv2_bitcoin_rpc_cookie_file != "" %}
+cookie_file = "{{ p2poolv2_bitcoin_rpc_cookie_file }}"
+{% else %}
 username = "{{ p2poolv2_bitcoin_rpc_user }}"
 password = "{{ p2poolv2_bitcoin_rpc_pass }}"
+{% endif %}
 
 [logging]
 file = "{{ p2poolv2_log_file }}"

@@ -97,13 +97,15 @@ mod tests {
         // Create test config
         let config = BitcoinRpcConfig {
             url: mock_server.uri(),
-            username: "testuser".to_string(),
-            password: "testpass".to_string(),
+            username: Some("testuser".to_string()),
+            password: Some("testpass".to_string()),
+            cookie_file: None,
+            datadir: None,
+            network: None,
         };
 
         // Test validation
-        let client =
-            BitcoindRpcClient::new(&config.url, &config.username, &config.password).unwrap();
+        let client = BitcoindRpcClient::from_config(&config).unwrap();
         let result = validate_bitcoin_block(&block, &client).await;
         assert!(result.is_ok());
         assert!(result.unwrap());
@@ -148,13 +150,15 @@ mod tests {
         // Create test config
         let config = BitcoinRpcConfig {
             url: mock_server.uri(),
-            username: "testuser".to_string(),
-            password: "testpass".to_string(),
+            username: Some("testuser".to_string()),
+            password: Some("testpass".to_string()),
+            cookie_file: None,
+            datadir: None,
+            network: None,
         };
 
         // Test validation
-        let client =
-            BitcoindRpcClient::new(&config.url, &config.username, &config.password).unwrap();
+        let client = BitcoindRpcClient::from_config(&config).unwrap();
         let result = validate_bitcoin_block(&block, &client).await;
         assert!(result.is_ok());
         assert!(!result.unwrap());
@@ -195,13 +199,15 @@ mod tests {
         // Create test config
         let config = BitcoinRpcConfig {
             url: mock_server.uri(),
-            username: "testuser".to_string(),
-            password: "testpass".to_string(),
+            username: Some("testuser".to_string()),
+            password: Some("testpass".to_string()),
+            cookie_file: None,
+            datadir: None,
+            network: None,
         };
 
         // Test validation
-        let client =
-            BitcoindRpcClient::new(&config.url, &config.username, &config.password).unwrap();
+        let client = BitcoindRpcClient::from_config(&config).unwrap();
         let result = validate_bitcoin_block(&block, &client).await;
         assert!(result.is_err());
     }

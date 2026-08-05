@@ -103,11 +103,7 @@ async fn main() -> ExitCode {
             .and_then(|a| a.require_network(sim_network).map_err(|e| e.to_string()))
         {
             Ok(miner_address) => {
-                match bitcoindrpc::BitcoindRpcClient::new(
-                    &node_config.bitcoinrpc.url,
-                    &node_config.bitcoinrpc.username,
-                    &node_config.bitcoinrpc.password,
-                ) {
+                match bitcoindrpc::BitcoindRpcClient::from_config(&node_config.bitcoinrpc) {
                     Ok(sim_rpc) => {
                         let emitter = SimEmitter::new(
                             handles.emissions_tx.clone(),

@@ -655,8 +655,11 @@ mod tests {
             network: network_config.clone(),
             bitcoinrpc: BitcoinRpcConfig {
                 url: "http://localhost:8332".to_string(),
-                username: "testuser".to_string(),
-                password: "testpass".to_string(),
+                username: Some("testuser".to_string()),
+                password: Some("testpass".to_string()),
+                cookie_file: None,
+                datadir: None,
+                network: None,
             },
             store: StoreConfig {
                 path: "test_chain.db".to_string(),
@@ -769,8 +772,11 @@ mod tests {
             },
             bitcoinrpc: BitcoinRpcConfig {
                 url: "http://localhost:8332".to_string(),
-                username: "testuser".to_string(),
-                password: "testpass".to_string(),
+                username: Some("testuser".to_string()),
+                password: Some("testpass".to_string()),
+                cookie_file: None,
+                datadir: None,
+                network: None,
             },
             store: StoreConfig {
                 path: "test_chain.db".to_string(),
