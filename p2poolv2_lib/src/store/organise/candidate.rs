@@ -387,6 +387,15 @@ impl Store {
             .unwrap_or(false)
     }
 
+    /// Check if a blockhash is marked Invalid. Chain-context validation
+    /// failure marks a block Invalid; such a block must never be confirmed
+    /// (including via the fallback path), even though its body is stored.
+    pub(super) fn is_invalid(&self, blockhash: &BlockHash) -> bool {
+        self.get_block_metadata(blockhash)
+            .map(|m| m.status == Status::Invalid)
+            .unwrap_or(false)
+    }
+
     /// Check if a blockhash has Candidate status in its metadata.
     pub fn is_candidate(&self, blockhash: &BlockHash) -> bool {
         self.get_block_metadata(blockhash)
