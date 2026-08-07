@@ -718,6 +718,12 @@ impl ChainStoreHandle {
         Ok(height)
     }
 
+    /// Mark a block Invalid so it is never promoted to confirmed. Used
+    /// when chain-context validation fails.
+    pub async fn mark_invalid(&self, blockhash: BlockHash) -> Result<(), StoreError> {
+        self.store_handle.mark_invalid(blockhash).await
+    }
+
     /// Add a block to the candidate chain and promote candidates to confirmed.
     ///
     /// Combines organise_header (which places the block on the candidate
@@ -833,6 +839,7 @@ mockall::mock! {
         pub async fn init_or_setup_genesis(&self, genesis_block: ShareBlock) -> Result<(), StoreError>;
         pub async fn organise_header(&self, header: ShareHeader) -> Result<Option<u32>, StoreError>;
         pub async fn organise_block(&self) -> Result<Option<u32>, StoreError>;
+        pub async fn mark_invalid(&self, blockhash: BlockHash) -> Result<(), StoreError>;
         pub async fn promote_block(&self, header: ShareHeader) -> Result<Option<u32>, StoreError>;
         pub async fn add_share_block(&self, share: ShareBlock) -> Result<(), StoreError>;
         pub async fn add_share_block_and_organise_header(&self, share: ShareBlock) -> Result<Option<u32>, StoreError>;

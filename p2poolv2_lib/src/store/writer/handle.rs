@@ -337,6 +337,18 @@ impl StoreHandle {
         reply_rx.await.map_err(|_| StoreError::ChannelClosed)?
     }
 
+    /// Mark a block Invalid so it is never promoted to confirmed.
+    pub async fn mark_invalid(&self, blockhash: BlockHash) -> Result<(), StoreError> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.write_tx
+            .send(WriteCommand::MarkInvalid {
+                blockhash,
+                reply: reply_tx,
+            })
+            .map_err(|_| StoreError::ChannelClosed)?;
+        reply_rx.await.map_err(|_| StoreError::ChannelClosed)?
+    }
+
     /// Add a PPLNS share for accounting.
     pub async fn add_pplns_share(&self, pplns_share: SimplePplnsShare) -> Result<(), StoreError> {
         let (reply_tx, reply_rx) = oneshot::channel();
@@ -391,6 +403,7 @@ mockall::mock! {
         // Serialized writes (async)
         pub async fn organise_header(&self, header: ShareHeader) -> Result<Option<u32>, StoreError>;
         pub async fn organise_block(&self) -> Result<Option<u32>, StoreError>;
+        pub async fn mark_invalid(&self, blockhash: BlockHash) -> Result<(), StoreError>;
         pub async fn add_share_block(&self, share: ShareBlock) -> Result<(), StoreError>;
         pub async fn add_share_block_and_organise_header(&self, share: ShareBlock) -> Result<Option<u32>, StoreError>;
         pub async fn setup_genesis(&self, genesis: ShareBlock) -> Result<(), StoreError>;
