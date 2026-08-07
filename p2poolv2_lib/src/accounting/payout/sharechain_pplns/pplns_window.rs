@@ -115,6 +115,10 @@ pub struct PplnsWindow {
     address_keys: AddressKeys,
     /// Bitcoin network used for computing integer difficulty from Target.
     pub(crate) network: bitcoin::Network,
+    /// Maximum confirmed entries retained before eviction. Defaults to
+    /// `MAX_PPLNS_WINDOW_SHARES`; overridable in tests so eviction can be
+    /// exercised without a full-capacity fixture.
+    max_window_shares: usize,
 }
 
 impl PplnsWindow {
@@ -127,7 +131,21 @@ impl PplnsWindow {
             total_accumulated_difficulty: 0,
             address_keys: AddressKeys::default(),
             network,
+            max_window_shares: MAX_PPLNS_WINDOW_SHARES,
         }
+    }
+
+    /// Test-only constructor with an injectable eviction cap, so the
+    /// eviction path can be driven without building a
+    /// `MAX_PPLNS_WINDOW_SHARES`-sized fixture.
+    #[cfg(test)]
+    pub(super) fn new_with_max_window_shares(
+        network: bitcoin::Network,
+        max_window_shares: usize,
+    ) -> Self {
+        let mut window = Self::new(network);
+        window.max_window_shares = max_window_shares;
+        window
     }
 }
 
@@ -459,7 +477,7 @@ impl PplnsWindow {
             }
         } else {
             // no cached top height, first load
-            let estimated_min_height = tip_height.saturating_sub(MAX_PPLNS_WINDOW_SHARES as u32);
+            let estimated_min_height = tip_height.saturating_sub(self.max_window_shares as u32);
             self.load_range(chain_store_handle, estimated_min_height, tip_height)?;
         }
 
@@ -509,8 +527,7 @@ impl PplnsWindow {
             None => {
                 debug!("Deep reorg detected in PPLNS window, full cache invalidation");
                 self.invalidate();
-                let estimated_min_height =
-                    tip_height.saturating_sub(MAX_PPLNS_WINDOW_SHARES as u32);
+                let estimated_min_height = tip_height.saturating_sub(self.max_window_shares as u32);
                 self.load_range(chain_store_handle, estimated_min_height, tip_height)?;
             }
         }
@@ -630,7 +647,7 @@ impl PplnsWindow {
     /// MAX_PPLNS_WINDOW_SHARES in confirmed entries. If difficulty is
     /// not reached in these many shares, we only ever maintain these many shares.
     fn evict_overflow(&mut self) {
-        while self.confirmed_entries.len() > MAX_PPLNS_WINDOW_SHARES {
+        while self.confirmed_entries.len() > self.max_window_shares {
             if let Some(entry) = self.confirmed_entries.pop_back() {
                 self.remove_from_running_total(&entry);
             } else {
@@ -817,7 +834,8 @@ mod tests {
     use crate::shares::share_block::ShareHeader;
     use crate::store::block_tx_metadata::{BlockMetadata, Status};
     use crate::test_utils::{
-        PUBKEY_2G, PUBKEY_3G, PUBKEY_G, build_test_header, build_test_header_with_uncles,
+        PUBKEY_2G, PUBKEY_3G, PUBKEY_4G, PUBKEY_5G, PUBKEY_G, build_test_header,
+        build_test_header_with_uncles,
     };
     use bitcoin::Work;
     use bitcoin::hashes::Hash;
@@ -2100,6 +2118,123 @@ mod tests {
         assert!(
             result.is_some(),
             "share_c must be able to find its parent share_b in the PPLNS window during sync"
+        );
+    }
+
+    //* Regression for the testnet4 coinbase-mismatch wedge (hive.log
+    //* 2026-08-06). Two siblings at height 197110 shared a parent
+    //* (f1455ab0 @197109) and an identical coinbase. The first sibling
+    //* confirmed, advancing the tip to 197110; post_promote updated the
+    //* window and evict_overflow dropped the oldest share. Validating the
+    //* second sibling then computed get_distribution_from_start_hash at the
+    //* same parent against a window short by the evicted share, so its
+    //* identical coinbase failed "Coinbase and template merkle root don't
+    //* match merkle root", and the chain wedged.
+    //*
+    //* Invariant: the distribution at a fixed anchor must not change when a
+    //* sibling promotion advances the tip and triggers eviction. Driven with
+    //* an injected cap of 3 so eviction bites without a 120,960-entry fixture.
+    //* This FAILS on the current cache (the anchor's window is truncated by
+    //* eviction) and must pass once the window read no longer drops shares
+    //* still within a valid anchor's window.
+    #[test]
+    fn test_distribution_at_anchor_invariant_to_sibling_promotion() {
+        const MAX_SHARES: usize = 3;
+        let genesis = BlockHash::all_zeros();
+
+        // Confirmed chain a(0) -> b(1) -> c(2) -> parent(3), distinct miners.
+        let a = build_test_header(&genesis.to_string(), PUBKEY_G, 2);
+        let b = build_test_header(&a.block_hash().to_string(), PUBKEY_2G, 2);
+        let c = build_test_header(&b.block_hash().to_string(), PUBKEY_3G, 2);
+        let parent = build_test_header(&c.block_hash().to_string(), PUBKEY_4G, 2);
+        // Sibling extends the parent; confirming it advances the tip past the
+        // anchor and evicts the oldest window share.
+        let sibling = build_test_header(&parent.block_hash().to_string(), PUBKEY_5G, 2);
+        let parent_hash = parent.block_hash();
+
+        let mut window = PplnsWindow::new_with_max_window_shares(TEST_NETWORK, MAX_SHARES);
+
+        // Update 1: tip = parent (height 3). First load, then evict to 3
+        // entries -> cache [parent, c, b] (a evicted).
+        let to_parent = vec![
+            ConfirmedHeaderResult {
+                height: 3,
+                blockhash: parent.block_hash(),
+                header: parent.clone(),
+            },
+            ConfirmedHeaderResult {
+                height: 2,
+                blockhash: c.block_hash(),
+                header: c.clone(),
+            },
+            ConfirmedHeaderResult {
+                height: 1,
+                blockhash: b.block_hash(),
+                header: b.clone(),
+            },
+            ConfirmedHeaderResult {
+                height: 0,
+                blockhash: a.block_hash(),
+                header: a.clone(),
+            },
+        ];
+        let parent_tip = parent.block_hash();
+        let mut mock1 = MockChainStoreHandle::default();
+        mock1
+            .expect_get_chain_tip()
+            .returning(move || Ok(parent_tip));
+        mock1
+            .expect_get_block_metadata()
+            .returning(|_| Ok(metadata_at_height(3)));
+        mock1
+            .expect_get_confirmed_headers_in_range()
+            .returning(move |_, _| Ok(to_parent.clone()));
+        window.update(&mock1).unwrap();
+
+        let before = window
+            .get_distribution_from_start_hash(
+                u128::MAX,
+                parent_hash,
+                &MockChainStoreHandle::default(),
+            )
+            .expect("parent is in the window at the tip");
+
+        // Update 2: tip = sibling (height 4). Simple extension, then evict to
+        // 3 entries -> cache [sibling, parent, c] (b evicted).
+        let to_sibling = vec![ConfirmedHeaderResult {
+            height: 4,
+            blockhash: sibling.block_hash(),
+            header: sibling.clone(),
+        }];
+        let sibling_tip = sibling.block_hash();
+        let parent_at_cached = parent.block_hash();
+        let mut mock2 = MockChainStoreHandle::default();
+        mock2
+            .expect_get_chain_tip()
+            .returning(move || Ok(sibling_tip));
+        mock2
+            .expect_get_block_metadata()
+            .returning(|_| Ok(metadata_at_height(4)));
+        mock2
+            .expect_get_confirmed_at_height()
+            .returning(move |_| Ok(parent_at_cached));
+        mock2
+            .expect_get_confirmed_headers_in_range()
+            .returning(move |_, _| Ok(to_sibling.clone()));
+        window.update(&mock2).unwrap();
+
+        let after = window
+            .get_distribution_from_start_hash(
+                u128::MAX,
+                parent_hash,
+                &MockChainStoreHandle::default(),
+            )
+            .expect("parent is still in the window after the sibling promotion");
+
+        assert_eq!(
+            before, after,
+            "distribution at the parent anchor changed after a sibling promotion evicted a \
+             window share -- an identical coinbase would fail validation"
         );
     }
 }
