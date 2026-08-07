@@ -95,6 +95,13 @@ impl Store {
                 if header.prev_share_blockhash != top_confirmed.hash {
                     continue;
                 }
+                // Never confirm a block that failed chain-context validation.
+                // A HeaderValid child (e.g. a locally-mined block that could
+                // not reorg the candidate chain) is valid and promotable; only
+                // an Invalid block is excluded.
+                if self.is_invalid(blockhash) {
+                    continue;
+                }
                 if !self.all_block_and_uncle_data_available(&[*blockhash], prune_height)? {
                     continue;
                 }
@@ -149,6 +156,13 @@ impl Store {
     ) -> Chain {
         let mut result = Vec::with_capacity(candidates.len());
         for (height, blockhash) in candidates {
+            if self.is_invalid(blockhash) {
+                debug!(
+                    "Candidate at height {} ({}) is Invalid, stopping promotion",
+                    height, blockhash
+                );
+                return result;
+            }
             if *height >= prune_height && !self.share_block_exists(blockhash) {
                 debug!(
                     "Candidate at height {} ({}) missing block data, stopping promotion",
@@ -250,6 +264,57 @@ mod tests {
         assert_eq!(
             store.get_confirmed_at_height(1).unwrap(),
             share.block_hash()
+        );
+        assert_eq!(store.get_top_confirmed_height().unwrap(), 1);
+    }
+
+    /// Regression: `try_fallback_confirmation` must not confirm a block that
+    /// failed chain-context validation (marked Invalid), even though its body
+    /// is present -- otherwise an invalid-coinbase block gets confirmed via
+    /// the fallback, as it did on testnet4. A HeaderValid child (e.g. a valid
+    /// locally-mined block) is still promotable; only Invalid is excluded.
+    #[test]
+    fn test_fallback_does_not_confirm_invalid_block() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Confirm one child so a confirmed and candidate tip exist at height 1.
+        let share_a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        store.push_to_confirmed_chain(&share_a).unwrap();
+        assert_eq!(store.get_top_confirmed_height().unwrap(), 1);
+
+        // Child of the confirmed tip with its body present, off the candidate
+        // chain, then marked Invalid (as chain-context validation failure
+        // would). With no promotable candidate above height 1, organise_block
+        // reaches the fallback and finds this height-2 child.
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_a.block_hash().to_string())
+            .nonce(0xe9695793)
+            .build();
+        store.store_with_valid_metadata(&share1);
+        let mut metadata = store.get_block_metadata(&share1.block_hash()).unwrap();
+        metadata.status = Status::Invalid;
+        let mut batch = Store::get_write_batch();
+        store
+            .update_block_metadata(&share1.block_hash(), &metadata, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = Store::get_write_batch();
+        let result = store.organise_block(&mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert_eq!(
+            result, None,
+            "fallback must not confirm an Invalid child of the confirmed tip"
         );
         assert_eq!(store.get_top_confirmed_height().unwrap(), 1);
     }
