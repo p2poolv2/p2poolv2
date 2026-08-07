@@ -245,6 +245,12 @@ impl OrganiseWorker {
                 Arc::clone(&self.pplns_window),
             ) {
                 error!("Chain-context validation failed for {blockhash}: {validation_error}");
+                // Mark the block Invalid so it is never promoted -- including
+                // via organise_block's fallback path -- and so confirmation can
+                // advance past it onto a valid sibling.
+                if let Err(mark_error) = self.chain_store_handle.mark_invalid(blockhash).await {
+                    error!("Failed to mark {blockhash} Invalid: {mark_error}");
+                }
                 return Ok(None);
             }
         }
@@ -611,7 +617,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_organise_worker_skips_promote_when_validator_rejects() {
+    async fn test_organise_worker_marks_invalid_and_skips_promote_when_validator_rejects() {
         let (organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
         mock_chain_handle
@@ -632,7 +638,12 @@ mod tests {
         mock_chain_handle
             .expect_get_tip_height()
             .returning(|| Ok(Some(10)));
-        // promote_block must NOT be called when chain-context validation fails.
+        // On chain-context validation failure the block must be marked Invalid
+        // (so promotion never confirms it) and promote_block must NOT be called.
+        mock_chain_handle
+            .expect_mark_invalid()
+            .times(1)
+            .returning(|_| Ok(()));
         mock_chain_handle.expect_promote_block().never();
 
         let mut mock_validator = MockDefaultShareValidator::new();

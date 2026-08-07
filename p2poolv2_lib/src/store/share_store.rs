@@ -19,6 +19,7 @@ use super::{ColumnFamily, Store, writer::StoreError};
 use crate::shares::share_block::{
     MerkleBranches, ShareBlock, ShareHeader, ShareTransaction, Txids,
 };
+use crate::store::block_tx_metadata::Status::{Confirmed, Invalid};
 use bitcoin::BlockHash;
 use bitcoin::TxMerkleNode;
 use bitcoin::consensus::{self, Encodable, encode};
@@ -515,6 +516,24 @@ impl Store {
 
         batch.put_cf(&block_metadata_cf, &metadata_key, serialized);
         Ok(())
+    }
+
+    /// Mark a block Invalid so it is never promoted to confirmed (see
+    /// organise_block's Invalid gate). Called when chain-context validation
+    /// fails. A no-op when the block is already Confirmed -- a confirmed
+    /// block must not be invalidated -- and errors if the block has no
+    /// metadata.
+    pub fn mark_invalid(
+        &self,
+        blockhash: &BlockHash,
+        batch: &mut rocksdb::WriteBatch,
+    ) -> Result<(), StoreError> {
+        let mut metadata = self.get_block_metadata(blockhash)?;
+        if metadata.status == Confirmed {
+            return Ok(());
+        }
+        metadata.status = Invalid;
+        self.update_block_metadata(blockhash, &metadata, batch)
     }
 
     /// Get a share header from the Header column family.

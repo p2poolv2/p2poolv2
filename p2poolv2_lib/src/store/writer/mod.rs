@@ -145,6 +145,13 @@ pub enum WriteCommand {
     OrganiseBlock {
         reply: oneshot::Sender<Result<Option<u32>, StoreError>>,
     },
+
+    /// Mark a block Invalid so it is never promoted to confirmed. Used
+    /// when chain-context validation fails.
+    MarkInvalid {
+        blockhash: BlockHash,
+        reply: oneshot::Sender<Result<(), StoreError>>,
+    },
 }
 
 /// Sender type for write commands (std::sync::mpsc for sync StoreWriter)
@@ -273,6 +280,14 @@ impl StoreWriter {
                     self.store.commit_batch(batch).map_err(StoreError::from)?;
                     Ok(height)
                 });
+                let _ = reply.send(result);
+            }
+            WriteCommand::MarkInvalid { blockhash, reply } => {
+                let mut batch = Store::get_write_batch();
+                let result = self
+                    .store
+                    .mark_invalid(&blockhash, &mut batch)
+                    .and_then(|_| self.store.commit_batch(batch).map_err(StoreError::from));
                 let _ = reply.send(result);
             }
         }
