@@ -38,6 +38,14 @@ use tracing::debug;
 /// At 6 shares per minute over 2 weeks: 6 * 60 * 24 * 14 = 120,960.
 pub const MAX_PPLNS_WINDOW_SHARES: usize = 120960;
 
+/// Divisor for the retained eviction buffer beyond the window: the cache
+/// keeps the window plus `window / PPLNS_WINDOW_BUFFER_DIVISOR` extra shares
+/// (1%, rounded up) so the distribution for an anchor slightly behind the
+/// tip -- e.g. a sibling's parent after a competing sibling advanced the tip
+/// -- is not truncated by eviction. Sized to cover realistic anchor offsets
+/// (siblings, shallow forks) at negligible memory cost.
+const PPLNS_WINDOW_BUFFER_DIVISOR: usize = 100;
+
 /// Number of blocks from the chain tip that must be retained by each node.
 /// Equals 2x the PPLNS window: one window for full tx validation and one
 /// window for PoW-only validation that provides output availability.
@@ -477,7 +485,7 @@ impl PplnsWindow {
             }
         } else {
             // no cached top height, first load
-            let estimated_min_height = tip_height.saturating_sub(self.max_window_shares as u32);
+            let estimated_min_height = tip_height.saturating_sub(self.cache_capacity() as u32);
             self.load_range(chain_store_handle, estimated_min_height, tip_height)?;
         }
 
@@ -527,7 +535,7 @@ impl PplnsWindow {
             None => {
                 debug!("Deep reorg detected in PPLNS window, full cache invalidation");
                 self.invalidate();
-                let estimated_min_height = tip_height.saturating_sub(self.max_window_shares as u32);
+                let estimated_min_height = tip_height.saturating_sub(self.cache_capacity() as u32);
                 self.load_range(chain_store_handle, estimated_min_height, tip_height)?;
             }
         }
@@ -643,11 +651,20 @@ impl PplnsWindow {
             .saturating_sub(entry.total_weighted_difficulty);
     }
 
+    /// Total confirmed entries the cache loads and retains: the window cap
+    /// plus a ~1% buffer (see `PPLNS_WINDOW_BUFFER_DIVISOR`) so an anchor
+    /// slightly behind the tip still has its full window available. Window
+    /// queries remain bounded by `total_difficulty`; the buffer only widens
+    /// how far below the window the cache reaches.
+    fn cache_capacity(&self) -> usize {
+        self.max_window_shares + self.max_window_shares.div_ceil(PPLNS_WINDOW_BUFFER_DIVISOR)
+    }
+
     /// Remove confirmed entries to only maintain
     /// MAX_PPLNS_WINDOW_SHARES in confirmed entries. If difficulty is
     /// not reached in these many shares, we only ever maintain these many shares.
     fn evict_overflow(&mut self) {
-        while self.confirmed_entries.len() > self.max_window_shares {
+        while self.confirmed_entries.len() > self.cache_capacity() {
             if let Some(entry) = self.confirmed_entries.pop_back() {
                 self.remove_from_running_total(&entry);
             } else {
@@ -1248,18 +1265,21 @@ mod tests {
         let header_b = build_test_header(&header_a.block_hash().to_string(), PUBKEY_2G, 2);
         let hash_b = header_b.block_hash();
 
-        let mut window = PplnsWindow::new(TEST_NETWORK);
-        // Fill beyond max: push max + 2 entries, first two are our named ones
+        // Injected small window cap so eviction runs without a 120,960-entry
+        // fixture. Eviction retains cache_capacity() = cap + ~1% buffer.
+        const CAP: usize = 200;
+        let mut window = PplnsWindow::new_with_max_window_shares(TEST_NETWORK, CAP);
+        let capacity = window.cache_capacity();
+
+        // Newest-to-oldest at the front: header_b, header_a, then padding.
         let entry_b = entry_from_header(&mut window, &header_b, 1);
         window.confirmed_entries.push_back(entry_b);
         let entry_a = entry_from_header(&mut window, &header_a, 0);
         window.confirmed_entries.push_back(entry_a);
 
-        // Pad to exceed MAX_PPLNS_WINDOW_SHARES
-        let max_shares = MAX_PPLNS_WINDOW_SHARES as usize;
-        let padding_needed = max_shares; // total will be max + 2
+        // Pad so the total exceeds the retained capacity (window cap + buffer).
         let padding_address = header_a.miner_bitcoin_address.clone();
-        for index in 0..padding_needed {
+        for index in 0..capacity {
             let entry = window.build_confirmed_entry(
                 BlockHash::all_zeros(),
                 index as u32 + 2,
@@ -1270,13 +1290,13 @@ mod tests {
             window.confirmed_entries.push_back(entry);
         }
 
-        assert_eq!(window.confirmed_entries.len(), max_shares + 2);
+        assert_eq!(window.confirmed_entries.len(), capacity + 2);
 
         window.evict_overflow();
 
-        // Should be truncated to max_shares, dropping the 2 oldest from the back
-        assert_eq!(window.confirmed_entries.len(), max_shares);
-        // The newest entries (header_b, header_a) at front should still be present
+        // Truncated to the retained capacity, dropping the 2 oldest from the back.
+        assert_eq!(window.confirmed_entries.len(), capacity);
+        // The newest entries (header_b, header_a) at front should still be present.
         assert_eq!(window.confirmed_entries[0].blockhash, hash_b);
         assert_eq!(window.confirmed_entries[1].blockhash, hash_a);
     }
@@ -2133,10 +2153,12 @@ mod tests {
     //*
     //* Invariant: the distribution at a fixed anchor must not change when a
     //* sibling promotion advances the tip and triggers eviction. Driven with
-    //* an injected cap of 3 so eviction bites without a 120,960-entry fixture.
-    //* This FAILS on the current cache (the anchor's window is truncated by
-    //* eviction) and must pass once the window read no longer drops shares
-    //* still within a valid anchor's window.
+    //* an injected window cap of 3 and a bounded total_difficulty (3 shares)
+    //* so eviction bites without a 120,960-entry fixture. The ~1% retained
+    //* buffer (`cache_capacity`) keeps the anchor's oldest window share alive
+    //* across the promotion; without it (evicting at the bare window cap) the
+    //* second sibling's identical coinbase would fail validation, as
+    //* it did in the testnet4 network with three nodes.
     #[test]
     fn test_distribution_at_anchor_invariant_to_sibling_promotion() {
         const MAX_SHARES: usize = 3;
@@ -2152,10 +2174,15 @@ mod tests {
         let sibling = build_test_header(&parent.block_hash().to_string(), PUBKEY_5G, 2);
         let parent_hash = parent.block_hash();
 
+        // Window bounded to exactly MAX_SHARES (3) shares: parent, c, b. The
+        // ~1% buffer keeps b alive when the sibling promotion evicts the
+        // oldest cache entry.
+        let window_difficulty = MAX_SHARES as u128 * a.get_difficulty(TEST_NETWORK);
+
         let mut window = PplnsWindow::new_with_max_window_shares(TEST_NETWORK, MAX_SHARES);
 
-        // Update 1: tip = parent (height 3). First load, then evict to 3
-        // entries -> cache [parent, c, b] (a evicted).
+        // Update 1: tip = parent (height 3). Loads [parent, c, b, a]; the
+        // buffer (cap 3 + 1) retains all four.
         let to_parent = vec![
             ConfirmedHeaderResult {
                 height: 3,
@@ -2193,14 +2220,15 @@ mod tests {
 
         let before = window
             .get_distribution_from_start_hash(
-                u128::MAX,
+                window_difficulty,
                 parent_hash,
                 &MockChainStoreHandle::default(),
             )
             .expect("parent is in the window at the tip");
 
-        // Update 2: tip = sibling (height 4). Simple extension, then evict to
-        // 3 entries -> cache [sibling, parent, c] (b evicted).
+        // Update 2: tip = sibling (height 4). Simple extension -> loads
+        // sibling, evicts the oldest (a) -> cache [sibling, parent, c, b].
+        // The buffer keeps b, so parent's 3-share window is intact.
         let to_sibling = vec![ConfirmedHeaderResult {
             height: 4,
             blockhash: sibling.block_hash(),
@@ -2225,7 +2253,7 @@ mod tests {
 
         let after = window
             .get_distribution_from_start_hash(
-                u128::MAX,
+                window_difficulty,
                 parent_hash,
                 &MockChainStoreHandle::default(),
             )
