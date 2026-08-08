@@ -171,7 +171,7 @@ pub(crate) fn build_share_commitment(
 ) -> Result<Option<ShareCommitment>, Box<dyn Error + Send + Sync>> {
     let (tip, uncles) = chain_store_handle.get_chain_tip_and_uncles()?;
 
-    let (tip_height, parent_time) = chain_store_handle.get_tip_height_and_time()?;
+    let (tip_height, parent_time) = chain_store_handle.get_share_height_and_time(&tip)?;
     // tip_height is the parent height; ASERT internally adds 1 to height_delta
     let target = pool_difficulty.calculate_target_clamped(parent_time, tip_height);
 
@@ -358,8 +358,8 @@ mod tests {
             .returning(move || Ok((tip_hash, HashSet::new())));
 
         chain_store_handle
-            .expect_get_tip_height_and_time()
-            .returning(|| Ok((0, TEST_TIP_TIME)));
+            .expect_get_share_height_and_time()
+            .returning(|_| Ok((0, TEST_TIP_TIME)));
 
         let result = build_share_commitment(
             &chain_store_handle,
@@ -424,8 +424,8 @@ mod tests {
             });
 
         chain_store_handle
-            .expect_get_tip_height_and_time()
-            .returning(|| Ok((0, TEST_TIP_TIME)));
+            .expect_get_share_height_and_time()
+            .returning(|_| Ok((0, TEST_TIP_TIME)));
 
         let result = build_share_commitment(
             &chain_store_handle,
@@ -514,8 +514,8 @@ mod tests {
             });
 
         chain_store_handle
-            .expect_get_tip_height_and_time()
-            .returning(|| Ok((0, TEST_TIP_TIME)));
+            .expect_get_share_height_and_time()
+            .returning(|_| Ok((0, TEST_TIP_TIME)));
 
         let result = build_share_commitment(
             &chain_store_handle,
