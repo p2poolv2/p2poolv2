@@ -28,6 +28,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ConfirmedHeaderResult;
 use crate::shares::share_block::ShareHeader;
+use crate::store::block_tx_metadata::Status;
 use bitcoin::Address;
 use bitcoin::BlockHash;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -252,6 +253,11 @@ impl PplnsWindow {
     /// Returns the collected headers (newest-to-oldest) and the
     /// confirmed index of the anchor parent.
     ///
+    /// Only validated candidate blocks are walked: a block must be
+    /// `Candidate` or `BlockValid`. A block that is only `HeaderValid`
+    /// (PoW-valid but not chain-context validated), `Pending`, or `Invalid`
+    /// must not contribute to a payout distribution, so the walk errors.
+    ///
     /// Errors when the walk runs off the end of the stored chain without
     /// reaching a confirmed ancestor (`get_share_header` returns
     /// `NotFound`: the anchor is unresolvable) or when any store read
@@ -269,6 +275,13 @@ impl PplnsWindow {
 
         while confirmed_index.is_none() {
             let header = chain_store_handle.get_share_header(&current_hash)?;
+            let status = chain_store_handle.get_block_metadata(&current_hash)?.status;
+            if !matches!(status, Status::Candidate | Status::BlockValid) {
+                return Err(format!(
+                    "PPLNS walk reached non-validated block {current_hash} (status {status:?})"
+                )
+                .into());
+            }
             let parent_hash = header.prev_share_blockhash;
             candidate_headers.push((current_hash, header));
             current_hash = parent_hash;
@@ -2183,6 +2196,14 @@ mod tests {
             .expect_get_share_header()
             .withf(move |hash| *hash == share_b_hash)
             .returning(move |_| Ok(share_b_clone.clone()));
+        // share_b is a validated candidate, so the walk accepts it.
+        mock_store.expect_get_block_metadata().returning(|_| {
+            Ok(BlockMetadata {
+                expected_height: Some(1),
+                chain_work: Work::from_le_bytes([0u8; 32]),
+                status: Status::Candidate,
+            })
+        });
         // No uncle headers needed for this test
         mock_store
             .expect_get_share_headers()
