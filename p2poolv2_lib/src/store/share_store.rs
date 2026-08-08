@@ -19,7 +19,9 @@ use super::{ColumnFamily, Store, writer::StoreError};
 use crate::shares::share_block::{
     MerkleBranches, ShareBlock, ShareHeader, ShareTransaction, Txids,
 };
-use crate::store::block_tx_metadata::Status::{BlockValid, Candidate, Confirmed, HeaderValid, Invalid};
+use crate::store::block_tx_metadata::Status::{
+    BlockValid, Candidate, Confirmed, HeaderValid, Invalid,
+};
 use bitcoin::BlockHash;
 use bitcoin::TxMerkleNode;
 use bitcoin::consensus::{self, Encodable, encode};
@@ -598,7 +600,10 @@ mod tests {
             .build();
         store.store_with_valid_metadata(&share);
         assert_eq!(
-            store.get_block_metadata(&share.block_hash()).unwrap().status,
+            store
+                .get_block_metadata(&share.block_hash())
+                .unwrap()
+                .status,
             Status::HeaderValid
         );
 
@@ -607,7 +612,10 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         assert_eq!(
-            store.get_block_metadata(&share.block_hash()).unwrap().status,
+            store
+                .get_block_metadata(&share.block_hash())
+                .unwrap()
+                .status,
             Status::Invalid
         );
     }
@@ -642,7 +650,10 @@ mod tests {
             store.commit_batch(batch).unwrap();
 
             assert_eq!(
-                store.get_block_metadata(&share.block_hash()).unwrap().status,
+                store
+                    .get_block_metadata(&share.block_hash())
+                    .unwrap()
+                    .status,
                 status,
                 "mark_invalid must be a no-op for {status:?}"
             );
@@ -672,7 +683,10 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         assert_eq!(
-            store.get_block_metadata(&share.block_hash()).unwrap().status,
+            store
+                .get_block_metadata(&share.block_hash())
+                .unwrap()
+                .status,
             Status::BlockValid
         );
     }
@@ -709,7 +723,10 @@ mod tests {
             store.commit_batch(batch).unwrap();
 
             assert_eq!(
-                store.get_block_metadata(&share.block_hash()).unwrap().status,
+                store
+                    .get_block_metadata(&share.block_hash())
+                    .unwrap()
+                    .status,
                 status,
                 "mark_block_valid must be a no-op for {status:?}"
             );

@@ -23,7 +23,7 @@ use crate::accounting::payout::payout_distribution::{
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
-use bitcoin::{Address, Amount};
+use bitcoin::{Address, Amount, BlockHash};
 use std::collections::HashMap;
 use std::error::Error;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -40,6 +40,9 @@ impl PayoutDistribution for Payout {
         &mut self,
         distribution: &mut Vec<OutputPair>,
         chain_store_handle: &ChainStoreHandle,
+        // Time-window PPLNS is not anchored on a share; it queries by
+        // timestamp, so the share-chain anchor does not apply here.
+        _anchor: BlockHash,
         total_difficulty: u128,
         total_amount: bitcoin::Amount,
         remaining_total_amount: Amount,
@@ -150,6 +153,7 @@ mod tests {
     use super::*;
     use crate::accounting::payout::simple_pplns::SimplePplnsShare;
     use crate::test_utils::make_test_address;
+    use bitcoin::hashes::Hash;
     use p2poolv2_config::StratumConfig;
 
     #[tokio::test]
@@ -606,7 +610,13 @@ mod tests {
         let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
 
         let result = payout
-            .get_output_distribution(&chain_store_handle, 1000, total_amount, &stratum_config)
+            .get_output_distribution(
+                &chain_store_handle,
+                BlockHash::all_zeros(),
+                1000,
+                total_amount,
+                &stratum_config,
+            )
             .unwrap();
 
         assert_eq!(result.len(), 1);
@@ -659,7 +669,13 @@ mod tests {
         let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
 
         let result = payout
-            .get_output_distribution(&chain_store_handle, 1000, total_amount, &stratum_config)
+            .get_output_distribution(
+                &chain_store_handle,
+                BlockHash::all_zeros(),
+                1000,
+                total_amount,
+                &stratum_config,
+            )
             .unwrap();
 
         assert_eq!(result.len(), 2);
@@ -739,7 +755,13 @@ mod tests {
         let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
 
         let result = payout
-            .get_output_distribution(&chain_store_handle, 1000, total_amount, &stratum_config)
+            .get_output_distribution(
+                &chain_store_handle,
+                BlockHash::all_zeros(),
+                1000,
+                total_amount,
+                &stratum_config,
+            )
             .unwrap();
 
         // Should have 2 unique addresses
@@ -769,7 +791,13 @@ mod tests {
         let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
 
         let result = payout
-            .get_output_distribution(&chain_store_handle, 1000, total_amount, &stratum_config)
+            .get_output_distribution(
+                &chain_store_handle,
+                BlockHash::all_zeros(),
+                1000,
+                total_amount,
+                &stratum_config,
+            )
             .unwrap();
 
         assert_eq!(result.len(), 1);
@@ -824,7 +852,13 @@ mod tests {
         let stratum_config = stratum_config.parse().unwrap();
 
         let result = payout
-            .get_output_distribution(&chain_store_handle, 1000, total_amount, &stratum_config)
+            .get_output_distribution(
+                &chain_store_handle,
+                BlockHash::all_zeros(),
+                1000,
+                total_amount,
+                &stratum_config,
+            )
             .unwrap();
 
         // Should have 3 outputs: donation + 2 miners
@@ -912,7 +946,13 @@ mod tests {
         let stratum_config = stratum_config.parse().unwrap();
 
         let result = payout
-            .get_output_distribution(&chain_store_handle, 1000, total_amount, &stratum_config)
+            .get_output_distribution(
+                &chain_store_handle,
+                BlockHash::all_zeros(),
+                1000,
+                total_amount,
+                &stratum_config,
+            )
             .unwrap();
 
         // Should have 3 outputs: fee + 2 miners
@@ -1006,7 +1046,13 @@ mod tests {
         let stratum_config = stratum_config.parse().unwrap();
 
         let result = payout
-            .get_output_distribution(&chain_store_handle, 1000, total_amount, &stratum_config)
+            .get_output_distribution(
+                &chain_store_handle,
+                BlockHash::all_zeros(),
+                1000,
+                total_amount,
+                &stratum_config,
+            )
             .unwrap();
 
         // Should have 4 outputs: donation + fee + 2 miners
@@ -1082,7 +1128,13 @@ mod tests {
         let stratum_config = stratum_config.parse().unwrap();
 
         let result = payout
-            .get_output_distribution(&chain_store_handle, 1000, total_amount, &stratum_config)
+            .get_output_distribution(
+                &chain_store_handle,
+                BlockHash::all_zeros(),
+                1000,
+                total_amount,
+                &stratum_config,
+            )
             .unwrap();
 
         // When no shares, all funds should go to bootstrap address (not donation)
@@ -1138,7 +1190,13 @@ mod tests {
         let stratum_config = stratum_config.parse().unwrap();
 
         let result = payout
-            .get_output_distribution(&chain_store_handle, 1000, total_amount, &stratum_config)
+            .get_output_distribution(
+                &chain_store_handle,
+                BlockHash::all_zeros(),
+                1000,
+                total_amount,
+                &stratum_config,
+            )
             .unwrap();
 
         // Should have only 2 outputs: just the 2 miners (no donation output)
@@ -1223,7 +1281,13 @@ mod tests {
         let stratum_config = stratum_config.parse().unwrap();
 
         let result = payout
-            .get_output_distribution(&chain_store_handle, 1000, total_amount, &stratum_config)
+            .get_output_distribution(
+                &chain_store_handle,
+                BlockHash::all_zeros(),
+                1000,
+                total_amount,
+                &stratum_config,
+            )
             .unwrap();
 
         // Should have only 2 outputs: just the 2 miners (no fee output)
@@ -1288,7 +1352,13 @@ mod tests {
         let stratum_config = stratum_config.parse().unwrap();
 
         let result = payout
-            .get_output_distribution(&chain_store_handle, 1000, total_amount, &stratum_config)
+            .get_output_distribution(
+                &chain_store_handle,
+                BlockHash::all_zeros(),
+                1000,
+                total_amount,
+                &stratum_config,
+            )
             .unwrap();
 
         // Should have only 1 output: donation gets 100%
