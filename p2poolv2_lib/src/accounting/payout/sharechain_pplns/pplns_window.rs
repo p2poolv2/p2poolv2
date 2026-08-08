@@ -99,6 +99,11 @@ struct UncleEntry {
     difficulty: u128,
 }
 
+/// Candidate headers collected while walking backward from an anchor to a
+/// confirmed ancestor (newest-to-oldest), paired with that ancestor's index
+/// in `confirmed_entries`.
+type CandidateWalk = (Vec<(BlockHash, ShareHeader)>, usize);
+
 /// Incremental PPLNS window cache.
 ///
 /// Caches confirmed share headers and uncle data from the share chain,
@@ -178,14 +183,18 @@ impl PplnsWindow {
     /// When start_hash is already in the confirmed entries, no store
     /// reads are needed and the walk produces zero candidate entries.
     ///
-    /// Returns `None` when start_hash cannot be resolved to a
-    /// confirmed ancestor.
+    /// Errors when `start_hash` cannot be resolved to a confirmed ancestor
+    /// (e.g. an anchor whose ancestry is not stored) or when a store read
+    /// fails, so callers fail rather than silently treat an unresolved
+    /// anchor or a transient read error as an empty distribution. The
+    /// explicit empty/genesis case is handled by callers before this call
+    /// (they check `is_empty`).
     pub fn get_distribution_from_start_hash(
         &mut self,
         total_difficulty: u128,
         start_hash: BlockHash,
         chain_store_handle: &ChainStoreHandle,
-    ) -> Option<HashMap<Address, u128>> {
+    ) -> Result<HashMap<Address, u128>, Box<dyn Error + Send + Sync>> {
         let (candidate_entries, confirmed_start_index) =
             self.resolve_start_hash(start_hash, chain_store_handle)?;
 
@@ -201,7 +210,7 @@ impl PplnsWindow {
         );
 
         if threshold_met {
-            return Some(self.collect_distribution(&difficulty_by_key));
+            return Ok(self.collect_distribution(&difficulty_by_key));
         }
 
         // Continue into confirmed entries from the anchor point
@@ -212,7 +221,7 @@ impl PplnsWindow {
             confirmed_start_index,
         );
 
-        Some(self.collect_distribution(&difficulty_by_key))
+        Ok(self.collect_distribution(&difficulty_by_key))
     }
 
     /// Resolve start_hash to candidate entries and a confirmed anchor index.
@@ -220,46 +229,56 @@ impl PplnsWindow {
     /// If start_hash is in confirmed_entries, returns empty candidate
     /// entries and the confirmed index. Otherwise walks backward through
     /// parent pointers in the store, building candidate entries until a
-    /// confirmed ancestor is found.
+    /// confirmed ancestor is found. Errors when no confirmed ancestor is
+    /// reachable or a store read fails.
     fn resolve_start_hash(
         &mut self,
         start_hash: BlockHash,
         chain_store_handle: &ChainStoreHandle,
-    ) -> Option<(Vec<ConfirmedEntry>, usize)> {
+    ) -> Result<(Vec<ConfirmedEntry>, usize), Box<dyn Error + Send + Sync>> {
         if let Some(confirmed_index) = self.find_start_index(start_hash) {
-            return Some((Vec::new(), confirmed_index));
+            return Ok((Vec::new(), confirmed_index));
         }
 
         let (candidate_headers, confirmed_index) =
             self.collect_candidate_headers(start_hash, chain_store_handle)?;
         let candidate_entries =
             self.build_entries_from_headers(&candidate_headers, chain_store_handle)?;
-        Some((candidate_entries, confirmed_index))
+        Ok((candidate_entries, confirmed_index))
     }
 
     /// Walk backward from start_hash through parent pointers until
     /// finding a block whose parent is in the confirmed entries.
     /// Returns the collected headers (newest-to-oldest) and the
     /// confirmed index of the anchor parent.
+    ///
+    /// Errors when the walk runs off the end of the stored chain without
+    /// reaching a confirmed ancestor (`get_share_header` returns
+    /// `NotFound`: the anchor is unresolvable) or when any store read
+    /// fails; both propagate so an unresolvable anchor or a transient read
+    /// failure is never mistaken for an empty distribution.
     fn collect_candidate_headers(
         &self,
         start_hash: BlockHash,
         chain_store_handle: &ChainStoreHandle,
-    ) -> Option<(Vec<(BlockHash, ShareHeader)>, usize)> {
+    ) -> Result<CandidateWalk, Box<dyn Error + Send + Sync>> {
         const INITIAL_CAPACITY: usize = 8;
         let mut candidate_headers = Vec::with_capacity(INITIAL_CAPACITY);
         let mut current_hash = start_hash;
         let mut confirmed_index = self.find_start_index(current_hash);
 
         while confirmed_index.is_none() {
-            let header = chain_store_handle.get_share_header(&current_hash).ok()?;
+            let header = chain_store_handle.get_share_header(&current_hash)?;
             let parent_hash = header.prev_share_blockhash;
             candidate_headers.push((current_hash, header));
             current_hash = parent_hash;
             confirmed_index = self.find_start_index(current_hash);
         }
 
-        Some((candidate_headers, confirmed_index?))
+        match confirmed_index {
+            Some(index) => Ok((candidate_headers, index)),
+            None => Err("walk ended without reaching a confirmed ancestor".into()),
+        }
     }
 
     /// Convert collected candidate headers into ConfirmedEntry values
@@ -268,14 +287,13 @@ impl PplnsWindow {
         &mut self,
         candidate_headers: &[(BlockHash, ShareHeader)],
         chain_store_handle: &ChainStoreHandle,
-    ) -> Option<Vec<ConfirmedEntry>> {
+    ) -> Result<Vec<ConfirmedEntry>, Box<dyn Error + Send + Sync>> {
         let all_uncle_hashes: Vec<BlockHash> = candidate_headers
             .iter()
             .flat_map(|(_, header)| header.uncles.iter().copied())
             .collect();
-        let uncle_lookup_table = self
-            .build_uncle_entry_lookup_table(chain_store_handle, &all_uncle_hashes)
-            .ok()?;
+        let uncle_lookup_table =
+            self.build_uncle_entry_lookup_table(chain_store_handle, &all_uncle_hashes)?;
 
         let entries = candidate_headers
             .iter()
@@ -292,7 +310,7 @@ impl PplnsWindow {
             })
             .collect();
 
-        Some(entries)
+        Ok(entries)
     }
 
     /// Find the index of the entry matching the given blockhash.
@@ -812,7 +830,7 @@ mockall::mock! {
             total_difficulty: u128,
             start_hash: BlockHash,
             chain_store_handle: &ChainStoreHandle,
-        ) -> Option<HashMap<Address, u128>>;
+        ) -> Result<HashMap<Address, u128>, Box<dyn std::error::Error + Send + Sync>>;
     }
 }
 
@@ -1373,7 +1391,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_distribution_with_unknown_start_hash_returns_none() {
+    fn test_get_distribution_with_unknown_start_hash_returns_error() {
         let genesis_hash = BlockHash::all_zeros();
         let header1 = build_test_header(&genesis_hash.to_string(), PUBKEY_G, 2);
         let header2 = build_test_header(&header1.block_hash().to_string(), PUBKEY_2G, 2);
@@ -1386,7 +1404,9 @@ mod tests {
         window.add_to_running_total(&entry1);
         window.confirmed_entries.push_back(entry1);
 
-        // A hash not in the window and not in the store should return None
+        // A hash not in the window and not in the store cannot be resolved
+        // to a confirmed ancestor, so the walk errors rather than silently
+        // producing an empty distribution.
         let unknown_hash = build_test_header(&genesis_hash.to_string(), PUBKEY_3G, 3).block_hash();
         let mut mock_store = MockChainStoreHandle::default();
         mock_store.expect_get_share_header().returning(|_| {
@@ -1395,7 +1415,7 @@ mod tests {
             ))
         });
         let result = window.get_distribution_from_start_hash(u128::MAX, unknown_hash, &mock_store);
-        assert!(result.is_none());
+        assert!(result.is_err());
     }
 
     #[test]
@@ -2143,7 +2163,7 @@ mod tests {
             &MockChainStoreHandle::default(),
         );
         assert!(
-            result.is_some(),
+            result.is_ok(),
             "share_a should be in the PPLNS window (it is confirmed)"
         );
 
@@ -2179,7 +2199,7 @@ mod tests {
             &mock_store,
         );
         assert!(
-            result.is_some(),
+            result.is_ok(),
             "share_c must be able to find its parent share_b in the PPLNS window during sync"
         );
     }

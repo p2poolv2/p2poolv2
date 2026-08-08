@@ -92,22 +92,19 @@ impl PayoutDistribution for Payout {
             .expect("PPLNS window lock poisoned on write");
         window.update(chain_store_handle)?;
 
-        //* Anchor the window on the committed prev (`anchor`) rather than the
-        //* live cache tip, so the producer pays the same window the validator
-        //* reconstructs from prev_share_blockhash. Mid-chain the anchor is the
-        //* confirmed tip update() just synced, so it always resolves; None only
-        //* happens on a fresh chain before genesis is in the window, which the
-        //* bootstrap branch below handles alongside an empty window.
-        let Some(address_difficulty_map) = window
-            .get_distribution_from_start_hash(total_difficulty, anchor, chain_store_handle)
-            .filter(|address_difficulty_map| !address_difficulty_map.is_empty())
-        else {
+        if window.is_empty() {
             distribution.push(OutputPair {
                 address: bootstrap_address,
                 amount: remaining_total_amount,
             });
             return Ok(());
-        };
+        }
+
+        let address_difficulty_map = window.get_distribution_from_start_hash(
+            total_difficulty,
+            anchor,
+            chain_store_handle,
+        )?;
 
         append_proportional_distribution(
             &address_difficulty_map,
@@ -128,7 +125,6 @@ mod tests {
     use crate::shares::chain::chain_store_handle::ConfirmedHeaderResult;
     use crate::shares::chain::chain_store_handle::MockChainStoreHandle;
     use crate::store::block_tx_metadata::{BlockMetadata, Status};
-    use crate::store::writer::StoreError;
     use crate::test_utils::{
         PUBKEY_2G, PUBKEY_3G, PUBKEY_4G, PUBKEY_G, build_test_header, build_test_header_with_uncles,
     };
@@ -155,11 +151,8 @@ mod tests {
                 status: Status::Confirmed,
             })
         });
-        // Fresh chain: the anchor is not in the (empty) window and cannot be
-        // resolved from the store, so get_distribution_from_start_hash returns
-        // None and the payout falls back to bootstrap.
-        mock.expect_get_share_header()
-            .returning(|hash| Err(StoreError::NotFound(hash.to_string())));
+        // Fresh chain: update() leaves the window empty, so the payout takes
+        // the explicit is_empty() bootstrap branch without resolving an anchor.
 
         let mut payout = Payout::new(bitcoin::Network::Signet);
         let config = make_test_config();
