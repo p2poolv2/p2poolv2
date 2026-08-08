@@ -685,8 +685,10 @@ impl DefaultShareValidator {
                 share.header.prev_share_blockhash,
                 chain_store_handle,
             )
-            .ok_or_else(|| {
-                ValidationError::new("prev_share_blockhash not found in PPLNS window")
+            .map_err(|error| {
+                ValidationError::new(format!(
+                    "Failed to resolve PPLNS window from prev_share_blockhash: {error}"
+                ))
             })?;
 
         let coinbase_value = share.header.coinbase_value;
@@ -2790,7 +2792,7 @@ mod tests {
                 let mut distribution = HashMap::with_capacity(2);
                 distribution.insert(addr_a_clone.clone(), 600u128);
                 distribution.insert(addr_b_clone.clone(), 400u128);
-                Some(distribution)
+                Ok(distribution)
             });
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
@@ -2864,7 +2866,7 @@ mod tests {
                 let mut distribution = HashMap::with_capacity(2);
                 distribution.insert(addr_a_clone.clone(), 600u128);
                 distribution.insert(addr_b_clone.clone(), 400u128);
-                Some(distribution)
+                Ok(distribution)
             });
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
@@ -2896,7 +2898,7 @@ mod tests {
             .return_const(bitcoin::Network::Signet);
         mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(|_, _, _| Some(HashMap::new()));
+            .returning(|_, _, _| Ok(HashMap::new()));
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
         let error = validator()
@@ -2940,7 +2942,7 @@ mod tests {
             .return_const(bitcoin::Network::Signet);
         mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(|_, _, _| None);
+            .returning(|_, _, _| Err("prev_share_blockhash not found in PPLNS window".into()));
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
         let error = validator()
@@ -2995,7 +2997,7 @@ mod tests {
         let addr_a_clone = address_a.clone();
         mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(move |_, _, _| Some(HashMap::from([(addr_a_clone.clone(), 100u128)])));
+            .returning(move |_, _, _| Ok(HashMap::from([(addr_a_clone.clone(), 100u128)])));
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
         // The reconstructed coinbase will also have 1 sat to address_a,
@@ -3120,7 +3122,7 @@ mod tests {
                 distribution.insert(miner_a_clone.clone(), 500u128);
                 distribution.insert(miner_b_clone.clone(), 300u128);
                 distribution.insert(miner_c_clone.clone(), 200u128);
-                Some(distribution)
+                Ok(distribution)
             });
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
@@ -3226,7 +3228,7 @@ mod tests {
         let addr_a_clone = address_a.clone();
         mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(move |_, _, _| Some(HashMap::from([(addr_a_clone.clone(), 1000u128)])));
+            .returning(move |_, _, _| Ok(HashMap::from([(addr_a_clone.clone(), 1000u128)])));
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
         let validator =
