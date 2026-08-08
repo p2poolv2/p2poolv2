@@ -387,12 +387,15 @@ impl Store {
             .unwrap_or(false)
     }
 
-    /// Check if a blockhash is marked Invalid. Chain-context validation
-    /// failure marks a block Invalid; such a block must never be confirmed
-    /// (including via the fallback path), even though its body is stored.
-    pub(super) fn is_invalid(&self, blockhash: &BlockHash) -> bool {
+    /// Check if a blockhash is validated for promotion: its status is
+    /// Candidate or BlockValid. HeaderValid (PoW-valid but not chain-context
+    /// validated), Pending, and Invalid are all excluded, so an unvalidated
+    /// or rejected block is never confirmed -- including via the fallback
+    /// path -- even though its body may be stored. Locally-mined blocks are
+    /// marked BlockValid (or are Candidate), so they still qualify.
+    pub(super) fn is_candidate_or_block_valid(&self, blockhash: &BlockHash) -> bool {
         self.get_block_metadata(blockhash)
-            .map(|m| m.status == Status::Invalid)
+            .map(|m| matches!(m.status, Status::Candidate | Status::BlockValid))
             .unwrap_or(false)
     }
 

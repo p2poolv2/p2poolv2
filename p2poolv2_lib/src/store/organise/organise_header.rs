@@ -948,13 +948,21 @@ mod tests {
         assert_eq!(top_candidate.hash, share1.block_hash());
         assert_eq!(top_candidate.height, 1);
 
-        // share2: child of share1, stored with block data and
-        // HeaderValid metadata but NOT on the candidate chain.
+        // share2: child of share1, stored with block data but NOT on the
+        // candidate chain. Marked BlockValid (as validate_and_promote_block
+        // does after chain-context validation, before promote_block runs
+        // organise_block) so the fallback, which only confirms validated
+        // blocks, promotes it.
         let share2 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share1.block_hash().to_string())
             .nonce(0xe9695793)
             .build();
         store.store_with_valid_metadata(&share2);
+        let mut batch = Store::get_write_batch();
+        store
+            .mark_block_valid(&share2.block_hash(), &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
 
         // Promote share2 via fallback confirmation (organise_block).
         // try_fallback_confirmation finds share2 at h:2 with parent =

@@ -95,11 +95,12 @@ impl Store {
                 if header.prev_share_blockhash != top_confirmed.hash {
                     continue;
                 }
-                // Never confirm a block that failed chain-context validation.
-                // A HeaderValid child (e.g. a locally-mined block that could
-                // not reorg the candidate chain) is valid and promotable; only
-                // an Invalid block is excluded.
-                if self.is_invalid(blockhash) {
+                // Only confirm validated blocks (Candidate or BlockValid). A
+                // HeaderValid child (PoW-valid but not chain-context validated),
+                // Pending, or Invalid block must not be promoted. A locally-mined
+                // block that could not reorg the candidate chain is marked
+                // BlockValid at stratum receipt, so it still qualifies here.
+                if !self.is_candidate_or_block_valid(blockhash) {
                     continue;
                 }
                 if !self.all_block_and_uncle_data_available(&[*blockhash], prune_height)? {
@@ -156,9 +157,10 @@ impl Store {
     ) -> Chain {
         let mut result = Vec::with_capacity(candidates.len());
         for (height, blockhash) in candidates {
-            if self.is_invalid(blockhash) {
+            if !self.is_candidate_or_block_valid(blockhash) {
                 debug!(
-                    "Candidate at height {} ({}) is Invalid, stopping promotion",
+                    "Candidate at height {} ({}) is not validated (Candidate/BlockValid), \
+                     stopping promotion",
                     height, blockhash
                 );
                 return result;
@@ -1275,6 +1277,17 @@ mod tests {
         let mut batch = Store::get_write_batch();
         store
             .organise_header(&local_block.header, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Local block could not reorg the candidate chain, so it stayed
+        // HeaderValid. In the node, validate_and_promote_block marks a block
+        // BlockValid after chain-context validation, before promote_block runs
+        // organise_block; mirror that here so the fallback (which only confirms
+        // validated blocks) promotes it.
+        let mut batch = Store::get_write_batch();
+        store
+            .mark_block_valid(&local_block.block_hash(), &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
