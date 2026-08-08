@@ -51,6 +51,7 @@ pub(crate) struct NotifyContext {
 fn build_output_distribution(
     template: &BlockTemplate,
     pool_target: bitcoin::CompactTarget,
+    anchor: bitcoin::BlockHash,
     context: &mut NotifyContext,
 ) -> Vec<OutputPair> {
     let total_amount = bitcoin::Amount::from_sat(template.coinbasevalue);
@@ -69,6 +70,7 @@ fn build_output_distribution(
 
     match context.payout.get_output_distribution(
         &context.chain_store_handle,
+        anchor,
         total_difficulty,
         total_amount,
         &context.config,
@@ -106,7 +108,10 @@ fn build_prepared_notify(
         .pool_difficulty
         .calculate_target_clamped(parent_time, tip_height);
 
-    let output_distribution = build_output_distribution(template, target, context);
+    //* Anchor the payout on the same `tip` we commit as prev_share_blockhash
+    //* below, so a confirmed-chain advance between reads cannot make the
+    //* coinbase pay a window inconsistent with its declared prev.
+    let output_distribution = build_output_distribution(template, target, tip, context);
 
     PreparedNotifyParamsBuilder::new(
         Arc::clone(template),
@@ -248,7 +253,7 @@ mod tests {
         let mut mock_payout = MockPayoutDistribution::default();
         mock_payout
             .expect_get_output_distribution()
-            .return_once(move |_, _, _, _| Ok(distribution));
+            .return_once(move |_, _, _, _, _| Ok(distribution));
         mock_payout
     }
 
@@ -337,7 +342,7 @@ mod tests {
         let mut mock_payout = MockPayoutDistribution::default();
         mock_payout
             .expect_get_output_distribution()
-            .returning(move |_, _, _, _| Ok(test_distribution.clone()));
+            .returning(move |_, _, _, _, _| Ok(test_distribution.clone()));
 
         let task_handle = tokio::spawn(async move {
             start_notify(

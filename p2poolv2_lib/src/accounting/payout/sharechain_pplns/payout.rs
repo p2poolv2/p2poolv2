@@ -30,7 +30,7 @@ use crate::accounting::payout::sharechain_pplns::pplns_window::PplnsWindow;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
-use bitcoin::{Address, Amount};
+use bitcoin::{Address, Amount, BlockHash};
 use std::error::Error;
 use std::sync::{Arc, RwLock};
 
@@ -67,6 +67,7 @@ impl PayoutDistribution for Payout {
         &mut self,
         distribution: &mut Vec<OutputPair>,
         chain_store_handle: &ChainStoreHandle,
+        anchor: BlockHash,
         total_difficulty: u128,
         _total_amount: bitcoin::Amount,
         remaining_total_amount: Amount,
@@ -91,15 +92,22 @@ impl PayoutDistribution for Payout {
             .expect("PPLNS window lock poisoned on write");
         window.update(chain_store_handle)?;
 
-        let address_difficulty_map = window.get_distribution(total_difficulty);
-
-        if address_difficulty_map.is_empty() {
+        //* Anchor the window on the committed prev (`anchor`) rather than the
+        //* live cache tip, so the producer pays the same window the validator
+        //* reconstructs from prev_share_blockhash. Mid-chain the anchor is the
+        //* confirmed tip update() just synced, so it always resolves; None only
+        //* happens on a fresh chain before genesis is in the window, which the
+        //* bootstrap branch below handles alongside an empty window.
+        let Some(address_difficulty_map) = window
+            .get_distribution_from_start_hash(total_difficulty, anchor, chain_store_handle)
+            .filter(|address_difficulty_map| !address_difficulty_map.is_empty())
+        else {
             distribution.push(OutputPair {
                 address: bootstrap_address,
                 amount: remaining_total_amount,
             });
             return Ok(());
-        }
+        };
 
         append_proportional_distribution(
             &address_difficulty_map,
@@ -120,6 +128,7 @@ mod tests {
     use crate::shares::chain::chain_store_handle::ConfirmedHeaderResult;
     use crate::shares::chain::chain_store_handle::MockChainStoreHandle;
     use crate::store::block_tx_metadata::{BlockMetadata, Status};
+    use crate::store::writer::StoreError;
     use crate::test_utils::{
         PUBKEY_2G, PUBKEY_3G, PUBKEY_4G, PUBKEY_G, build_test_header, build_test_header_with_uncles,
     };
@@ -146,12 +155,17 @@ mod tests {
                 status: Status::Confirmed,
             })
         });
+        // Fresh chain: the anchor is not in the (empty) window and cannot be
+        // resolved from the store, so get_distribution_from_start_hash returns
+        // None and the payout falls back to bootstrap.
+        mock.expect_get_share_header()
+            .returning(|hash| Err(StoreError::NotFound(hash.to_string())));
 
         let mut payout = Payout::new(bitcoin::Network::Signet);
         let config = make_test_config();
         let total_amount = Amount::from_sat(100_000_000);
         let result = payout
-            .get_output_distribution(&mock, 1000, total_amount, &config)
+            .get_output_distribution(&mock, genesis_hash, 1000, total_amount, &config)
             .unwrap();
 
         assert_eq!(result.len(), 1);
@@ -189,7 +203,7 @@ mod tests {
         let config = make_test_config();
         let total_amount = Amount::from_sat(100_000_000);
         let result = payout
-            .get_output_distribution(&mock, u128::MAX, total_amount, &config)
+            .get_output_distribution(&mock, tip_hash, u128::MAX, total_amount, &config)
             .unwrap();
 
         assert_eq!(result.len(), 1);
@@ -238,7 +252,7 @@ mod tests {
         let config = make_test_config();
         let total_amount = Amount::from_sat(100_000_000);
         let result = payout
-            .get_output_distribution(&mock, u128::MAX, total_amount, &config)
+            .get_output_distribution(&mock, tip_hash, u128::MAX, total_amount, &config)
             .unwrap();
 
         assert_eq!(result.len(), 2);
@@ -254,6 +268,71 @@ mod tests {
             result.iter().map(|pair| pair.address.to_string()).collect();
         assert!(addresses.contains(&miner1));
         assert!(addresses.contains(&miner2));
+    }
+
+    /// Regression: the producer must anchor the payout window on the
+    /// committed prev, not on the live cache tip.
+    ///
+    /// The confirmed chain is [header1, header2] and the window cache
+    /// syncs to the tip header2, but the notify reads header1 as the prev
+    /// (the race: confirmed advanced to header2 between the prev read and
+    /// the payout read). Anchoring on header1 must exclude header2's share,
+    /// paying only miner1 -- matching what the validator reconstructs from
+    /// prev_share_blockhash == header1. The pre-fix code walked from the
+    /// cache tip and paid both miners.
+    #[test]
+    fn test_distribution_anchored_on_prev_excludes_newer_tip() {
+        let genesis_hash = BlockHash::all_zeros();
+        let header1 = build_test_header(&genesis_hash.to_string(), PUBKEY_G, 2);
+        let header2 = build_test_header(&header1.block_hash().to_string(), PUBKEY_2G, 2);
+        let miner1 = header1.miner_bitcoin_address.to_string();
+        let miner2 = header2.miner_bitcoin_address.to_string();
+        let tip_hash = header2.block_hash();
+        let anchor = header1.block_hash();
+
+        // Newest-to-oldest order; the cache syncs to the tip header2.
+        let confirmed_headers = vec![
+            ConfirmedHeaderResult {
+                height: 1,
+                blockhash: header2.block_hash(),
+                header: header2.clone(),
+            },
+            ConfirmedHeaderResult {
+                height: 0,
+                blockhash: header1.block_hash(),
+                header: header1.clone(),
+            },
+        ];
+
+        let mut mock = MockChainStoreHandle::default();
+        mock.expect_get_chain_tip().returning(move || Ok(tip_hash));
+        mock.expect_get_block_metadata().returning(move |_| {
+            Ok(BlockMetadata {
+                expected_height: Some(1),
+                chain_work: Work::from_le_bytes([0u8; 32]),
+                status: Status::Confirmed,
+            })
+        });
+        mock.expect_get_confirmed_headers_in_range()
+            .returning(move |_, _| Ok(confirmed_headers.clone()));
+        mock.expect_get_share_headers()
+            .returning(|_| Ok(Vec::new()));
+
+        let mut payout = Payout::new(bitcoin::Network::Signet);
+        let config = make_test_config();
+        let total_amount = Amount::from_sat(100_000_000);
+        let result = payout
+            .get_output_distribution(&mock, anchor, u128::MAX, total_amount, &config)
+            .unwrap();
+
+        // Only header1's miner is paid; header2 (the newer tip) is excluded.
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].amount, total_amount);
+        assert_eq!(result[0].address.to_string(), miner1);
+
+        let addresses: HashSet<String> =
+            result.iter().map(|pair| pair.address.to_string()).collect();
+        assert!(!addresses.contains(&miner2));
     }
 
     #[test]
@@ -298,7 +377,7 @@ mod tests {
         let config = make_test_config();
         let total_amount = Amount::from_sat(100_000_000);
         let result = payout
-            .get_output_distribution(&mock, u128::MAX, total_amount, &config)
+            .get_output_distribution(&mock, tip_hash, u128::MAX, total_amount, &config)
             .unwrap();
 
         // Uncle gets 9/10 of its difficulty, nephew gets base * 10 + 1/10 of uncle's difficulty.
@@ -379,7 +458,7 @@ mod tests {
         let config = make_test_config();
         let total_amount = Amount::from_sat(100_000_000);
         let result = payout
-            .get_output_distribution(&mock, u128::MAX, total_amount, &config)
+            .get_output_distribution(&mock, tip_hash, u128::MAX, total_amount, &config)
             .unwrap();
 
         // Nephew gets base * 10 + 1/10 of each uncle's difficulty
@@ -455,7 +534,13 @@ mod tests {
         // Set total_difficulty to just one share's difficulty -- should include
         // the first (newest) share only
         let result = payout
-            .get_output_distribution(&mock, single_share_difficulty, total_amount, &config)
+            .get_output_distribution(
+                &mock,
+                tip_hash,
+                single_share_difficulty,
+                total_amount,
+                &config,
+            )
             .unwrap();
 
         // Only the newest share (header3) should be included
@@ -518,7 +603,13 @@ mod tests {
         // Set total_difficulty to two shares' worth -- should include
         // only the two newest shares (header3 and header2)
         let result = payout
-            .get_output_distribution(&mock, single_share_difficulty * 2, total_amount, &config)
+            .get_output_distribution(
+                &mock,
+                tip_hash,
+                single_share_difficulty * 2,
+                total_amount,
+                &config,
+            )
             .unwrap();
 
         assert_eq!(result.len(), 2);
@@ -588,7 +679,7 @@ mod tests {
         let total_amount = Amount::from_sat(100_000_000);
 
         let result = payout
-            .get_output_distribution(&mock, u128::MAX, total_amount, &config)
+            .get_output_distribution(&mock, tip_hash, u128::MAX, total_amount, &config)
             .unwrap();
 
         // Should have 3 addresses: miner A, miner B (uncle), miner C (nephew)
