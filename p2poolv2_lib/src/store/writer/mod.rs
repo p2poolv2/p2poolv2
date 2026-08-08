@@ -152,6 +152,12 @@ pub enum WriteCommand {
         blockhash: BlockHash,
         reply: oneshot::Sender<Result<(), StoreError>>,
     },
+
+    /// Mark a block BlockValid after it passes chain-context validation.
+    MarkBlockValid {
+        blockhash: BlockHash,
+        reply: oneshot::Sender<Result<(), StoreError>>,
+    },
 }
 
 /// Sender type for write commands (std::sync::mpsc for sync StoreWriter)
@@ -287,6 +293,14 @@ impl StoreWriter {
                 let result = self
                     .store
                     .mark_invalid(&blockhash, &mut batch)
+                    .and_then(|_| self.store.commit_batch(batch).map_err(StoreError::from));
+                let _ = reply.send(result);
+            }
+            WriteCommand::MarkBlockValid { blockhash, reply } => {
+                let mut batch = Store::get_write_batch();
+                let result = self
+                    .store
+                    .mark_block_valid(&blockhash, &mut batch)
                     .and_then(|_| self.store.commit_batch(batch).map_err(StoreError::from));
                 let _ = reply.send(result);
             }

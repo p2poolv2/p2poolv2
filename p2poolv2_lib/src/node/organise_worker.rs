@@ -253,6 +253,9 @@ impl OrganiseWorker {
                 }
                 return Ok(None);
             }
+            if let Err(mark_error) = self.chain_store_handle.mark_block_valid(blockhash).await {
+                error!("Failed to mark {blockhash} BlockValid: {mark_error}");
+            }
         }
 
         match self
@@ -517,6 +520,9 @@ mod tests {
         mock_chain_handle
             .expect_clone()
             .return_once(MockChainStoreHandle::new);
+        mock_chain_handle
+            .expect_mark_block_valid()
+            .returning(|_| Ok(()));
         let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let worker = OrganiseWorker::new(
@@ -543,6 +549,9 @@ mod tests {
         mock_chain_handle
             .expect_clone()
             .return_once(MockChainStoreHandle::new);
+        mock_chain_handle
+            .expect_mark_block_valid()
+            .returning(|_| Ok(()));
         mock_chain_handle
             .expect_organise_header()
             .returning(|_| Ok(None));
@@ -577,6 +586,11 @@ mod tests {
         mock_chain_handle
             .expect_clone()
             .return_once(MockChainStoreHandle::new);
+        // Successful chain-context validation must persist BlockValid.
+        mock_chain_handle
+            .expect_mark_block_valid()
+            .times(1)
+            .returning(|_| Ok(()));
         mock_chain_handle
             .expect_get_block_metadata()
             .returning(|_| {
@@ -623,6 +637,8 @@ mod tests {
         mock_chain_handle
             .expect_clone()
             .return_once(MockChainStoreHandle::new);
+        // Validation failed -> the block must NOT be marked BlockValid.
+        mock_chain_handle.expect_mark_block_valid().never();
         mock_chain_handle
             .expect_get_block_metadata()
             .returning(|_| {
@@ -680,6 +696,9 @@ mod tests {
             .expect_clone()
             .return_once(MockChainStoreHandle::new);
         mock_chain_handle
+            .expect_mark_block_valid()
+            .returning(|_| Ok(()));
+        mock_chain_handle
             .expect_get_block_metadata()
             .returning(|_| {
                 Ok(BlockMetadata {
@@ -725,6 +744,9 @@ mod tests {
         mock_chain_handle
             .expect_clone()
             .return_once(MockChainStoreHandle::new);
+        mock_chain_handle
+            .expect_mark_block_valid()
+            .returning(|_| Ok(()));
         mock_chain_handle
             .expect_get_block_metadata()
             .returning(|_| {
@@ -772,6 +794,9 @@ mod tests {
         mock_chain_handle
             .expect_clone()
             .return_once(MockChainStoreHandle::new);
+        mock_chain_handle
+            .expect_mark_block_valid()
+            .returning(|_| Ok(()));
         mock_chain_handle
             .expect_get_block_metadata()
             .returning(|_| {
@@ -828,6 +853,9 @@ mod tests {
             .expect_clone()
             .return_once(MockChainStoreHandle::new);
         mock_chain_handle
+            .expect_mark_block_valid()
+            .returning(|_| Ok(()));
+        mock_chain_handle
             .expect_get_block_metadata()
             .returning(|_| {
                 Ok(BlockMetadata {
@@ -882,6 +910,9 @@ mod tests {
             .expect_clone()
             .return_once(MockChainStoreHandle::new);
         mock_chain_handle
+            .expect_mark_block_valid()
+            .returning(|_| Ok(()));
+        mock_chain_handle
             .expect_get_block_metadata()
             .returning(|_| {
                 Ok(BlockMetadata {
@@ -925,6 +956,9 @@ mod tests {
         mock_chain_handle
             .expect_clone()
             .return_once(MockChainStoreHandle::new);
+        mock_chain_handle
+            .expect_mark_block_valid()
+            .returning(|_| Ok(()));
         mock_chain_handle
             .expect_get_block_metadata()
             .returning(|_| {
@@ -975,6 +1009,9 @@ mod tests {
         mock_chain_handle
             .expect_clone()
             .return_once(MockChainStoreHandle::new);
+        mock_chain_handle
+            .expect_mark_block_valid()
+            .returning(|_| Ok(()));
         mock_chain_handle
             .expect_get_block_metadata()
             .returning(|_| {
@@ -1033,6 +1070,9 @@ mod tests {
         mock_chain_handle
             .expect_clone()
             .return_once(MockChainStoreHandle::new);
+        mock_chain_handle
+            .expect_mark_block_valid()
+            .returning(|_| Ok(()));
         mock_chain_handle
             .expect_get_block_metadata()
             .returning(|_| {
@@ -1095,6 +1135,9 @@ mod tests {
         mock_chain_handle
             .expect_clone()
             .return_once(MockChainStoreHandle::new);
+        mock_chain_handle
+            .expect_mark_block_valid()
+            .returning(|_| Ok(()));
 
         // First call: block A has parent at height 100, tip is 5 -> buffer.
         // Second call: block B has parent at height 5, tip is 5 -> proceed.
@@ -1182,6 +1225,9 @@ mod tests {
         mock_chain_handle
             .expect_clone()
             .return_once(MockChainStoreHandle::new);
+        mock_chain_handle
+            .expect_mark_block_valid()
+            .returning(|_| Ok(()));
 
         // All blocks return valid metadata with height 10.
         mock_chain_handle

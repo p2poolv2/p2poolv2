@@ -724,6 +724,11 @@ impl ChainStoreHandle {
         self.store_handle.mark_invalid(blockhash).await
     }
 
+    /// Mark a block BlockValid after it passes chain-context validation.
+    pub async fn mark_block_valid(&self, blockhash: BlockHash) -> Result<(), StoreError> {
+        self.store_handle.mark_block_valid(blockhash).await
+    }
+
     /// Add a block to the candidate chain and promote candidates to confirmed.
     ///
     /// Combines organise_header (which places the block on the candidate
@@ -840,6 +845,7 @@ mockall::mock! {
         pub async fn organise_header(&self, header: ShareHeader) -> Result<Option<u32>, StoreError>;
         pub async fn organise_block(&self) -> Result<Option<u32>, StoreError>;
         pub async fn mark_invalid(&self, blockhash: BlockHash) -> Result<(), StoreError>;
+        pub async fn mark_block_valid(&self, blockhash: BlockHash) -> Result<(), StoreError>;
         pub async fn promote_block(&self, header: ShareHeader) -> Result<Option<u32>, StoreError>;
         pub async fn add_share_block(&self, share: ShareBlock) -> Result<(), StoreError>;
         pub async fn add_share_block_and_organise_header(&self, share: ShareBlock) -> Result<Option<u32>, StoreError>;
