@@ -19,7 +19,7 @@ use super::{ColumnFamily, Store, writer::StoreError};
 use crate::shares::share_block::{
     MerkleBranches, ShareBlock, ShareHeader, ShareTransaction, Txids,
 };
-use crate::store::block_tx_metadata::Status::{Confirmed, Invalid};
+use crate::store::block_tx_metadata::Status::{BlockValid, Candidate, Confirmed, HeaderValid, Invalid};
 use bitcoin::BlockHash;
 use bitcoin::TxMerkleNode;
 use bitcoin::consensus::{self, Encodable, encode};
@@ -520,20 +520,40 @@ impl Store {
 
     /// Mark a block Invalid so it is never promoted to confirmed (see
     /// organise_block's Invalid gate). Called when chain-context validation
-    /// fails. A no-op when the block is already Confirmed -- a confirmed
-    /// block must not be invalidated -- and errors if the block has no
-    /// metadata.
+    /// fails. A no-op when the block is already validated (Candidate,
+    /// BlockValid) or Confirmed -- a block that previously passed validation
+    /// or is on the confirmed chain must not be downgraded on a later
+    /// (possibly transient) failure. Errors if the block has no metadata.
     pub fn mark_invalid(
         &self,
         blockhash: &BlockHash,
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<(), StoreError> {
         let mut metadata = self.get_block_metadata(blockhash)?;
-        if metadata.status == Confirmed {
+        if matches!(metadata.status, Candidate | Confirmed | BlockValid) {
             return Ok(());
         }
         metadata.status = Invalid;
         self.update_block_metadata(blockhash, &metadata, batch)
+    }
+
+    /// Mark a block BlockValid after it passes chain-context validation.
+    ///
+    /// Only upgrades a HeaderValid block: a Candidate or Confirmed block
+    /// already carries a validated/on-chain status, and overwriting Candidate
+    /// would break candidate-chain detection (`is_candidate`). A no-op for
+    /// any other status. Errors if the block has no metadata.
+    pub fn mark_block_valid(
+        &self,
+        blockhash: &BlockHash,
+        batch: &mut rocksdb::WriteBatch,
+    ) -> Result<(), StoreError> {
+        let mut metadata = self.get_block_metadata(blockhash)?;
+        if metadata.status == HeaderValid {
+            metadata.status = BlockValid;
+            self.update_block_metadata(blockhash, &metadata, batch)?;
+        }
+        Ok(())
     }
 
     /// Get a share header from the Header column family.
@@ -561,6 +581,140 @@ mod tests {
     use bitcoin::Work;
     use bitcoin::hashes::Hash;
     use tempfile::tempdir;
+
+    /// mark_invalid downgrades a not-yet-validated (HeaderValid) block.
+    #[test]
+    fn test_mark_invalid_marks_header_valid_block() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        store.store_with_valid_metadata(&share);
+        assert_eq!(
+            store.get_block_metadata(&share.block_hash()).unwrap().status,
+            Status::HeaderValid
+        );
+
+        let mut batch = Store::get_write_batch();
+        store.mark_invalid(&share.block_hash(), &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert_eq!(
+            store.get_block_metadata(&share.block_hash()).unwrap().status,
+            Status::Invalid
+        );
+    }
+
+    /// mark_invalid must not downgrade an already-validated (Candidate /
+    /// BlockValid) or Confirmed block on a later (transient) failure.
+    #[test]
+    fn test_mark_invalid_is_noop_for_validated_or_confirmed() {
+        for status in [Status::Candidate, Status::BlockValid, Status::Confirmed] {
+            let temp_dir = tempdir().unwrap();
+            let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+            let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+            let mut batch = Store::get_write_batch();
+            store.setup_genesis(&genesis, &mut batch).unwrap();
+            store.commit_batch(batch).unwrap();
+
+            let share = TestShareBlockBuilder::new()
+                .prev_share_blockhash(genesis.block_hash().to_string())
+                .nonce(0xe9695792)
+                .build();
+            store.store_with_valid_metadata(&share);
+            let mut metadata = store.get_block_metadata(&share.block_hash()).unwrap();
+            metadata.status = status;
+            let mut batch = Store::get_write_batch();
+            store
+                .update_block_metadata(&share.block_hash(), &metadata, &mut batch)
+                .unwrap();
+            store.commit_batch(batch).unwrap();
+
+            let mut batch = Store::get_write_batch();
+            store.mark_invalid(&share.block_hash(), &mut batch).unwrap();
+            store.commit_batch(batch).unwrap();
+
+            assert_eq!(
+                store.get_block_metadata(&share.block_hash()).unwrap().status,
+                status,
+                "mark_invalid must be a no-op for {status:?}"
+            );
+        }
+    }
+
+    /// mark_block_valid upgrades HeaderValid to BlockValid.
+    #[test]
+    fn test_mark_block_valid_upgrades_header_valid() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        store.store_with_valid_metadata(&share);
+
+        let mut batch = Store::get_write_batch();
+        store
+            .mark_block_valid(&share.block_hash(), &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert_eq!(
+            store.get_block_metadata(&share.block_hash()).unwrap().status,
+            Status::BlockValid
+        );
+    }
+
+    /// mark_block_valid must not overwrite Candidate or Confirmed (which
+    /// carry chain position; overwriting Candidate breaks is_candidate).
+    #[test]
+    fn test_mark_block_valid_is_noop_for_candidate_and_confirmed() {
+        for status in [Status::Candidate, Status::Confirmed] {
+            let temp_dir = tempdir().unwrap();
+            let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+            let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+            let mut batch = Store::get_write_batch();
+            store.setup_genesis(&genesis, &mut batch).unwrap();
+            store.commit_batch(batch).unwrap();
+
+            let share = TestShareBlockBuilder::new()
+                .prev_share_blockhash(genesis.block_hash().to_string())
+                .nonce(0xe9695792)
+                .build();
+            store.store_with_valid_metadata(&share);
+            let mut metadata = store.get_block_metadata(&share.block_hash()).unwrap();
+            metadata.status = status;
+            let mut batch = Store::get_write_batch();
+            store
+                .update_block_metadata(&share.block_hash(), &metadata, &mut batch)
+                .unwrap();
+            store.commit_batch(batch).unwrap();
+
+            let mut batch = Store::get_write_batch();
+            store
+                .mark_block_valid(&share.block_hash(), &mut batch)
+                .unwrap();
+            store.commit_batch(batch).unwrap();
+
+            assert_eq!(
+                store.get_block_metadata(&share.block_hash()).unwrap().status,
+                status,
+                "mark_block_valid must be a no-op for {status:?}"
+            );
+        }
+    }
 
     #[test]
     fn test_setup_genesis() {
