@@ -31,11 +31,11 @@ The share processing pipeline is designed to:
 | (tokio task)           |     | (p2p message handler)     |
 |                        |     |                           |
 | - handle_stratum_share |     | - Stores share block      |
-| - Sends Header event   |     | - Checks missing deps     |
-|   to organise          |     |   (parent, uncles)        |
-| - Sends ValidateBlock  |     | - If deps missing:        |
-|   to validation        |     |   sends FetchBlocks,      |
-| - Broadcasts to peers  |     |   defers validation       |
+|   stores share,        |     | - Checks missing deps     |
+|   organises header     |     |   (parent, uncles)        |
+| - Sends ValidateShare  |     | - If deps missing:        |
+|   Block to validation  |     |   sends FetchBlocks,      |
+|                        |     |   defers validation       |
 +---+----------+---------+     | - If deps present:        |
     |          |               |   sends ValidateBlock     |
     |          |               +----------+----------------+
@@ -141,17 +141,27 @@ to confirmed), operating independently.
 ### EmissionWorker (`node/emission_worker.rs`)
 - Runs in dedicated tokio task, spawned by NodeActor
 - Receives `Emission` from stratum server via `EmissionReceiver`
-- Calls `handle_stratum_share()` which builds and stores the share
-- On success with `Some(ShareBlock)`:
-  - Sends `OrganiseEvent::Header(header)` for candidate chain building
-  - Sends `OrganiseEvent::Block(share_block)` for confirmed promotion
-  - Sends original to `swarm_tx` for peer broadcast
+- Calls `handle_stratum_share()` which builds the share, stores it, and
+  organises its header onto the candidate chain
+- On success with `Some(ShareBlock)`: sends
+  `ValidationEvent::ValidateShareBlock(share_block)` straight to the
+  ValidationWorker (avoiding a redundant store read). The ValidationWorker
+  emits `OrganiseEvent::Block` for confirmed promotion and broadcasts to peers
+  after validation succeeds.
 - On success with `None`: solo mode, no broadcast or organisation needed
 
 ### handle_stratum_share (`shares/handle_stratum_share.rs`)
 - Async function that processes emissions
-- P2P mode (share commitment present): builds `ShareBlock`, stores via `ChainStoreHandle::add_share()`, returns `Some(ShareBlock)`
+- P2P mode (share commitment present): builds `ShareBlock`, persists it and
+  organises its header onto the candidate chain in one atomic write via
+  `ChainStoreHandle::add_share_block_and_organise_header()`, and returns
+  `Some(ShareBlock)`
 - Solo mode (no commitment): stores PPLNS share via `ChainStoreHandle::add_pplns_share()`, returns `None`
+
+Locally-mined blocks are not validated or marked `BlockValid` here. Like peer
+blocks, they are enqueued for validation (see EmissionWorker), and
+`validate_and_promote_block` marks them `BlockValid` after chain-context
+validation, just before confirmation.
 
 ### OrganiseWorker (`node/organise_worker.rs`)
 - Runs in dedicated tokio task, spawned by NodeActor
@@ -247,9 +257,21 @@ const TOP_CONFIRMED_KEY: &str = "meta:top_confirmed_height";
 
 2. **Reorg confirmed chain** (`should_reorg_confirmed`): If the candidate chain has more work than the confirmed chain, replace the confirmed chain with the candidate chain.
 
-3. **No-op**: No promotion conditions met.
+3. **Fallback confirmation** (`try_fallback_confirmation`): When no candidate chain block can be promoted, look for a child of the confirmed tip at the next height that has full block and uncle data, and confirm it directly. This lets a locally-mined block that could not reorg the candidate chain (so it is not on the candidate chain) still advance the confirmed chain.
+
+4. **No-op**: No promotion conditions met.
 
 All writes go into a single `WriteBatch` for atomicity.
+
+**Validated-only promotion**: promotion accepts only *validated* blocks --
+status `Candidate` or `BlockValid`. Both `contiguous_candidates_with_block_data`
+(the candidate-chain scan) and `try_fallback_confirmation` gate on
+`Store::is_candidate_or_block_valid`, rejecting `HeaderValid` (PoW-valid but
+not chain-context validated), `Pending`, and `Invalid` blocks. So an
+unvalidated or rejected block is never promoted, even when its body is stored.
+`validate_and_promote_block` marks a block `BlockValid` after chain-context
+validation and *before* it calls `promote_block` (which runs `organise_block`),
+so the block is already validated by the time this promotion path sees it.
 
 ### WriteBatch stale-read pattern
 
@@ -292,6 +314,27 @@ missing, a `FetchBlocks` event is sent to the block fetcher and validation
 is deferred. Once the dependency arrives and validates, `schedule_dependents`
 picks up the waiting block.
 
+### Payout (coinbase) validation
+Chain-context validation (`validate_bitcoin_payout` in
+`shares/validation/mod.rs`) reconstructs the expected coinbase from the PPLNS
+window and checks it against the share's bitcoin merkle root. Success is what
+transitions a block from `HeaderValid` to `BlockValid`.
+
+The window is anchored on the share's declared `prev_share_blockhash`, not the
+live confirmed tip, via `PplnsWindow::get_distribution_from_start_hash`. The
+work-building path (notify) anchors the coinbase it hands to miners on the same
+`prev`, so producer and validator compute the identical distribution for the
+same parent -- closing a race where a confirmation advancing between reads made
+a mined share's coinbase inconsistent with its declared parent.
+
+Resolving the window walks parent pointers back to a confirmed ancestor and:
+- only steps through *validated* (`Candidate` or `BlockValid`) blocks, so an
+  unvalidated block never contributes to a payout distribution;
+- returns an `Err` -- rather than a bootstrap or empty distribution -- on a
+  store failure or an unresolvable anchor, so a transient read error cannot
+  silently misdirect the reward. The producer pays the bootstrap address only
+  for the explicit empty/genesis case (`PplnsWindow::is_empty`).
+
 ## Future Additions
 
 ### Header Sync / Block Fetch Separation
@@ -308,7 +351,8 @@ picks up the waiting block.
 - `p2poolv2_lib/src/node/request_response_handler/block_fetcher.rs` (BlockFetcher)
 - `p2poolv2_lib/src/node/p2p_message_handlers/receivers/share_blocks.rs` (handle_share_block, dependency fetching)
 - `p2poolv2_lib/src/shares/handle_stratum_share.rs`
-- `p2poolv2_lib/src/shares/validation/mod.rs` (validate_share_block, validate_uncles)
+- `p2poolv2_lib/src/shares/validation/mod.rs` (validate_share_block, validate_uncles, validate_bitcoin_payout)
+- `p2poolv2_lib/src/accounting/payout/sharechain_pplns/pplns_window.rs` (PplnsWindow, get_distribution_from_start_hash, prev-anchored payout walk)
 - `p2poolv2_lib/src/shares/chain/chain_store_handle.rs`
 - `p2poolv2_lib/src/store/writer/mod.rs` (StoreWriter + WriteCommand)
 - `p2poolv2_lib/src/store/writer/handle.rs` (StoreHandle)
