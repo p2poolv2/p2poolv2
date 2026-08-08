@@ -311,33 +311,34 @@ impl ChainStoreHandle {
         now_secs.saturating_sub(tip_time) <= MAX_TIP_AGE_SECS
     }
 
-    /// Get the confirmed tip height and parent time for ASERT target
+    /// Get the height and time of a specific share, for ASERT target
     /// calculation.
     ///
-    /// Reads the tip blockhash once and derives both height (from
-    /// block metadata) and time (from share header) from that same
-    /// hash. This avoids a race where the confirmed tip advances
-    /// between two independent store queries
+    /// Height comes from block metadata, time from the share header, both
+    /// keyed on the given `share_hash`. Callers building work pass the same
+    /// hash they declare as `prev_share_blockhash`, so the target (`bits`)
+    /// they compute is derived from that exact parent rather than a
+    /// separately re-read live tip that may have advanced in between.
     ///
-    /// Returns (tip_height, tip_time) where tip_time is the share
-    /// chain tip's timestamp (the parent time for the next share
-    /// being built).
-    pub fn get_tip_height_and_time(&self) -> Result<(u32, u32), StoreError> {
-        let tip_blockhash = self.store_handle.get_chain_tip()?;
-
-        let headers = self.get_share_headers(&[tip_blockhash])?;
-        let tip_header = headers
+    /// Returns (height, time) where time is the share's timestamp (the
+    /// parent time for the next share being built).
+    pub fn get_share_height_and_time(
+        &self,
+        share_hash: &BlockHash,
+    ) -> Result<(u32, u32), StoreError> {
+        let headers = self.get_share_headers(&[*share_hash])?;
+        let header = headers
             .into_iter()
             .next()
             .map(|(_, header)| header)
-            .ok_or_else(|| StoreError::NotFound("No header found for chain tip".into()))?;
+            .ok_or_else(|| StoreError::NotFound(format!("No header found for {share_hash}")))?;
 
-        let metadata = self.get_block_metadata(&tip_blockhash)?;
-        let tip_height = metadata
-            .expected_height
-            .ok_or_else(|| StoreError::NotFound("No height in tip metadata".into()))?;
+        let metadata = self.get_block_metadata(share_hash)?;
+        let height = metadata.expected_height.ok_or_else(|| {
+            StoreError::NotFound(format!("No height in metadata for {share_hash}"))
+        })?;
 
-        Ok((tip_height, tip_header.time))
+        Ok((height, header.time))
     }
 
     /// Get the genesis blockhash from the chain.
@@ -823,7 +824,7 @@ mockall::mock! {
         pub fn get_candidate_tip_header(&self) -> Result<ShareHeader, StoreError>;
         pub fn is_current(&self) -> bool;
         pub fn get_chain_tip_and_uncles(&self) -> Result<(BlockHash, HashSet<BlockHash>), StoreError>;
-        pub fn get_tip_height_and_time(&self) -> Result<(u32, u32), StoreError>;
+        pub fn get_share_height_and_time(&self, share_hash: &BlockHash) -> Result<(u32, u32), StoreError>;
         pub fn get_genesis_blockhash(&self) -> Option<BlockHash>;
         pub fn get_genesis_header(&self) -> Result<ShareHeader, StoreError>;
         pub fn get_children_blockhashes(&self, blockhash: &BlockHash) -> Result<Option<Vec<BlockHash>>, StoreError>;

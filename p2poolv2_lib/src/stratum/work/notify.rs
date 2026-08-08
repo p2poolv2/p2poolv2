@@ -100,7 +100,7 @@ fn build_prepared_notify(
         })?;
     let (tip_height, parent_time) = context
         .chain_store_handle
-        .get_tip_height_and_time()
+        .get_share_height_and_time(&tip)
         .map_err(|error| WorkError {
             message: format!("Failed to get tip height: {error}"),
         })?;
@@ -327,8 +327,8 @@ mod tests {
             pool_difficulty::PoolDifficulty::new(genesis_header.bits, genesis_header.time, 0);
 
         chain_store_handle
-            .expect_get_tip_height_and_time()
-            .returning(|| Ok((0, genesis_for_tests().header.time)));
+            .expect_get_share_height_and_time()
+            .returning(|_| Ok((0, genesis_for_tests().header.time)));
 
         let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
 
@@ -418,8 +418,8 @@ mod tests {
             .returning(move || Ok((genesis_hash, std::collections::HashSet::new())));
 
         chain_store_handle
-            .expect_get_tip_height_and_time()
-            .returning(|| Ok((0, genesis_for_tests().header.time)));
+            .expect_get_share_height_and_time()
+            .returning(|_| Ok((0, genesis_for_tests().header.time)));
 
         // Setup config and tracker
         let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
