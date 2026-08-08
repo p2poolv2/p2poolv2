@@ -25,8 +25,7 @@ use bitcoin::hashes::Hash;
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use p2poolv2_lib::accounting::payout::sharechain_pplns::pplns_window::PplnsWindow;
 use p2poolv2_lib::test_utils::{
-    PUBKEY_2G, PUBKEY_3G, PUBKEY_4G, PUBKEY_5G, PUBKEY_G, TestShareBlockBuilder, genesis_for_tests,
-    setup_test_chain_store_handle,
+    PUBKEY_2G, PUBKEY_3G, PUBKEY_4G, PUBKEY_5G, PUBKEY_G, setup_test_chain_store_handle,
 };
 
 /// Total confirmed shares to fill the window (MAX_PPLNS_WINDOW_SHARES).
@@ -101,15 +100,43 @@ fn build_benchmark_window(share_count: usize) -> PplnsWindow {
     window
 }
 
-fn bench_get_distribution(criterion: &mut Criterion) {
+/// Benchmark the full-window payout walk via the canonical anchored path.
+///
+/// Anchoring on the tip (the front entry) walks the entire window, matching
+/// the work the producer and validator do per share. The anchor is in the
+/// window, so the chain store handle is never dereferenced.
+fn bench_get_distribution_from_start_hash(criterion: &mut Criterion) {
+    let runtime = tokio::runtime::Runtime::new().expect("failed to build tokio runtime");
+    let (chain_store_handle, _temp_dir) = runtime.block_on(setup_test_chain_store_handle(false));
     let mut window = build_benchmark_window(TOTAL_CONFIRMED_SHARES);
+    // populate_for_benchmark pushes newest-to-oldest, so index 0 is the tip.
+    let tip = blockhash_from_index(0);
 
-    criterion.bench_function("get_distribution_full_window", |bencher| {
+    criterion.bench_function("get_distribution_from_start_hash_full_window", |bencher| {
         bencher.iter(|| {
-            black_box(window.get_distribution(u128::MAX));
+            black_box(
+                window
+                    .get_distribution_from_start_hash(u128::MAX, tip, &chain_store_handle)
+                    .expect("tip should be in window"),
+            );
         });
     });
 }
 
-criterion_group!(benches, bench_get_distribution);
+/// Benchmark the stale-key sweep that runs after eviction on every update.
+fn bench_prune_unreferenced_keys(criterion: &mut Criterion) {
+    let mut window = build_benchmark_window(TOTAL_CONFIRMED_SHARES);
+
+    criterion.bench_function("prune_unreferenced_keys_full_window", |bencher| {
+        bencher.iter(|| {
+            window.prune_unreferenced_keys_for_benchmark();
+        });
+    });
+}
+
+criterion_group!(
+    benches,
+    bench_get_distribution_from_start_hash,
+    bench_prune_unreferenced_keys
+);
 criterion_main!(benches);

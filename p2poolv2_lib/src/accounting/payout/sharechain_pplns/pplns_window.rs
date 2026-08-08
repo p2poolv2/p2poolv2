@@ -295,43 +295,6 @@ impl PplnsWindow {
         Some(entries)
     }
 
-    /// Get payout distribution from the tip and clean up stale
-    /// address keys.
-    ///
-    /// Walk entries up to index where we meet
-    /// total_difficulty. Continue from there to mark overflow
-    /// entries.  Remove any address keys that are not in overflow and
-    /// don't contribute any difficulty.
-    ///
-    /// Finally collect difficulties by addresses in a hashmap and
-    /// return that.
-    pub fn get_distribution(&mut self, total_difficulty: u128) -> HashMap<Address, u128> {
-        let (difficulty_by_key, threshold_index) = self.walk_entries(total_difficulty, 0);
-
-        let overflow_flags = self.mark_overflow_entries(threshold_index);
-        self.remove_stale_keys(&difficulty_by_key, &overflow_flags);
-
-        self.collect_distribution(&difficulty_by_key)
-    }
-
-    /// Accumulate difficulty by walking confirmed entries from
-    /// start_index and return the per-key difficulty vector along
-    /// with the threshold index.
-    fn walk_entries(&self, total_difficulty: u128, start_index: usize) -> (Vec<u128>, usize) {
-        let scaled_threshold = total_difficulty.saturating_mul(DIFFICULTY_SCALE);
-        let mut difficulty_by_key = vec![0u128; self.address_keys.len()];
-        let mut accumulated_difficulty: u128 = 0;
-
-        let threshold_index = self.accumulate_confirmed_difficulty(
-            &mut difficulty_by_key,
-            &mut accumulated_difficulty,
-            scaled_threshold,
-            start_index,
-        );
-
-        (difficulty_by_key, threshold_index)
-    }
-
     /// Find the index of the entry matching the given blockhash.
     /// Returns `None` when the hash is not found in the window.
     fn find_start_index(&self, start_hash: BlockHash) -> Option<usize> {
@@ -415,24 +378,26 @@ impl PplnsWindow {
         self.confirmed_entries.len()
     }
 
-    /// Mark address keys that appear in entries beyond the threshold
-    /// so they are not removed as stale.
-    fn mark_overflow_entries(&self, threshold_index: usize) -> Vec<bool> {
-        let mut overflow_flags = vec![false; self.address_keys.len()];
-        for entry in self.confirmed_entries.iter().skip(threshold_index) {
-            overflow_flags[entry.internal_key] = true;
+    /// Free address-key slots no longer referenced by any cached entry.
+    ///
+    /// A miner address is retained while it appears as a share miner or an
+    /// uncle miner in any `confirmed_entries` slot (including the overflow
+    /// region past `total_difficulty`, since those entries stay cached).
+    /// Once its last referencing entry leaves the cache -- via eviction or a
+    /// reorg -- the slot is freed so the `AddressKeys` interner stays bounded
+    /// and its linear `key_for` scan does not grow without bound. Runs after
+    /// eviction in `update`; replaces the stale-key cleanup that the removed
+    /// tip-anchored `get_distribution` performed inline.
+    fn prune_unreferenced_keys(&mut self) {
+        let mut referenced = vec![false; self.address_keys.len()];
+        for entry in &self.confirmed_entries {
+            referenced[entry.internal_key] = true;
             for uncle_entry in &entry.uncle_entries {
-                overflow_flags[uncle_entry.internal_key] = true;
+                referenced[uncle_entry.internal_key] = true;
             }
         }
-        overflow_flags
-    }
-
-    /// Remove address keys that have zero difficulty and are not in
-    /// the overflow region.
-    fn remove_stale_keys(&mut self, difficulty_by_key: &[u128], overflow_flags: &[bool]) {
-        for index in 0..difficulty_by_key.len() {
-            if difficulty_by_key[index] == 0 && !overflow_flags[index] {
+        for (index, is_referenced) in referenced.iter().enumerate() {
+            if !is_referenced {
                 self.address_keys.remove(index);
             }
         }
@@ -490,6 +455,7 @@ impl PplnsWindow {
         }
 
         self.evict_overflow();
+        self.prune_unreferenced_keys();
         self.cached_tip_blockhash = Some(tip_blockhash);
         self.cached_top_height = Some(tip_height);
 
@@ -823,6 +789,12 @@ impl PplnsWindow {
         }
         self.cached_top_height = Some(total_count.saturating_sub(1));
         eprintln!("  populated {} in window", self.confirmed_entries.len());
+    }
+
+    /// Expose the stale-key sweep for benchmarking. In production this runs
+    /// only as an internal step of `update` after eviction.
+    pub fn prune_unreferenced_keys_for_benchmark(&mut self) {
+        self.prune_unreferenced_keys();
     }
 }
 
@@ -1302,7 +1274,7 @@ mod tests {
     }
 
     #[test]
-    fn test_get_distribution() {
+    fn test_distribution_from_tip_includes_all_entries() {
         let genesis_hash = BlockHash::all_zeros();
         let header1 = build_test_header(&genesis_hash.to_string(), PUBKEY_G, 2);
         let header2 = build_test_header(&header1.block_hash().to_string(), PUBKEY_2G, 2);
@@ -1317,7 +1289,14 @@ mod tests {
         window.add_to_running_total(&entry1);
         window.confirmed_entries.push_back(entry1);
 
-        let result = window.get_distribution(u128::MAX);
+        // Anchoring on the tip (header2 at the front) walks the whole window.
+        let result = window
+            .get_distribution_from_start_hash(
+                u128::MAX,
+                header2.block_hash(),
+                &MockChainStoreHandle::default(),
+            )
+            .expect("tip should be in window");
 
         assert_eq!(result.len(), 2);
         assert_eq!(
@@ -1440,7 +1419,13 @@ mod tests {
         window.add_to_running_total(&nephew_entry);
         window.confirmed_entries.push_back(nephew_entry);
 
-        let result = window.get_distribution(u128::MAX);
+        let result = window
+            .get_distribution_from_start_hash(
+                u128::MAX,
+                nephew_header.block_hash(),
+                &MockChainStoreHandle::default(),
+            )
+            .expect("nephew should be in window");
 
         // Uncle gets UNCLE_SCALED_WEIGHT (9) times its difficulty
         let expected_uncle_weight = uncle_difficulty * UNCLE_SCALED_WEIGHT;
@@ -1710,7 +1695,9 @@ mod tests {
         let miner_g = &headers_a[0].header.miner_bitcoin_address;
 
         // All 3 shares are by PUBKEY_G
-        let dist = window.get_distribution(u128::MAX);
+        let dist = window
+            .get_distribution_from_start_hash(u128::MAX, tip_a, &MockChainStoreHandle::default())
+            .expect("tip should be in window");
         assert_eq!(dist.len(), 1);
         assert_eq!(dist[miner_g], 3 * difficulty * DIFFICULTY_SCALE);
 
@@ -1758,7 +1745,13 @@ mod tests {
         let miner_2g = &fork_header.miner_bitcoin_address;
 
         // Now: 2 shares by PUBKEY_G (heights 0-1) + 1 share by PUBKEY_2G (height 2)
-        let dist = window.get_distribution(u128::MAX);
+        let dist = window
+            .get_distribution_from_start_hash(
+                u128::MAX,
+                fork_hash,
+                &MockChainStoreHandle::default(),
+            )
+            .expect("fork tip should be in window");
         assert_eq!(dist.len(), 2);
         assert_eq!(
             dist[miner_g],
@@ -1832,10 +1825,8 @@ mod tests {
         // Evict miner A's entry (oldest, at back)
         window.confirmed_entries.pop_back();
 
-        // get_distribution should remove miner A's stale key
-        let result = window.get_distribution(u128::MAX);
-        assert_eq!(result.len(), 1);
-        assert!(result.contains_key(&header_b.miner_bitcoin_address));
+        // Pruning should free miner A's now-unreferenced key.
+        window.prune_unreferenced_keys();
 
         assert!(
             window.address_keys.value_for(miner_a_key).is_none(),
@@ -1848,14 +1839,13 @@ mod tests {
     }
 
     #[test]
-    fn test_overflow_address_key_preserved() {
+    fn test_prune_preserves_keys_of_all_cached_entries() {
         let genesis_hash = BlockHash::all_zeros();
 
         // Three miners: A (oldest), B (middle), C (newest)
         let header_a = build_test_header(&genesis_hash.to_string(), PUBKEY_G, 2);
         let header_b = build_test_header(&header_a.block_hash().to_string(), PUBKEY_2G, 2);
         let header_c = build_test_header(&header_b.block_hash().to_string(), PUBKEY_3G, 2);
-        let single_difficulty = header_a.get_difficulty(TEST_NETWORK);
 
         let mut window = PplnsWindow::new(TEST_NETWORK);
         let entry_c = entry_from_header(&mut window, &header_c, 2);
@@ -1870,26 +1860,22 @@ mod tests {
 
         assert_eq!(window.address_keys.len(), 3);
 
-        // Set threshold so only the newest entry (C) is included,
-        // B and A overflow past the threshold
-        let result = window.get_distribution(single_difficulty);
+        // Nothing has left the cache, so pruning keeps every key -- retention
+        // depends only on whether an entry references the key, not on where the
+        // entry sits relative to any total_difficulty threshold.
+        window.prune_unreferenced_keys();
 
-        // Only C should be in distribution
-        assert_eq!(result.len(), 1);
-        assert!(result.contains_key(&header_c.miner_bitcoin_address));
-
-        // All three keys should still exist because B and A are in overflow
         assert!(
             window.address_keys.value_for(0).is_some(),
-            "overflow miner key should be preserved"
+            "cached miner key should be preserved"
         );
         assert!(
             window.address_keys.value_for(1).is_some(),
-            "overflow miner key should be preserved"
+            "cached miner key should be preserved"
         );
         assert!(
             window.address_keys.value_for(2).is_some(),
-            "active miner key should be preserved"
+            "cached miner key should be preserved"
         );
     }
 
@@ -1915,7 +1901,7 @@ mod tests {
 
         // Evict miner A, then trigger cleanup
         window.confirmed_entries.pop_back();
-        window.get_distribution(u128::MAX);
+        window.prune_unreferenced_keys();
 
         assert!(
             window.address_keys.value_for(miner_a_key).is_none(),
@@ -1948,20 +1934,19 @@ mod tests {
     }
 
     #[test]
-    fn test_overflow_uncle_address_key_preserved() {
+    fn test_prune_preserves_uncle_key_of_cached_entry() {
         let genesis_hash = BlockHash::all_zeros();
 
-        // Uncle miner (PUBKEY_3G) only appears as uncle in the overflow region
+        // Uncle miner (PUBKEY_3G) appears only as an uncle, never as a share miner.
         let uncle_header = build_test_header(&genesis_hash.to_string(), PUBKEY_3G, 2);
         let uncle_hash = uncle_header.block_hash();
 
-        // Nephew at height 0 references the uncle (this will be in overflow)
+        // Nephew at height 0 references the uncle.
         let nephew_header =
             build_test_header_with_uncles(&genesis_hash.to_string(), PUBKEY_G, 2, vec![uncle_hash]);
 
-        // A second entry at height 1 by a different miner (this hits the threshold)
+        // A second entry at height 1 by a different miner.
         let header_top = build_test_header(&nephew_header.block_hash().to_string(), PUBKEY_2G, 2);
-        let single_difficulty = header_top.get_difficulty(TEST_NETWORK);
 
         let mut window = PplnsWindow::new(TEST_NETWORK);
         // Uncle built first -> PUBKEY_3G gets key 0
@@ -1976,17 +1961,75 @@ mod tests {
         window.add_to_running_total(&entry_nephew);
         window.confirmed_entries.push_back(entry_nephew);
 
-        // Threshold = single difficulty, so only entry_top is included;
-        // entry_nephew and its uncle are in overflow
-        let result = window.get_distribution(single_difficulty);
+        // The nephew is still cached, so pruning must keep its uncle's key even
+        // though that miner never appears as a share miner.
+        window.prune_unreferenced_keys();
 
-        assert_eq!(result.len(), 1);
-        assert!(result.contains_key(&header_top.miner_bitcoin_address));
-
-        // Uncle miner's key should be preserved because it is in overflow
         assert!(
             window.address_keys.value_for(uncle_miner_key).is_some(),
-            "uncle miner key in overflow should be preserved"
+            "uncle miner key referenced by a cached nephew should be preserved"
+        );
+    }
+
+    #[test]
+    fn test_update_prunes_key_of_evicted_only_miner() {
+        // Height 0 is mined by a unique miner (PUBKEY_5G); heights 1-4 by
+        // PUBKEY_G. With a small window cap, the initial load pulls all five
+        // then evicts the oldest, dropping height 0. update() must then prune
+        // PUBKEY_5G's now-unreferenced key while keeping PUBKEY_G's.
+        let (headers, tip_hash) =
+            build_test_chain(5, &[PUBKEY_5G, PUBKEY_G, PUBKEY_G, PUBKEY_G, PUBKEY_G]);
+        // headers are newest-to-oldest; height 0 (PUBKEY_5G) is at the back.
+        let evicted_only_miner = headers[4].header.miner_bitcoin_address.clone();
+        let active_miner = headers[0].header.miner_bitcoin_address.clone();
+
+        let mut mock = MockChainStoreHandle::default();
+        let headers_clone = headers.clone();
+        mock.expect_get_chain_tip().returning(move || Ok(tip_hash));
+        mock.expect_get_block_metadata()
+            .returning(move |_| Ok(metadata_at_height(4)));
+        mock.expect_get_confirmed_headers_in_range()
+            .returning(move |_, _| Ok(headers_clone.clone()));
+        mock.expect_get_share_headers()
+            .returning(|_| Ok(Vec::new()));
+
+        // cache_capacity for cap 2 is 2 + ceil(2/100) = 3, so heights 0 and 1
+        // are evicted, leaving heights 2-4 (all PUBKEY_G).
+        let mut window = PplnsWindow::new_with_max_window_shares(TEST_NETWORK, 2);
+        window.update(&mock).unwrap();
+
+        assert_eq!(window.confirmed_entries.len(), 3);
+
+        let distribution = window
+            .get_distribution_from_start_hash(u128::MAX, tip_hash, &MockChainStoreHandle::default())
+            .expect("tip should be in window");
+        assert!(
+            !distribution.contains_key(&evicted_only_miner),
+            "miner present only in evicted entries should not be paid"
+        );
+        assert!(
+            distribution.contains_key(&active_miner),
+            "retained miner should be paid"
+        );
+
+        // The interner slot for the evicted-only miner must be freed; the
+        // active miner's slot must survive.
+        let mut freed_evicted_miner = true;
+        let mut kept_active_miner = false;
+        for index in 0..window.address_keys.len() {
+            match window.address_keys.value_for(index) {
+                Some(address) if *address == evicted_only_miner => freed_evicted_miner = false,
+                Some(address) if *address == active_miner => kept_active_miner = true,
+                _ => {}
+            }
+        }
+        assert!(
+            freed_evicted_miner,
+            "evicted-only miner key should be pruned from the interner"
+        );
+        assert!(
+            kept_active_miner,
+            "active miner key should be retained in the interner"
         );
     }
 
