@@ -229,12 +229,7 @@ async fn validate_and_emit(
     };
 
     if let Err(validation_error) = validation_result {
-        let error_message = validation_error.to_string();
-        if error_message.contains("is on confirmed chain") {
-            debug!("Share block {block_hash} validation: {error_message}");
-        } else {
-            error!("Share block {block_hash} validation failed: {error_message}");
-        }
+        error!("Share block {block_hash} validation failed: {validation_error}");
         return;
     }
 
