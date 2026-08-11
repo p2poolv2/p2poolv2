@@ -18,7 +18,7 @@ use crate::{
     shares::share_block::ShareHeader,
     store::{
         ColumnFamily, Store,
-        block_tx_metadata::{BlockMetadata, Status},
+        block_tx_metadata::{BlockMetadata, ChainMembership, Status},
         writer::StoreError,
     },
 };
@@ -151,6 +151,7 @@ impl Store {
         self.increment_top_candidate(height, batch)?;
 
         metadata.status = Status::Candidate;
+        metadata.chain = ChainMembership::Candidate;
         self.update_block_metadata(blockhash, metadata, batch)?;
         Ok(Some(height))
     }
@@ -503,6 +504,7 @@ impl Store {
             self.delete_candidate_entry(*height, batch);
             let mut metadata = self.get_block_metadata(uncandidate)?;
             metadata.status = Status::HeaderValid;
+            metadata.chain = ChainMembership::None;
             self.update_block_metadata(uncandidate, &metadata, batch)?;
         }
 
@@ -542,6 +544,7 @@ impl Store {
             })?;
             self.put_candidate_entry(height, candidate, batch);
             metadata.status = Status::Candidate;
+            metadata.chain = ChainMembership::Candidate;
             self.update_block_metadata(candidate, &metadata, batch)?;
             new_chain.push((height, *candidate));
             new_top_height = height;
@@ -582,6 +585,7 @@ impl Store {
                 let next_height = height + 1;
                 self.put_candidate_entry(next_height, &best_hash, batch);
                 best_metadata.status = Status::Candidate;
+                best_metadata.chain = ChainMembership::Candidate;
                 self.update_block_metadata(&best_hash, &best_metadata, batch)?;
                 candidates.push((next_height, best_hash));
 
@@ -1007,6 +1011,7 @@ mod tests {
             expected_height: Some(5),
             chain_work: share.header.get_work(),
             status: Status::Pending,
+            chain: ChainMembership::None,
         };
 
         let result = store.should_extend_candidates(&share.header, &metadata, None);
@@ -1030,6 +1035,7 @@ mod tests {
             expected_height: Some(6),
             chain_work: share.header.get_work(),
             status: Status::Pending,
+            chain: ChainMembership::None,
         };
 
         // height == top candidate height + 1 → 6 == 5 + 1
@@ -1057,6 +1063,7 @@ mod tests {
             expected_height: Some(6),
             chain_work: share.header.get_work(),
             status: Status::Pending,
+            chain: ChainMembership::None,
         };
 
         // Height condition met (6 == 5+1), but hash differs from prev_share_blockhash
@@ -1088,6 +1095,7 @@ mod tests {
             expected_height: Some(7),
             chain_work: share.header.get_work(),
             status: Status::Pending,
+            chain: ChainMembership::None,
         };
 
         // Hash matches but height doesn't (7 != 5+1)
@@ -1115,6 +1123,7 @@ mod tests {
             expected_height: Some(5),
             chain_work: share.header.get_work(),
             status: Status::Pending,
+            chain: ChainMembership::None,
         };
 
         // Neither hash nor height matches
@@ -1143,6 +1152,7 @@ mod tests {
             expected_height: Some(2),
             chain_work: Work::from_hex("0x10").unwrap(),
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
 
         let top_candidate = Some(TopResult {
@@ -1170,6 +1180,7 @@ mod tests {
             expected_height: Some(2),
             chain_work: Work::from_hex("0x03").unwrap(),
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
 
         let top_candidate = Some(TopResult {
@@ -1197,6 +1208,7 @@ mod tests {
             expected_height: Some(2),
             chain_work: Work::from_hex("0x05").unwrap(),
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
 
         let top_candidate = Some(TopResult {
@@ -1223,6 +1235,7 @@ mod tests {
             expected_height: Some(2),
             chain_work: Work::from_hex("0x10").unwrap(),
             status: Status::Candidate,
+            chain: ChainMembership::Candidate,
         };
 
         // Same blockhash as share — should not reorg against itself
@@ -1250,6 +1263,7 @@ mod tests {
             expected_height: Some(2),
             chain_work: Work::from_hex("0x10").unwrap(),
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
 
         assert!(!store.should_reorg_candidate(&share.block_hash(), &metadata, None));

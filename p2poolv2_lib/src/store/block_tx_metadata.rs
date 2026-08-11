@@ -116,6 +116,51 @@ impl Decodable for Status {
     }
 }
 
+/// Identify which chain a share currently sits on.
+///
+/// This is independent of validation `Status`: a share can be on the
+/// candidate chain while still only `HeaderValid`, and a share that failed
+/// validation or was reorged out is `None` (off any chain) while its `Status`
+/// records why. Keeping chain membership separate from validation lets us
+/// mark a candidate `Invalid` without losing track of the candidate chain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[repr(u8)]
+pub enum ChainMembership {
+    /// Not on the candidate or confirmed chain.
+    None = 0,
+    /// On the candidate (best-work header) chain.
+    Candidate = 1,
+    /// On the confirmed chain.
+    Confirmed = 2,
+}
+
+impl Encodable for ChainMembership {
+    #[inline]
+    fn consensus_encode<W: bitcoin::io::Write + ?Sized>(
+        &self,
+        w: &mut W,
+    ) -> Result<usize, bitcoin::io::Error> {
+        (*self as u8).consensus_encode(w)
+    }
+}
+
+impl Decodable for ChainMembership {
+    #[inline]
+    fn consensus_decode<R: bitcoin::io::Read + ?Sized>(
+        r: &mut R,
+    ) -> Result<Self, bitcoin::consensus::encode::Error> {
+        let value = u8::consensus_decode(r)?;
+        match value {
+            0 => Ok(ChainMembership::None),
+            1 => Ok(ChainMembership::Candidate),
+            2 => Ok(ChainMembership::Confirmed),
+            _ => Err(bitcoin::consensus::encode::Error::ParseFailed(
+                "Invalid ChainMembership value",
+            )),
+        }
+    }
+}
+
 /// ShareBlock metadata capturing the expected height and the chain
 /// work for the block. These values are computed when the block is
 /// received based on the height and chain work of the previous
@@ -129,8 +174,10 @@ pub struct BlockMetadata {
     pub expected_height: Option<u32>,
     /// Total chain work up to the share block
     pub chain_work: Work,
-    /// Share validation/candidate status
+    /// Share validation status (independent of chain membership).
     pub status: Status,
+    /// The chain that the share is on (independent of validation status).
+    pub chain: ChainMembership,
 }
 
 impl Encodable for BlockMetadata {
@@ -154,6 +201,7 @@ impl Encodable for BlockMetadata {
 
         len += self.chain_work.to_le_bytes().consensus_encode(w)?;
         len += self.status.consensus_encode(w)?;
+        len += self.chain.consensus_encode(w)?;
         Ok(len)
     }
 }
@@ -172,11 +220,53 @@ impl Decodable for BlockMetadata {
 
         let chain_work = Work::from_le_bytes(<[u8; 32]>::consensus_decode(r)?);
         let status = Status::consensus_decode(r)?;
+        let chain = ChainMembership::consensus_decode(r)?;
 
         Ok(BlockMetadata {
             expected_height: height,
             chain_work,
             status,
+            chain,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bitcoin::consensus::{self, encode};
+
+    #[test]
+    fn test_block_metadata_roundtrip_preserves_chain() {
+        for (status, chain) in [
+            (Status::HeaderValid, ChainMembership::None),
+            (Status::Candidate, ChainMembership::Candidate),
+            (Status::BlockValid, ChainMembership::Confirmed),
+            (Status::Invalid, ChainMembership::None),
+        ] {
+            let metadata = BlockMetadata {
+                expected_height: Some(42),
+                chain_work: Work::from_le_bytes([7u8; 32]),
+                status,
+                chain,
+            };
+            let bytes = consensus::serialize(&metadata);
+            let decoded: BlockMetadata = encode::deserialize(&bytes).unwrap();
+            assert_eq!(decoded, metadata);
+            assert_eq!(decoded.chain, chain);
+        }
+    }
+
+    #[test]
+    fn test_chain_membership_roundtrip() {
+        for chain in [
+            ChainMembership::None,
+            ChainMembership::Candidate,
+            ChainMembership::Confirmed,
+        ] {
+            let bytes = consensus::serialize(&chain);
+            let decoded: ChainMembership = encode::deserialize(&bytes).unwrap();
+            assert_eq!(decoded, chain);
+        }
     }
 }

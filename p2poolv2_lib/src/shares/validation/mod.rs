@@ -1168,7 +1168,7 @@ mod tests {
     use crate::shares::share_block::ShareTransaction;
     use crate::shares::share_commitment::ShareCommitment;
     use crate::shares::witness_commitment::WitnessCommitment;
-    use crate::store::block_tx_metadata::BlockMetadata;
+    use crate::store::block_tx_metadata::{BlockMetadata, ChainMembership};
     use crate::store::writer::StoreError;
     use crate::stratum::work::block_template::BlockTemplate;
     use crate::stratum::work::gbt::build_merkle_branches_for_template;
@@ -1212,6 +1212,7 @@ mod tests {
             expected_height: Some(height),
             chain_work: Work::from_le_bytes([0u8; 32]),
             status: Status::Confirmed,
+            chain: ChainMembership::Confirmed,
         }
     }
 
@@ -1340,6 +1341,7 @@ mod tests {
                     expected_height: None,
                     chain_work: Work::from_le_bytes([0u8; 32]),
                     status: Status::Confirmed,
+                    chain: ChainMembership::Confirmed,
                 })
             });
 
@@ -3670,6 +3672,7 @@ mod tests {
                     expected_height: None,
                     chain_work: Work::from_hex("0x00").unwrap(),
                     status: Status::Candidate,
+                    chain: ChainMembership::Candidate,
                 })
             });
 

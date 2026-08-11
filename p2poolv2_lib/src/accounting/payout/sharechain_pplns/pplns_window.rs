@@ -852,7 +852,7 @@ mod tests {
     use super::*;
     use crate::shares::chain::chain_store_handle::MockChainStoreHandle;
     use crate::shares::share_block::ShareHeader;
-    use crate::store::block_tx_metadata::{BlockMetadata, Status};
+    use crate::store::block_tx_metadata::{BlockMetadata, ChainMembership, Status};
     use crate::test_utils::{
         PUBKEY_2G, PUBKEY_3G, PUBKEY_4G, PUBKEY_5G, PUBKEY_G, build_test_header,
         build_test_header_with_uncles,
@@ -908,6 +908,7 @@ mod tests {
             expected_height: Some(height),
             chain_work: Work::from_le_bytes([0u8; 32]),
             status: Status::Confirmed,
+            chain: ChainMembership::Confirmed,
         }
     }
 
@@ -917,6 +918,7 @@ mod tests {
             expected_height: None,
             chain_work: Work::from_le_bytes([0u8; 32]),
             status: Status::Confirmed,
+            chain: ChainMembership::Confirmed,
         }
     }
 
@@ -2202,6 +2204,7 @@ mod tests {
                 expected_height: Some(1),
                 chain_work: Work::from_le_bytes([0u8; 32]),
                 status: Status::Candidate,
+                chain: ChainMembership::Candidate,
             })
         });
         // No uncle headers needed for this test

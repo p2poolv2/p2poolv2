@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::store::block_tx_metadata::Status;
+use crate::store::block_tx_metadata::{ChainMembership, Status};
 use crate::{
     shares::share_block::ShareHeader,
     store::{block_tx_metadata::BlockMetadata, writer::StoreError},
@@ -219,6 +219,7 @@ impl Store {
             expected_height: Some(new_height),
             chain_work: new_chain_work,
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
         self.update_block_metadata(blockhash, &metadata, batch)?;
 
@@ -378,6 +379,7 @@ mod tests {
                 expected_height: Some(height),
                 chain_work,
                 status: Status::HeaderValid,
+                chain: ChainMembership::None,
             };
             store
                 .update_block_metadata(&blockhash, &metadata, &mut batch)
@@ -647,6 +649,7 @@ mod tests {
                 expected_height: Some(height),
                 chain_work,
                 status: Status::HeaderValid,
+                chain: ChainMembership::None,
             };
             store
                 .update_block_metadata(&blockhash, &metadata, &mut batch)
@@ -801,6 +804,7 @@ mod tests {
             expected_height: Some(1),
             chain_work,
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
         let mut batch = Store::get_write_batch();
         store.add_share_header(&share.header, &mut batch).unwrap();
@@ -896,6 +900,7 @@ mod tests {
             expected_height: None,
             chain_work: share.header.get_work(),
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
         let mut batch = Store::get_write_batch();
         store.add_share_header(&share.header, &mut batch).unwrap();

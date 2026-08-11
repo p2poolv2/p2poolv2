@@ -611,7 +611,7 @@ mod tests {
     #[mockall_double::double]
     use crate::shares::chain::chain_store_handle::ChainStoreHandle;
     use crate::shares::validation::MockDefaultShareValidator;
-    use crate::store::block_tx_metadata::{BlockMetadata, Status};
+    use crate::store::block_tx_metadata::{BlockMetadata, ChainMembership, Status};
     use crate::test_utils::TestShareBlockBuilder;
     use tokio::sync::{mpsc, oneshot};
 
@@ -643,6 +643,7 @@ mod tests {
                     expected_height: Some(0),
                     chain_work: Work::from_hex("0x00").unwrap(),
                     status: Status::Confirmed,
+                    chain: ChainMembership::Confirmed,
                 })
             });
         chain_store_handle
@@ -657,6 +658,7 @@ mod tests {
                                 expected_height: Some(0),
                                 chain_work: Work::from_hex("0x00").unwrap(),
                                 status: Status::Confirmed,
+                                chain: ChainMembership::Confirmed,
                             },
                         )
                     })
@@ -1034,6 +1036,7 @@ mod tests {
                         expected_height: Some(0),
                         chain_work: Work::from_hex("0x00").unwrap(),
                         status: Status::Confirmed,
+                        chain: ChainMembership::Confirmed,
                     })
                 } else {
                     Err(StoreError::NotFound(format!("{hash} not found")))
@@ -1052,6 +1055,7 @@ mod tests {
                                 expected_height: Some(0),
                                 chain_work: Work::from_hex("0x00").unwrap(),
                                 status: Status::Confirmed,
+                                chain: ChainMembership::Confirmed,
                             },
                         )
                     })
@@ -1345,6 +1349,7 @@ mod tests {
                         expected_height: Some(0),
                         chain_work: Work::from_hex("0x00").unwrap(),
                         status: Status::Confirmed,
+                        chain: ChainMembership::Confirmed,
                     })
                 } else {
                     Err(StoreError::NotFound(format!("{hash} not found")))
@@ -1363,6 +1368,7 @@ mod tests {
                                 expected_height: Some(0),
                                 chain_work: Work::from_hex("0x00").unwrap(),
                                 status: Status::Confirmed,
+                                chain: ChainMembership::Confirmed,
                             },
                         )
                     })
@@ -1555,6 +1561,7 @@ mod tests {
                                 expected_height: Some(0),
                                 chain_work: Work::from_hex("0x00").unwrap(),
                                 status: Status::Confirmed,
+                                chain: ChainMembership::Confirmed,
                             },
                         )
                     })

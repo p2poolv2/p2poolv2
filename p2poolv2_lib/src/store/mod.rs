@@ -15,7 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::shares::share_block::ShareBlock;
-use crate::store::block_tx_metadata::{BlockMetadata, Status};
+use crate::store::block_tx_metadata::{BlockMetadata, ChainMembership, Status};
 use crate::store::column_families::ColumnFamily;
 use crate::store::dag_store::{MAX_BLOCKS_PER_HEIGHT, MAX_UNCLES_DEPTH};
 use bitcoin::consensus::{Encodable, encode};
@@ -356,6 +356,7 @@ impl Store {
             expected_height: Some(0),
             chain_work: genesis_work,
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
         self.update_block_metadata(&blockhash, &metadata, batch)?;
 
@@ -444,6 +445,7 @@ impl Store {
             expected_height: Some(height),
             chain_work,
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
         self.update_block_metadata(&blockhash, &metadata, &mut batch)
             .unwrap();
@@ -478,6 +480,7 @@ impl Store {
             expected_height: Some(height),
             chain_work,
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
         self.update_block_metadata(&blockhash, &metadata, &mut batch)
             .unwrap();

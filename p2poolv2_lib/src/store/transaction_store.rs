@@ -980,7 +980,7 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::block_tx_metadata::{BlockMetadata, Status};
+    use crate::store::block_tx_metadata::{BlockMetadata, ChainMembership, Status};
     use crate::test_utils::TestShareBlockBuilder;
     use bitcoin::hashes::Hash;
     use bitcoin::pow::Work;
@@ -1618,6 +1618,7 @@ mod tests {
                     expected_height: Some(1),
                     chain_work: Work::from_le_bytes([1u8; 32]),
                     status: Status::Confirmed,
+                    chain: ChainMembership::Confirmed,
                 },
                 &mut batch,
             )
@@ -1657,6 +1658,7 @@ mod tests {
                     expected_height: Some(1),
                     chain_work: Work::from_le_bytes([1u8; 32]),
                     status: Status::Confirmed,
+                    chain: ChainMembership::Confirmed,
                 },
                 &mut batch,
             )
@@ -1668,6 +1670,7 @@ mod tests {
                     expected_height: Some(1),
                     chain_work: Work::from_le_bytes([1u8; 32]),
                     status: Status::Candidate,
+                    chain: ChainMembership::Candidate,
                 },
                 &mut batch,
             )
@@ -2392,6 +2395,7 @@ mod tests {
                     expected_height: Some(1000),
                     chain_work: Work::from_le_bytes([1u8; 32]),
                     status: Status::Confirmed,
+                    chain: ChainMembership::Confirmed,
                 },
                 &mut batch,
             )
@@ -2430,6 +2434,7 @@ mod tests {
                     expected_height: Some(5000),
                     chain_work: Work::from_le_bytes([1u8; 32]),
                     status: Status::Confirmed,
+                    chain: ChainMembership::Confirmed,
                 },
                 &mut batch,
             )
@@ -2474,6 +2479,7 @@ mod tests {
                     expected_height: Some(100),
                     chain_work: Work::from_le_bytes([1u8; 32]),
                     status: Status::Confirmed,
+                    chain: ChainMembership::Confirmed,
                 },
                 &mut batch,
             )
@@ -2485,6 +2491,7 @@ mod tests {
                     expected_height: Some(9000),
                     chain_work: Work::from_le_bytes([2u8; 32]),
                     status: Status::Confirmed,
+                    chain: ChainMembership::Confirmed,
                 },
                 &mut batch,
             )

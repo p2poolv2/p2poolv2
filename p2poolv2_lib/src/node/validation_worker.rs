@@ -266,7 +266,7 @@ mod tests {
     use super::*;
     use crate::node::organise_worker;
     use crate::shares::chain::chain_store_handle::MockChainStoreHandle;
-    use crate::store::block_tx_metadata::{BlockMetadata, Status};
+    use crate::store::block_tx_metadata::{BlockMetadata, ChainMembership, Status};
     use crate::test_utils::TestShareBlockBuilder;
 
     use bitcoin::Work;
@@ -281,6 +281,7 @@ mod tests {
             expected_height: Some(1),
             chain_work: Work::from_be_bytes([0u8; 32]),
             status: Status::Candidate,
+            chain: ChainMembership::Candidate,
         }
     }
 
@@ -717,6 +718,7 @@ mod tests {
                 expected_height: Some(100),
                 chain_work: Work::from_be_bytes([0u8; 32]),
                 status: Status::Candidate,
+                chain: ChainMembership::Candidate,
             })
         });
         mock_clone
