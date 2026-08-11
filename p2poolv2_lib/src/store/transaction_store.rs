@@ -16,7 +16,7 @@
 
 use super::{ColumnFamily, Store, writer::StoreError};
 use crate::shares::share_block::{ShareTransaction, Txids};
-use crate::store::block_tx_metadata::{Status, TxMetadata};
+use crate::store::block_tx_metadata::{ChainMembership, TxMetadata};
 use bitcoin::consensus::{self, Decodable, Encodable, encode};
 use bitcoin::{BlockHash, OutPoint, Transaction, Txid};
 use rocksdb::WriteBatch;
@@ -262,7 +262,7 @@ impl Store {
         // Map blockhash -> confirmed height
         let confirmed_block_heights: HashMap<BlockHash, u32> = blockhash_to_metadata
             .into_iter()
-            .filter(|(_, metadata)| metadata.status == Status::Confirmed)
+            .filter(|(_, metadata)| metadata.chain == ChainMembership::Confirmed)
             .filter_map(|(blockhash, metadata)| {
                 metadata.expected_height.map(|height| (blockhash, height))
             })
@@ -301,7 +301,7 @@ impl Store {
         let metadata_pairs = self.get_block_metadata_batch(&all_blockhashes);
         let confirmed_set: HashSet<BlockHash> = metadata_pairs
             .into_iter()
-            .filter(|(_, metadata)| metadata.status == Status::Confirmed)
+            .filter(|(_, metadata)| metadata.chain == ChainMembership::Confirmed)
             .map(|(blockhash, _)| blockhash)
             .collect();
 

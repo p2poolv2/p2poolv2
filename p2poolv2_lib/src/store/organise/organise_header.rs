@@ -72,7 +72,7 @@ impl Store {
         // should_extend_candidates would match (parent == top candidate,
         // height and work match) and append_to_candidates would
         // overwrite the Confirmed status to Candidate.
-        if metadata.status == Status::Confirmed {
+        if metadata.chain == ChainMembership::Confirmed {
             return Ok(None);
         }
 
