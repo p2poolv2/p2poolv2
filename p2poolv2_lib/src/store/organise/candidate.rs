@@ -309,7 +309,8 @@ impl Store {
         let already_valid: HashSet<BlockHash> = metadata_results
             .into_iter()
             .filter(|(_, metadata)| {
-                metadata.status == Status::BlockValid || metadata.status == Status::Confirmed
+                metadata.status == Status::BlockValid
+                    || metadata.chain == ChainMembership::Confirmed
             })
             .map(|(blockhash, _)| blockhash)
             .collect();
@@ -381,10 +382,10 @@ impl Store {
         }
     }
 
-    /// Check if a blockhash has BlockValid or Confirmed status.
+    /// Check if a blockhash is BlockValid or on the confirmed chain.
     fn is_block_valid_or_confirmed(&self, blockhash: &BlockHash) -> bool {
         self.get_block_metadata(blockhash)
-            .map(|m| m.status == Status::BlockValid || m.status == Status::Confirmed)
+            .map(|m| m.status == Status::BlockValid || m.chain == ChainMembership::Confirmed)
             .unwrap_or(false)
     }
 
@@ -396,14 +397,14 @@ impl Store {
     /// marked BlockValid (or are Candidate), so they still qualify.
     pub(super) fn is_candidate_or_block_valid(&self, blockhash: &BlockHash) -> bool {
         self.get_block_metadata(blockhash)
-            .map(|m| matches!(m.status, Status::Candidate | Status::BlockValid))
+            .map(|m| m.chain == ChainMembership::Candidate || m.status == Status::BlockValid)
             .unwrap_or(false)
     }
 
-    /// Check if a blockhash has Candidate status in its metadata.
+    /// Check if a blockhash is on the candidate chain.
     pub fn is_candidate(&self, blockhash: &BlockHash) -> bool {
         self.get_block_metadata(blockhash)
-            .map(|m| m.status == Status::Candidate)
+            .map(|m| m.chain == ChainMembership::Candidate)
             .unwrap_or(false)
     }
 

@@ -356,10 +356,10 @@ impl Store {
         }
     }
 
-    /// Check if a blockhash has Confirmed status in its metadata.
+    /// Check if a blockhash is on the confirmed chain.
     pub fn is_confirmed(&self, blockhash: &BlockHash) -> bool {
         self.get_block_metadata(blockhash)
-            .map(|m| m.status == Status::Confirmed)
+            .map(|m| m.chain == ChainMembership::Confirmed)
             .unwrap_or(false)
     }
 
