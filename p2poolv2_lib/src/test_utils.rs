@@ -228,7 +228,7 @@ pub fn setup_pool_difficulty_mocks(
             Ok(BlockMetadata {
                 expected_height: Some(0),
                 chain_work: bitcoin::Work::from_hex("0x00").unwrap(),
-                status: Status::Confirmed,
+                status: Status::BlockValid,
                 chain: ChainMembership::Confirmed,
             })
         });
@@ -268,7 +268,7 @@ pub fn setup_header_chain_validation_mocks(chain_store_handle: &mut MockChainSto
             Ok(BlockMetadata {
                 expected_height: Some(0),
                 chain_work: bitcoin::Work::from_hex("0x00").unwrap(),
-                status: Status::Confirmed,
+                status: Status::BlockValid,
                 chain: ChainMembership::Confirmed,
             })
         });
@@ -284,7 +284,7 @@ pub fn setup_header_chain_validation_mocks(chain_store_handle: &mut MockChainSto
                         BlockMetadata {
                             expected_height: Some(0),
                             chain_work: bitcoin::Work::from_hex("0x00").unwrap(),
-                            status: Status::Confirmed,
+                            status: Status::BlockValid,
                             chain: ChainMembership::Confirmed,
                         },
                     )

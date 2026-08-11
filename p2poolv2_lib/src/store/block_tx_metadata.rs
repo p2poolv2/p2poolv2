@@ -69,21 +69,19 @@ impl Decodable for TxMetadata {
     }
 }
 
+/// Validation status of a share, independent of which chain it is on
+/// (see [`ChainMembership`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum Status {
     /// Not yet validated
     Pending = 0,
-    /// PoW validated
+    /// PoW / header validated, but not chain-context (coinbase/payout) validated
     HeaderValid = 1,
     /// Validation failed
     Invalid = 2,
-    /// Is a candidate. Could be on candidate chain or not. Can later be reorged into confirmed.
-    Candidate = 3,
-    /// Is on confirmed chain. Can later be removed and this status can change on reorg.
-    Confirmed = 4,
-    /// Block is fully validated, including checks for previous blocks, transaction spending checks etc
-    BlockValid = 5,
+    /// Fully validated, including chain-context checks (coinbase/payout, uncles).
+    BlockValid = 3,
 }
 
 impl Encodable for Status {
@@ -106,9 +104,7 @@ impl Decodable for Status {
             0 => Ok(Status::Pending),
             1 => Ok(Status::HeaderValid),
             2 => Ok(Status::Invalid),
-            3 => Ok(Status::Candidate),
-            4 => Ok(Status::Confirmed),
-            5 => Ok(Status::BlockValid),
+            3 => Ok(Status::BlockValid),
             _ => Err(bitcoin::consensus::encode::Error::ParseFailed(
                 "Invalid Status value",
             )),
@@ -240,7 +236,7 @@ mod tests {
     fn test_block_metadata_roundtrip_preserves_chain() {
         for (status, chain) in [
             (Status::HeaderValid, ChainMembership::None),
-            (Status::Candidate, ChainMembership::Candidate),
+            (Status::HeaderValid, ChainMembership::Candidate),
             (Status::BlockValid, ChainMembership::Confirmed),
             (Status::Invalid, ChainMembership::None),
         ] {

@@ -705,7 +705,7 @@ mod tests {
 
         assert!(store.is_confirmed(&share1.block_hash()));
         let metadata_before = store.get_block_metadata(&share1.block_hash()).unwrap();
-        assert_eq!(metadata_before.status, Status::Confirmed);
+        assert_eq!(metadata_before.chain, ChainMembership::Confirmed);
 
         // Re-organise the already-confirmed header, simulating what
         // happens when synced headers from a peer include share1.
@@ -719,9 +719,9 @@ mod tests {
         // share1 must still be Confirmed, not downgraded
         let metadata_after = store.get_block_metadata(&share1.block_hash()).unwrap();
         assert_eq!(
-            metadata_after.status,
-            Status::Confirmed,
-            "organise_header must not overwrite Confirmed status"
+            metadata_after.chain,
+            ChainMembership::Confirmed,
+            "organise_header must not overwrite Confirmed chain membership"
         );
         assert!(store.is_confirmed(&share1.block_hash()));
     }
@@ -994,8 +994,8 @@ mod tests {
 
         let metadata = store.get_block_metadata(&share2.block_hash()).unwrap();
         assert_eq!(
-            metadata.status,
-            Status::Confirmed,
+            metadata.chain,
+            ChainMembership::Confirmed,
             "organise_header must not downgrade Confirmed to Candidate"
         );
 

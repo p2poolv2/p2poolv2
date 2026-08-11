@@ -288,8 +288,9 @@ impl Store {
     }
 
     /// Returns true if every provided txid is included in at least one
-    /// block whose `BlockMetadata::status` is `Status::Confirmed`. Returns
-    /// false on the first txid that has no confirmed blockhash.
+    /// block on the confirmed chain (`BlockMetadata::chain` is
+    /// `ChainMembership::Confirmed`). Returns false on the first txid that
+    /// has no confirmed blockhash.
     pub(crate) fn are_all_txids_confirmed(&self, txids: &[Txid]) -> Result<bool, StoreError> {
         let per_txid_blockhashes = self.get_blockhashes_for_all_txids(txids)?;
 
@@ -1617,7 +1618,7 @@ mod tests {
                 &BlockMetadata {
                     expected_height: Some(1),
                     chain_work: Work::from_le_bytes([1u8; 32]),
-                    status: Status::Confirmed,
+                    status: Status::BlockValid,
                     chain: ChainMembership::Confirmed,
                 },
                 &mut batch,
@@ -1657,7 +1658,7 @@ mod tests {
                 &BlockMetadata {
                     expected_height: Some(1),
                     chain_work: Work::from_le_bytes([1u8; 32]),
-                    status: Status::Confirmed,
+                    status: Status::BlockValid,
                     chain: ChainMembership::Confirmed,
                 },
                 &mut batch,
@@ -1669,7 +1670,7 @@ mod tests {
                 &BlockMetadata {
                     expected_height: Some(1),
                     chain_work: Work::from_le_bytes([1u8; 32]),
-                    status: Status::Candidate,
+                    status: Status::HeaderValid,
                     chain: ChainMembership::Candidate,
                 },
                 &mut batch,
@@ -2394,7 +2395,7 @@ mod tests {
                 &BlockMetadata {
                     expected_height: Some(1000),
                     chain_work: Work::from_le_bytes([1u8; 32]),
-                    status: Status::Confirmed,
+                    status: Status::BlockValid,
                     chain: ChainMembership::Confirmed,
                 },
                 &mut batch,
@@ -2433,7 +2434,7 @@ mod tests {
                 &BlockMetadata {
                     expected_height: Some(5000),
                     chain_work: Work::from_le_bytes([1u8; 32]),
-                    status: Status::Confirmed,
+                    status: Status::BlockValid,
                     chain: ChainMembership::Confirmed,
                 },
                 &mut batch,
@@ -2478,7 +2479,7 @@ mod tests {
                 &BlockMetadata {
                     expected_height: Some(100),
                     chain_work: Work::from_le_bytes([1u8; 32]),
-                    status: Status::Confirmed,
+                    status: Status::BlockValid,
                     chain: ChainMembership::Confirmed,
                 },
                 &mut batch,
@@ -2490,7 +2491,7 @@ mod tests {
                 &BlockMetadata {
                     expected_height: Some(9000),
                     chain_work: Work::from_le_bytes([2u8; 32]),
-                    status: Status::Confirmed,
+                    status: Status::BlockValid,
                     chain: ChainMembership::Confirmed,
                 },
                 &mut batch,

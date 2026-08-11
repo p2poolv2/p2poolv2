@@ -28,7 +28,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ConfirmedHeaderResult;
 use crate::shares::share_block::ShareHeader;
-use crate::store::block_tx_metadata::Status;
+use crate::store::block_tx_metadata::{ChainMembership, Status};
 use bitcoin::Address;
 use bitcoin::BlockHash;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -275,8 +275,11 @@ impl PplnsWindow {
 
         while confirmed_index.is_none() {
             let header = chain_store_handle.get_share_header(&current_hash)?;
-            let status = chain_store_handle.get_block_metadata(&current_hash)?.status;
-            if !matches!(status, Status::Candidate | Status::BlockValid) {
+            let metadata = chain_store_handle.get_block_metadata(&current_hash)?;
+            let on_candidate_or_valid = metadata.chain == ChainMembership::Candidate
+                || metadata.status == Status::BlockValid;
+            if !on_candidate_or_valid {
+                let status = metadata.status;
                 return Err(format!(
                     "PPLNS walk reached non-validated block {current_hash} (status {status:?})"
                 )
@@ -907,7 +910,7 @@ mod tests {
         BlockMetadata {
             expected_height: Some(height),
             chain_work: Work::from_le_bytes([0u8; 32]),
-            status: Status::Confirmed,
+            status: Status::BlockValid,
             chain: ChainMembership::Confirmed,
         }
     }
@@ -917,7 +920,7 @@ mod tests {
         BlockMetadata {
             expected_height: None,
             chain_work: Work::from_le_bytes([0u8; 32]),
-            status: Status::Confirmed,
+            status: Status::BlockValid,
             chain: ChainMembership::Confirmed,
         }
     }
@@ -2203,7 +2206,7 @@ mod tests {
             Ok(BlockMetadata {
                 expected_height: Some(1),
                 chain_work: Work::from_le_bytes([0u8; 32]),
-                status: Status::Candidate,
+                status: Status::HeaderValid,
                 chain: ChainMembership::Candidate,
             })
         });

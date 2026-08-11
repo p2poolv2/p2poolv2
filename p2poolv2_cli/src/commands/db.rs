@@ -22,7 +22,7 @@
 use super::DbCommands;
 use bitcoin::BlockHash;
 use p2poolv2_lib::store::Store;
-use p2poolv2_lib::store::block_tx_metadata::Status;
+use p2poolv2_lib::store::block_tx_metadata::{ChainMembership, Status};
 use p2poolv2_lib::store::dag_store::MAX_BLOCKS_PER_HEIGHT;
 use p2poolv2_lib::store::writer::StoreError;
 use std::error::Error;
@@ -44,9 +44,10 @@ pub fn execute(command: &DbCommands, db_path: &str) -> Result<(), Box<dyn Error>
 /// Clean up dense heights by marking excess HeaderValid blocks as Invalid.
 ///
 /// Walks the height index and for each height with more than
-/// MAX_BLOCKS_PER_HEIGHT blocks, keeps Confirmed, Candidate, and
-/// BlockValid blocks plus HeaderValid blocks that are referenced as
-/// uncles. Marks remaining HeaderValid blocks as Invalid.
+/// MAX_BLOCKS_PER_HEIGHT blocks, keeps every block on the candidate or
+/// confirmed chain, every BlockValid block, and HeaderValid blocks that are
+/// referenced as uncles. Marks the remaining off-chain, unreferenced
+/// HeaderValid blocks as Invalid.
 fn cleanup_dense_heights(store: &Store) -> Result<(), Box<dyn Error>> {
     let top_height = match store.get_top_confirmed_height() {
         Ok(height) => height,
@@ -69,31 +70,34 @@ fn cleanup_dense_heights(store: &Store) -> Result<(), Box<dyn Error>> {
 
         let metadata_results = store.get_block_metadata_batch(&blockhashes);
 
-        let header_valid_hashes: Vec<BlockHash> = metadata_results
+        // Only off-chain HeaderValid blocks are eligible for invalidation.
+        // Blocks on the candidate or confirmed chain, and BlockValid blocks,
+        // are always kept regardless of how dense the height is.
+        let off_chain_header_valid: Vec<BlockHash> = metadata_results
             .iter()
-            .filter(|(_, metadata)| metadata.status == Status::HeaderValid)
+            .filter(|(_, metadata)| {
+                metadata.status == Status::HeaderValid && metadata.chain == ChainMembership::None
+            })
             .map(|(hash, _)| *hash)
             .collect();
 
-        if header_valid_hashes.len() + (blockhashes.len() - header_valid_hashes.len())
-            <= MAX_BLOCKS_PER_HEIGHT
-        {
+        if off_chain_header_valid.is_empty() {
             continue;
         }
 
         dense_heights += 1;
-        let non_header_valid_count = blockhashes.len() - header_valid_hashes.len();
+        let kept_count = blockhashes.len() - off_chain_header_valid.len();
         println!(
-            "Height {height}: {total} blocks ({non_hv} non-HeaderValid, {hv} HeaderValid)",
+            "Height {height}: {total} blocks ({kept} on-chain/valid, {hv} off-chain HeaderValid)",
             total = blockhashes.len(),
-            non_hv = non_header_valid_count,
-            hv = header_valid_hashes.len(),
+            kept = kept_count,
+            hv = off_chain_header_valid.len(),
         );
 
         let mut batch = Store::get_write_batch();
         let mut height_invalidated = 0usize;
 
-        for blockhash in &header_valid_hashes {
+        for blockhash in &off_chain_header_valid {
             let is_uncle = store.get_nephews(blockhash).is_some();
             if is_uncle {
                 continue;

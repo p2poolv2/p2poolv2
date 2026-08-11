@@ -19,9 +19,8 @@ use super::{ColumnFamily, Store, writer::StoreError};
 use crate::shares::share_block::{
     MerkleBranches, ShareBlock, ShareHeader, ShareTransaction, Txids,
 };
-use crate::store::block_tx_metadata::Status::{
-    BlockValid, Candidate, Confirmed, HeaderValid, Invalid,
-};
+use crate::store::block_tx_metadata::ChainMembership;
+use crate::store::block_tx_metadata::Status::{BlockValid, HeaderValid, Invalid};
 use bitcoin::BlockHash;
 use bitcoin::TxMerkleNode;
 use bitcoin::consensus::{self, Encodable, encode};
@@ -522,17 +521,23 @@ impl Store {
 
     /// Mark a block Invalid so it is never promoted to confirmed (see
     /// organise_block's Invalid gate). Called when chain-context validation
-    /// fails. A no-op when the block is already validated (Candidate,
-    /// BlockValid) or Confirmed -- a block that previously passed validation
-    /// or is on the confirmed chain must not be downgraded on a later
-    /// (possibly transient) failure. Errors if the block has no metadata.
+    /// fails. A no-op only when the block is on the confirmed chain -- a
+    /// finalized block must not be downgraded on a later (possibly transient)
+    /// failure. A block on the candidate chain (or off-chain) can now be
+    /// invalidated even if it was previously `BlockValid`, because validation
+    /// state is tracked independently of chain membership. Errors if the block
+    /// has no metadata.
+    ///
+    /// This only sets the validation status; removing a now-invalid block
+    /// from the candidate chain and rebuilding the best alternative is done
+    /// separately by the invalidation reorg.
     pub fn mark_invalid(
         &self,
         blockhash: &BlockHash,
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<(), StoreError> {
         let mut metadata = self.get_block_metadata(blockhash)?;
-        if matches!(metadata.status, Candidate | Confirmed | BlockValid) {
+        if metadata.chain == ChainMembership::Confirmed {
             return Ok(());
         }
         metadata.status = Invalid;
@@ -541,10 +546,14 @@ impl Store {
 
     /// Mark a block BlockValid after it passes chain-context validation.
     ///
-    /// Only upgrades a HeaderValid block: a Candidate or Confirmed block
-    /// already carries a validated/on-chain status, and overwriting Candidate
-    /// would break candidate-chain detection (`is_candidate`). A no-op for
-    /// any other status. Errors if the block has no metadata.
+    /// Only upgrades a HeaderValid block. A block that is already
+    /// BlockValid, Invalid, or still Pending is left unchanged. This
+    /// implies that before BlockValid, a share needs to be
+    /// HeaderValid.
+    ///
+    /// Chain membership is a separate field, so this never affects
+    /// candidate/confirmed position.  A no-op for any non-HeaderValid
+    /// status. Errors if the block has no metadata.
     pub fn mark_block_valid(
         &self,
         blockhash: &BlockHash,
@@ -620,11 +629,52 @@ mod tests {
         );
     }
 
-    /// mark_invalid must not downgrade an already-validated (Candidate /
-    /// BlockValid) or Confirmed block on a later (transient) failure.
+    /// mark_invalid must not downgrade a block on the confirmed chain on a
+    /// later (transient) failure. Chain membership, not status, is the guard.
     #[test]
-    fn test_mark_invalid_is_noop_for_validated_or_confirmed() {
-        for status in [Status::Candidate, Status::BlockValid, Status::Confirmed] {
+    fn test_mark_invalid_is_noop_for_confirmed() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        store.store_with_valid_metadata(&share);
+        let mut metadata = store.get_block_metadata(&share.block_hash()).unwrap();
+        metadata.status = Status::BlockValid;
+        metadata.chain = ChainMembership::Confirmed;
+        let mut batch = Store::get_write_batch();
+        store
+            .update_block_metadata(&share.block_hash(), &metadata, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = Store::get_write_batch();
+        store.mark_invalid(&share.block_hash(), &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert_eq!(
+            store
+                .get_block_metadata(&share.block_hash())
+                .unwrap()
+                .status,
+            Status::BlockValid,
+            "mark_invalid must be a no-op for a confirmed block"
+        );
+    }
+
+    /// mark_invalid takes effect on a non-confirmed block even if it was
+    /// previously BlockValid: validation state is tracked independently of
+    /// chain membership, so a candidate that later fails re-validation can be
+    /// quarantined instead of being silently confirmed.
+    #[test]
+    fn test_mark_invalid_takes_effect_for_non_confirmed() {
+        for chain in [ChainMembership::None, ChainMembership::Candidate] {
             let temp_dir = tempdir().unwrap();
             let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
             let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
@@ -638,7 +688,8 @@ mod tests {
                 .build();
             store.store_with_valid_metadata(&share);
             let mut metadata = store.get_block_metadata(&share.block_hash()).unwrap();
-            metadata.status = status;
+            metadata.status = Status::BlockValid;
+            metadata.chain = chain;
             let mut batch = Store::get_write_batch();
             store
                 .update_block_metadata(&share.block_hash(), &metadata, &mut batch)
@@ -654,8 +705,8 @@ mod tests {
                     .get_block_metadata(&share.block_hash())
                     .unwrap()
                     .status,
-                status,
-                "mark_invalid must be a no-op for {status:?}"
+                Status::Invalid,
+                "mark_invalid must quarantine a non-confirmed block (chain {chain:?})"
             );
         }
     }
@@ -691,11 +742,12 @@ mod tests {
         );
     }
 
-    /// mark_block_valid must not overwrite Candidate or Confirmed (which
-    /// carry chain position; overwriting Candidate breaks is_candidate).
+    /// mark_block_valid only upgrades HeaderValid; it is a no-op for any other
+    /// validation status (Pending, Invalid, or already BlockValid). Chain
+    /// membership is a separate field and is never consulted here.
     #[test]
-    fn test_mark_block_valid_is_noop_for_candidate_and_confirmed() {
-        for status in [Status::Candidate, Status::Confirmed] {
+    fn test_mark_block_valid_is_noop_for_non_header_valid() {
+        for status in [Status::Pending, Status::Invalid, Status::BlockValid] {
             let temp_dir = tempdir().unwrap();
             let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
             let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
@@ -1016,13 +1068,13 @@ mod tests {
         let metadata_a = BlockMetadata {
             expected_height: Some(1),
             chain_work: Work::from_le_bytes([1u8; 32]),
-            status: Status::Candidate,
+            status: Status::HeaderValid,
             chain: ChainMembership::Candidate,
         };
         let metadata_b = BlockMetadata {
             expected_height: Some(2),
             chain_work: Work::from_le_bytes([2u8; 32]),
-            status: Status::Confirmed,
+            status: Status::BlockValid,
             chain: ChainMembership::Confirmed,
         };
 

@@ -280,7 +280,7 @@ mod tests {
         BlockMetadata {
             expected_height: Some(1),
             chain_work: Work::from_be_bytes([0u8; 32]),
-            status: Status::Candidate,
+            status: Status::HeaderValid,
             chain: ChainMembership::Candidate,
         }
     }
@@ -717,7 +717,7 @@ mod tests {
             Ok(BlockMetadata {
                 expected_height: Some(100),
                 chain_work: Work::from_be_bytes([0u8; 32]),
-                status: Status::Candidate,
+                status: Status::HeaderValid,
                 chain: ChainMembership::Candidate,
             })
         });
