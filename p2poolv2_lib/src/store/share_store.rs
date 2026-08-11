@@ -20,7 +20,7 @@ use crate::shares::share_block::{
     MerkleBranches, ShareBlock, ShareHeader, ShareTransaction, Txids,
 };
 use crate::store::block_tx_metadata::ChainMembership;
-use crate::store::block_tx_metadata::Status::{BlockValid, HeaderValid, Invalid};
+use crate::store::block_tx_metadata::Status::{BlockValid, HeaderValid, Invalid, Pending};
 use bitcoin::BlockHash;
 use bitcoin::TxMerkleNode;
 use bitcoin::consensus::{self, Encodable, encode};
@@ -546,25 +546,47 @@ impl Store {
 
     /// Mark a block BlockValid after it passes chain-context validation.
     ///
-    /// Only upgrades a HeaderValid block. A block that is already
-    /// BlockValid, Invalid, or still Pending is left unchanged. This
-    /// implies that before BlockValid, a share needs to be
-    /// HeaderValid.
+    /// Upgrades a HeaderValid block to BlockValid. An already-BlockValid
+    /// block is a no-op (idempotent: the re-validation cascade may re-check
+    /// a descendant that is already valid). A Pending or Invalid block is a
+    /// precondition violation -- block validation must run on a
+    /// header-validated, not-yet-rejected block -- and returns
+    /// `StoreError::InvalidStatustransition` rather than silently succeeding.
     ///
     /// Chain membership is a separate field, so this never affects
-    /// candidate/confirmed position.  A no-op for any non-HeaderValid
-    /// status. Errors if the block has no metadata.
+    /// candidate/confirmed position. Errors if the block has no metadata.
+    ///
+    /// On a successful upgrade this also advances the highest-work
+    /// BlockValid pointer (see `update_highest_block_valid_if_new_high_work`),
+    /// which tracks the best base to mine on and anchor payouts against.
     pub fn mark_block_valid(
         &self,
         blockhash: &BlockHash,
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<(), StoreError> {
         let mut metadata = self.get_block_metadata(blockhash)?;
-        if metadata.status == HeaderValid {
-            metadata.status = BlockValid;
-            self.update_block_metadata(blockhash, &metadata, batch)?;
+        match metadata.status {
+            HeaderValid => {
+                metadata.status = BlockValid;
+                self.update_block_metadata(blockhash, &metadata, batch)?;
+                self.update_highest_block_valid_if_new_high_work(
+                    blockhash,
+                    metadata.chain_work,
+                    batch,
+                )?;
+                Ok(())
+            }
+            // Already validated: idempotent, e.g. when the re-validation
+            // cascade re-checks an already-BlockValid descendant.
+            BlockValid => Ok(()),
+            // Pending (header never validated) or Invalid (already rejected)
+            // both violate the precondition that block validation runs on a
+            // header-valid block. Surface it instead of silently succeeding.
+            Pending | Invalid => Err(StoreError::InvalidStatusTransition(format!(
+                "Cannot mark block {blockhash} BlockValid from status {:?}",
+                metadata.status
+            ))),
         }
-        Ok(())
     }
 
     /// Get a share header from the Header column family.
@@ -742,12 +764,52 @@ mod tests {
         );
     }
 
-    /// mark_block_valid only upgrades HeaderValid; it is a no-op for any other
-    /// validation status (Pending, Invalid, or already BlockValid). Chain
-    /// membership is a separate field and is never consulted here.
+    /// mark_block_valid is an idempotent no-op for an already-BlockValid
+    /// block (the re-validation cascade may re-check a valid descendant).
     #[test]
-    fn test_mark_block_valid_is_noop_for_non_header_valid() {
-        for status in [Status::Pending, Status::Invalid, Status::BlockValid] {
+    fn test_mark_block_valid_is_noop_for_block_valid() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        store.store_with_valid_metadata(&share);
+        let mut metadata = store.get_block_metadata(&share.block_hash()).unwrap();
+        metadata.status = Status::BlockValid;
+        let mut batch = Store::get_write_batch();
+        store
+            .update_block_metadata(&share.block_hash(), &metadata, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = Store::get_write_batch();
+        store
+            .mark_block_valid(&share.block_hash(), &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert_eq!(
+            store
+                .get_block_metadata(&share.block_hash())
+                .unwrap()
+                .status,
+            Status::BlockValid
+        );
+    }
+
+    /// mark_block_valid is a precondition violation for a Pending or Invalid
+    /// block -- block validation must run on a header-validated,
+    /// not-yet-rejected block -- so it returns InvalidState rather than
+    /// silently succeeding.
+    #[test]
+    fn test_mark_block_valid_errors_for_pending_or_invalid() {
+        for status in [Status::Pending, Status::Invalid] {
             let temp_dir = tempdir().unwrap();
             let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
             let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
@@ -769,18 +831,20 @@ mod tests {
             store.commit_batch(batch).unwrap();
 
             let mut batch = Store::get_write_batch();
-            store
-                .mark_block_valid(&share.block_hash(), &mut batch)
-                .unwrap();
-            store.commit_batch(batch).unwrap();
+            let result = store.mark_block_valid(&share.block_hash(), &mut batch);
+            assert!(
+                matches!(result, Err(StoreError::InvalidStatusTransition(_))),
+                "mark_block_valid must error for {status:?}, got {result:?}"
+            );
 
+            // The status must be left unchanged.
             assert_eq!(
                 store
                     .get_block_metadata(&share.block_hash())
                     .unwrap()
                     .status,
                 status,
-                "mark_block_valid must be a no-op for {status:?}"
+                "mark_block_valid must not change status for {status:?}"
             );
         }
     }

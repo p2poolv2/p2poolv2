@@ -49,6 +49,9 @@ pub enum StoreError {
     ChannelClosed,
     /// Item not found
     NotFound(String),
+    /// A block metadata state transition was requested that violates an
+    /// invariant (for example marking a Pending or Invalid block BlockValid).
+    InvalidStatusTransition(String),
 }
 
 impl fmt::Display for StoreError {
@@ -58,6 +61,9 @@ impl fmt::Display for StoreError {
             StoreError::ChannelClosed => write!(f, "Channel closed"),
             StoreError::NotFound(msg) => write!(f, "Not found: {msg}"),
             StoreError::Serialization(msg) => write!(f, "Bitcoin en/decoding error: {msg}"),
+            StoreError::InvalidStatusTransition(msg) => {
+                write!(f, "Invalid status transition: {msg}")
+            }
         }
     }
 }
