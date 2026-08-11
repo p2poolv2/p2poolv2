@@ -703,8 +703,8 @@ mod tests {
             .expect_share_block_exists()
             .returning(|_| true);
         chain_store_handle
-            .expect_has_status()
-            .returning(|_, _| true);
+            .expect_is_block_confirmed()
+            .returning(|_| true);
         // Chain not current, so request_headers_for_missing_blocks is a no-op
         chain_store_handle.expect_is_current().returning(|| false);
 
@@ -755,8 +755,8 @@ mod tests {
             .expect_share_block_exists()
             .returning(|_| true);
         chain_store_handle
-            .expect_has_status()
-            .returning(|_, _| true);
+            .expect_is_block_confirmed()
+            .returning(|_| true);
 
         // Chain is current and parent is missing -- should trigger getheaders
         chain_store_handle.expect_is_current().returning(|| true);

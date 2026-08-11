@@ -482,6 +482,7 @@ mod tests {
     use crate::shares::chain::chain_store_handle::MockChainStoreHandle;
     use crate::shares::validation::MockDefaultShareValidator;
     use crate::shares::validation::ValidationError;
+    use crate::store::block_tx_metadata::Status;
     use crate::store::block_tx_metadata::{BlockMetadata, ChainMembership};
     use crate::stratum::work::notify::{NotifyCmd, NotifyReceiver};
     use crate::test_utils::TestShareBlockBuilder;
@@ -597,7 +598,7 @@ mod tests {
                 Ok(BlockMetadata {
                     expected_height: Some(1),
                     chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
-                    status: crate::store::block_tx_metadata::Status::Candidate,
+                    status: Status::HeaderValid,
                     chain: ChainMembership::Candidate,
                 })
             });
@@ -646,7 +647,7 @@ mod tests {
                 Ok(BlockMetadata {
                     expected_height: Some(10),
                     chain_work: bitcoin::Work::from_hex("0x00").unwrap(),
-                    status: crate::store::block_tx_metadata::Status::Candidate,
+                    status: Status::HeaderValid,
                     chain: ChainMembership::Candidate,
                 })
             });
@@ -706,7 +707,7 @@ mod tests {
                 Ok(BlockMetadata {
                     expected_height: Some(1),
                     chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
-                    status: crate::store::block_tx_metadata::Status::Candidate,
+                    status: Status::HeaderValid,
                     chain: ChainMembership::Candidate,
                 })
             });
@@ -756,7 +757,7 @@ mod tests {
                 Ok(BlockMetadata {
                     expected_height: Some(1),
                     chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
-                    status: crate::store::block_tx_metadata::Status::Candidate,
+                    status: Status::HeaderValid,
                     chain: ChainMembership::Candidate,
                 })
             });
@@ -807,7 +808,7 @@ mod tests {
                 Ok(BlockMetadata {
                     expected_height: Some(1),
                     chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
-                    status: crate::store::block_tx_metadata::Status::Candidate,
+                    status: Status::HeaderValid,
                     chain: ChainMembership::Candidate,
                 })
             });
@@ -866,7 +867,7 @@ mod tests {
                 Ok(BlockMetadata {
                     expected_height: Some(1),
                     chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
-                    status: crate::store::block_tx_metadata::Status::Candidate,
+                    status: Status::HeaderValid,
                     chain: ChainMembership::Candidate,
                 })
             });
@@ -924,7 +925,7 @@ mod tests {
                 Ok(BlockMetadata {
                     expected_height: Some(10),
                     chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
-                    status: crate::store::block_tx_metadata::Status::Candidate,
+                    status: Status::HeaderValid,
                     chain: ChainMembership::Candidate,
                 })
             });
@@ -972,7 +973,7 @@ mod tests {
                 Ok(BlockMetadata {
                     expected_height: Some(5),
                     chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
-                    status: crate::store::block_tx_metadata::Status::Confirmed,
+                    status: Status::BlockValid,
                     chain: ChainMembership::Confirmed,
                 })
             });
@@ -1026,7 +1027,7 @@ mod tests {
                 Ok(BlockMetadata {
                     expected_height: Some(5),
                     chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
-                    status: crate::store::block_tx_metadata::Status::Confirmed,
+                    status: Status::BlockValid,
                     chain: ChainMembership::Confirmed,
                 })
             });
@@ -1088,7 +1089,7 @@ mod tests {
                 Ok(BlockMetadata {
                     expected_height: Some(5),
                     chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
-                    status: crate::store::block_tx_metadata::Status::Confirmed,
+                    status: Status::BlockValid,
                     chain: ChainMembership::Confirmed,
                 })
             });
@@ -1162,7 +1163,7 @@ mod tests {
                 Ok(BlockMetadata {
                     expected_height: Some(height),
                     chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
-                    status: crate::store::block_tx_metadata::Status::Confirmed,
+                    status: Status::BlockValid,
                     chain: ChainMembership::Confirmed,
                 })
             });
@@ -1247,7 +1248,7 @@ mod tests {
                 Ok(BlockMetadata {
                     expected_height: Some(10),
                     chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
-                    status: crate::store::block_tx_metadata::Status::Candidate,
+                    status: Status::HeaderValid,
                     chain: ChainMembership::Candidate,
                 })
             });

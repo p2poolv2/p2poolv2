@@ -26,7 +26,6 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::ShareBlock;
 use crate::shares::validation::ShareValidator;
-use crate::store::block_tx_metadata::Status;
 use std::error::Error;
 use tokio::sync::oneshot;
 use tracing::{debug, error, warn};
@@ -67,7 +66,7 @@ pub async fn handle_share_block(
     // the process restarted after storing a block but before validation
     // completed.
     if chain_store_handle.share_block_exists(&block_hash) {
-        if !chain_store_handle.has_status(&block_hash, Status::Confirmed) {
+        if !chain_store_handle.is_block_confirmed(&block_hash) {
             debug!("Share block {block_hash} in store but not confirmed, re-sending to validation");
             if let Err(send_error) = validation_tx
                 .send(ValidationEvent::ValidateBlockHash(block_hash))
@@ -211,9 +210,9 @@ mod tests {
             .with(eq(block_hash))
             .returning(|_| true);
         chain_store_handle
-            .expect_has_status()
-            .with(eq(block_hash), eq(Status::Confirmed))
-            .returning(|_, _| true);
+            .expect_is_block_confirmed()
+            .with(eq(block_hash))
+            .returning(|_| true);
 
         let mock_validator = MockDefaultShareValidator::default();
 
@@ -255,9 +254,9 @@ mod tests {
             .with(eq(block_hash))
             .returning(|_| true);
         chain_store_handle
-            .expect_has_status()
-            .with(eq(block_hash), eq(Status::Confirmed))
-            .returning(|_, _| false);
+            .expect_is_block_confirmed()
+            .with(eq(block_hash))
+            .returning(|_| false);
 
         let mock_validator = MockDefaultShareValidator::default();
 
@@ -368,9 +367,9 @@ mod tests {
             .with(eq(block_hash))
             .returning(|_| true);
         chain_store_handle
-            .expect_has_status()
-            .with(eq(block_hash), eq(Status::Confirmed))
-            .returning(|_, _| true);
+            .expect_is_block_confirmed()
+            .with(eq(block_hash))
+            .returning(|_| true);
 
         let mock_validator = MockDefaultShareValidator::default();
 

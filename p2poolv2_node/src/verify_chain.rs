@@ -24,7 +24,7 @@ use bitcoin::hashes::Hash;
 use p2poolv2_lib::accounting::payout::sharechain_pplns::pplns_window::PRUNE_DEPTH;
 use p2poolv2_lib::shares::validation::MAX_UNCLES;
 use p2poolv2_lib::store::Store;
-use p2poolv2_lib::store::block_tx_metadata::Status;
+use p2poolv2_lib::store::block_tx_metadata::ChainMembership;
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::process;
@@ -187,13 +187,13 @@ fn main() {
             }
         }
 
-        // 6. Verify metadata exists and status is Confirmed
+        // 6. Verify metadata exists and chain membership is Confirmed
         match store.get_block_metadata(&blockhash) {
             Ok(metadata) => {
-                if metadata.status != Status::Confirmed {
-                    let status = metadata.status;
+                if metadata.chain != ChainMembership::Confirmed {
+                    let chain = metadata.chain;
                     summary.error(format!(
-                        "h:{height} {blockhash} - metadata status is {status:?}, expected Confirmed"
+                        "h:{height} {blockhash} - metadata chain is {chain:?}, expected Confirmed"
                     ));
                 }
 

@@ -634,10 +634,15 @@ impl Store {
         while height <= to_height {
             let blockhashes = self.get_blockhashes_for_height(height);
             for blockhash in &blockhashes {
-                let status = self
+                let (status, chain) = self
                     .get_block_metadata(blockhash)
-                    .map(|metadata| format!("{:?}", metadata.status))
-                    .unwrap_or_else(|_| "Unknown".to_string());
+                    .map(|metadata| {
+                        (
+                            format!("{:?}", metadata.status),
+                            format!("{:?}", metadata.chain),
+                        )
+                    })
+                    .unwrap_or_else(|_| ("Unknown".to_string(), "Unknown".to_string()));
 
                 let (parent, uncles, miner_address) = match self.get_share_header(blockhash) {
                     Ok(Some(header)) => (
@@ -654,6 +659,7 @@ impl Store {
                     blockhash: *blockhash,
                     height,
                     status,
+                    chain,
                     parent,
                     uncles,
                     miner_address,
@@ -676,6 +682,7 @@ pub struct DagEntry {
     pub blockhash: BlockHash,
     pub height: u32,
     pub status: String,
+    pub chain: String,
     pub parent: BlockHash,
     pub uncles: Vec<BlockHash>,
     pub miner_address: String,
@@ -3562,7 +3569,8 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].blockhash, genesis.block_hash());
         assert_eq!(entries[0].height, 0);
-        assert_eq!(entries[0].status, "Confirmed");
+        assert_eq!(entries[0].status, "HeaderValid");
+        assert_eq!(entries[0].chain, "Confirmed");
         assert!(entries[0].has_block_data);
     }
 

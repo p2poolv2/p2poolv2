@@ -150,7 +150,6 @@ impl Store {
 
         self.increment_top_candidate(height, batch)?;
 
-        metadata.status = Status::Candidate;
         metadata.chain = ChainMembership::Candidate;
         self.update_block_metadata(blockhash, metadata, batch)?;
         Ok(Some(height))
@@ -504,7 +503,6 @@ impl Store {
         for (height, uncandidate) in &reorged_out_chain {
             self.delete_candidate_entry(*height, batch);
             let mut metadata = self.get_block_metadata(uncandidate)?;
-            metadata.status = Status::HeaderValid;
             metadata.chain = ChainMembership::None;
             self.update_block_metadata(uncandidate, &metadata, batch)?;
         }
@@ -544,7 +542,6 @@ impl Store {
                 StoreError::NotFound("Block metadata missing expected_height for candidate".into())
             })?;
             self.put_candidate_entry(height, candidate, batch);
-            metadata.status = Status::Candidate;
             metadata.chain = ChainMembership::Candidate;
             self.update_block_metadata(candidate, &metadata, batch)?;
             new_chain.push((height, *candidate));
@@ -585,7 +582,6 @@ impl Store {
             {
                 let next_height = height + 1;
                 self.put_candidate_entry(next_height, &best_hash, batch);
-                best_metadata.status = Status::Candidate;
                 best_metadata.chain = ChainMembership::Candidate;
                 self.update_block_metadata(&best_hash, &best_metadata, batch)?;
                 candidates.push((next_height, best_hash));
@@ -604,9 +600,13 @@ impl Store {
 
     /// Select the best qualifying child from a list of children.
     ///
-    /// Filters for `Valid` status, correct `expected_height`, and matching
-    /// parent hash (to exclude uncle links in the block index). Among
-    /// qualifying children, returns the one with the highest `chain_work`.
+    /// Filters for a valid header (`HeaderValid` or `BlockValid` -- both
+    /// carry a valid PoW header and are eligible for the candidate chain;
+    /// `BlockValid` is a candidate that has since passed chain-context
+    /// validation), correct `expected_height`, and matching parent hash
+    /// (to exclude uncle links in the block
+    /// index). Among qualifying children, returns the one with the
+    /// highest `chain_work`.
     fn pick_best_child(
         &self,
         children: &[BlockHash],
@@ -619,7 +619,7 @@ impl Store {
             let all_children = self
                 .get_block_metadata(child_hash)
                 .ok()
-                .filter(|m| m.status == Status::HeaderValid)
+                .filter(|m| matches!(m.status, Status::HeaderValid | Status::BlockValid))
                 .filter(|m| m.expected_height == Some(expected_height))
                 .and_then(|m| {
                     self.get_share_header(child_hash)
@@ -1235,7 +1235,7 @@ mod tests {
         let metadata = BlockMetadata {
             expected_height: Some(2),
             chain_work: Work::from_hex("0x10").unwrap(),
-            status: Status::Candidate,
+            status: Status::HeaderValid,
             chain: ChainMembership::Candidate,
         };
 
@@ -1303,7 +1303,7 @@ mod tests {
     }
 
     #[test]
-    fn test_pick_best_child_skips_candidate_status() {
+    fn test_pick_best_child_skips_invalid_status() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
@@ -1316,8 +1316,17 @@ mod tests {
             .prev_share_blockhash(genesis.block_hash().to_string())
             .nonce(0xe9695792)
             .build();
-        // Mark as Candidate via push_to_candidate_chain -- should be skipped by pick_best_child
-        store.push_to_candidate_chain(&child).unwrap();
+        store.store_with_valid_metadata(&child);
+
+        // pick_best_child only picks HeaderValid children, so an Invalid
+        // child is skipped even though it exists at the right height.
+        let mut metadata = store.get_block_metadata(&child.block_hash()).unwrap();
+        metadata.status = Status::Invalid;
+        let mut batch = Store::get_write_batch();
+        store
+            .update_block_metadata(&child.block_hash(), &metadata, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
 
         let result = store
             .pick_best_child(&[child.block_hash()], &genesis.block_hash(), 1)
@@ -1805,34 +1814,87 @@ mod tests {
             .build();
         store.store_with_valid_metadata(&valid_child);
 
-        // candidate_child: stored with Status::Valid initially, then set to Candidate
-        let candidate_child = TestShareBlockBuilder::new()
+        // invalid_child: stored HeaderValid initially, then marked Invalid
+        let invalid_child = TestShareBlockBuilder::new()
             .prev_share_blockhash(genesis.block_hash().to_string())
             .work(3)
             .nonce(0xe9695793)
             .build();
-        store.store_with_valid_metadata(&candidate_child);
+        store.store_with_valid_metadata(&invalid_child);
 
-        // Override candidate_child status to Candidate (more work but ineligible)
+        // Override status to Invalid (more work but ineligible for the chain)
         let mut metadata = store
-            .get_block_metadata(&candidate_child.block_hash())
+            .get_block_metadata(&invalid_child.block_hash())
             .unwrap();
-        metadata.status = Status::Candidate;
+        metadata.status = Status::Invalid;
         let mut batch = Store::get_write_batch();
         store
-            .update_block_metadata(&candidate_child.block_hash(), &metadata, &mut batch)
+            .update_block_metadata(&invalid_child.block_hash(), &metadata, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
-        // candidate_child has more work but is Candidate status -- should be skipped
+        // invalid_child has more work but is Invalid -- should be skipped
         let result = store
             .pick_best_child(
-                &[candidate_child.block_hash(), valid_child.block_hash()],
+                &[invalid_child.block_hash(), valid_child.block_hash()],
                 &genesis.block_hash(),
                 1,
             )
             .unwrap();
         assert_eq!(result.unwrap().0, valid_child.block_hash());
+    }
+
+    /// A candidate that has passed chain-context validation is BlockValid
+    /// while still on the candidate chain. pick_best_child must keep picking
+    /// it so extend_candidates_with_children can rebuild the chain through an
+    /// already-validated block (e.g. after a reorg).
+    #[test]
+    fn test_pick_best_child_selects_block_valid_child() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // header_valid_child: lower work, plain HeaderValid
+        let header_valid_child = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .work(1)
+            .nonce(0xe9695792)
+            .build();
+        store.store_with_valid_metadata(&header_valid_child);
+
+        // block_valid_child: higher work, upgraded to BlockValid
+        let block_valid_child = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .work(3)
+            .nonce(0xe9695793)
+            .build();
+        store.store_with_valid_metadata(&block_valid_child);
+        let mut metadata = store
+            .get_block_metadata(&block_valid_child.block_hash())
+            .unwrap();
+        metadata.status = Status::BlockValid;
+        let mut batch = Store::get_write_batch();
+        store
+            .update_block_metadata(&block_valid_child.block_hash(), &metadata, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // block_valid_child has more work and is eligible -- it must win.
+        let result = store
+            .pick_best_child(
+                &[
+                    block_valid_child.block_hash(),
+                    header_valid_child.block_hash(),
+                ],
+                &genesis.block_hash(),
+                1,
+            )
+            .unwrap();
+        assert_eq!(result.unwrap().0, block_valid_child.block_hash());
     }
 
     #[test]

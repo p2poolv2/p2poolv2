@@ -642,7 +642,7 @@ mod tests {
                 Ok(BlockMetadata {
                     expected_height: Some(0),
                     chain_work: Work::from_hex("0x00").unwrap(),
-                    status: Status::Confirmed,
+                    status: Status::BlockValid,
                     chain: ChainMembership::Confirmed,
                 })
             });
@@ -657,7 +657,7 @@ mod tests {
                             BlockMetadata {
                                 expected_height: Some(0),
                                 chain_work: Work::from_hex("0x00").unwrap(),
-                                status: Status::Confirmed,
+                                status: Status::BlockValid,
                                 chain: ChainMembership::Confirmed,
                             },
                         )
@@ -1035,7 +1035,7 @@ mod tests {
                     Ok(BlockMetadata {
                         expected_height: Some(0),
                         chain_work: Work::from_hex("0x00").unwrap(),
-                        status: Status::Confirmed,
+                        status: Status::BlockValid,
                         chain: ChainMembership::Confirmed,
                     })
                 } else {
@@ -1054,7 +1054,7 @@ mod tests {
                             BlockMetadata {
                                 expected_height: Some(0),
                                 chain_work: Work::from_hex("0x00").unwrap(),
-                                status: Status::Confirmed,
+                                status: Status::BlockValid,
                                 chain: ChainMembership::Confirmed,
                             },
                         )
@@ -1348,7 +1348,7 @@ mod tests {
                     Ok(BlockMetadata {
                         expected_height: Some(0),
                         chain_work: Work::from_hex("0x00").unwrap(),
-                        status: Status::Confirmed,
+                        status: Status::BlockValid,
                         chain: ChainMembership::Confirmed,
                     })
                 } else {
@@ -1367,7 +1367,7 @@ mod tests {
                             BlockMetadata {
                                 expected_height: Some(0),
                                 chain_work: Work::from_hex("0x00").unwrap(),
-                                status: Status::Confirmed,
+                                status: Status::BlockValid,
                                 chain: ChainMembership::Confirmed,
                             },
                         )
@@ -1560,7 +1560,7 @@ mod tests {
                             BlockMetadata {
                                 expected_height: Some(0),
                                 chain_work: Work::from_hex("0x00").unwrap(),
-                                status: Status::Confirmed,
+                                status: Status::BlockValid,
                                 chain: ChainMembership::Confirmed,
                             },
                         )

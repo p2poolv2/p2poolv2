@@ -167,7 +167,6 @@ impl Store {
 
             // Mark as valid, because Candidate status is limited to those on candidate chain
             // When these are again reorged into candidates chain, they will be marked as candidate again
-            metadata.status = Status::HeaderValid;
             metadata.chain = ChainMembership::None;
             self.update_block_metadata(unconfirm, &metadata, batch)?;
         }
@@ -183,7 +182,6 @@ impl Store {
             })?;
             self.put_confirmed_entry(height, to_confirm, batch)?;
 
-            metadata.status = Status::Confirmed;
             metadata.chain = ChainMembership::Confirmed;
             self.update_block_metadata(to_confirm, &metadata, batch)?;
 
@@ -336,7 +334,6 @@ impl Store {
         self.put_confirmed_entry(height, blockhash, batch)?;
         self.set_top_confirmed_height(height, batch);
 
-        metadata.status = Status::Confirmed;
         metadata.chain = ChainMembership::Confirmed;
         self.update_block_metadata(blockhash, metadata, batch)?;
         Ok(())
@@ -420,7 +417,6 @@ impl Store {
         for (candidate_height, candidate_hash) in candidates {
             self.put_confirmed_entry(*candidate_height, candidate_hash, batch)?;
             let mut metadata = self.get_block_metadata(candidate_hash)?;
-            metadata.status = Status::Confirmed;
             metadata.chain = ChainMembership::Confirmed;
             self.update_block_metadata(candidate_hash, &metadata, batch)?;
         }

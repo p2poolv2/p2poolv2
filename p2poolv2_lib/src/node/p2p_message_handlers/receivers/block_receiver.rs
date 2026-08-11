@@ -85,10 +85,7 @@ pub struct BlockReceiver {
 /// chain at least at the HeaderValid level (so its metadata can be used
 /// to validate descendants).
 fn is_at_least_header_valid(status: Status) -> bool {
-    matches!(
-        status,
-        Status::HeaderValid | Status::Candidate | Status::Confirmed | Status::BlockValid
-    )
+    matches!(status, Status::HeaderValid | Status::BlockValid)
 }
 
 impl BlockReceiver {
@@ -633,7 +630,7 @@ mod tests {
                 Ok(BlockMetadata {
                     expected_height: Some(0),
                     chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
-                    status: Status::Confirmed,
+                    status: Status::BlockValid,
                     chain: ChainMembership::Confirmed,
                 })
             });
@@ -678,7 +675,7 @@ mod tests {
                 Ok(BlockMetadata {
                     expected_height: Some(0),
                     chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
-                    status: Status::Confirmed,
+                    status: Status::BlockValid,
                     chain: ChainMembership::Confirmed,
                 })
             });
@@ -730,7 +727,7 @@ mod tests {
                     Ok(BlockMetadata {
                         expected_height: Some(0),
                         chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
-                        status: Status::Confirmed,
+                        status: Status::BlockValid,
                         chain: ChainMembership::Confirmed,
                     })
                 } else {
@@ -968,7 +965,7 @@ mod tests {
                     Ok(BlockMetadata {
                         expected_height: Some(0),
                         chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
-                        status: Status::Confirmed,
+                        status: Status::BlockValid,
                         chain: ChainMembership::Confirmed,
                     })
                 } else {
@@ -1050,7 +1047,7 @@ mod tests {
                 Ok(BlockMetadata {
                     expected_height: Some(0),
                     chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
-                    status: Status::Confirmed,
+                    status: Status::BlockValid,
                     chain: ChainMembership::Confirmed,
                 })
             });
@@ -1077,7 +1074,7 @@ mod tests {
                 Ok(BlockMetadata {
                     expected_height: Some(0),
                     chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
-                    status: Status::Confirmed,
+                    status: Status::BlockValid,
                     chain: ChainMembership::Confirmed,
                 })
             });

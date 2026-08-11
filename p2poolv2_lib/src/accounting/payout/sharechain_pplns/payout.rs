@@ -148,7 +148,7 @@ mod tests {
             Ok(BlockMetadata {
                 expected_height: None,
                 chain_work: Work::from_le_bytes([0u8; 32]),
-                status: Status::Confirmed,
+                status: Status::BlockValid,
                 chain: ChainMembership::Confirmed,
             })
         });
@@ -185,7 +185,7 @@ mod tests {
             Ok(BlockMetadata {
                 expected_height: Some(0),
                 chain_work: Work::from_le_bytes([0u8; 32]),
-                status: Status::Confirmed,
+                status: Status::BlockValid,
                 chain: ChainMembership::Confirmed,
             })
         });
@@ -235,7 +235,7 @@ mod tests {
             Ok(BlockMetadata {
                 expected_height: Some(1),
                 chain_work: Work::from_le_bytes([0u8; 32]),
-                status: Status::Confirmed,
+                status: Status::BlockValid,
                 chain: ChainMembership::Confirmed,
             })
         });
@@ -306,7 +306,7 @@ mod tests {
             Ok(BlockMetadata {
                 expected_height: Some(1),
                 chain_work: Work::from_le_bytes([0u8; 32]),
-                status: Status::Confirmed,
+                status: Status::BlockValid,
                 chain: ChainMembership::Confirmed,
             })
         });
@@ -362,7 +362,7 @@ mod tests {
             Ok(BlockMetadata {
                 expected_height: Some(0),
                 chain_work: Work::from_le_bytes([0u8; 32]),
-                status: Status::Confirmed,
+                status: Status::BlockValid,
                 chain: ChainMembership::Confirmed,
             })
         });
@@ -444,7 +444,7 @@ mod tests {
             Ok(BlockMetadata {
                 expected_height: Some(0),
                 chain_work: Work::from_le_bytes([0u8; 32]),
-                status: Status::Confirmed,
+                status: Status::BlockValid,
                 chain: ChainMembership::Confirmed,
             })
         });
@@ -518,7 +518,7 @@ mod tests {
             Ok(BlockMetadata {
                 expected_height: Some(2),
                 chain_work: Work::from_le_bytes([0u8; 32]),
-                status: Status::Confirmed,
+                status: Status::BlockValid,
                 chain: ChainMembership::Confirmed,
             })
         });
@@ -588,7 +588,7 @@ mod tests {
             Ok(BlockMetadata {
                 expected_height: Some(2),
                 chain_work: Work::from_le_bytes([0u8; 32]),
-                status: Status::Confirmed,
+                status: Status::BlockValid,
                 chain: ChainMembership::Confirmed,
             })
         });
@@ -667,7 +667,7 @@ mod tests {
             Ok(BlockMetadata {
                 expected_height: Some(1),
                 chain_work: Work::from_le_bytes([0u8; 32]),
-                status: Status::Confirmed,
+                status: Status::BlockValid,
                 chain: ChainMembership::Confirmed,
             })
         });

@@ -22,7 +22,7 @@ use axum::{
 };
 use bitcoin::BlockHash;
 use p2poolv2_lib::shares::chain::chain_store_handle::ChainStoreHandle;
-use p2poolv2_lib::store::block_tx_metadata::Status;
+use p2poolv2_lib::store::block_tx_metadata::{ChainMembership, Status};
 use p2poolv2_lib::store::dag_store::MAX_UNCLES_DEPTH;
 use p2poolv2_lib::store::writer::StoreError;
 use p2poolv2_lib::utils::time_provider::format_timestamp;
@@ -59,6 +59,7 @@ pub struct ShareLookupOutput {
     pub blockhash: String,
     pub height: Option<u32>,
     pub status: String,
+    pub chain: String,
     pub parent: String,
     pub uncles: Vec<String>,
     pub miner_address: String,
@@ -71,15 +72,22 @@ pub struct ShareLookupOutput {
     pub transactions: Option<Vec<String>>,
 }
 
-/// Format a Status enum value as a human-readable string.
+/// Format a Status enum value (validation state) as a human-readable string.
 fn format_status(status: &Status) -> &'static str {
     match status {
         Status::Pending => "Pending",
         Status::HeaderValid => "HeaderValid",
         Status::Invalid => "Invalid",
-        Status::Candidate => "Candidate",
         Status::BlockValid => "BlockValid",
-        Status::Confirmed => "Confirmed",
+    }
+}
+
+/// Format a ChainMembership enum value (chain position) as a human-readable string.
+fn format_chain(chain: &ChainMembership) -> &'static str {
+    match chain {
+        ChainMembership::None => "None",
+        ChainMembership::Candidate => "Candidate",
+        ChainMembership::Confirmed => "Confirmed",
     }
 }
 
@@ -112,6 +120,10 @@ fn build_share_output(
     let status = metadata
         .as_ref()
         .map(|metadata| format_status(&metadata.status))
+        .unwrap_or("Unknown");
+    let chain = metadata
+        .as_ref()
+        .map(|metadata| format_chain(&metadata.chain))
         .unwrap_or("Unknown");
 
     let bitcoin_header = &share_header.bitcoin_header;
@@ -150,6 +162,7 @@ fn build_share_output(
         blockhash: blockhash.to_string(),
         height,
         status: status.to_string(),
+        chain: chain.to_string(),
         parent: share_header.prev_share_blockhash.to_string(),
         uncles: share_header
             .uncles
@@ -256,7 +269,7 @@ mod tests {
     use p2poolv2_lib::accounting::stats::metrics;
     use p2poolv2_lib::monitoring_events::create_monitoring_event_channel;
     use p2poolv2_lib::node::actor::NodeHandle;
-    use p2poolv2_lib::store::block_tx_metadata::Status;
+    use p2poolv2_lib::store::block_tx_metadata::{ChainMembership, Status};
     use p2poolv2_lib::stratum::work::tracker::start_tracker_actor;
     use p2poolv2_lib::test_utils::{genesis_for_tests, setup_test_chain_store_handle};
 
@@ -290,9 +303,14 @@ mod tests {
         assert_eq!(format_status(&Status::Pending), "Pending");
         assert_eq!(format_status(&Status::HeaderValid), "HeaderValid");
         assert_eq!(format_status(&Status::Invalid), "Invalid");
-        assert_eq!(format_status(&Status::Candidate), "Candidate");
         assert_eq!(format_status(&Status::BlockValid), "BlockValid");
-        assert_eq!(format_status(&Status::Confirmed), "Confirmed");
+    }
+
+    #[test]
+    fn test_format_chain_all_variants() {
+        assert_eq!(format_chain(&ChainMembership::None), "None");
+        assert_eq!(format_chain(&ChainMembership::Candidate), "Candidate");
+        assert_eq!(format_chain(&ChainMembership::Confirmed), "Confirmed");
     }
 
     #[tokio::test]

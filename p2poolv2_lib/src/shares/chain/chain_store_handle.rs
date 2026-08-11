@@ -598,6 +598,12 @@ impl ChainStoreHandle {
             .unwrap_or(false)
     }
 
+    /// Check whether a block is on the confirmed chain (position, not status).
+    /// Returns false if the block has no metadata in the store.
+    pub fn is_block_confirmed(&self, hash: &BlockHash) -> bool {
+        self.store_handle.store().is_confirmed(hash)
+    }
+
     /// Get the depth of a blockhash from the confirmed chain tip.
     pub fn get_depth(&self, blockhash: &BlockHash) -> Option<usize> {
         let tip = self.get_chain_tip().ok()?;
@@ -800,6 +806,7 @@ mockall::mock! {
         pub fn get_block_metadata_batch(&self, blockhashes: &[BlockHash]) -> Vec<(BlockHash, BlockMetadata)>;
         pub fn get_uncle_infos(&self, uncle_hashes: &[BlockHash]) -> Vec<UncleInfo>;
         pub fn has_status(&self, hash: &BlockHash, status: Status) -> bool;
+        pub fn is_block_confirmed(&self, hash: &BlockHash) -> bool;
         pub fn get_blockhashes_for_height(&self, height: u32) -> Vec<BlockHash>;
         pub fn network(&self) -> bitcoin::Network;
         pub fn get_all_prevouts(&self, transaction: &bitcoin::Transaction) -> Result<Vec<(usize, bitcoin::TxOut)>, StoreError>;

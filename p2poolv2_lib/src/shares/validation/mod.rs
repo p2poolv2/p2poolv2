@@ -923,7 +923,7 @@ impl ShareValidator for DefaultShareValidator {
                     "Uncle {uncle} not found in store"
                 )));
             };
-            if chain_store_handle.has_status(uncle, Status::Confirmed) {
+            if chain_store_handle.is_block_confirmed(uncle) {
                 return Err(ValidationError::new(format!(
                     "Uncle {uncle} is on confirmed chain"
                 )));
@@ -1211,7 +1211,7 @@ mod tests {
         BlockMetadata {
             expected_height: Some(height),
             chain_work: Work::from_le_bytes([0u8; 32]),
-            status: Status::Confirmed,
+            status: Status::BlockValid,
             chain: ChainMembership::Confirmed,
         }
     }
@@ -1340,7 +1340,7 @@ mod tests {
                 Ok(BlockMetadata {
                     expected_height: None,
                     chain_work: Work::from_le_bytes([0u8; 32]),
-                    status: Status::Confirmed,
+                    status: Status::BlockValid,
                     chain: ChainMembership::Confirmed,
                 })
             });
@@ -1399,8 +1399,8 @@ mod tests {
             .expect_share_block_exists()
             .returning(|_| true);
         chain_store_handle
-            .expect_has_status()
-            .returning(|_, _| false);
+            .expect_is_block_confirmed()
+            .returning(|_| false);
 
         let valid_share = TestShareBlockBuilder::new()
             .uncles(vec![
@@ -1496,8 +1496,8 @@ mod tests {
             .expect_share_block_exists()
             .returning(|_| true);
         chain_store_handle
-            .expect_has_status()
-            .returning(|_, _| true);
+            .expect_is_block_confirmed()
+            .returning(|_| true);
 
         let invalid_share = TestShareBlockBuilder::new()
             .uncles(vec![uncle1.block_hash()])
@@ -3671,7 +3671,7 @@ mod tests {
                 Ok(BlockMetadata {
                     expected_height: None,
                     chain_work: Work::from_hex("0x00").unwrap(),
-                    status: Status::Candidate,
+                    status: Status::HeaderValid,
                     chain: ChainMembership::Candidate,
                 })
             });
