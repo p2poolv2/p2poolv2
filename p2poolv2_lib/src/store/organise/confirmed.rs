@@ -16,7 +16,7 @@
 
 use crate::store::{
     ColumnFamily, Store,
-    block_tx_metadata::{BlockMetadata, Status},
+    block_tx_metadata::{BlockMetadata, ChainMembership, Status},
     writer::StoreError,
 };
 use bitcoin::{
@@ -168,6 +168,7 @@ impl Store {
             // Mark as valid, because Candidate status is limited to those on candidate chain
             // When these are again reorged into candidates chain, they will be marked as candidate again
             metadata.status = Status::HeaderValid;
+            metadata.chain = ChainMembership::None;
             self.update_block_metadata(unconfirm, &metadata, batch)?;
         }
 
@@ -183,6 +184,7 @@ impl Store {
             self.put_confirmed_entry(height, to_confirm, batch)?;
 
             metadata.status = Status::Confirmed;
+            metadata.chain = ChainMembership::Confirmed;
             self.update_block_metadata(to_confirm, &metadata, batch)?;
 
             new_top_height = height;
@@ -335,6 +337,7 @@ impl Store {
         self.set_top_confirmed_height(height, batch);
 
         metadata.status = Status::Confirmed;
+        metadata.chain = ChainMembership::Confirmed;
         self.update_block_metadata(blockhash, metadata, batch)?;
         Ok(())
     }
@@ -417,7 +420,8 @@ impl Store {
         for (candidate_height, candidate_hash) in candidates {
             self.put_confirmed_entry(*candidate_height, candidate_hash, batch)?;
             let mut metadata = self.get_block_metadata(candidate_hash)?;
-            metadata.status = crate::store::block_tx_metadata::Status::Confirmed;
+            metadata.status = Status::Confirmed;
+            metadata.chain = ChainMembership::Confirmed;
             self.update_block_metadata(candidate_hash, &metadata, batch)?;
         }
         self.set_top_confirmed_height(to, batch);
@@ -449,6 +453,7 @@ mod tests {
             expected_height: Some(0),
             chain_work: share1.header.get_work(),
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
         store
             .update_block_metadata(&share1.block_hash(), &metadata1, &mut batch)
@@ -468,6 +473,7 @@ mod tests {
             expected_height: Some(1),
             chain_work: share2.header.get_work(),
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
         store
             .update_block_metadata(&share2.block_hash(), &metadata2, &mut batch)
@@ -519,6 +525,7 @@ mod tests {
             expected_height: Some(0),
             chain_work: share1.header.get_work(),
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
         store
             .update_block_metadata(&share1.block_hash(), &metadata1, &mut batch)
@@ -527,6 +534,7 @@ mod tests {
             expected_height: Some(1),
             chain_work: share2.header.get_work(),
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
         store
             .update_block_metadata(&share2.block_hash(), &metadata2, &mut batch)
@@ -535,6 +543,7 @@ mod tests {
             expected_height: Some(1),
             chain_work: share3.header.get_work(),
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
         store
             .update_block_metadata(&share3.block_hash(), &metadata3, &mut batch)
@@ -581,6 +590,7 @@ mod tests {
             expected_height: Some(0),
             chain_work: share0.header.get_work(),
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
         store
             .update_block_metadata(&share0.block_hash(), &metadata0, &mut batch)
@@ -589,6 +599,7 @@ mod tests {
             expected_height: Some(2),
             chain_work: share2.header.get_work(),
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
         store
             .update_block_metadata(&share2.block_hash(), &metadata2, &mut batch)
@@ -629,6 +640,7 @@ mod tests {
             expected_height: Some(0),
             chain_work: candidate_share.header.get_work(),
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
         store
             .update_block_metadata(
@@ -641,6 +653,7 @@ mod tests {
             expected_height: Some(0),
             chain_work: confirmed_share.header.get_work(),
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
         store
             .update_block_metadata(
@@ -832,6 +845,7 @@ mod tests {
             expected_height: Some(0),
             chain_work: share0.header.get_work(),
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
         store
             .update_block_metadata(&share0.block_hash(), &m0, &mut batch)
@@ -847,6 +861,7 @@ mod tests {
             expected_height: Some(1),
             chain_work: share1.header.get_work(),
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
         store
             .update_block_metadata(&share1.block_hash(), &m1, &mut batch)
@@ -862,6 +877,7 @@ mod tests {
             expected_height: Some(2),
             chain_work: share2.header.get_work(),
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
         store
             .update_block_metadata(&share2.block_hash(), &m2, &mut batch)
@@ -1142,6 +1158,7 @@ mod tests {
             expected_height: Some(1),
             chain_work: fork.header.get_work(),
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
         store
             .update_block_metadata(&fork.block_hash(), &fork_metadata, &mut batch)
@@ -1215,6 +1232,7 @@ mod tests {
             expected_height: Some(1),
             chain_work: fork1.header.get_work(),
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
         store
             .update_block_metadata(&fork1.block_hash(), &fork1_metadata, &mut batch)
@@ -1232,6 +1250,7 @@ mod tests {
             expected_height: Some(2),
             chain_work: fork1_metadata.chain_work + fork2.header.get_work(),
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
         store
             .update_block_metadata(&fork2.block_hash(), &fork2_metadata, &mut batch)
@@ -1272,6 +1291,7 @@ mod tests {
             expected_height: Some(1),
             chain_work: a.header.get_work(),
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
         store
             .update_block_metadata(&a.block_hash(), &metadata_a, &mut batch)
@@ -1295,6 +1315,7 @@ mod tests {
             expected_height: Some(1),
             chain_work: fork_share.header.get_work(),
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
         store
             .update_block_metadata(&fork_share.block_hash(), &fork_metadata, &mut batch)
@@ -1368,6 +1389,7 @@ mod tests {
             expected_height: Some(1),
             chain_work: share_a.header.get_work(),
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
         store
             .update_block_metadata(&share_a.block_hash(), &metadata_a, &mut batch)
@@ -1387,6 +1409,7 @@ mod tests {
             expected_height: Some(2),
             chain_work: metadata_a.chain_work + share_b.header.get_work(),
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
         store
             .update_block_metadata(&share_b.block_hash(), &metadata_b, &mut batch)
@@ -1409,6 +1432,7 @@ mod tests {
             expected_height: Some(1),
             chain_work: fork_1.header.get_work(),
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
         store
             .update_block_metadata(&fork_1.block_hash(), &fork_1_metadata, &mut batch)
@@ -1429,6 +1453,7 @@ mod tests {
             expected_height: Some(2),
             chain_work: fork_1_metadata.chain_work + fork_2.header.get_work(),
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
         store
             .update_block_metadata(&fork_2.block_hash(), &fork_2_metadata, &mut batch)
@@ -1512,6 +1537,7 @@ mod tests {
             expected_height: Some(1),
             chain_work: share_a.header.get_work(),
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
         store
             .update_block_metadata(&share_a.block_hash(), &metadata_a, &mut batch)
@@ -1531,6 +1557,7 @@ mod tests {
             expected_height: Some(2),
             chain_work: metadata_a.chain_work + share_b.header.get_work(),
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
         store
             .update_block_metadata(&share_b.block_hash(), &metadata_b, &mut batch)
@@ -1550,6 +1577,7 @@ mod tests {
             expected_height: Some(3),
             chain_work: metadata_b.chain_work + share_c.header.get_work(),
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
         store
             .update_block_metadata(&share_c.block_hash(), &metadata_c, &mut batch)
@@ -1573,6 +1601,7 @@ mod tests {
             expected_height: Some(1),
             chain_work: fork_share.header.get_work(),
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
         store
             .update_block_metadata(&fork_share.block_hash(), &fork_metadata, &mut batch)
@@ -1646,6 +1675,7 @@ mod tests {
             expected_height: Some(1),
             chain_work: share_a.header.get_work(),
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
         store
             .update_block_metadata(&share_a.block_hash(), &metadata_a, &mut batch)
@@ -1665,6 +1695,7 @@ mod tests {
             expected_height: Some(2),
             chain_work: metadata_a.chain_work + share_b.header.get_work(),
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
         store
             .update_block_metadata(&share_b.block_hash(), &metadata_b, &mut batch)
@@ -1688,6 +1719,7 @@ mod tests {
             expected_height: Some(2),
             chain_work: metadata_a.chain_work + fork_share.header.get_work(),
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
         store
             .update_block_metadata(&fork_share.block_hash(), &fork_metadata, &mut batch)
@@ -1818,6 +1850,7 @@ mod tests {
             expected_height: Some(1),
             chain_work: share_a.header.get_work(),
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
         store
             .update_block_metadata(&share_a.block_hash(), &metadata_a, &mut batch)
@@ -1849,6 +1882,7 @@ mod tests {
             expected_height: Some(1),
             chain_work: fork_1.header.get_work(),
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
         store
             .update_block_metadata(&fork_1.block_hash(), &fork_1_metadata, &mut batch)
@@ -1887,6 +1921,7 @@ mod tests {
             expected_height: Some(2),
             chain_work: fork_1_metadata.chain_work + fork_2.header.get_work(),
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
         store
             .update_block_metadata(&fork_2.block_hash(), &fork_2_metadata, &mut batch)

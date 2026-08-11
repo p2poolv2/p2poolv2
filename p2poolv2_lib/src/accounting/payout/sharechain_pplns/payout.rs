@@ -124,7 +124,7 @@ mod tests {
     };
     use crate::shares::chain::chain_store_handle::ConfirmedHeaderResult;
     use crate::shares::chain::chain_store_handle::MockChainStoreHandle;
-    use crate::store::block_tx_metadata::{BlockMetadata, Status};
+    use crate::store::block_tx_metadata::{BlockMetadata, ChainMembership, Status};
     use crate::test_utils::{
         PUBKEY_2G, PUBKEY_3G, PUBKEY_4G, PUBKEY_G, build_test_header, build_test_header_with_uncles,
     };
@@ -149,6 +149,7 @@ mod tests {
                 expected_height: None,
                 chain_work: Work::from_le_bytes([0u8; 32]),
                 status: Status::Confirmed,
+                chain: ChainMembership::Confirmed,
             })
         });
         // Fresh chain: update() leaves the window empty, so the payout takes
@@ -185,6 +186,7 @@ mod tests {
                 expected_height: Some(0),
                 chain_work: Work::from_le_bytes([0u8; 32]),
                 status: Status::Confirmed,
+                chain: ChainMembership::Confirmed,
             })
         });
         mock.expect_get_confirmed_headers_in_range()
@@ -234,6 +236,7 @@ mod tests {
                 expected_height: Some(1),
                 chain_work: Work::from_le_bytes([0u8; 32]),
                 status: Status::Confirmed,
+                chain: ChainMembership::Confirmed,
             })
         });
         mock.expect_get_confirmed_headers_in_range()
@@ -304,6 +307,7 @@ mod tests {
                 expected_height: Some(1),
                 chain_work: Work::from_le_bytes([0u8; 32]),
                 status: Status::Confirmed,
+                chain: ChainMembership::Confirmed,
             })
         });
         mock.expect_get_confirmed_headers_in_range()
@@ -359,6 +363,7 @@ mod tests {
                 expected_height: Some(0),
                 chain_work: Work::from_le_bytes([0u8; 32]),
                 status: Status::Confirmed,
+                chain: ChainMembership::Confirmed,
             })
         });
         mock.expect_get_confirmed_headers_in_range()
@@ -440,6 +445,7 @@ mod tests {
                 expected_height: Some(0),
                 chain_work: Work::from_le_bytes([0u8; 32]),
                 status: Status::Confirmed,
+                chain: ChainMembership::Confirmed,
             })
         });
         mock.expect_get_confirmed_headers_in_range()
@@ -513,6 +519,7 @@ mod tests {
                 expected_height: Some(2),
                 chain_work: Work::from_le_bytes([0u8; 32]),
                 status: Status::Confirmed,
+                chain: ChainMembership::Confirmed,
             })
         });
         mock.expect_get_confirmed_headers_in_range()
@@ -582,6 +589,7 @@ mod tests {
                 expected_height: Some(2),
                 chain_work: Work::from_le_bytes([0u8; 32]),
                 status: Status::Confirmed,
+                chain: ChainMembership::Confirmed,
             })
         });
         mock.expect_get_confirmed_headers_in_range()
@@ -660,6 +668,7 @@ mod tests {
                 expected_height: Some(1),
                 chain_work: Work::from_le_bytes([0u8; 32]),
                 status: Status::Confirmed,
+                chain: ChainMembership::Confirmed,
             })
         });
         mock.expect_get_confirmed_headers_in_range()

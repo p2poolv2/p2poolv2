@@ -577,7 +577,7 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::block_tx_metadata::{BlockMetadata, Status};
+    use crate::store::block_tx_metadata::{BlockMetadata, ChainMembership, Status};
     use crate::test_utils::TestShareBlockBuilder;
     use bitcoin::TxMerkleNode;
     use bitcoin::Work;
@@ -1017,11 +1017,13 @@ mod tests {
             expected_height: Some(1),
             chain_work: Work::from_le_bytes([1u8; 32]),
             status: Status::Candidate,
+            chain: ChainMembership::Candidate,
         };
         let metadata_b = BlockMetadata {
             expected_height: Some(2),
             chain_work: Work::from_le_bytes([2u8; 32]),
             status: Status::Confirmed,
+            chain: ChainMembership::Confirmed,
         };
 
         let mut batch = Store::get_write_batch();
@@ -1052,6 +1054,7 @@ mod tests {
             expected_height: Some(5),
             chain_work: Work::from_le_bytes([3u8; 32]),
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
 
         let mut batch = Store::get_write_batch();

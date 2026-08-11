@@ -3326,7 +3326,7 @@ mod tests {
 
     #[test]
     fn test_query_share_blocks_returns_blocks_in_order() {
-        use crate::store::block_tx_metadata::{BlockMetadata, Status};
+        use crate::store::block_tx_metadata::{BlockMetadata, ChainMembership, Status};
 
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
@@ -3343,6 +3343,7 @@ mod tests {
                 expected_height: Some(height as u32),
                 chain_work: share.header.get_work(),
                 status: Status::HeaderValid,
+                chain: ChainMembership::None,
             };
             store
                 .update_block_metadata(&share.block_hash(), &metadata, &mut batch)
@@ -3367,7 +3368,7 @@ mod tests {
 
     #[test]
     fn test_query_share_blocks_returns_subset() {
-        use crate::store::block_tx_metadata::{BlockMetadata, Status};
+        use crate::store::block_tx_metadata::{BlockMetadata, ChainMembership, Status};
 
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
@@ -3384,6 +3385,7 @@ mod tests {
                 expected_height: Some(height as u32),
                 chain_work: share.header.get_work(),
                 status: Status::HeaderValid,
+                chain: ChainMembership::None,
             };
             store
                 .update_block_metadata(&share.block_hash(), &metadata, &mut batch)

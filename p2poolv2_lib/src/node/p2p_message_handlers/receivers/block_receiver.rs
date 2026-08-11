@@ -415,7 +415,7 @@ mod tests {
     #[mockall_double::double]
     use crate::pool_difficulty::PoolDifficulty;
     use crate::shares::validation::MockDefaultShareValidator;
-    use crate::store::block_tx_metadata::BlockMetadata;
+    use crate::store::block_tx_metadata::{BlockMetadata, ChainMembership};
     use crate::store::writer::StoreError;
     use crate::test_utils::TestShareBlockBuilder;
     use bitcoin::CompactTarget;
@@ -593,6 +593,7 @@ mod tests {
                     expected_height: Some(0),
                     chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
                     status: Status::HeaderValid,
+                    chain: ChainMembership::None,
                 })
             });
 
@@ -633,6 +634,7 @@ mod tests {
                     expected_height: Some(0),
                     chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
                     status: Status::Confirmed,
+                    chain: ChainMembership::Confirmed,
                 })
             });
         mock_store
@@ -677,6 +679,7 @@ mod tests {
                     expected_height: Some(0),
                     chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
                     status: Status::Confirmed,
+                    chain: ChainMembership::Confirmed,
                 })
             });
         mock_store
@@ -728,6 +731,7 @@ mod tests {
                         expected_height: Some(0),
                         chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
                         status: Status::Confirmed,
+                        chain: ChainMembership::Confirmed,
                     })
                 } else {
                     Err(StoreError::NotFound("not found".to_string()))
@@ -845,6 +849,7 @@ mod tests {
                 expected_height: Some(0),
                 chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
                 status: Status::BlockValid,
+                chain: ChainMembership::None,
             })
         });
 
@@ -891,6 +896,7 @@ mod tests {
                 expected_height: Some(0),
                 chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
                 status: Status::HeaderValid,
+                chain: ChainMembership::None,
             })
         });
         mock_store
@@ -963,6 +969,7 @@ mod tests {
                         expected_height: Some(0),
                         chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
                         status: Status::Confirmed,
+                        chain: ChainMembership::Confirmed,
                     })
                 } else {
                     Err(StoreError::NotFound("not found".to_string()))
@@ -1044,6 +1051,7 @@ mod tests {
                     expected_height: Some(0),
                     chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
                     status: Status::Confirmed,
+                    chain: ChainMembership::Confirmed,
                 })
             });
         // child_hash: always NotFound (never reaches the store via the
@@ -1070,6 +1078,7 @@ mod tests {
                     expected_height: Some(0),
                     chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
                     status: Status::Confirmed,
+                    chain: ChainMembership::Confirmed,
                 })
             });
         mock_store
@@ -1176,6 +1185,7 @@ mod tests {
                     expected_height: Some(0),
                     chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
                     status: Status::HeaderValid,
+                    chain: ChainMembership::None,
                 })
             });
         mock_store
