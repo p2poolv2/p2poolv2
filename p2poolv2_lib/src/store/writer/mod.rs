@@ -307,7 +307,10 @@ impl StoreWriter {
                 let result = self
                     .store
                     .mark_block_valid(&blockhash, &mut batch)
-                    .and_then(|_| self.store.commit_batch(batch).map_err(StoreError::from));
+                    .and_then(|upgraded| {
+                        self.store.commit_batch(batch).map_err(StoreError::from)?;
+                        Ok(upgraded)
+                    });
                 let _ = reply.send(result);
             }
         }
