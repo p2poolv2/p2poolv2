@@ -547,11 +547,10 @@ impl Store {
     /// Mark a block BlockValid after it passes chain-context validation.
     ///
     /// Upgrades a HeaderValid block to BlockValid. An already-BlockValid
-    /// block is a no-op (idempotent: the re-validation cascade may re-check
-    /// a descendant that is already valid). A Pending or Invalid block is a
+    /// block is an idempotent no-op. A Pending or Invalid block is a
     /// precondition violation -- block validation must run on a
     /// header-validated, not-yet-rejected block -- and returns
-    /// `StoreError::InvalidStatustransition` rather than silently succeeding.
+    /// `StoreError::InvalidStatusTransition` rather than silently succeeding.
     ///
     /// Chain membership is a separate field, so this never affects
     /// candidate/confirmed position. Errors if the block has no metadata.
@@ -576,8 +575,7 @@ impl Store {
                 )?;
                 Ok(())
             }
-            // Already validated: idempotent, e.g. when the re-validation
-            // cascade re-checks an already-BlockValid descendant.
+            // Already validated: idempotent no-op.
             BlockValid => Ok(()),
             // Pending (header never validated) or Invalid (already rejected)
             // both violate the precondition that block validation runs on a

@@ -38,9 +38,11 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::shares::validation::ShareValidator;
 use crate::shares::validation::check_pplns_zone;
+use crate::store::block_tx_metadata::{ChainMembership, Status};
 use crate::store::dag_store::ShareInfo;
 use crate::store::writer::StoreError;
 use crate::stratum::work::notify::{NotifyCmd, NotifySender};
+use bitcoin::BlockHash;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::{Arc, RwLock};
@@ -94,8 +96,7 @@ impl std::error::Error for OrganiseError {}
 /// Receives `OrganiseEvent` values that have already been stored in the
 /// chain and triggers atomic updates to the candidate/confirmed indexes
 /// via `ChainStoreHandle`. After promoting a block, updates the shared
-/// PplnsWindow cache and schedules stored children/nephews for
-/// validation.
+/// PplnsWindow cache.
 pub struct OrganiseWorker {
     organise_rx: OrganiseReceiver,
     chain_store_handle: ChainStoreHandle,
@@ -253,9 +254,7 @@ impl OrganiseWorker {
                 }
                 return Ok(None);
             }
-            if let Err(mark_error) = self.chain_store_handle.mark_block_valid(blockhash).await {
-                error!("Failed to mark {blockhash} BlockValid: {mark_error}");
-            }
+            self.mark_valid_if_parent_validated(share_block).await;
         }
 
         match self
@@ -274,6 +273,52 @@ impl OrganiseWorker {
             Err(error) => {
                 error!("Error promoting block {blockhash}: {error}");
                 Ok(None)
+            }
+        }
+    }
+
+    /// Mark a block BlockValid, but only once its parent is itself BlockValid
+    /// or on the confirmed chain.
+    ///
+    /// This keeps the BlockValid chain fully validated from the confirmed tip
+    /// up (transitivity): an attacker who withholds an early dependency can
+    /// grow header-work, but nothing above the gap ever becomes BlockValid, so
+    /// nothing we mine on follows it.
+    ///
+    /// If the parent is not yet validated the block is left HeaderValid. No
+    /// re-trigger is needed: the block stays on the candidate chain with its
+    /// body, so confirmation still sweeps through it, and the mining base
+    /// (max of confirmed tip and highest BlockValid) tracks it via confirmed.
+    /// The BlockValid pointer only needs to lead the confirmed tip where
+    /// confirmation cannot advance -- a case the gate itself already stops.
+    async fn mark_valid_if_parent_validated(&self, share_block: &ShareBlock) {
+        let blockhash = share_block.block_hash();
+        if !self.has_valid_parent(&share_block.header.prev_share_blockhash) {
+            debug!("Leaving {blockhash} HeaderValid: parent not yet BlockValid/confirmed");
+            return;
+        }
+        if let Err(mark_error) = self.chain_store_handle.mark_block_valid(blockhash).await {
+            error!("Failed to mark {blockhash} BlockValid: {mark_error}");
+        }
+    }
+
+    /// Whether a parent block is BlockValid or on the confirmed chain, the
+    /// precondition for marking a child BlockValid. Missing parent metadata is
+    /// treated as not-yet-validated so the child stays HeaderValid.
+    ///
+    /// We need to allow either block valid or confirmed as below pplns window,
+    /// the blocks are confirmed without being blockvalid.
+    fn has_valid_parent(&self, parent_hash: &BlockHash) -> bool {
+        match self.chain_store_handle.get_block_metadata(parent_hash) {
+            Ok(metadata) => {
+                metadata.status == Status::BlockValid
+                    || metadata.chain == ChainMembership::Confirmed
+            }
+            Err(error) => {
+                debug!(
+                    "Parent {parent_hash} metadata unavailable, treating as unvalidated: {error}"
+                );
+                false
             }
         }
     }
@@ -514,6 +559,80 @@ mod tests {
         Arc::new(mock_validator)
     }
 
+    /// Build an OrganiseWorker whose chain store returns `metadata_result`
+    /// for any get_block_metadata call. Used to unit-test has_valid_parent.
+    fn worker_with_parent_metadata(
+        metadata_result: Result<BlockMetadata, StoreError>,
+    ) -> OrganiseWorker {
+        let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_get_block_metadata()
+            .returning(move |_| metadata_result.clone());
+
+        let (_organise_tx, organise_rx) = create_organise_channel();
+        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let (notify_tx, _notify_rx) = create_test_notify_channel();
+        OrganiseWorker::new(
+            organise_rx,
+            mock_chain_handle,
+            monitoring_tx,
+            notify_tx,
+            create_test_metrics_handle(),
+            create_test_pplns_window(),
+            stub_share_validator_with_success(),
+        )
+    }
+
+    fn parent_metadata(status: Status, chain: ChainMembership) -> BlockMetadata {
+        BlockMetadata {
+            expected_height: Some(1),
+            chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
+            status,
+            chain,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_has_valid_parent() {
+        let parent = TestShareBlockBuilder::new()
+            .nonce(0xe9695791)
+            .build()
+            .block_hash();
+
+        // A BlockValid parent (even off-chain) satisfies the gate.
+        let worker = worker_with_parent_metadata(Ok(parent_metadata(
+            Status::BlockValid,
+            ChainMembership::None,
+        )));
+        assert!(worker.has_valid_parent(&parent));
+
+        // A confirmed parent that is only HeaderValid (genesis, or a block
+        // confirmed below the PPLNS zone) also satisfies the gate.
+        let worker = worker_with_parent_metadata(Ok(parent_metadata(
+            Status::HeaderValid,
+            ChainMembership::Confirmed,
+        )));
+        assert!(worker.has_valid_parent(&parent));
+
+        // A HeaderValid candidate parent is not yet validated.
+        let worker = worker_with_parent_metadata(Ok(parent_metadata(
+            Status::HeaderValid,
+            ChainMembership::Candidate,
+        )));
+        assert!(!worker.has_valid_parent(&parent));
+
+        // An Invalid parent is not validated.
+        let worker = worker_with_parent_metadata(Ok(parent_metadata(
+            Status::Invalid,
+            ChainMembership::None,
+        )));
+        assert!(!worker.has_valid_parent(&parent));
+
+        // Missing parent metadata is treated as not-yet-validated.
+        let worker = worker_with_parent_metadata(Err(StoreError::NotFound("missing".to_string())));
+        assert!(!worker.has_valid_parent(&parent));
+    }
+
     #[tokio::test]
     async fn test_organise_worker_stops_on_channel_close() {
         let (_organise_tx, organise_rx) = create_organise_channel();
@@ -592,6 +711,60 @@ mod tests {
             .expect_mark_block_valid()
             .times(1)
             .returning(|_| Ok(()));
+        // Parent on the confirmed chain, so the transitivity gate lets the
+        // block be marked BlockValid.
+        mock_chain_handle
+            .expect_get_block_metadata()
+            .returning(|_| {
+                Ok(BlockMetadata {
+                    expected_height: Some(1),
+                    chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
+                    status: Status::HeaderValid,
+                    chain: ChainMembership::Confirmed,
+                })
+            });
+        mock_chain_handle
+            .expect_get_candidate_tip_height()
+            .returning(|| Ok(Some(1)));
+        mock_chain_handle
+            .expect_get_tip_height()
+            .returning(|| Ok(Some(1)));
+        mock_chain_handle
+            .expect_promote_block()
+            .returning(|_| Ok(None));
+
+        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let (notify_tx, _notify_rx) = create_test_notify_channel();
+        let worker = OrganiseWorker::new(
+            organise_rx,
+            mock_chain_handle,
+            monitoring_tx,
+            notify_tx,
+            create_test_metrics_handle(),
+            create_test_pplns_window(),
+            stub_share_validator_with_success(),
+        );
+
+        let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        organise_tx.send(OrganiseEvent::Block(share)).await.unwrap();
+        drop(organise_tx);
+
+        let result = worker.run().await;
+        assert!(result.is_ok());
+    }
+
+    /// Transitivity gate: a block whose parent is only HeaderValid on the
+    /// candidate chain (not BlockValid, not confirmed) must NOT be marked
+    /// BlockValid even after its own chain-context validation passes. It is
+    /// left HeaderValid until the parent is validated.
+    #[tokio::test]
+    async fn test_block_not_marked_valid_when_parent_unvalidated() {
+        let (organise_tx, organise_rx) = create_organise_channel();
+        let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_clone()
+            .return_once(MockChainStoreHandle::new);
+        // Parent is HeaderValid on the candidate chain -- not yet validated.
         mock_chain_handle
             .expect_get_block_metadata()
             .returning(|_| {
@@ -608,6 +781,8 @@ mod tests {
         mock_chain_handle
             .expect_get_tip_height()
             .returning(|| Ok(Some(1)));
+        // The gate must block the upgrade entirely.
+        mock_chain_handle.expect_mark_block_valid().never();
         mock_chain_handle
             .expect_promote_block()
             .returning(|_| Ok(None));
