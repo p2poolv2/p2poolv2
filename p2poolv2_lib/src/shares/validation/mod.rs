@@ -1538,10 +1538,6 @@ mod tests {
             .with(eq(bitcoin::BlockHash::all_zeros()))
             .returning(|_| Some(genesis_for_tests()));
 
-        chain_store_handle
-            .expect_setup_share_for_chain()
-            .returning(Ok);
-
         let validator =
             DefaultShareValidator::new(PoolDifficulty::default(), 1, b"P2Poolv2".to_vec());
         let result = validator.validate_share_block(&share_block, &chain_store_handle);

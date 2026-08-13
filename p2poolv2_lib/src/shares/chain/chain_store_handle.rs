@@ -649,23 +649,6 @@ impl ChainStoreHandle {
         }
     }
 
-    /// Set up a share for the chain by setting prev_blockhash and uncles.
-    pub fn setup_share_for_chain(
-        &self,
-        mut share_block: ShareBlock,
-    ) -> Result<ShareBlock, StoreError> {
-        let (chain_tip, tips) = self.get_chain_tip_and_uncles()?;
-        debug!(
-            "Setting up share for share blockhash: {:?} with chain_tip: {:?} and tips: {:?}",
-            share_block.block_hash(),
-            chain_tip,
-            tips
-        );
-        share_block.header.prev_share_blockhash = chain_tip;
-        share_block.header.uncles = tips.into_iter().collect();
-        Ok(share_block)
-    }
-
     // ========================================================================
     // ASYNC WRITES - These use StoreHandle's serialized write methods
     // ========================================================================
@@ -845,7 +828,6 @@ mockall::mock! {
         pub fn get_pplns_shares_filtered(&self, limit: Option<usize>, start_time: Option<u64>, end_time: Option<u64>) -> Vec<SimplePplnsShare>;
         pub fn get_confirmed_at_height(&self, height: u32) -> Result<BlockHash, StoreError>;
         pub fn get_current_target(&self) -> Result<u32, StoreError>;
-        pub fn setup_share_for_chain(&self, share_block: ShareBlock) -> Result<ShareBlock, StoreError>;
         pub fn is_confirmed(&self, share: &ShareBlock) -> bool;
         pub fn is_confirmed_or_confirmed_uncle(&self, blockhash: &BlockHash) -> bool;
         pub fn get_btcaddresses_for_user_ids(&self, user_ids: &[u64]) -> Result<Vec<(u64, String)>, StoreError>;
