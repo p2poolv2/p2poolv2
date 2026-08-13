@@ -94,9 +94,9 @@ fn build_prepared_notify(
 ) -> Result<PreparedNotifyParams, WorkError> {
     let (tip, uncles) = context
         .chain_store_handle
-        .get_chain_tip_and_uncles()
+        .get_mining_base_and_uncles()
         .map_err(|error| WorkError {
-            message: format!("Failed to get chain tip: {error}"),
+            message: format!("Failed to get mining base: {error}"),
         })?;
     let (tip_height, parent_time) = context
         .chain_store_handle
@@ -320,7 +320,7 @@ mod tests {
         let genesis_hash = genesis.block_hash();
         let genesis_header = genesis.header.clone();
         chain_store_handle
-            .expect_get_chain_tip_and_uncles()
+            .expect_get_mining_base_and_uncles()
             .returning(move || Ok((genesis_hash, std::collections::HashSet::new())));
 
         let pool_difficulty =
@@ -414,7 +414,7 @@ mod tests {
         let genesis = genesis_for_tests();
         let genesis_hash = genesis.block_hash();
         chain_store_handle
-            .expect_get_chain_tip_and_uncles()
+            .expect_get_mining_base_and_uncles()
             .returning(move || Ok((genesis_hash, std::collections::HashSet::new())));
 
         chain_store_handle
