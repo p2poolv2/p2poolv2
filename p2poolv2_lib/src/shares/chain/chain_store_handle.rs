@@ -526,6 +526,60 @@ impl ChainStoreHandle {
         Ok((chain_tip, uncles))
     }
 
+    /// The block to mine the next share on: the higher-work of the confirmed
+    /// tip and the highest-work `BlockValid` block, ties broken by the
+    /// lexicographically smallest hash.
+    ///
+    /// Mining on the highest-work validated block -- which may lead or fork
+    /// off the confirmed chain -- keeps honest miners building on validated
+    /// work even when an attacker's unvalidatable high-work chain stalls
+    /// confirmation. When no block is `BlockValid` yet (or the confirmed tip
+    /// out-works it) the confirmed tip is used.
+    pub fn get_mining_base(&self) -> Result<BlockHash, StoreError> {
+        let store = self.store_handle.store();
+        let top_confirmed = store.get_top_confirmed()?;
+        match store.get_highest_block_valid()? {
+            Some((block_valid_hash, block_valid_work)) => {
+                let block_valid_wins = block_valid_work > top_confirmed.work
+                    || (block_valid_work == top_confirmed.work
+                        && block_valid_hash < top_confirmed.hash);
+                if block_valid_wins {
+                    Ok(block_valid_hash)
+                } else {
+                    Ok(top_confirmed.hash)
+                }
+            }
+            None => Ok(top_confirmed.hash),
+        }
+    }
+
+    /// The mining base and the uncles to reference when building on it.
+    ///
+    /// Uncles come from `find_uncles`, excluding the mining base and its
+    /// ancestry down to the confirmed chain, so a block we build on (or one
+    /// of its ancestors) is never also listed as an uncle. When the mining
+    /// base is the confirmed tip this is exactly `get_chain_tip_and_uncles`.
+    pub fn get_mining_base_and_uncles(
+        &self,
+    ) -> Result<(BlockHash, HashSet<BlockHash>), StoreError> {
+        let mining_base = self.get_mining_base()?;
+        let store = self.store_handle.store();
+        let branch = store
+            .get_branch_to_chain(&mining_base, |hash| store.is_confirmed(hash))?
+            .ok_or_else(|| {
+                StoreError::NotFound(format!(
+                    "Mining base {mining_base} does not connect to the confirmed chain"
+                ))
+            })?;
+        let ancestry: HashSet<BlockHash> = branch.into_iter().collect();
+        let uncles: HashSet<BlockHash> = store
+            .find_uncles()?
+            .into_iter()
+            .filter(|uncle| !ancestry.contains(uncle))
+            .collect();
+        Ok((mining_base, uncles))
+    }
+
     /// Check which blockhashes are missing from the chain.
     pub fn get_missing_blockhashes(&self, blockhashes: &[BlockHash]) -> Vec<BlockHash> {
         self.store_handle.get_missing_blockhashes(blockhashes)
@@ -814,6 +868,8 @@ mockall::mock! {
         pub fn get_candidate_tip_header(&self) -> Result<ShareHeader, StoreError>;
         pub fn is_current(&self) -> bool;
         pub fn get_chain_tip_and_uncles(&self) -> Result<(BlockHash, HashSet<BlockHash>), StoreError>;
+        pub fn get_mining_base(&self) -> Result<BlockHash, StoreError>;
+        pub fn get_mining_base_and_uncles(&self) -> Result<(BlockHash, HashSet<BlockHash>), StoreError>;
         pub fn get_share_height_and_time(&self, share_hash: &BlockHash) -> Result<(u32, u32), StoreError>;
         pub fn get_genesis_blockhash(&self) -> Option<BlockHash>;
         pub fn get_genesis_header(&self) -> Result<ShareHeader, StoreError>;
@@ -850,6 +906,8 @@ mockall::mock! {
 
 #[cfg(test)]
 mod tests {
+    use crate::store::Store;
+    use crate::store::writer::StoreError;
     use crate::test_utils::{
         TestShareBlockBuilder, genesis_for_tests, setup_test_chain_store_handle,
     };
@@ -860,6 +918,261 @@ mod tests {
     async fn test_chain_store_handle_creation() {
         let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
         assert_eq!(chain_handle.network(), bitcoin::Network::Signet);
+    }
+
+    #[tokio::test]
+    async fn test_get_mining_base_defaults_to_confirmed_tip() {
+        let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let genesis = genesis_for_tests();
+        chain_handle
+            .init_or_setup_genesis(genesis.clone())
+            .await
+            .unwrap();
+
+        // No BlockValid block yet -> mining base is the confirmed (genesis) tip.
+        assert_eq!(
+            chain_handle.get_mining_base().unwrap(),
+            genesis.block_hash()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_mining_base_prefers_higher_work_block_valid() {
+        let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let genesis = genesis_for_tests();
+        chain_handle
+            .init_or_setup_genesis(genesis.clone())
+            .await
+            .unwrap();
+
+        // A real block validated on top of genesis out-works the confirmed
+        // (genesis) tip, so it becomes the mining base.
+        let store = chain_handle.store_handle().store();
+        let block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .work(2)
+            .build();
+        store.store_with_valid_metadata(&block);
+        let mut batch = Store::get_write_batch();
+        store
+            .mark_block_valid(&block.block_hash(), &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert_eq!(chain_handle.get_mining_base().unwrap(), block.block_hash());
+    }
+
+    #[tokio::test]
+    async fn test_get_mining_base_keeps_confirmed_when_it_outworks_the_fork() {
+        let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let genesis = genesis_for_tests();
+        chain_handle
+            .init_or_setup_genesis(genesis.clone())
+            .await
+            .unwrap();
+
+        let store = chain_handle.store_handle().store();
+        // Confirm two blocks so the confirmed tip accumulates more work than
+        // a shallow fork.
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .work(2)
+            .build();
+        store.push_to_confirmed_chain(&share1).unwrap();
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(0xe9695793)
+            .work(2)
+            .build();
+        store.push_to_confirmed_chain(&share2).unwrap();
+
+        // A validated fork off genesis carries less cumulative work than share2.
+        let fork = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695799)
+            .work(1)
+            .build();
+        store.store_with_valid_metadata(&fork);
+        let mut batch = Store::get_write_batch();
+        store
+            .mark_block_valid(&fork.block_hash(), &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert_eq!(chain_handle.get_mining_base().unwrap(), share2.block_hash());
+    }
+
+    #[tokio::test]
+    async fn test_get_mining_base_tiebreak_smallest_hash_on_equal_work() {
+        let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let genesis = genesis_for_tests();
+        chain_handle
+            .init_or_setup_genesis(genesis.clone())
+            .await
+            .unwrap();
+
+        let store = chain_handle.store_handle().store();
+        // Two sibling blocks off genesis with equal work -> equal cumulative
+        // work. Confirm one and mark the other BlockValid so the confirmed
+        // tip and the highest-BlockValid pointer tie on work.
+        let share_a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .work(3)
+            .build();
+        let share_b = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695793)
+            .work(3)
+            .build();
+        store.push_to_confirmed_chain(&share_a).unwrap();
+        store.store_with_valid_metadata(&share_b);
+        let mut batch = Store::get_write_batch();
+        store
+            .mark_block_valid(&share_b.block_hash(), &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Equal work: the lexicographically smaller hash wins.
+        let expected = std::cmp::min(share_a.block_hash(), share_b.block_hash());
+        assert_eq!(chain_handle.get_mining_base().unwrap(), expected);
+    }
+
+    #[tokio::test]
+    async fn test_get_mining_base_and_uncles_excludes_base() {
+        let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let genesis = genesis_for_tests();
+        chain_handle
+            .init_or_setup_genesis(genesis.clone())
+            .await
+            .unwrap();
+
+        // With only genesis, the mining base is genesis and it is never
+        // listed as an uncle (its own-ancestry is excluded).
+        let (base, uncles) = chain_handle.get_mining_base_and_uncles().unwrap();
+        assert_eq!(base, genesis.block_hash());
+        assert!(!uncles.contains(&genesis.block_hash()));
+        assert!(uncles.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_mining_base_and_uncles_returns_sibling_uncle() {
+        let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let genesis = genesis_for_tests();
+        chain_handle
+            .init_or_setup_genesis(genesis.clone())
+            .await
+            .unwrap();
+
+        let store = chain_handle.store_handle().store();
+        // Confirm a block at height 1.
+        let confirmed = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .work(2)
+            .build();
+        store.push_to_confirmed_chain(&confirmed).unwrap();
+
+        // A sibling of the confirmed block (also a child of genesis) with its
+        // body stored is a valid uncle candidate.
+        let sibling = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695793)
+            .work(1)
+            .build();
+        store.store_with_valid_metadata(&sibling);
+
+        // With no BlockValid block, the mining base is the confirmed tip. The
+        // sibling is returned as an uncle, and the mining base is never listed
+        // among the uncles.
+        let (base, uncles) = chain_handle.get_mining_base_and_uncles().unwrap();
+        assert_eq!(base, confirmed.block_hash());
+        assert!(uncles.contains(&sibling.block_hash()));
+        assert!(!uncles.contains(&confirmed.block_hash()));
+    }
+
+    #[tokio::test]
+    async fn test_get_mining_base_and_uncles_excludes_fork_ancestry() {
+        let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let genesis = genesis_for_tests();
+        chain_handle
+            .init_or_setup_genesis(genesis.clone())
+            .await
+            .unwrap();
+
+        let store = chain_handle.store_handle().store();
+        // Confirm a block at height 1.
+        let confirmed = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .work(2)
+            .build();
+        store.push_to_confirmed_chain(&confirmed).unwrap();
+
+        // An off-chain BlockValid fork off genesis that out-works the confirmed
+        // tip becomes the mining base.
+        let fork = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695793)
+            .work(5)
+            .build();
+        store.store_with_valid_metadata(&fork);
+        let mut batch = Store::get_write_batch();
+        store
+            .mark_block_valid(&fork.block_hash(), &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Another sibling off genesis is a genuine uncle, outside the fork's
+        // ancestry.
+        let sibling = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695794)
+            .work(1)
+            .build();
+        store.store_with_valid_metadata(&sibling);
+
+        let (base, uncles) = chain_handle.get_mining_base_and_uncles().unwrap();
+        // The mining base is the fork; it and its ancestry (down to genesis)
+        // are excluded from the uncle set.
+        assert_eq!(base, fork.block_hash());
+        assert!(!uncles.contains(&fork.block_hash()));
+        assert!(!uncles.contains(&genesis.block_hash()));
+        // The confirmed tip is never an uncle, but the unrelated sibling is.
+        assert!(!uncles.contains(&confirmed.block_hash()));
+        assert!(uncles.contains(&sibling.block_hash()));
+    }
+
+    #[tokio::test]
+    async fn test_get_mining_base_and_uncles_errors_when_base_disconnected() {
+        let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let genesis = genesis_for_tests();
+        chain_handle
+            .init_or_setup_genesis(genesis.clone())
+            .await
+            .unwrap();
+
+        // Simulate an inconsistent store: the highest-BlockValid pointer names a
+        // block that has no stored header, so its ancestry cannot be traced to
+        // the confirmed chain. This must surface as an error, not silently
+        // return an empty ancestry (which would let the base be its own uncle).
+        let store = chain_handle.store_handle().store();
+        let orphan = BlockHash::from_byte_array([7u8; 32]);
+        let mut batch = Store::get_write_batch();
+        store.set_highest_block_valid(
+            &orphan,
+            bitcoin::Work::from_le_bytes([0xff; 32]),
+            &mut batch,
+        );
+        store.commit_batch(batch).unwrap();
+
+        let result = chain_handle.get_mining_base_and_uncles();
+        assert!(
+            matches!(result, Err(StoreError::NotFound(_))),
+            "expected NotFound, got {result:?}"
+        );
     }
 
     #[tokio::test]
