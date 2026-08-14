@@ -349,9 +349,13 @@ fn print_shares_dot(shares: &[ShareInfo], graph_name: &str) {
 
 /// Render DagEntry list as a Graphviz DOT digraph.
 ///
-/// Colours nodes by status: green for Confirmed, yellow for Candidate,
-/// grey for HeaderValid/other. Marks nodes without block data with a
-/// double border. Only emits edges between nodes present in the result.
+/// Colours nodes by chain membership (position), which is what matters
+/// for reading fork/confirmation structure: green for Confirmed, yellow
+/// for Candidate, grey for off-chain (None). A node whose validation
+/// status is Invalid is drawn red regardless of position. The label
+/// carries both the validation status and the chain membership so the
+/// two axes stay visible. Nodes without block data get a double border.
+/// Only emits edges between nodes present in the result.
 fn print_dag_dot(entries: &[DagEntry]) {
     let known_hashes: std::collections::HashSet<String> = entries
         .iter()
@@ -368,14 +372,17 @@ fn print_dag_dot(entries: &[DagEntry]) {
         let miner = short(&entry.miner_address, 8);
         let data_marker = if entry.has_block_data { "D" } else { "-" };
         let label = format!(
-            "{}|h:{}|{}|{}|{}",
-            identifier, entry.height, miner, entry.status, data_marker
+            "{}|h:{}|{}|{}/{}|{}",
+            identifier, entry.height, miner, entry.chain, entry.status, data_marker
         );
-        let fill_color = match entry.status.as_str() {
-            "Confirmed" => "#a8d5ba",
-            "Candidate" => "#ffffb3",
-            "HeaderValid" | "BlockValid" => "#d9d9d9",
-            _ => "#f4a582",
+        let fill_color = if entry.status == "Invalid" {
+            "#f4a582"
+        } else {
+            match entry.chain.as_str() {
+                "Confirmed" => "#a8d5ba",
+                "Candidate" => "#ffffb3",
+                _ => "#d9d9d9",
+            }
         };
         let border = if entry.has_block_data {
             ""
