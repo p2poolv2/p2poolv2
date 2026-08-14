@@ -1268,6 +1268,10 @@ mod tests {
                 .organise_header(share.header.clone())
                 .await
                 .unwrap();
+            chain_handle
+                .mark_block_valid(share.block_hash())
+                .await
+                .unwrap();
             chain_handle.organise_block().await.unwrap();
             prev_hash = share.block_hash();
             shares.push(share);
@@ -1333,6 +1337,10 @@ mod tests {
             chain_handle.add_share_block(share.clone()).await.unwrap();
             chain_handle
                 .organise_header(share.header.clone())
+                .await
+                .unwrap();
+            chain_handle
+                .mark_block_valid(share.block_hash())
                 .await
                 .unwrap();
             chain_handle.organise_block().await.unwrap();
@@ -1408,6 +1416,10 @@ mod tests {
             chain_handle.add_share_block(share.clone()).await.unwrap();
             chain_handle
                 .organise_header(share.header.clone())
+                .await
+                .unwrap();
+            chain_handle
+                .mark_block_valid(share.block_hash())
                 .await
                 .unwrap();
             chain_handle.organise_block().await.unwrap();
@@ -1526,6 +1538,10 @@ mod tests {
             .organise_header(share_a.header.clone())
             .await
             .unwrap();
+        chain_handle
+            .mark_block_valid(share_a.block_hash())
+            .await
+            .unwrap();
         chain_handle.organise_block().await.unwrap();
 
         let share_b = TestShareBlockBuilder::new()
@@ -1536,6 +1552,10 @@ mod tests {
         chain_handle.add_share_block(share_b.clone()).await.unwrap();
         chain_handle
             .organise_header(share_b.header.clone())
+            .await
+            .unwrap();
+        chain_handle
+            .mark_block_valid(share_b.block_hash())
             .await
             .unwrap();
         chain_handle.organise_block().await.unwrap();
@@ -1616,6 +1636,10 @@ mod tests {
             chain_handle.add_share_block(share.clone()).await.unwrap();
             chain_handle
                 .organise_header(share.header.clone())
+                .await
+                .unwrap();
+            chain_handle
+                .mark_block_valid(share.block_hash())
                 .await
                 .unwrap();
             chain_handle.organise_block().await.unwrap();

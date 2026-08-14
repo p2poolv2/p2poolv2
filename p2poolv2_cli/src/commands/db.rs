@@ -148,9 +148,14 @@ mod tests {
             .await
             .unwrap();
         chain_store_handle
-            .promote_block(confirmed.header.clone())
+            .organise_header(confirmed.header.clone())
             .await
             .unwrap();
+        chain_store_handle
+            .mark_block_valid(confirmed.block_hash())
+            .await
+            .unwrap();
+        chain_store_handle.organise_block().await.unwrap();
 
         // Uncle at height 1 (organise header stores as HeaderValid)
         let uncle = TestShareBlockBuilder::new()
@@ -178,9 +183,14 @@ mod tests {
             .await
             .unwrap();
         chain_store_handle
-            .promote_block(confirmed_with_uncle.header.clone())
+            .organise_header(confirmed_with_uncle.header.clone())
             .await
             .unwrap();
+        chain_store_handle
+            .mark_block_valid(confirmed_with_uncle.block_hash())
+            .await
+            .unwrap();
+        chain_store_handle.organise_block().await.unwrap();
 
         // 25 unreferenced HeaderValid blocks at height 1
         for nonce in 200..225 {

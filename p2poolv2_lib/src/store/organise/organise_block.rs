@@ -71,50 +71,6 @@ impl Store {
                 return self.reorg_confirmed(&top_confirmed, &candidates, prune_height, batch);
             }
         }
-
-        self.try_fallback_confirmation(&top_confirmed, prune_height, batch)
-    }
-
-    /// Fallback: when no candidate chain blocks can be promoted, look
-    /// for any block at the next height that is a child of the
-    /// confirmed tip with all block and uncle data available.
-    fn try_fallback_confirmation(
-        &self,
-        top_confirmed: &TopResult,
-        prune_height: u32,
-        batch: &mut rocksdb::WriteBatch,
-    ) -> Result<Option<Height>, StoreError> {
-        let next_height = top_confirmed.height + 1;
-        let height_entries = self.get_blockhashes_for_height_range(next_height, next_height);
-
-        for (_, blockhashes) in &height_entries {
-            for blockhash in blockhashes {
-                let Some(header) = self.get_share_header(blockhash)? else {
-                    continue;
-                };
-                if header.prev_share_blockhash != top_confirmed.hash {
-                    continue;
-                }
-                // Only confirm validated blocks (Candidate or BlockValid). A
-                // HeaderValid child (PoW-valid but not chain-context validated),
-                // Pending, or Invalid block must not be promoted. A locally-mined
-                // block that could not reorg the candidate chain is marked
-                // BlockValid at stratum receipt, so it still qualifies here.
-                if !self.is_candidate_or_block_valid(blockhash) {
-                    continue;
-                }
-                if !self.all_block_and_uncle_data_available(&[*blockhash], prune_height)? {
-                    continue;
-                }
-                debug!(
-                    "Fallback confirmation: block {blockhash} at height {next_height} \
-                     extends confirmed tip"
-                );
-                let candidates = vec![(next_height, *blockhash)];
-                return self.extend_confirmed(next_height, &candidates, batch);
-            }
-        }
-
         Ok(None)
     }
 
@@ -146,10 +102,15 @@ impl Store {
 
     /// Return the contiguous prefix of candidates eligible for promotion.
     ///
-    /// Blocks below `prune_height` are allowed without body data (their
-    /// PoW was validated at header time). Blocks at or above the boundary
-    /// must have full block data stored. Stops at the first block above
-    /// the boundary that lacks data.
+    /// Below `prune_height` a block is promoted header-only: it only needs to
+    /// be on the candidate chain, and its body is not required (its PoW was
+    /// validated at header time).
+    ///
+    /// At or above `prune_height` -- the PPLNS zone -- a block must be on the
+    /// candidate chain, `BlockValid` (chain-context validation complete), and
+    /// have its body stored. This keeps a block from reaching the confirmed
+    /// chain before it is fully validated. Stops at the first block that
+    /// fails its tier's requirement.
     fn contiguous_candidates_with_block_data(
         &self,
         candidates: &Chain,
@@ -157,17 +118,24 @@ impl Store {
     ) -> Chain {
         let mut result = Vec::with_capacity(candidates.len());
         for (height, blockhash) in candidates {
-            if !self.is_candidate_or_block_valid(blockhash) {
+            if *height >= prune_height {
+                if !self.is_candidate_and_block_valid(blockhash) {
+                    debug!(
+                        "Candidate at height {} ({}) not Candidate+BlockValid, stopping promotion",
+                        height, blockhash
+                    );
+                    return result;
+                }
+                if !self.share_block_exists(blockhash) {
+                    debug!(
+                        "Candidate at height {} ({}) missing block data, stopping promotion",
+                        height, blockhash
+                    );
+                    return result;
+                }
+            } else if !self.is_candidate(blockhash) {
                 debug!(
-                    "Candidate at height {} ({}) is not validated (Candidate/BlockValid), \
-                     stopping promotion",
-                    height, blockhash
-                );
-                return result;
-            }
-            if *height >= prune_height && !self.share_block_exists(blockhash) {
-                debug!(
-                    "Candidate at height {} ({}) missing block data, stopping promotion",
+                    "Candidate at height {} ({}) not on candidate chain, stopping promotion",
                     height, blockhash
                 );
                 return result;
@@ -270,13 +238,13 @@ mod tests {
         assert_eq!(store.get_top_confirmed_height().unwrap(), 1);
     }
 
-    /// Regression: `try_fallback_confirmation` must not confirm a block that
-    /// failed chain-context validation (marked Invalid), even though its body
-    /// is present -- otherwise an invalid-coinbase block gets confirmed via
-    /// the fallback, as it did on testnet4. A HeaderValid child (e.g. a valid
-    /// locally-mined block) is still promotable; only Invalid is excluded.
+    /// Regression (testnet4): a child of the confirmed tip that is off the
+    /// candidate chain must never be confirmed. Confirmation advances only
+    /// along the candidate chain -- there is no off-best-chain fallback that
+    /// could promote such a block (which previously confirmed an
+    /// invalid-coinbase block via the old fallback path).
     #[test]
-    fn test_fallback_does_not_confirm_invalid_block() {
+    fn test_off_candidate_chain_child_not_confirmed() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
@@ -293,10 +261,10 @@ mod tests {
         store.push_to_confirmed_chain(&share_a).unwrap();
         assert_eq!(store.get_top_confirmed_height().unwrap(), 1);
 
-        // Child of the confirmed tip with its body present, off the candidate
-        // chain, then marked Invalid (as chain-context validation failure
-        // would). With no promotable candidate above height 1, organise_block
-        // reaches the fallback and finds this height-2 child.
+        // Child of the confirmed tip with its body present but off the
+        // candidate chain, then marked Invalid (as a chain-context validation
+        // failure would). It is not on the candidate chain, so confirmation
+        // never reaches it.
         let share1 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share_a.block_hash().to_string())
             .nonce(0xe9695793)
@@ -316,7 +284,7 @@ mod tests {
 
         assert_eq!(
             result, None,
-            "fallback must not confirm an Invalid child of the confirmed tip"
+            "an off-candidate-chain child of the confirmed tip must not be confirmed"
         );
         assert_eq!(store.get_top_confirmed_height().unwrap(), 1);
     }
@@ -1077,6 +1045,10 @@ mod tests {
         assert!(store.share_block_exists(&share2.block_hash()));
         assert!(!store.share_block_exists(&share3.block_hash()));
 
+        // In-zone promotion requires BlockValid; mark the validated prefix.
+        // share3 stays unpromotable on its missing body regardless.
+        store.mark_candidate_chain_block_valid();
+
         // organise_block should promote only share1 and share2
         let mut batch = Store::get_write_batch();
         let result = store.organise_block(&mut batch).unwrap();
@@ -1204,99 +1176,15 @@ mod tests {
             .unwrap();
         store.commit_batch(batch).unwrap();
 
-        // Now organise_block confirms from the candidate chain
-        let mut batch = Store::get_write_batch();
-        let result = store.organise_block(&mut batch).unwrap();
-        store.commit_batch(batch).unwrap();
-
-        assert_eq!(result, Some(2));
-        assert_eq!(store.get_top_confirmed_height().unwrap(), 2);
-        assert_eq!(
-            store.get_confirmed_at_height(2).unwrap(),
-            local_block.block_hash()
-        );
-    }
-
-    /// Fallback confirmation when candidate chain is stuck on a fork
-    /// whose block data is missing and the local block cannot reorg
-    /// the candidate chain (equal cumulative work).
-    ///
-    /// Scenario:
-    /// - genesis -> share1(h:1) confirmed
-    /// - Candidate chain on a fork at h:1 (header only, no block data)
-    ///   with a second fork block at h:2 (header only) keeping the
-    ///   candidate tip ahead
-    /// - Local block at h:2, parent = share1, WITH block data
-    /// - Local block has equal cumulative work so cannot reorg candidates
-    /// - organise_block falls back to confirming the local block
-    #[test]
-    fn test_fallback_confirms_block_when_candidate_chain_stuck() {
-        let temp_dir = tempdir().unwrap();
-        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-
-        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
-        let mut batch = Store::get_write_batch();
-        store.setup_genesis(&genesis, &mut batch).unwrap();
-        store.commit_batch(batch).unwrap();
-
-        // share1: confirmed at h:1
-        let share1 = TestShareBlockBuilder::new()
-            .prev_share_blockhash(genesis.block_hash().to_string())
-            .nonce(0xe9695792)
-            .build();
-        store.push_to_confirmed_chain(&share1).unwrap();
-        assert_eq!(store.get_top_confirmed_height().unwrap(), 1);
-
-        // fork_share: different child of genesis on a competing fork.
-        // Header only, no block data.
-        let fork_share = TestShareBlockBuilder::new()
-            .prev_share_blockhash(genesis.block_hash().to_string())
-            .nonce(0xe9695799)
-            .build();
-        store.push_to_candidate_chain(&fork_share).unwrap();
-
-        // fork_share2: extends fork to h:2 (header only, no block data).
-        // This keeps the candidate tip ahead of confirmed.
-        let fork_share2 = TestShareBlockBuilder::new()
-            .prev_share_blockhash(fork_share.block_hash().to_string())
-            .nonce(0xe9695800)
-            .build();
-        store.push_to_candidate_chain(&fork_share2).unwrap();
-        assert_eq!(store.get_top_candidate_height().ok(), Some(2));
-
-        // local_block: child of share1 (confirmed tip), WITH block data.
-        // It has equal cumulative work to fork_share at the same height,
-        // so organise_header cannot reorg the candidate chain.
-        let local_block = TestShareBlockBuilder::new()
-            .prev_share_blockhash(share1.block_hash().to_string())
-            .nonce(0xe9695801)
-            .build();
-        let mut batch = Store::get_write_batch();
-        store.add_share_block(&local_block, &mut batch).unwrap();
-        store.commit_batch(batch).unwrap();
-        let mut batch = Store::get_write_batch();
-        store
-            .organise_header(&local_block.header, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
-
-        // Local block could not reorg the candidate chain, so it stayed
-        // HeaderValid. In the node, validate_and_promote_block marks a block
-        // BlockValid after chain-context validation, before promote_block runs
-        // organise_block; mirror that here so the fallback (which only confirms
-        // validated blocks) promotes it.
+        // In-zone promotion requires BlockValid; the node marks a candidate
+        // BlockValid after chain-context validation, so mirror that here.
         let mut batch = Store::get_write_batch();
         store
             .mark_block_valid(&local_block.block_hash(), &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
-        // Candidate chain still on the fork (local block could not reorg)
-        assert!(!store.share_block_exists(&fork_share.block_hash()));
-
-        // organise_block: candidate chain has no block data at h:1,
-        // so find_promotable_candidates returns empty. Fallback finds
-        // local_block at h:2 with parent = confirmed tip and confirms it.
+        // Now organise_block confirms from the candidate chain
         let mut batch = Store::get_write_batch();
         let result = store.organise_block(&mut batch).unwrap();
         store.commit_batch(batch).unwrap();
