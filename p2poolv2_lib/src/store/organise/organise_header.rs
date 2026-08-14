@@ -117,6 +117,7 @@ impl Store {
             blockhash,
             &mut new_entries,
             batch,
+            None,
         )?;
         debug!("new candidate height after extending candidates {final_height}");
         Ok(Some(final_height))
@@ -140,6 +141,7 @@ impl Store {
             &reorg_tip_hash,
             &mut new_entries,
             batch,
+            None,
         )?;
         debug!("new candidate height after reorg + forward walk {final_height}");
         Ok(Some(final_height))

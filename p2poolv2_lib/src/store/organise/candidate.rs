@@ -485,6 +485,133 @@ impl Store {
         }
     }
 
+    /// Reorg the candidate chain after invalidating `invalid_hash`.
+    ///
+    /// The invalid block and every candidate above it leave the candidate
+    /// chain (`chain = None`), then the best surviving branch is rebuilt from
+    /// the invalid block's parent (the branch point, a candidate or the
+    /// confirmed tip). The now-invalid block is filtered out of the parent's
+    /// children before `pick_best_child` runs -- so we never re-read its
+    /// (still-uncommitted) Invalid status -- and `pick_best_child` also skips
+    /// any non-HeaderValid block, so the best valid alternative is chosen.
+    ///
+    /// If the highest-BlockValid pointer referenced a block on the removed
+    /// branch it is cleared, to be rebuilt as the new candidate chain is
+    /// re-validated.
+    ///
+    /// The caller (`mark_invalid`) has already set `invalid_hash` to
+    /// `Invalid` + `chain = None` in the same batch.
+    pub(crate) fn reorg_candidate_after_invalidation(
+        &self,
+        invalid_hash: &BlockHash,
+        invalid_metadata: &BlockMetadata,
+        batch: &mut rocksdb::WriteBatch,
+    ) -> Result<(), StoreError> {
+        let invalid_height = invalid_metadata.expected_height.ok_or_else(|| {
+            StoreError::NotFound("Invalidated candidate missing expected_height".into())
+        })?;
+        let removed = self.detach_candidate_branch(invalid_hash, invalid_height, batch)?;
+        let final_top = self.rebuild_candidate_from_parent(invalid_hash, invalid_height, batch)?;
+        self.set_or_clear_top_candidate_height(final_top, batch)?;
+        self.clear_block_valid_pointer_if_removed(&removed, batch)?;
+        Ok(())
+    }
+
+    /// Remove the invalid block and every candidate above it from the
+    /// candidate index, clearing their candidate membership.
+    ///
+    /// The invalid block's own metadata was already set to `Invalid` +
+    /// `chain = None` by the caller in this same (uncommitted) batch, so it
+    /// is only deleted from the index here -- re-reading it would return the
+    /// stale committed metadata and clobber that write. Returns the set of
+    /// removed blockhashes.
+    fn detach_candidate_branch(
+        &self,
+        invalid_hash: &BlockHash,
+        from_height: Height,
+        batch: &mut rocksdb::WriteBatch,
+    ) -> Result<HashSet<BlockHash>, StoreError> {
+        let top = self.get_top_candidate_height()?;
+        let mut removed: HashSet<BlockHash> =
+            HashSet::with_capacity((top.saturating_sub(from_height) + 1) as usize);
+        for height in from_height..=top {
+            let hash = self.get_candidate_at_height(height)?;
+            self.delete_candidate_entry(height, batch);
+            removed.insert(hash);
+            if hash != *invalid_hash {
+                let mut metadata = self.get_block_metadata(&hash)?;
+                metadata.chain = ChainMembership::None;
+                self.update_block_metadata(&hash, &metadata, batch)?;
+            }
+        }
+        Ok(removed)
+    }
+
+    /// Rebuild the best-work candidate branch from the invalid block's parent
+    /// (the branch point, a candidate or the confirmed tip).
+    ///
+    /// Walks forward from the parent with `extend_candidates_with_children`,
+    /// excluding the invalid block so its still-uncommitted Invalid status is
+    /// never re-read; `pick_best_child` also skips non-HeaderValid blocks, so
+    /// the best valid alternative is chosen. Returns the new candidate top
+    /// height, or the parent's height when no child survives.
+    fn rebuild_candidate_from_parent(
+        &self,
+        invalid_hash: &BlockHash,
+        invalid_height: Height,
+        batch: &mut rocksdb::WriteBatch,
+    ) -> Result<Height, StoreError> {
+        let parent_hash = self
+            .get_share_header(invalid_hash)?
+            .ok_or_else(|| {
+                StoreError::NotFound(format!("No header for invalidated block {invalid_hash}"))
+            })?
+            .prev_share_blockhash;
+        let parent_height = invalid_height - 1;
+        let mut new_candidates: Chain = Vec::new();
+        self.extend_candidates_with_children(
+            parent_height,
+            &parent_hash,
+            &mut new_candidates,
+            batch,
+            Some(invalid_hash),
+        )
+    }
+
+    /// Set the candidate top height after a rebuild, or delete it when the
+    /// candidate chain is now empty (`final_top` is the confirmed tip, i.e.
+    /// nothing survived above it).
+    ///
+    /// `extend_candidates_with_children` only raises the top when it appends,
+    /// so the no-surviving-child and single-child cases are handled here.
+    fn set_or_clear_top_candidate_height(
+        &self,
+        final_top: Height,
+        batch: &mut rocksdb::WriteBatch,
+    ) -> Result<(), StoreError> {
+        if final_top > self.get_top_confirmed_height()? {
+            self.set_top_candidate_height(final_top, batch);
+        } else {
+            self.delete_top_candidate_height(batch);
+        }
+        Ok(())
+    }
+
+    /// Clear the highest-BlockValid pointer when it referenced a block on the
+    /// removed branch; it rebuilds as the new candidate chain is re-validated.
+    fn clear_block_valid_pointer_if_removed(
+        &self,
+        removed: &HashSet<BlockHash>,
+        batch: &mut rocksdb::WriteBatch,
+    ) -> Result<(), StoreError> {
+        if let Some((pointer_hash, _)) = self.get_highest_block_valid()?
+            && removed.contains(&pointer_hash)
+        {
+            self.delete_highest_block_valid(batch);
+        }
+        Ok(())
+    }
+
     /// Reorg when the branch point is on the candidate chain.
     ///
     /// Removes old candidate entries from the branch point to the
@@ -558,13 +685,15 @@ impl Store {
     /// Among multiple children at the same height, selects the one with
     /// the highest `chain_work`. Verifies parent hash to exclude uncle
     /// relationships from the block index. Overwrites `top_candidate_height`
-    /// only if at least one child was appended.
+    /// only if at least one child was appended. `excluded` is forwarded to
+    /// `pick_best_child` (see there) so a specific block is never selected.
     pub(super) fn extend_candidates_with_children(
         &self,
         current_top_height: Height,
         current_top_hash: &BlockHash,
         candidates: &mut Chain,
         batch: &mut rocksdb::WriteBatch,
+        excluded: Option<&BlockHash>,
     ) -> Result<Height, StoreError> {
         let mut height = current_top_height;
         let mut tip_hash = *current_top_hash;
@@ -578,7 +707,7 @@ impl Store {
                 .unwrap_or_default();
 
             if let Some((best_hash, mut best_metadata)) =
-                self.pick_best_child(&children, &tip_hash, height + 1)?
+                self.pick_best_child(&children, &tip_hash, height + 1, excluded)?
             {
                 let next_height = height + 1;
                 self.put_candidate_entry(next_height, &best_hash, batch);
@@ -604,14 +733,17 @@ impl Store {
     /// carry a valid PoW header and are eligible for the candidate chain;
     /// `BlockValid` is a candidate that has since passed chain-context
     /// validation), correct `expected_height`, and matching parent hash
-    /// (to exclude uncle links in the block
-    /// index). Among qualifying children, returns the one with the
+    /// (to exclude uncle links in the block index). `excluded`, when set,
+    /// skips a specific child by hash -- the invalidation reorg uses it so a
+    /// block whose Invalid status is still uncommitted in the batch is never
+    /// re-selected. Among qualifying children, returns the one with the
     /// highest `chain_work`.
     fn pick_best_child(
         &self,
         children: &[BlockHash],
         parent_hash: &BlockHash,
         expected_height: Height,
+        excluded: Option<&BlockHash>,
     ) -> Result<Option<(BlockHash, BlockMetadata)>, StoreError> {
         let mut top_work_child: Option<(BlockHash, BlockMetadata)> = None;
 
@@ -619,6 +751,7 @@ impl Store {
             let all_children = self
                 .get_block_metadata(child_hash)
                 .ok()
+                .filter(|_| excluded != Some(child_hash))
                 .filter(|m| matches!(m.status, Status::HeaderValid | Status::BlockValid))
                 .filter(|m| m.expected_height == Some(expected_height))
                 .and_then(|m| {
@@ -652,6 +785,7 @@ mod tests {
     use crate::store::organise::TopResult;
     use crate::test_utils::TestShareBlockBuilder;
     use bitcoin::Work;
+    use std::collections::HashSet;
     use tempfile::tempdir;
 
     #[test]
@@ -1279,7 +1413,7 @@ mod tests {
 
         let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
         let result = store
-            .pick_best_child(&[], &genesis.block_hash(), 1)
+            .pick_best_child(&[], &genesis.block_hash(), 1, None)
             .unwrap();
         assert!(result.is_none());
     }
@@ -1297,7 +1431,7 @@ mod tests {
         let parent = TestShareBlockBuilder::new().nonce(0xe9695791).build();
 
         let result = store
-            .pick_best_child(&[fake_hash], &parent.block_hash(), 1)
+            .pick_best_child(&[fake_hash], &parent.block_hash(), 1, None)
             .unwrap();
         assert!(result.is_none());
     }
@@ -1329,7 +1463,7 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         let result = store
-            .pick_best_child(&[child.block_hash()], &genesis.block_hash(), 1)
+            .pick_best_child(&[child.block_hash()], &genesis.block_hash(), 1, None)
             .unwrap();
         assert!(result.is_none());
     }
@@ -1361,7 +1495,7 @@ mod tests {
 
         // Ask for height 5 -- child is at height 1
         let result = store
-            .pick_best_child(&[child.block_hash()], &genesis.block_hash(), 5)
+            .pick_best_child(&[child.block_hash()], &genesis.block_hash(), 5, None)
             .unwrap();
         assert!(result.is_none());
     }
@@ -1393,7 +1527,7 @@ mod tests {
 
         let wrong_parent = TestShareBlockBuilder::new().nonce(0xe9695799).build();
         let result = store
-            .pick_best_child(&[child.block_hash()], &wrong_parent.block_hash(), 1)
+            .pick_best_child(&[child.block_hash()], &wrong_parent.block_hash(), 1, None)
             .unwrap();
         assert!(result.is_none());
     }
@@ -1416,7 +1550,7 @@ mod tests {
         store.store_with_valid_metadata(&child);
 
         let result = store
-            .pick_best_child(&[child.block_hash()], &genesis.block_hash(), 1)
+            .pick_best_child(&[child.block_hash()], &genesis.block_hash(), 1, None)
             .unwrap();
         assert!(result.is_some());
         let (hash, result_metadata) = result.unwrap();
@@ -1456,6 +1590,7 @@ mod tests {
                 &[light.block_hash(), heavy.block_hash()],
                 &genesis.block_hash(),
                 1,
+                None,
             )
             .unwrap();
         assert_eq!(result.unwrap().0, heavy.block_hash());
@@ -1466,9 +1601,45 @@ mod tests {
                 &[heavy.block_hash(), light.block_hash()],
                 &genesis.block_hash(),
                 1,
+                None,
             )
             .unwrap();
         assert_eq!(result.unwrap().0, heavy.block_hash());
+    }
+
+    #[test]
+    fn test_pick_best_child_honours_exclusion() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Two valid children of genesis; the heavier one is excluded, so the
+        // lighter one is chosen instead of being the overall best.
+        let heavy = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .work(3)
+            .build();
+        store.store_with_valid_metadata(&heavy);
+        let light = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695793)
+            .work(1)
+            .build();
+        store.store_with_valid_metadata(&light);
+
+        let result = store
+            .pick_best_child(
+                &[heavy.block_hash(), light.block_hash()],
+                &genesis.block_hash(),
+                1,
+                Some(&heavy.block_hash()),
+            )
+            .unwrap();
+        assert_eq!(result.unwrap().0, light.block_hash());
     }
 
     // -- get_candidate_blocks_missing_data tests --
@@ -1839,6 +2010,7 @@ mod tests {
                 &[invalid_child.block_hash(), valid_child.block_hash()],
                 &genesis.block_hash(),
                 1,
+                None,
             )
             .unwrap();
         assert_eq!(result.unwrap().0, valid_child.block_hash());
@@ -1892,6 +2064,7 @@ mod tests {
                 ],
                 &genesis.block_hash(),
                 1,
+                None,
             )
             .unwrap();
         assert_eq!(result.unwrap().0, block_valid_child.block_hash());
@@ -1954,5 +2127,320 @@ mod tests {
 
         let result = store.missing_data_scan_start(None).unwrap();
         assert_eq!(result, 1);
+    }
+
+    // ── invalidation reorg tests ─────────────────────────────────────────
+
+    /// Invalidating a mid-candidate block removes it and its descendants from
+    /// the candidate chain and rebuilds the best surviving branch from the
+    /// invalid block's parent.
+    #[test]
+    fn test_mark_invalid_reorgs_mid_candidate() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Candidate chain: genesis -> c1 -> c2 -> c3.
+        let c1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .work(1)
+            .build();
+        store.push_to_candidate_chain(&c1).unwrap();
+        let c2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(c1.block_hash().to_string())
+            .nonce(0xe9695793)
+            .work(3)
+            .build();
+        store.push_to_candidate_chain(&c2).unwrap();
+        let c3 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(c2.block_hash().to_string())
+            .nonce(0xe9695794)
+            .work(1)
+            .build();
+        store.push_to_candidate_chain(&c3).unwrap();
+
+        // c2b: a lower-work sibling of c2 (also a child of c1), off-chain.
+        let c2b = TestShareBlockBuilder::new()
+            .prev_share_blockhash(c1.block_hash().to_string())
+            .nonce(0xe9695795)
+            .work(2)
+            .build();
+        store.store_with_valid_metadata(&c2b);
+
+        assert_eq!(store.get_top_candidate_height().unwrap(), 3);
+
+        // Invalidate c2 (mid-candidate).
+        let mut batch = Store::get_write_batch();
+        store.mark_invalid(&c2.block_hash(), &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // c2 is Invalid and off the chain; c3 left the chain too.
+        let c2_meta = store.get_block_metadata(&c2.block_hash()).unwrap();
+        assert_eq!(c2_meta.status, Status::Invalid);
+        assert_eq!(c2_meta.chain, ChainMembership::None);
+        assert_eq!(
+            store.get_block_metadata(&c3.block_hash()).unwrap().chain,
+            ChainMembership::None
+        );
+
+        // The candidate chain was rebuilt onto the surviving sibling c2b.
+        assert_eq!(store.get_top_candidate_height().unwrap(), 2);
+        assert_eq!(store.get_candidate_at_height(1).unwrap(), c1.block_hash());
+        assert_eq!(store.get_candidate_at_height(2).unwrap(), c2b.block_hash());
+        assert!(store.get_candidate_at_height(3).is_err());
+        assert_eq!(
+            store.get_block_metadata(&c2b.block_hash()).unwrap().chain,
+            ChainMembership::Candidate
+        );
+    }
+
+    /// Invalidating the only candidate above the confirmed tip, with no
+    /// surviving sibling, empties the candidate chain.
+    #[test]
+    fn test_mark_invalid_empties_candidate_chain_when_no_sibling() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let c1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .work(1)
+            .build();
+        store.push_to_candidate_chain(&c1).unwrap();
+        assert_eq!(store.get_top_candidate_height().unwrap(), 1);
+
+        let mut batch = Store::get_write_batch();
+        store.mark_invalid(&c1.block_hash(), &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let c1_meta = store.get_block_metadata(&c1.block_hash()).unwrap();
+        assert_eq!(c1_meta.status, Status::Invalid);
+        assert_eq!(c1_meta.chain, ChainMembership::None);
+        // No candidate remains above the confirmed tip.
+        assert!(store.get_top_candidate_height().is_err());
+        assert!(store.get_candidate_at_height(1).is_err());
+    }
+
+    /// The highest-BlockValid pointer is cleared when it referenced a block on
+    /// the removed branch, and left alone otherwise.
+    #[test]
+    fn test_mark_invalid_clears_pointer_on_removed_branch() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let c1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .work(1)
+            .build();
+        store.push_to_candidate_chain(&c1).unwrap();
+
+        // Mark the candidate BlockValid so the pointer references it.
+        let mut batch = Store::get_write_batch();
+        store
+            .mark_block_valid(&c1.block_hash(), &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+        assert_eq!(
+            store
+                .get_highest_block_valid()
+                .unwrap()
+                .map(|(hash, _)| hash),
+            Some(c1.block_hash())
+        );
+
+        // Invalidating c1 clears the pointer (it was on the removed branch).
+        let mut batch = Store::get_write_batch();
+        store.mark_invalid(&c1.block_hash(), &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert_eq!(store.get_highest_block_valid().unwrap(), None);
+    }
+
+    // ── invalidation reorg helper unit tests ─────────────────────────────
+
+    /// detach_candidate_branch removes the branch from `from_height` up,
+    /// clears chain membership for every removed block except the invalid one
+    /// (whose metadata the caller owns), and returns the removed set.
+    #[test]
+    fn test_detach_candidate_branch() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let c1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        store.push_to_candidate_chain(&c1).unwrap();
+        let c2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(c1.block_hash().to_string())
+            .nonce(0xe9695793)
+            .build();
+        store.push_to_candidate_chain(&c2).unwrap();
+        let c3 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(c2.block_hash().to_string())
+            .nonce(0xe9695794)
+            .build();
+        store.push_to_candidate_chain(&c3).unwrap();
+
+        // Detach from height 2 treating c2 as the invalid block.
+        let mut batch = Store::get_write_batch();
+        let removed = store
+            .detach_candidate_branch(&c2.block_hash(), 2, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert_eq!(removed, HashSet::from([c2.block_hash(), c3.block_hash()]));
+        // Index entries for the detached heights are gone; c1 stays.
+        assert!(store.get_candidate_at_height(2).is_err());
+        assert!(store.get_candidate_at_height(3).is_err());
+        assert_eq!(store.get_candidate_at_height(1).unwrap(), c1.block_hash());
+        // c3 (not the invalid block) left the candidate chain.
+        assert_eq!(
+            store.get_block_metadata(&c3.block_hash()).unwrap().chain,
+            ChainMembership::None
+        );
+        // c2's metadata is untouched by detach (the caller owns it).
+        assert_eq!(
+            store.get_block_metadata(&c2.block_hash()).unwrap().chain,
+            ChainMembership::Candidate
+        );
+    }
+
+    /// rebuild_candidate_from_parent picks the best surviving child of the
+    /// branch point (excluding the invalid block) and returns the new top.
+    #[test]
+    fn test_rebuild_candidate_from_parent() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let c1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        store.push_to_candidate_chain(&c1).unwrap();
+
+        // Two children of c1: the invalid one and a surviving sibling.
+        let invalid = TestShareBlockBuilder::new()
+            .prev_share_blockhash(c1.block_hash().to_string())
+            .nonce(0xe9695793)
+            .work(1)
+            .build();
+        store.store_with_valid_metadata(&invalid);
+        let surviving = TestShareBlockBuilder::new()
+            .prev_share_blockhash(c1.block_hash().to_string())
+            .nonce(0xe9695794)
+            .work(2)
+            .build();
+        store.store_with_valid_metadata(&surviving);
+
+        let mut batch = Store::get_write_batch();
+        let final_top = store
+            .rebuild_candidate_from_parent(&invalid.block_hash(), 2, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert_eq!(final_top, 2);
+        assert_eq!(
+            store.get_candidate_at_height(2).unwrap(),
+            surviving.block_hash()
+        );
+        assert_eq!(
+            store
+                .get_block_metadata(&surviving.block_hash())
+                .unwrap()
+                .chain,
+            ChainMembership::Candidate
+        );
+    }
+
+    /// set_or_clear_top_candidate_height sets the top above the confirmed tip
+    /// and deletes it when the candidate chain is empty.
+    #[test]
+    fn test_set_or_clear_top_candidate_height() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Confirmed tip is genesis (height 0). A top above it is set.
+        let mut batch = Store::get_write_batch();
+        store
+            .set_or_clear_top_candidate_height(5, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+        assert_eq!(store.get_top_candidate_height().unwrap(), 5);
+
+        // A top at the confirmed tip means the candidate chain is empty.
+        let mut batch = Store::get_write_batch();
+        store
+            .set_or_clear_top_candidate_height(0, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+        assert!(store.get_top_candidate_height().is_err());
+    }
+
+    /// clear_block_valid_pointer_if_removed clears the pointer only when it
+    /// referenced a removed block.
+    #[test]
+    fn test_clear_block_valid_pointer_if_removed() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let pointer = TestShareBlockBuilder::new().nonce(0xe9695792).build();
+        let other = TestShareBlockBuilder::new().nonce(0xe9695793).build();
+        let work = Work::from_le_bytes([1u8; 32]);
+
+        // Pointer references a block that is NOT in the removed set: kept.
+        let mut batch = Store::get_write_batch();
+        store.set_highest_block_valid(&pointer.block_hash(), work, &mut batch);
+        store.commit_batch(batch).unwrap();
+        let mut batch = Store::get_write_batch();
+        store
+            .clear_block_valid_pointer_if_removed(&HashSet::from([other.block_hash()]), &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+        assert_eq!(
+            store
+                .get_highest_block_valid()
+                .unwrap()
+                .map(|(hash, _)| hash),
+            Some(pointer.block_hash())
+        );
+
+        // Pointer references a removed block: cleared.
+        let mut batch = Store::get_write_batch();
+        store
+            .clear_block_valid_pointer_if_removed(
+                &HashSet::from([pointer.block_hash()]),
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+        assert_eq!(store.get_highest_block_valid().unwrap(), None);
     }
 }

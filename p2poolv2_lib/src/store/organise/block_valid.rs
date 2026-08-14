@@ -84,6 +84,19 @@ impl Store {
         );
     }
 
+    /// Clear the highest-work `BlockValid` pointer.
+    ///
+    /// Used by the invalidation reorg when the pointer referenced a block on
+    /// the removed branch; it rebuilds as the reorged candidate chain is
+    /// re-validated.
+    pub(crate) fn delete_highest_block_valid(&self, batch: &mut rocksdb::WriteBatch) {
+        let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
+        batch.delete_cf(
+            &block_height_cf,
+            HIGHEST_BLOCK_VALID_KEY.as_bytes().as_ref(),
+        );
+    }
+
     /// Read the highest-work `BlockValid` pointer, or `None` if unset (no
     /// block has been marked `BlockValid` yet).
     pub(crate) fn get_highest_block_valid(&self) -> Result<Option<(BlockHash, Work)>, StoreError> {
