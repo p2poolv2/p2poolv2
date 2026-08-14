@@ -28,7 +28,6 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ConfirmedHeaderResult;
 use crate::shares::share_block::ShareHeader;
-use crate::store::block_tx_metadata::{ChainMembership, Status};
 use bitcoin::Address;
 use bitcoin::BlockHash;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -253,10 +252,11 @@ impl PplnsWindow {
     /// Returns the collected headers (newest-to-oldest) and the
     /// confirmed index of the anchor parent.
     ///
-    /// Only validated candidate blocks are walked: a block must be
-    /// `Candidate` or `BlockValid`. A block that is only `HeaderValid`
-    /// (PoW-valid but not chain-context validated), `Pending`, or `Invalid`
-    /// must not contribute to a payout distribution, so the walk errors.
+    /// The walk follows parent links regardless of validation `status`: the
+    /// payout must be a pure function of the chain shape (headers), not of
+    /// per-node, timing-dependent validation state, or the producer and a
+    /// validator computing the window at different moments would derive
+    /// different distributions.
     ///
     /// Errors when the walk runs off the end of the stored chain without
     /// reaching a confirmed ancestor (`get_share_header` returns
@@ -275,16 +275,6 @@ impl PplnsWindow {
 
         while confirmed_index.is_none() {
             let header = chain_store_handle.get_share_header(&current_hash)?;
-            let metadata = chain_store_handle.get_block_metadata(&current_hash)?;
-            let on_candidate_or_valid = metadata.chain == ChainMembership::Candidate
-                || metadata.status == Status::BlockValid;
-            if !on_candidate_or_valid {
-                let status = metadata.status;
-                return Err(format!(
-                    "PPLNS walk reached non-validated block {current_hash} (status {status:?})"
-                )
-                .into());
-            }
             let parent_hash = header.prev_share_blockhash;
             candidate_headers.push((current_hash, header));
             current_hash = parent_hash;
@@ -2201,13 +2191,15 @@ mod tests {
             .expect_get_share_header()
             .withf(move |hash| *hash == share_b_hash)
             .returning(move |_| Ok(share_b_clone.clone()));
-        // share_b is a validated candidate, so the walk accepts it.
+        // share_b is only HeaderValid and off any chain -- the walk follows
+        // parent links regardless of validation status, so it is still
+        // included (the old status/chain filter would have rejected it).
         mock_store.expect_get_block_metadata().returning(|_| {
             Ok(BlockMetadata {
                 expected_height: Some(1),
                 chain_work: Work::from_le_bytes([0u8; 32]),
                 status: Status::HeaderValid,
-                chain: ChainMembership::Candidate,
+                chain: ChainMembership::None,
             })
         });
         // No uncle headers needed for this test
