@@ -528,20 +528,28 @@ impl Store {
     /// state is tracked independently of chain membership. Errors if the block
     /// has no metadata.
     ///
-    /// This only sets the validation status; removing a now-invalid block
-    /// from the candidate chain and rebuilding the best alternative is done
-    /// separately by the invalidation reorg.
+    /// When the block was on the candidate chain, invalidating it also
+    /// reorgs the candidate chain: the block and its candidate descendants
+    /// leave the chain and the best surviving branch is rebuilt from the
+    /// block's parent (see `reorg_candidate_after_invalidation`).
     pub fn mark_invalid(
         &self,
         blockhash: &BlockHash,
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<(), StoreError> {
         let mut metadata = self.get_block_metadata(blockhash)?;
+        // Confired blocks can't be marked invalid
         if metadata.chain == ChainMembership::Confirmed {
             return Ok(());
         }
+        let was_candidate = metadata.chain == ChainMembership::Candidate;
         metadata.status = Invalid;
-        self.update_block_metadata(blockhash, &metadata, batch)
+        metadata.chain = ChainMembership::None;
+        self.update_block_metadata(blockhash, &metadata, batch)?;
+        if was_candidate {
+            self.reorg_candidate_after_invalidation(blockhash, &metadata, batch)?;
+        }
+        Ok(())
     }
 
     /// Mark a block BlockValid after it passes chain-context validation.
@@ -693,42 +701,42 @@ mod tests {
     /// chain membership, so a candidate that later fails re-validation can be
     /// quarantined instead of being silently confirmed.
     #[test]
-    fn test_mark_invalid_takes_effect_for_non_confirmed() {
-        for chain in [ChainMembership::None, ChainMembership::Candidate] {
-            let temp_dir = tempdir().unwrap();
-            let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-            let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
-            let mut batch = Store::get_write_batch();
-            store.setup_genesis(&genesis, &mut batch).unwrap();
-            store.commit_batch(batch).unwrap();
+    fn test_mark_invalid_takes_effect_for_off_chain_block() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
 
-            let share = TestShareBlockBuilder::new()
-                .prev_share_blockhash(genesis.block_hash().to_string())
-                .nonce(0xe9695792)
-                .build();
-            store.store_with_valid_metadata(&share);
-            let mut metadata = store.get_block_metadata(&share.block_hash()).unwrap();
-            metadata.status = Status::BlockValid;
-            metadata.chain = chain;
-            let mut batch = Store::get_write_batch();
+        // An off-chain (chain=None), previously-BlockValid block is still
+        // quarantined by mark_invalid. (The candidate-chain case is covered by
+        // the invalidation-reorg tests.)
+        let share = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        store.store_with_valid_metadata(&share);
+        let mut metadata = store.get_block_metadata(&share.block_hash()).unwrap();
+        metadata.status = Status::BlockValid;
+        metadata.chain = ChainMembership::None;
+        let mut batch = Store::get_write_batch();
+        store
+            .update_block_metadata(&share.block_hash(), &metadata, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = Store::get_write_batch();
+        store.mark_invalid(&share.block_hash(), &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert_eq!(
             store
-                .update_block_metadata(&share.block_hash(), &metadata, &mut batch)
-                .unwrap();
-            store.commit_batch(batch).unwrap();
-
-            let mut batch = Store::get_write_batch();
-            store.mark_invalid(&share.block_hash(), &mut batch).unwrap();
-            store.commit_batch(batch).unwrap();
-
-            assert_eq!(
-                store
-                    .get_block_metadata(&share.block_hash())
-                    .unwrap()
-                    .status,
-                Status::Invalid,
-                "mark_invalid must quarantine a non-confirmed block (chain {chain:?})"
-            );
-        }
+                .get_block_metadata(&share.block_hash())
+                .unwrap()
+                .status,
+            Status::Invalid
+        );
     }
 
     /// mark_block_valid upgrades HeaderValid to BlockValid.
