@@ -404,15 +404,41 @@ impl Store {
     /// Push a share to the confirmed chain: organise header, store
     /// the full block, then promote candidates to confirmed.
     /// Returns the new confirmed height if changed, or None.
+    ///
+    /// In-PPLNS-zone promotion requires the candidate prefix to be
+    /// BlockValid, so this marks the whole candidate chain validated before
+    /// promoting -- simulating candidates that have completed chain-context
+    /// validation.
     pub fn push_to_confirmed_chain(&self, share: &ShareBlock) -> Result<Option<u32>, StoreError> {
         self.push_to_candidate_chain(share)?;
         let mut batch = Store::get_write_batch();
         self.add_share_block(share, &mut batch)?;
         self.commit_batch(batch)?;
+        self.mark_candidate_chain_block_valid();
         let mut batch = Store::get_write_batch();
         let result = self.organise_block(&mut batch)?;
         self.commit_batch(batch)?;
         Ok(result)
+    }
+
+    /// Mark every block currently on the candidate chain BlockValid.
+    ///
+    /// Test helper for promotion scenarios: in-PPLNS-zone confirmation
+    /// requires `is_candidate_and_block_valid`, so tests that build a
+    /// candidate chain and expect it confirmed must first mark it validated.
+    /// Already-BlockValid entries are left unchanged.
+    pub fn mark_candidate_chain_block_valid(&self) {
+        let top = match self.get_top_candidate_height() {
+            Ok(top) => top,
+            Err(_) => return,
+        };
+        let mut batch = Store::get_write_batch();
+        for height in 1..=top {
+            if let Ok(hash) = self.get_candidate_at_height(height) {
+                let _ = self.mark_block_valid(&hash, &mut batch);
+            }
+        }
+        self.commit_batch(batch).unwrap();
     }
 
     /// Store a share block and create Valid metadata for it.

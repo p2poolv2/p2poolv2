@@ -258,7 +258,9 @@ async fn test_three_nodes_share_sync() {
         .await
         .unwrap();
 
-    // Seed non-genesis shares from fixture into store 1
+    // Seed non-genesis shares from fixture into store 1. In-zone promotion
+    // requires BlockValid, so mark each validated before organising the
+    // confirmed chain (mirroring validate_and_promote_block in the node).
     for share_block in &fixture_blocks[1..] {
         chain_store_handle1
             .add_share_block(share_block.clone())
@@ -266,6 +268,10 @@ async fn test_three_nodes_share_sync() {
             .unwrap();
         chain_store_handle1
             .organise_header(share_block.header.clone())
+            .await
+            .unwrap();
+        chain_store_handle1
+            .mark_block_valid(share_block.block_hash())
             .await
             .unwrap();
         chain_store_handle1.organise_block().await.unwrap();

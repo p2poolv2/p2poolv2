@@ -381,22 +381,15 @@ impl Store {
         }
     }
 
-    /// Check if a blockhash is BlockValid or on the confirmed chain.
-    fn is_block_valid_or_confirmed(&self, blockhash: &BlockHash) -> bool {
+    /// Check if a blockhash is both on the candidate chain and BlockValid.
+    ///
+    /// This is the promotion gate inside the PPLNS zone (at or above the
+    /// prune boundary): a block may only be confirmed there once its
+    /// chain-context validation has completed, so nothing reaches the
+    /// confirmed chain before it is fully validated.
+    pub(super) fn is_candidate_and_block_valid(&self, blockhash: &BlockHash) -> bool {
         self.get_block_metadata(blockhash)
-            .map(|m| m.status == Status::BlockValid || m.chain == ChainMembership::Confirmed)
-            .unwrap_or(false)
-    }
-
-    /// Check if a blockhash is validated for promotion: its status is
-    /// Candidate or BlockValid. HeaderValid (PoW-valid but not chain-context
-    /// validated), Pending, and Invalid are all excluded, so an unvalidated
-    /// or rejected block is never confirmed -- including via the fallback
-    /// path -- even though its body may be stored. Locally-mined blocks are
-    /// marked BlockValid (or are Candidate), so they still qualify.
-    pub(super) fn is_candidate_or_block_valid(&self, blockhash: &BlockHash) -> bool {
-        self.get_block_metadata(blockhash)
-            .map(|m| m.chain == ChainMembership::Candidate || m.status == Status::BlockValid)
+            .map(|m| m.chain == ChainMembership::Candidate && m.status == Status::BlockValid)
             .unwrap_or(false)
     }
 
