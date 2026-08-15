@@ -37,7 +37,7 @@ use crate::pool_difficulty::PoolDifficulty;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
-use crate::shares::share_block::{ShareBlock, ShareTransaction};
+use crate::shares::share_block::{ShareBlock, ShareTransaction, is_terminal_blockhash};
 use crate::shares::share_commitment::ShareCommitment;
 use crate::shares::transactions::coinbase::{compute_commitment_hash, compute_witness_root};
 use crate::shares::witness_commitment::WITNESS_COMMITMENT_LENGTH;
@@ -282,14 +282,21 @@ impl DefaultShareValidator {
         }
     }
 
-    /// Reject uncles that sit outside the allowed depth window below the
-    /// nephew. An uncle must be strictly below the nephew's height and no
-    /// deeper than `MAX_UNCLES_DEPTH` heights below it.
+    /// Validate each uncle's position relative to the nephew: strictly below
+    /// the nephew's height, no deeper than `MAX_UNCLES_DEPTH`, and not on the
+    /// nephew's own ancestry.
+    ///
+    /// The depth bound keeps every valid uncle inside the PPLNS window. The
+    /// ancestry check is what makes it safe to accept an uncle that happens to
+    /// be on the confirmed chain: a block is only ever double-counted in a
+    /// payout window (paid as a chain entry and again as an uncle) when a share
+    /// references its own ancestor. Rejecting ancestor uncles removes that
+    /// double-count structurally -- as a pure function of chain shape
     ///
     /// The nephew's height is derived from its parent (`prev_share_blockhash`),
     /// matching how the other chain-context checks resolve height. Parent and
     /// uncle metadata are read in a single batch to avoid per-uncle lookups.
-    fn validate_uncle_depths(
+    fn validate_uncle_positions(
         &self,
         share: &ShareBlock,
         chain_store_handle: &ChainStoreHandle,
@@ -311,29 +318,31 @@ impl DefaultShareValidator {
             .get(&parent_hash)
             .ok_or_else(|| {
                 ValidationError::new(format!(
-                    "Parent share {parent_hash} metadata not found for uncle depth check"
+                    "Parent share {parent_hash} metadata not found for uncle position check"
                 ))
             })?
             .expected_height
             .ok_or_else(|| {
                 ValidationError::new(format!(
-                    "Parent share {parent_hash} has no expected height for uncle depth check"
+                    "Parent share {parent_hash} has no expected height for uncle position check"
                 ))
             })?;
         let nephew_height = parent_height + 1;
+
+        let ancestors = self.collect_recent_ancestors(parent_hash, chain_store_handle)?;
 
         for uncle in &share.header.uncles {
             let uncle_height = metadata_by_hash
                 .get(uncle)
                 .ok_or_else(|| {
                     ValidationError::new(format!(
-                        "Uncle {uncle} metadata not found for depth check"
+                        "Uncle {uncle} metadata not found for position check"
                     ))
                 })?
                 .expected_height
                 .ok_or_else(|| {
                     ValidationError::new(format!(
-                        "Uncle {uncle} has no expected height for depth check"
+                        "Uncle {uncle} has no expected height for position check"
                     ))
                 })?;
 
@@ -347,8 +356,38 @@ impl DefaultShareValidator {
                     "Uncle {uncle} at height {uncle_height} is more than {MAX_UNCLES_DEPTH} below nephew height {nephew_height}"
                 )));
             }
+            if ancestors.contains(uncle) {
+                return Err(ValidationError::new(format!(
+                    "Uncle {uncle} is an ancestor of the nephew"
+                )));
+            }
         }
         Ok(())
+    }
+
+    /// Collect the nephew's ancestor hashes within `MAX_UNCLES_DEPTH` by
+    /// following parent pointers from `parent_hash` (the nephew's direct
+    /// parent). The walk covers exactly the heights a valid uncle can occupy,
+    /// so an uncle on the nephew's own ancestry is always in the returned set.
+    fn collect_recent_ancestors(
+        &self,
+        parent_hash: BlockHash,
+        chain_store_handle: &ChainStoreHandle,
+    ) -> Result<HashSet<BlockHash>, ValidationError> {
+        let mut ancestors = HashSet::with_capacity(MAX_UNCLES_DEPTH as usize);
+        let mut current = parent_hash;
+        let mut steps = 0;
+        while steps < MAX_UNCLES_DEPTH as usize && !is_terminal_blockhash(&current) {
+            ancestors.insert(current);
+            let header = chain_store_handle.get_share_header(&current).map_err(|_| {
+                ValidationError::new(format!(
+                    "Ancestor {current} header not found for uncle ancestry check"
+                ))
+            })?;
+            current = header.prev_share_blockhash;
+            steps += 1;
+        }
+        Ok(ancestors)
     }
 
     /// Validate that the total size of share transactions does not exceed BLOCK_TXS_SIZE_LIMIT.
@@ -993,13 +1032,8 @@ impl ShareValidator for DefaultShareValidator {
                     "Uncle {uncle} not found in store"
                 )));
             };
-            if chain_store_handle.is_block_confirmed(uncle) {
-                return Err(ValidationError::new(format!(
-                    "Uncle {uncle} is on confirmed chain"
-                )));
-            }
         }
-        self.validate_uncle_depths(share, chain_store_handle)?;
+        self.validate_uncle_positions(share, chain_store_handle)?;
         Ok(())
     }
 
@@ -1465,13 +1499,10 @@ mod tests {
         let uncle2 = TestShareBlockBuilder::new().miner_pubkey(PUBKEY_2G).build();
         let uncle3 = TestShareBlockBuilder::new().miner_pubkey(PUBKEY_3G).build();
 
-        // All uncles exist and are not confirmed
+        // All uncles exist
         chain_store_handle
             .expect_share_block_exists()
             .returning(|_| true);
-        chain_store_handle
-            .expect_is_block_confirmed()
-            .returning(|_| false);
         // Parent (all-zeros) at height 20 -> nephew at 21; uncles at 20 (depth 1).
         chain_store_handle
             .expect_get_block_metadata_batch()
@@ -1566,22 +1597,51 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_validate_uncles_on_confirmed_chain() {
+    async fn test_validate_uncles_rejects_ancestor() {
         let mut chain_store_handle = ChainStoreHandle::default();
 
-        let uncle1 = TestShareBlockBuilder::new().miner_pubkey(PUBKEY_G).build();
+        // The uncle is the nephew's grandparent -- on its own ancestry, which
+        // would be double-counted in the payout window.
+        let uncle = TestShareBlockBuilder::new().miner_pubkey(PUBKEY_G).build();
+        let uncle_hash = uncle.block_hash();
+        let parent = TestShareBlockBuilder::new()
+            .prev_share_blockhash(uncle_hash.to_string())
+            .miner_pubkey(PUBKEY_2G)
+            .build();
+        let parent_hash = parent.block_hash();
 
-        // Uncle exists but is on the confirmed chain
         chain_store_handle
             .expect_share_block_exists()
             .returning(|_| true);
+        // Parent at height 20 -> nephew at 21; uncle (grandparent) at 19, depth 2.
         chain_store_handle
-            .expect_is_block_confirmed()
-            .returning(|_| true);
+            .expect_get_block_metadata_batch()
+            .returning(move |hashes| {
+                hashes
+                    .iter()
+                    .map(|hash| {
+                        let height = if *hash == uncle_hash { 19 } else { 20 };
+                        (*hash, metadata_at_height(height))
+                    })
+                    .collect()
+            });
+        // Ancestry walk: parent -> uncle (grandparent) -> genesis sentinel.
+        let parent_header = parent.header.clone();
+        let uncle_header = uncle.header.clone();
+        chain_store_handle
+            .expect_get_share_header()
+            .returning(move |hash| {
+                if *hash == parent_hash {
+                    Ok(parent_header.clone())
+                } else {
+                    Ok(uncle_header.clone())
+                }
+            });
 
         let invalid_share = TestShareBlockBuilder::new()
-            .uncles(vec![uncle1.block_hash()])
-            .miner_pubkey(PUBKEY_G)
+            .prev_share_blockhash(parent_hash.to_string())
+            .uncles(vec![uncle_hash])
+            .miner_pubkey(PUBKEY_3G)
             .build();
 
         let result = validator().validate_uncles(&invalid_share, &chain_store_handle);
@@ -1590,7 +1650,41 @@ mod tests {
             result
                 .unwrap_err()
                 .to_string()
-                .contains("on confirmed chain")
+                .contains("is an ancestor of the nephew")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_validate_uncles_allows_non_ancestor() {
+        let mut chain_store_handle = ChainStoreHandle::default();
+
+        let uncle = TestShareBlockBuilder::new().miner_pubkey(PUBKEY_G).build();
+        let uncle_hash = uncle.block_hash();
+
+        chain_store_handle
+            .expect_share_block_exists()
+            .returning(|_| true);
+        // Parent (all-zeros) at height 20 -> nephew at 21; uncle at 20 (depth 1).
+        // The parent is the genesis sentinel, so the nephew has no stored
+        // ancestors and the uncle is trivially not an ancestor.
+        chain_store_handle
+            .expect_get_block_metadata_batch()
+            .returning(|hashes| {
+                hashes
+                    .iter()
+                    .map(|h| (*h, metadata_at_height(20)))
+                    .collect()
+            });
+
+        let share = TestShareBlockBuilder::new()
+            .uncles(vec![uncle_hash])
+            .miner_pubkey(PUBKEY_2G)
+            .build();
+
+        assert!(
+            validator()
+                .validate_uncles(&share, &chain_store_handle)
+                .is_ok()
         );
     }
 
@@ -1604,9 +1698,6 @@ mod tests {
         chain_store_handle
             .expect_share_block_exists()
             .returning(|_| true);
-        chain_store_handle
-            .expect_is_block_confirmed()
-            .returning(|_| false);
         // Parent (all-zeros) at height 20 -> nephew at 21; uncle at 17 is 4
         // heights below, deeper than MAX_UNCLES_DEPTH (3).
         chain_store_handle
@@ -1646,9 +1737,6 @@ mod tests {
         chain_store_handle
             .expect_share_block_exists()
             .returning(|_| true);
-        chain_store_handle
-            .expect_is_block_confirmed()
-            .returning(|_| false);
         // Parent (all-zeros) at height 20 -> nephew at 21; uncle also at 21 is
         // not strictly below the nephew (a sibling height, not an ancestor).
         chain_store_handle
@@ -1688,9 +1776,6 @@ mod tests {
         chain_store_handle
             .expect_share_block_exists()
             .returning(|_| true);
-        chain_store_handle
-            .expect_is_block_confirmed()
-            .returning(|_| false);
         // Parent (all-zeros) at height 20 -> nephew at 21; uncle at 18 is
         // exactly MAX_UNCLES_DEPTH (3) heights below, the deepest allowed.
         chain_store_handle
