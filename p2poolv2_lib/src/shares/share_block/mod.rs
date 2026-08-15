@@ -43,6 +43,13 @@ pub const MAX_POOL_TARGET: u32 = 0x1b384bd7;
 /// on the cummulative chain as derived from MAX_POOL_TARGET times this constant.
 pub const MIN_CUMULATIVE_CHAIN_WORK_MULTIPLIER: u64 = 1;
 
+/// True when a blockhash is the terminal marker of a share's parent chain --
+/// the all-zeros value the genesis share stores as its `prev_share_blockhash`
+/// to mean "no parent". Walks up the parent chain stop here.
+pub fn is_terminal_blockhash(blockhash: &BlockHash) -> bool {
+    *blockhash == BlockHash::all_zeros()
+}
+
 /// Header for the share chain block.
 ///
 /// Excludes bitcoin compact block and share chain transactions.
