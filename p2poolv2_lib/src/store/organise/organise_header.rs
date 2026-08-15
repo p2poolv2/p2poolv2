@@ -556,7 +556,7 @@ mod tests {
 
         // find_uncles should not return uncle_block since share2
         // already included it and organise_header marked it
-        let uncles = store.find_uncles().unwrap();
+        let uncles = store.find_uncles(&store.get_chain_tip().unwrap()).unwrap();
         assert!(
             !uncles.contains(&uncle_block.block_hash()),
             "uncle_block should be excluded after being included by share2"
@@ -770,7 +770,7 @@ mod tests {
         );
 
         // find_uncles must not return share1
-        let uncles = store.find_uncles().unwrap();
+        let uncles = store.find_uncles(&store.get_chain_tip().unwrap()).unwrap();
         assert!(
             !uncles.contains(&share1.block_hash()),
             "confirmed share1 must not appear as uncle after re-organise"
