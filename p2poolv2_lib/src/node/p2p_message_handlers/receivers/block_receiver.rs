@@ -21,11 +21,10 @@ use crate::node::validation_worker::{ValidationEvent, ValidationSender};
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
-use crate::shares::share_block::ShareBlock;
+use crate::shares::share_block::{ShareBlock, is_terminal_blockhash};
 use crate::shares::validation::ShareValidator;
 use crate::store::block_tx_metadata::Status;
 use bitcoin::BlockHash;
-use bitcoin::hashes::Hash;
 use std::collections::{HashMap, VecDeque};
 use std::error::Error;
 use std::sync::Arc;
@@ -121,7 +120,7 @@ impl BlockReceiver {
         }
 
         let parent_hash = share_block.header.prev_share_blockhash;
-        if parent_hash != BlockHash::all_zeros() {
+        if !is_terminal_blockhash(&parent_hash) {
             self.descendants
                 .entry(parent_hash)
                 .or_insert_with(|| Vec::with_capacity(2))
@@ -144,7 +143,7 @@ impl BlockReceiver {
         let pending_block = self.pending.remove(block_hash)?;
 
         let parent_hash = pending_block.share_block.header.prev_share_blockhash;
-        if parent_hash != BlockHash::all_zeros() {
+        if !is_terminal_blockhash(&parent_hash) {
             if let Some(descendants_list) = self.descendants.get_mut(&parent_hash) {
                 descendants_list.retain(|hash| hash != block_hash);
                 if descendants_list.is_empty() {
@@ -187,7 +186,7 @@ impl BlockReceiver {
         let header = &share_block.header;
         let mut not_ready: Vec<BlockHash> = Vec::with_capacity(1 + header.uncles.len());
         let parent_hash = header.prev_share_blockhash;
-        if parent_hash != BlockHash::all_zeros() && !self.ancestor_ready(&parent_hash) {
+        if !is_terminal_blockhash(&parent_hash) && !self.ancestor_ready(&parent_hash) {
             debug!(
                 "Parent {parent_hash} not ready for block {}. Metadata: {:?}",
                 share_block.block_hash(),
@@ -416,6 +415,7 @@ mod tests {
     use crate::store::writer::StoreError;
     use crate::test_utils::TestShareBlockBuilder;
     use bitcoin::CompactTarget;
+    use bitcoin::hashes::Hash;
 
     #[test]
     fn test_add_to_pending_inserts_block() {
