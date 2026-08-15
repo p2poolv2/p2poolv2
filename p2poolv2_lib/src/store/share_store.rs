@@ -17,14 +17,13 @@
 use super::block_tx_metadata::BlockMetadata;
 use super::{ColumnFamily, Store, writer::StoreError};
 use crate::shares::share_block::{
-    MerkleBranches, ShareBlock, ShareHeader, ShareTransaction, Txids,
+    MerkleBranches, ShareBlock, ShareHeader, ShareTransaction, Txids, is_terminal_blockhash,
 };
 use crate::store::block_tx_metadata::ChainMembership;
 use crate::store::block_tx_metadata::Status::{BlockValid, HeaderValid, Invalid, Pending};
 use bitcoin::BlockHash;
 use bitcoin::TxMerkleNode;
 use bitcoin::consensus::{self, Encodable, encode};
-use bitcoin::hashes::Hash;
 use std::collections::{HashMap, HashSet};
 use tracing::debug;
 
@@ -97,7 +96,7 @@ impl Store {
         &self,
         parent_blockhash: &BlockHash,
     ) -> Result<u32, StoreError> {
-        if *parent_blockhash == BlockHash::all_zeros() {
+        if is_terminal_blockhash(parent_blockhash) {
             return Ok(0);
         }
         let parent_metadata = self.get_block_metadata(parent_blockhash).map_err(|error| {
