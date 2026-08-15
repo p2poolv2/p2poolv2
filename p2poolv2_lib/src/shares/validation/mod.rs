@@ -42,7 +42,8 @@ use crate::shares::share_commitment::ShareCommitment;
 use crate::shares::transactions::coinbase::{compute_commitment_hash, compute_witness_root};
 use crate::shares::witness_commitment::WITNESS_COMMITMENT_LENGTH;
 use crate::sim_overrides;
-use crate::store::block_tx_metadata::Status;
+use crate::store::block_tx_metadata::{BlockMetadata, Status};
+use crate::store::dag_store::MAX_UNCLES_DEPTH;
 use crate::store::writer::StoreError;
 use crate::stratum::work::coinbase::build_bitcoin_coinbase_transaction;
 use crate::stratum::work::gbt::compute_merkle_root_from_branches;
@@ -279,6 +280,75 @@ impl DefaultShareValidator {
             pool_signature,
             time_provider,
         }
+    }
+
+    /// Reject uncles that sit outside the allowed depth window below the
+    /// nephew. An uncle must be strictly below the nephew's height and no
+    /// deeper than `MAX_UNCLES_DEPTH` heights below it.
+    ///
+    /// The nephew's height is derived from its parent (`prev_share_blockhash`),
+    /// matching how the other chain-context checks resolve height. Parent and
+    /// uncle metadata are read in a single batch to avoid per-uncle lookups.
+    fn validate_uncle_depths(
+        &self,
+        share: &ShareBlock,
+        chain_store_handle: &ChainStoreHandle,
+    ) -> Result<(), ValidationError> {
+        if share.header.uncles.is_empty() {
+            return Ok(());
+        }
+
+        let parent_hash = share.header.prev_share_blockhash;
+        let mut hashes = Vec::with_capacity(1 + share.header.uncles.len());
+        hashes.push(parent_hash);
+        hashes.extend_from_slice(&share.header.uncles);
+        let metadata_by_hash: HashMap<BlockHash, BlockMetadata> = chain_store_handle
+            .get_block_metadata_batch(&hashes)
+            .into_iter()
+            .collect();
+
+        let parent_height = metadata_by_hash
+            .get(&parent_hash)
+            .ok_or_else(|| {
+                ValidationError::new(format!(
+                    "Parent share {parent_hash} metadata not found for uncle depth check"
+                ))
+            })?
+            .expected_height
+            .ok_or_else(|| {
+                ValidationError::new(format!(
+                    "Parent share {parent_hash} has no expected height for uncle depth check"
+                ))
+            })?;
+        let nephew_height = parent_height + 1;
+
+        for uncle in &share.header.uncles {
+            let uncle_height = metadata_by_hash
+                .get(uncle)
+                .ok_or_else(|| {
+                    ValidationError::new(format!(
+                        "Uncle {uncle} metadata not found for depth check"
+                    ))
+                })?
+                .expected_height
+                .ok_or_else(|| {
+                    ValidationError::new(format!(
+                        "Uncle {uncle} has no expected height for depth check"
+                    ))
+                })?;
+
+            if uncle_height >= nephew_height {
+                return Err(ValidationError::new(format!(
+                    "Uncle {uncle} at height {uncle_height} is not below nephew height {nephew_height}"
+                )));
+            }
+            if nephew_height - uncle_height > MAX_UNCLES_DEPTH as u32 {
+                return Err(ValidationError::new(format!(
+                    "Uncle {uncle} at height {uncle_height} is more than {MAX_UNCLES_DEPTH} below nephew height {nephew_height}"
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// Validate that the total size of share transactions does not exceed BLOCK_TXS_SIZE_LIMIT.
@@ -929,6 +999,7 @@ impl ShareValidator for DefaultShareValidator {
                 )));
             }
         }
+        self.validate_uncle_depths(share, chain_store_handle)?;
         Ok(())
     }
 
@@ -1401,6 +1472,15 @@ mod tests {
         chain_store_handle
             .expect_is_block_confirmed()
             .returning(|_| false);
+        // Parent (all-zeros) at height 20 -> nephew at 21; uncles at 20 (depth 1).
+        chain_store_handle
+            .expect_get_block_metadata_batch()
+            .returning(|hashes| {
+                hashes
+                    .iter()
+                    .map(|h| (*h, metadata_at_height(20)))
+                    .collect()
+            });
 
         let valid_share = TestShareBlockBuilder::new()
             .uncles(vec![
@@ -1511,6 +1591,129 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("on confirmed chain")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_validate_uncles_rejects_too_deep() {
+        let mut chain_store_handle = ChainStoreHandle::default();
+
+        let uncle = TestShareBlockBuilder::new().miner_pubkey(PUBKEY_G).build();
+        let uncle_hash = uncle.block_hash();
+
+        chain_store_handle
+            .expect_share_block_exists()
+            .returning(|_| true);
+        chain_store_handle
+            .expect_is_block_confirmed()
+            .returning(|_| false);
+        // Parent (all-zeros) at height 20 -> nephew at 21; uncle at 17 is 4
+        // heights below, deeper than MAX_UNCLES_DEPTH (3).
+        chain_store_handle
+            .expect_get_block_metadata_batch()
+            .returning(move |hashes| {
+                hashes
+                    .iter()
+                    .map(|hash| {
+                        let height = if *hash == uncle_hash { 17 } else { 20 };
+                        (*hash, metadata_at_height(height))
+                    })
+                    .collect()
+            });
+
+        let invalid_share = TestShareBlockBuilder::new()
+            .uncles(vec![uncle_hash])
+            .miner_pubkey(PUBKEY_G)
+            .build();
+
+        let result = validator().validate_uncles(&invalid_share, &chain_store_handle);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("more than 3 below nephew height")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_validate_uncles_rejects_not_below_nephew() {
+        let mut chain_store_handle = ChainStoreHandle::default();
+
+        let uncle = TestShareBlockBuilder::new().miner_pubkey(PUBKEY_G).build();
+        let uncle_hash = uncle.block_hash();
+
+        chain_store_handle
+            .expect_share_block_exists()
+            .returning(|_| true);
+        chain_store_handle
+            .expect_is_block_confirmed()
+            .returning(|_| false);
+        // Parent (all-zeros) at height 20 -> nephew at 21; uncle also at 21 is
+        // not strictly below the nephew (a sibling height, not an ancestor).
+        chain_store_handle
+            .expect_get_block_metadata_batch()
+            .returning(move |hashes| {
+                hashes
+                    .iter()
+                    .map(|hash| {
+                        let height = if *hash == uncle_hash { 21 } else { 20 };
+                        (*hash, metadata_at_height(height))
+                    })
+                    .collect()
+            });
+
+        let invalid_share = TestShareBlockBuilder::new()
+            .uncles(vec![uncle_hash])
+            .miner_pubkey(PUBKEY_G)
+            .build();
+
+        let result = validator().validate_uncles(&invalid_share, &chain_store_handle);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("not below nephew height")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_validate_uncles_allows_max_depth_boundary() {
+        let mut chain_store_handle = ChainStoreHandle::default();
+
+        let uncle = TestShareBlockBuilder::new().miner_pubkey(PUBKEY_G).build();
+        let uncle_hash = uncle.block_hash();
+
+        chain_store_handle
+            .expect_share_block_exists()
+            .returning(|_| true);
+        chain_store_handle
+            .expect_is_block_confirmed()
+            .returning(|_| false);
+        // Parent (all-zeros) at height 20 -> nephew at 21; uncle at 18 is
+        // exactly MAX_UNCLES_DEPTH (3) heights below, the deepest allowed.
+        chain_store_handle
+            .expect_get_block_metadata_batch()
+            .returning(move |hashes| {
+                hashes
+                    .iter()
+                    .map(|hash| {
+                        let height = if *hash == uncle_hash { 18 } else { 20 };
+                        (*hash, metadata_at_height(height))
+                    })
+                    .collect()
+            });
+
+        let valid_share = TestShareBlockBuilder::new()
+            .uncles(vec![uncle_hash])
+            .miner_pubkey(PUBKEY_G)
+            .build();
+
+        assert!(
+            validator()
+                .validate_uncles(&valid_share, &chain_store_handle)
+                .is_ok()
         );
     }
 
