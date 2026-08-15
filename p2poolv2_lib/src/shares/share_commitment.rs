@@ -17,21 +17,11 @@
 use super::address_serde;
 use super::option_address_serde;
 use super::share_block::ShareHeader;
-use crate::pool_difficulty::PoolDifficulty;
-#[cfg(test)]
-#[mockall_double::double]
-use crate::shares::chain::chain_store_handle::ChainStoreHandle;
-#[cfg(not(test))]
-use crate::shares::chain::chain_store_handle::ChainStoreHandle;
-use crate::stratum::work::block_template::BlockTemplate;
-use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
 use bitcoin::consensus::Encodable;
 use bitcoin::hashes::Hash;
 use bitcoin::io::Write;
 use bitcoin::{Address, BlockHash, CompactTarget, hashes};
 use serde::Serialize;
-use std::error::Error;
-use std::sync::Arc;
 
 /// Share commitment created by miner and embedded in the bitcoin
 /// coinbase to tie the share to the bitcoin weak block
@@ -154,59 +144,17 @@ impl Encodable for ShareCommitment {
     }
 }
 
-/// Build share commitment by querying the database for fields to set.
-///
-/// Computes the share chain target using the ASERT algorithm via
-/// pool_difficulty, based on the current tip height and parent time.
-/// Uses the current timestamp for the share.
-pub(crate) fn build_share_commitment(
-    chain_store_handle: &ChainStoreHandle,
-    template: &Arc<BlockTemplate>,
-    btcaddress: Option<Address>,
-    pool_difficulty: &PoolDifficulty,
-    donation_address: Option<Address>,
-    donation: Option<u16>,
-    fee_address: Option<Address>,
-    fee: Option<u16>,
-) -> Result<Option<ShareCommitment>, Box<dyn Error + Send + Sync>> {
-    let (tip, uncles) = chain_store_handle.get_chain_tip_and_uncles()?;
-
-    let (tip_height, parent_time) = chain_store_handle.get_share_height_and_time(&tip)?;
-    // tip_height is the parent height; ASERT internally adds 1 to height_delta
-    let target = pool_difficulty.calculate_target_clamped(parent_time, tip_height);
-
-    let time = SystemTimeProvider.seconds_since_epoch() as u32;
-
-    match btcaddress {
-        Some(address) => Ok(Some(ShareCommitment {
-            prev_share_blockhash: tip,
-            uncles: uncles.into_iter().collect(),
-            miner_bitcoin_address: address,
-            bits: target,
-            time,
-            donation_address,
-            donation,
-            fee_address,
-            fee,
-            coinbase_value: template.coinbasevalue,
-        })),
-        None => Ok(None),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::shares::coinbaseaux_flags::CoinbaseAuxFlags;
     use crate::shares::extranonce::Extranonce;
     use crate::shares::witness_commitment::WitnessCommitment;
-    use crate::store::writer::StoreError;
     use crate::stratum::work::block_template::BlockTemplate;
+    use crate::test_utils::create_test_commitment;
     use crate::test_utils::test_coinbase_transaction;
-    use crate::test_utils::{TEST_TIP_TIME, create_test_commitment, on_schedule_pool_difficulty};
     use bitcoin::hashes::Hash;
     use bitcoin::{CompressedPublicKey, Network, TxMerkleNode};
-    use std::collections::HashSet;
     use std::str::FromStr;
 
     #[test]
@@ -329,209 +277,6 @@ mod tests {
         assert!(!serialized.is_empty());
     }
 
-    #[test]
-    fn test_build_share_commitment_success() {
-        let mut chain_store_handle = ChainStoreHandle::default();
-
-        // Load template from file
-        let json_content =
-            include_str!("../../../p2poolv2_tests/test_data/validation/stratum/a/template.json");
-        let template = Arc::new(
-            serde_json::from_str::<BlockTemplate>(json_content)
-                .expect("Failed to parse JSON into BlockTemplate"),
-        );
-
-        let pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
-            .parse::<CompressedPublicKey>()
-            .unwrap();
-        let btcaddress = Address::p2wpkh(&pubkey, Network::Signet);
-
-        let pool_difficulty = on_schedule_pool_difficulty();
-
-        let tip_hash =
-            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4")
-                .unwrap();
-
-        // Set up mock expectations
-        chain_store_handle
-            .expect_get_chain_tip_and_uncles()
-            .returning(move || Ok((tip_hash, HashSet::new())));
-
-        chain_store_handle
-            .expect_get_share_height_and_time()
-            .returning(|_| Ok((0, TEST_TIP_TIME)));
-
-        let result = build_share_commitment(
-            &chain_store_handle,
-            &template,
-            Some(btcaddress.clone()),
-            &pool_difficulty,
-            None,
-            None,
-            None,
-            None,
-        );
-
-        assert!(result.is_ok());
-        let commitment = result.unwrap().unwrap();
-
-        // Verify fields are set correctly
-        assert_eq!(
-            commitment.prev_share_blockhash,
-            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4")
-                .unwrap()
-        );
-        assert_eq!(commitment.uncles.len(), 0);
-        assert_eq!(commitment.miner_bitcoin_address, btcaddress);
-        let expected_bits =
-            bitcoin::CompactTarget::from_consensus(crate::shares::share_block::MAX_POOL_TARGET);
-        assert_eq!(commitment.bits, expected_bits);
-        // Time should be current, so just verify it's set
-        assert!(commitment.time > 0);
-    }
-
-    #[test]
-    fn test_build_share_commitment_with_uncles() {
-        let mut chain_store_handle = ChainStoreHandle::default();
-
-        // Load template from file
-        let json_content =
-            include_str!("../../../p2poolv2_tests/test_data/validation/stratum/a/template.json");
-        let template = Arc::new(
-            serde_json::from_str::<BlockTemplate>(json_content)
-                .expect("Failed to parse JSON into BlockTemplate"),
-        );
-
-        let pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
-            .parse::<CompressedPublicKey>()
-            .unwrap();
-        let btcaddress = Address::p2wpkh(&pubkey, Network::Signet);
-
-        let pool_difficulty = on_schedule_pool_difficulty();
-
-        let uncle1 =
-            BlockHash::from_str("00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6")
-                .unwrap();
-        let uncle2 =
-            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4")
-                .unwrap();
-
-        chain_store_handle
-            .expect_get_chain_tip_and_uncles()
-            .returning(move || {
-                let uncles = HashSet::from([uncle1, uncle2]);
-                Ok((BlockHash::all_zeros(), uncles))
-            });
-
-        chain_store_handle
-            .expect_get_share_height_and_time()
-            .returning(|_| Ok((0, TEST_TIP_TIME)));
-
-        let result = build_share_commitment(
-            &chain_store_handle,
-            &template,
-            Some(btcaddress),
-            &pool_difficulty,
-            None,
-            None,
-            None,
-            None,
-        );
-
-        assert!(result.is_ok());
-        let commitment = result.unwrap().unwrap();
-
-        // Verify uncles are set correctly
-        assert_eq!(commitment.uncles.len(), 2);
-        assert!(commitment.uncles.contains(&uncle1));
-        assert!(commitment.uncles.contains(&uncle2));
-    }
-
-    #[test]
-    fn test_build_share_commitment_error_on_chain_tip_failure() {
-        let mut chain_store_handle = ChainStoreHandle::default();
-
-        // Load template from file
-        let json_content =
-            include_str!("../../../p2poolv2_tests/test_data/validation/stratum/a/template.json");
-        let template = Arc::new(
-            serde_json::from_str::<BlockTemplate>(json_content)
-                .expect("Failed to parse JSON into BlockTemplate"),
-        );
-
-        let pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
-            .parse::<CompressedPublicKey>()
-            .unwrap();
-        let btcaddress = Address::p2wpkh(&pubkey, Network::Signet);
-
-        let pool_difficulty = on_schedule_pool_difficulty();
-
-        // Set up mock to return error on chain tip query
-        chain_store_handle
-            .expect_get_chain_tip_and_uncles()
-            .returning(|| Err(StoreError::Database("Failed to get chain tip".to_string())));
-
-        let result = build_share_commitment(
-            &chain_store_handle,
-            &template,
-            Some(btcaddress),
-            &pool_difficulty,
-            None,
-            None,
-            None,
-            None,
-        );
-
-        assert!(result.is_err());
-    }
-
-    #[test_log::test]
-    fn test_build_share_commitment_with_none_btcaddress_returns_none() {
-        let mut chain_store_handle = ChainStoreHandle::default();
-
-        // Load template from file
-        let json_content =
-            include_str!("../../../p2poolv2_tests/test_data/validation/stratum/a/template.json");
-        let template = Arc::new(
-            serde_json::from_str::<BlockTemplate>(json_content)
-                .expect("Failed to parse JSON into BlockTemplate"),
-        );
-
-        let pool_difficulty = on_schedule_pool_difficulty();
-
-        let uncle1 =
-            BlockHash::from_str("00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6")
-                .unwrap();
-        let uncle2 =
-            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4")
-                .unwrap();
-
-        chain_store_handle
-            .expect_get_chain_tip_and_uncles()
-            .returning(move || {
-                let uncles = HashSet::from([uncle1, uncle2]);
-                Ok((BlockHash::all_zeros(), uncles))
-            });
-
-        chain_store_handle
-            .expect_get_share_height_and_time()
-            .returning(|_| Ok((0, TEST_TIP_TIME)));
-
-        let result = build_share_commitment(
-            &chain_store_handle,
-            &template,
-            None,
-            &pool_difficulty,
-            None,
-            None,
-            None,
-            None,
-        );
-
-        assert!(result.is_ok());
-        assert!(result.unwrap().is_none());
-    }
-
     /// Build a ShareHeader from a commitment and a realistic bitcoin coinbase.
     fn header_from_commitment(commitment: ShareCommitment) -> ShareHeader {
         let coinbase = test_coinbase_transaction(1);
@@ -610,13 +355,7 @@ mod tests {
 
     #[test]
     fn test_from_share_header_hash_roundtrip() {
-        // Build a commitment whose merkle_root matches the template transactions,
-        // then verify from_share_header produces the same hash.
-        let json_content =
-            include_str!("../../../p2poolv2_tests/test_data/validation/stratum/a/template.json");
-        let template: BlockTemplate =
-            serde_json::from_str(json_content).expect("Failed to parse template JSON");
-
+        // Build a commitment, then verify from_share_header produces the same hash.
         let commitment = create_test_commitment();
         let expected_hash = commitment.hash();
 
@@ -675,11 +414,6 @@ mod tests {
 
     #[test]
     fn test_from_share_header_copies_donation_and_fee_fields() {
-        let json_content =
-            include_str!("../../../p2poolv2_tests/test_data/validation/stratum/a/template.json");
-        let template: BlockTemplate =
-            serde_json::from_str(json_content).expect("Failed to parse template JSON");
-
         let donation_pubkey = "02ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d"
             .parse::<CompressedPublicKey>()
             .unwrap();

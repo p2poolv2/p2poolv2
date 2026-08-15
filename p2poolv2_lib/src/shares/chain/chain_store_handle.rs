@@ -509,23 +509,6 @@ impl ChainStoreHandle {
         Ok(locator)
     }
 
-    /// Get the chain tip and uncles from the confirmed chain.
-    ///
-    /// Delegates uncle selection to Store::find_uncles() and removes
-    /// the chain tip from the result to guarantee the parent is never
-    /// also listed as an uncle.
-    pub fn get_chain_tip_and_uncles(&self) -> Result<(BlockHash, HashSet<BlockHash>), StoreError> {
-        let chain_tip = self.get_chain_tip()?;
-        let uncles: HashSet<BlockHash> = self
-            .store_handle
-            .store()
-            .find_uncles()?
-            .into_iter()
-            .filter(|uncle| *uncle != chain_tip)
-            .collect();
-        Ok((chain_tip, uncles))
-    }
-
     /// The block to mine the next share on: the higher-work of the confirmed
     /// tip and the highest-work `BlockValid` block, ties broken by the
     /// lexicographically smallest hash.
@@ -557,8 +540,7 @@ impl ChainStoreHandle {
     ///
     /// Uncles come from `find_uncles`, excluding the mining base and its
     /// ancestry down to the confirmed chain, so a block we build on (or one
-    /// of its ancestors) is never also listed as an uncle. When the mining
-    /// base is the confirmed tip this is exactly `get_chain_tip_and_uncles`.
+    /// of its ancestors) is never also listed as an uncle.
     pub fn get_mining_base_and_uncles(
         &self,
     ) -> Result<(BlockHash, HashSet<BlockHash>), StoreError> {
@@ -867,7 +849,6 @@ mockall::mock! {
         pub fn get_chain_tip_header(&self) -> Result<ShareHeader, StoreError>;
         pub fn get_candidate_tip_header(&self) -> Result<ShareHeader, StoreError>;
         pub fn is_current(&self) -> bool;
-        pub fn get_chain_tip_and_uncles(&self) -> Result<(BlockHash, HashSet<BlockHash>), StoreError>;
         pub fn get_mining_base(&self) -> Result<BlockHash, StoreError>;
         pub fn get_mining_base_and_uncles(&self) -> Result<(BlockHash, HashSet<BlockHash>), StoreError>;
         pub fn get_share_height_and_time(&self, share_hash: &BlockHash) -> Result<(u32, u32), StoreError>;
