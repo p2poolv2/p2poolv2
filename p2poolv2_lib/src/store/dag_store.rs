@@ -17,7 +17,7 @@
 use super::block_tx_metadata::{BlockMetadata, Status};
 use super::{ColumnFamily, Store, writer::StoreError};
 use crate::shares::chain::chain_store_handle::{COMMON_ANCESTOR_DEPTH, ConfirmedHeaderResult};
-use crate::shares::share_block::{ShareBlock, ShareHeader};
+use crate::shares::share_block::{ShareBlock, ShareHeader, is_terminal_blockhash};
 use crate::shares::validation::MAX_UNCLES;
 use bitcoin::consensus::{self, Encodable, encode};
 use bitcoin::hashes::Hash;
@@ -406,46 +406,51 @@ impl Store {
         }
     }
 
-    /// Finds uncles up to max depth and return a vector of all found
-    /// uncle BlockHashes, sorted by chain_work descending.
+    /// Finds uncles for a share built on `base_hash`, sorted by
+    /// chain_work descending.
     ///
-    /// Algorithm: Find ancestors up to max uncle depth on the
-    /// confirmed chain, not counting the parent. Find all children of
-    /// these ancestors that are not on the confirmed chain, not the
-    /// chain tip (parent), and not already included as uncles in other
-    /// blocks. Return the top MAX_UNCLES by chain_work.
-    pub fn find_uncles(&self) -> Result<Vec<BlockHash>, StoreError> {
-        let top_confirmed_height = match self.get_top_confirmed_height() {
-            Ok(height) => height,
-            Err(StoreError::NotFound(_)) => {
-                // No top confirmation yet; no uncles can be found.
-                return Ok(Vec::new());
+    /// Algorithm: walk the base's ancestry up to `MAX_UNCLES_DEPTH` parent
+    /// pointers. The children of those ancestors that are not themselves on
+    /// the base's ancestry, not on the confirmed chain, not already used as
+    /// an uncle, and have their block body stored are the uncle candidates.
+    /// Return the top `MAX_UNCLES` by chain_work.
+    ///
+    /// Anchoring on `base_hash` (the nephew's parent) rather than the
+    /// confirmed tip keeps every returned uncle within `MAX_UNCLES_DEPTH` of
+    /// the nephew even when the base leads the confirmed chain on a
+    /// `BlockValid` fork -- so the produced share passes the uncle-depth
+    /// check that validation applies. The body check prevents selecting
+    /// header-only blocks (received via header sync without a body), which
+    /// would create shares that reference uncle data no node can serve.
+    pub fn find_uncles(&self, base_hash: &BlockHash) -> Result<Vec<BlockHash>, StoreError> {
+        let mut ancestors: Vec<BlockHash> = Vec::with_capacity(MAX_UNCLES_DEPTH as usize);
+        let mut ancestry: HashSet<BlockHash> =
+            HashSet::with_capacity(MAX_UNCLES_DEPTH as usize + 1);
+        ancestry.insert(*base_hash);
+        let mut current = *base_hash;
+        let mut steps = 0;
+        while steps < MAX_UNCLES_DEPTH as usize && !is_terminal_blockhash(&current) {
+            let parent = match self.get_share_header(&current)? {
+                Some(header) => header.prev_share_blockhash,
+                None => return Ok(Vec::new()),
+            };
+            if !is_terminal_blockhash(&parent) {
+                ancestors.push(parent);
+                ancestry.insert(parent);
             }
-            Err(e) => return Err(e),
-        };
+            current = parent;
+            steps += 1;
+        }
 
-        let chain_tip = self.get_chain_tip()?;
-
-        // get all ancestors up to required depth on the confirmed index
-        let ancestors = (top_confirmed_height.saturating_sub(MAX_UNCLES_DEPTH as u32)
-            ..top_confirmed_height)
-            .filter_map(|height| self.get_confirmed_at_height(height).ok());
-
-        // get all children for the ancestors, will give us all uncles and confirmed blocks
         let children = ancestors
-            .filter_map(|blockhash| self.get_children_blockhashes(&blockhash).ok())
+            .iter()
+            .filter_map(|ancestor| self.get_children_blockhashes(ancestor).ok())
             .flatten()
             .flatten();
 
-        // Only keep the non-confirmed blocks that are not used as
-        // uncles already, are not the chain tip (parent), and have
-        // their block body stored. The body check prevents selecting
-        // header-only blocks (received via header sync without a
-        // body) as uncles, which would create shares that reference
-        // uncle data no node can serve.
         let mut uncles_with_work: Vec<(BlockHash, Work)> = children
             .filter(|blockhash| {
-                *blockhash != chain_tip
+                !ancestry.contains(blockhash)
                     && !self.is_confirmed(blockhash)
                     && !self.is_already_uncle(blockhash)
                     && self.share_block_exists(blockhash)
@@ -2590,8 +2595,8 @@ mod tests {
         store.add_share_block(&share, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
-        // No confirmed blocks, should return error
-        let result = store.find_uncles().unwrap();
+        // The share has no ancestors, so there are no uncle candidates.
+        let result = store.find_uncles(&share.block_hash()).unwrap();
         assert!(result.is_empty());
     }
 
@@ -2620,7 +2625,7 @@ mod tests {
         store.push_to_confirmed_chain(&share2).unwrap();
 
         // No unconfirmed children exist, so find_uncles should return empty
-        let uncles = store.find_uncles().unwrap();
+        let uncles = store.find_uncles(&store.get_chain_tip().unwrap()).unwrap();
         assert!(uncles.is_empty());
     }
 
@@ -2656,7 +2661,7 @@ mod tests {
         store.push_to_confirmed_chain(&share1).unwrap();
 
         // find_uncles should find uncle1
-        let uncles = store.find_uncles().unwrap();
+        let uncles = store.find_uncles(&store.get_chain_tip().unwrap()).unwrap();
         assert_eq!(uncles.len(), 1);
         assert!(uncles.contains(&uncle1.block_hash()));
     }
@@ -2704,7 +2709,7 @@ mod tests {
         store.push_to_confirmed_chain(&share1).unwrap();
 
         // find_uncles should NOT include the header-only uncle
-        let uncles = store.find_uncles().unwrap();
+        let uncles = store.find_uncles(&store.get_chain_tip().unwrap()).unwrap();
         assert!(
             uncles.is_empty(),
             "Header-only uncle without block body should not be selected"
@@ -2773,7 +2778,7 @@ mod tests {
 
         // find_uncles should find uncle0, uncle1, uncle2
         // Sorted by chain_work descending: uncle2 (work=3), uncle1 (work=2), uncle0 (work=1)
-        let uncles = store.find_uncles().unwrap();
+        let uncles = store.find_uncles(&store.get_chain_tip().unwrap()).unwrap();
         assert_eq!(uncles.len(), 3);
         // Verify order - highest chain_work first
         assert_eq!(uncles[0], uncle2.block_hash());
@@ -2847,7 +2852,7 @@ mod tests {
         // find_uncles from share5 (height 5)
         // Should only find uncle_within (at height 3, within depth 3: heights 2,3,4)
         // Should NOT find uncle_deep (at height 1, beyond the range we look at)
-        let uncles = store.find_uncles().unwrap();
+        let uncles = store.find_uncles(&store.get_chain_tip().unwrap()).unwrap();
 
         assert_eq!(uncles.len(), 1);
         assert!(uncles.contains(&uncle_within.block_hash()));
@@ -2906,7 +2911,7 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         // find_uncles should only find uncle2, not uncle1
-        let uncles = store.find_uncles().unwrap();
+        let uncles = store.find_uncles(&store.get_chain_tip().unwrap()).unwrap();
         assert_eq!(uncles.len(), 1);
         assert!(uncles.contains(&uncle2.block_hash()));
         assert!(!uncles.contains(&uncle1.block_hash()));
@@ -2943,7 +2948,7 @@ mod tests {
         store.push_to_confirmed_chain(&share2).unwrap();
 
         // find_uncles should return empty - share1 is child of share0 but is confirmed
-        let uncles = store.find_uncles().unwrap();
+        let uncles = store.find_uncles(&store.get_chain_tip().unwrap()).unwrap();
         assert!(uncles.is_empty());
     }
 
@@ -3008,7 +3013,7 @@ mod tests {
 
         // find_uncles should return exactly 3 uncles, prioritizing higher chain_work
         // uncle_d has work=2, uncle_a/b/c have default work=1
-        let uncles = store.find_uncles().unwrap();
+        let uncles = store.find_uncles(&store.get_chain_tip().unwrap()).unwrap();
         assert_eq!(uncles.len(), 3);
 
         // uncle_d should be first (highest chain_work)
@@ -3111,7 +3116,7 @@ mod tests {
         // - share4 (height 4) has children: share5, uncle5 -> uncle5 found
         // - share5 (height 5) has children: share6 only -> no uncles
         // uncle3 is NOT found because it's a child of share2 (height 2), which is outside the range
-        let uncles = store.find_uncles().unwrap();
+        let uncles = store.find_uncles(&store.get_chain_tip().unwrap()).unwrap();
 
         assert_eq!(uncles.len(), 2);
         // Should be sorted by chain_work descending: uncle5 (work=2), uncle4 (work=1)
@@ -3122,6 +3127,82 @@ mod tests {
         assert!(!uncles.contains(&uncle1.block_hash()));
         assert!(!uncles.contains(&uncle2.block_hash()));
         assert!(!uncles.contains(&uncle3.block_hash()));
+    }
+
+    #[test]
+    fn test_find_uncles_anchors_on_leading_base_not_confirmed_tip() {
+        // Regression for the mining-base / uncle-altitude mismatch: when the
+        // mining base leads the confirmed tip on a BlockValid fork, uncles must
+        // be selected relative to the base (the nephew's parent), not the
+        // confirmed tip. Otherwise find_uncles returns blocks too deep for the
+        // nephew and the node's own share fails the uncle-depth check.
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Confirmed chain g(0) -> c1(1) -> c2(2) -> c3(3).
+        let g = TestShareBlockBuilder::new().nonce(0).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&g, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let c1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(g.block_hash().to_string())
+            .nonce(1)
+            .build();
+        // A sibling of c2 (child of c1) at height 2. Depth 4 from a nephew built
+        // on f5, so it must be excluded -- but confirmed-tip anchoring (tip c3)
+        // would have selected it.
+        let deep_uncle = TestShareBlockBuilder::new()
+            .prev_share_blockhash(c1.block_hash().to_string())
+            .nonce(102)
+            .build();
+        let c2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(c1.block_hash().to_string())
+            .nonce(2)
+            .build();
+        let c3 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(c2.block_hash().to_string())
+            .nonce(3)
+            .build();
+
+        store.push_to_confirmed_chain(&c1).unwrap();
+        store.store_with_valid_metadata(&deep_uncle);
+        store.push_to_confirmed_chain(&c2).unwrap();
+        store.push_to_confirmed_chain(&c3).unwrap();
+
+        // BlockValid fork leading the confirmed tip by 2: c3 -> f4(4) -> f5(5).
+        let f4 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(c3.block_hash().to_string())
+            .nonce(4)
+            .build();
+        // A sibling of f4 (child of c3) at height 4. Depth 2 from a nephew built
+        // on f5, so it is a valid uncle.
+        let near_uncle = TestShareBlockBuilder::new()
+            .prev_share_blockhash(c3.block_hash().to_string())
+            .nonce(104)
+            .build();
+        let f5 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(f4.block_hash().to_string())
+            .nonce(5)
+            .build();
+        store.store_with_valid_metadata(&f4);
+        store.store_with_valid_metadata(&near_uncle);
+        store.store_with_valid_metadata(&f5);
+
+        // Anchored on the leading base f5 (the nephew would be at height 6).
+        let uncles = store.find_uncles(&f5.block_hash()).unwrap();
+
+        // The near sibling (depth 2) is a valid uncle.
+        assert!(
+            uncles.contains(&near_uncle.block_hash()),
+            "near sibling within MAX_UNCLES_DEPTH must be a uncle"
+        );
+        // The deep sibling (depth 4) is outside the base's window and must be
+        // excluded; confirmed-tip anchoring would have wrongly included it.
+        assert!(
+            !uncles.contains(&deep_uncle.block_hash()),
+            "sibling deeper than MAX_UNCLES_DEPTH from the base must be excluded"
+        );
     }
 
     /// Higher chain_work uncles at a lower height should be preferred
@@ -3189,7 +3270,7 @@ mod tests {
         // Confirm share2
         store.push_to_confirmed_chain(&share2).unwrap();
 
-        let uncles = store.find_uncles().unwrap();
+        let uncles = store.find_uncles(&store.get_chain_tip().unwrap()).unwrap();
         assert_eq!(uncles.len(), 3);
 
         // uncle_high (work=3) should come first
@@ -3245,7 +3326,7 @@ mod tests {
         // Verify chain tip is share2
         assert_eq!(store.get_chain_tip().unwrap(), share2.block_hash());
 
-        let uncles = store.find_uncles().unwrap();
+        let uncles = store.find_uncles(&store.get_chain_tip().unwrap()).unwrap();
 
         // fork_uncle should be found
         assert_eq!(uncles.len(), 1);

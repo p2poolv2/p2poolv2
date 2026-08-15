@@ -546,19 +546,14 @@ impl ChainStoreHandle {
     ) -> Result<(BlockHash, HashSet<BlockHash>), StoreError> {
         let mining_base = self.get_mining_base()?;
         let store = self.store_handle.store();
-        let branch = store
+        store
             .get_branch_to_chain(&mining_base, |hash| store.is_confirmed(hash))?
             .ok_or_else(|| {
                 StoreError::NotFound(format!(
                     "Mining base {mining_base} does not connect to the confirmed chain"
                 ))
             })?;
-        let ancestry: HashSet<BlockHash> = branch.into_iter().collect();
-        let uncles: HashSet<BlockHash> = store
-            .find_uncles()?
-            .into_iter()
-            .filter(|uncle| !ancestry.contains(uncle))
-            .collect();
+        let uncles: HashSet<BlockHash> = store.find_uncles(&mining_base)?.into_iter().collect();
         Ok((mining_base, uncles))
     }
 
