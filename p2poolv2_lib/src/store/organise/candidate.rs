@@ -849,7 +849,7 @@ mod tests {
         assert_eq!(store.get_top_candidate_height().unwrap(), 2);
     }
 
-    // ── append_to_candidate tests ─────────────────────────────────────────
+    // -- append_to_candidate tests -----------------------------------------
 
     #[test]
     fn test_append_to_candidate() {
@@ -978,7 +978,7 @@ mod tests {
         assert_eq!(store.get_top_candidate_height().unwrap(), 2);
     }
 
-    // ── get_candidates / get_candidates_chain tests ───────────────────
+    // -- get_candidates / get_candidates_chain tests -------------------
 
     #[test]
     fn test_get_candidates_returns_blockhashes_in_range() {
@@ -1083,7 +1083,7 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // ── is_candidate tests ────────────────────────────────────────────
+    // -- is_candidate tests --------------------------------------------
 
     #[test]
     fn test_is_candidate_returns_true_when_candidate() {
@@ -1127,7 +1127,7 @@ mod tests {
         assert!(!store.is_candidate(&share.block_hash()));
     }
 
-    // ── extend_candidates_at unit tests ──────────────────────────────
+    // -- extend_candidates_at unit tests ------------------------------
 
     #[test]
     fn test_extend_candidates_at_returns_share_expected_height_when_no_top_candidate() {
@@ -1166,7 +1166,7 @@ mod tests {
             chain: ChainMembership::None,
         };
 
-        // height == top candidate height + 1 → 6 == 5 + 1
+        // height == top candidate height + 1 -> 6 == 5 + 1
         let top_candidate = Some(TopResult {
             hash: parent_hash,
             height: 5,
@@ -1266,7 +1266,7 @@ mod tests {
         assert_eq!(result.unwrap(), None);
     }
 
-    // ── should_reorg_candidate unit tests ──────────────────────────────
+    // -- should_reorg_candidate unit tests ------------------------------
 
     #[test]
     fn test_should_reorg_candidate_true_when_more_work_different_hash() {
@@ -1366,7 +1366,7 @@ mod tests {
             chain: ChainMembership::Candidate,
         };
 
-        // Same blockhash as share — should not reorg against itself
+        // Same blockhash as share -- should not reorg against itself
         let top_candidate = Some(TopResult {
             hash: share.block_hash(),
             height: 2,
@@ -1397,7 +1397,7 @@ mod tests {
         assert!(!store.should_reorg_candidate(&share.block_hash(), &metadata, None));
     }
 
-    // ── pick_best_child unit tests ──────────────────────────────────
+    // -- pick_best_child unit tests ----------------------------------
 
     #[test]
     fn test_pick_best_child_returns_none_for_empty_children() {
@@ -2122,7 +2122,7 @@ mod tests {
         assert_eq!(result, 1);
     }
 
-    // ── invalidation reorg tests ─────────────────────────────────────────
+    // -- invalidation reorg tests -----------------------------------------
 
     /// Invalidating a mid-candidate block removes it and its descendants from
     /// the candidate chain and rebuilds the best surviving branch from the
@@ -2265,7 +2265,7 @@ mod tests {
         assert_eq!(store.get_highest_block_valid().unwrap(), None);
     }
 
-    // ── invalidation reorg helper unit tests ─────────────────────────────
+    // -- invalidation reorg helper unit tests -----------------------------
 
     /// detach_candidate_branch removes the branch from `from_height` up,
     /// clears chain membership for every removed block except the invalid one
