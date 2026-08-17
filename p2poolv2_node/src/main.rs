@@ -18,7 +18,7 @@ use clap::Parser;
 use p2poolv2_lib::config::Config;
 use p2poolv2_lib::logging::setup_logging;
 use std::process::ExitCode;
-use tracing::{error, info};
+use tracing::info;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]

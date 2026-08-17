@@ -314,11 +314,6 @@ impl Store {
         None
     }
 
-    /// Find the first blockhash that exists by checking the Header CF.
-    pub(crate) fn get_first_existing_blockhash(&self, locator: &[BlockHash]) -> Option<BlockHash> {
-        self.first_existing_share_header(locator)
-    }
-
     /// Get multiple shares from the store by reconstructing each from
     /// the Header CF and transaction CFs.
     pub fn get_shares(

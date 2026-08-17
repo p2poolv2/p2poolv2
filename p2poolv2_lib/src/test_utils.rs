@@ -55,7 +55,7 @@ use crate::shares::chain::chain_store_handle::MockChainStoreHandle;
 use crate::shares::coinbaseaux_flags::CoinbaseAuxFlags;
 #[cfg(any(test, feature = "test-utils"))]
 use crate::shares::share_commitment::ShareCommitment;
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(test)]
 use crate::shares::witness_commitment::WitnessCommitment;
 #[cfg(test)]
 use crate::store::block_tx_metadata::{BlockMetadata, ChainMembership, Status};
@@ -336,7 +336,12 @@ pub fn random_hex_string(length: usize, leading_zeroes: usize) -> String {
 #[cfg(test)]
 pub fn load_valid_stratum_work_components(
     path: &str,
-) -> (BlockTemplate, Notify, SimpleRequest, Response<'static>) {
+) -> (
+    BlockTemplate,
+    Notify,
+    SimpleRequest<'static>,
+    Response<'static>,
+) {
     let notify_file = std::fs::File::open(format!("{path}/notify.json")).unwrap();
     let notify: Notify = serde_json::from_reader(notify_file).unwrap();
 

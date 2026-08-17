@@ -20,7 +20,7 @@ use crate::stratum::work::notify::{NotifyCmd, NotifySender};
 use bitcoin::hashes::{Hash, sha256d};
 use bitcoindrpc::{BitcoinRpcConfig, BitcoindRpcClient};
 use std::sync::Arc;
-use tracing::{debug, error, info, instrument};
+use tracing::{debug, error, instrument};
 
 #[cfg(test)]
 const GBT_NO_TRANSACTIONS_FIXTURE: &str =

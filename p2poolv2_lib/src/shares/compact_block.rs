@@ -14,6 +14,11 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+//! Compact block relay for share blocks. Staged for future use: nothing in the
+//! node pipeline calls into this module yet, so the items below are allowed to
+//! be dead.
+#![allow(dead_code)]
+
 use bitcoin::secp256k1::rand::{self, RngCore};
 use bitcoin::{Block, bip152::HeaderAndShortIds, p2p::message_compact_blocks::CmpctBlock};
 use tokio::sync::mpsc;

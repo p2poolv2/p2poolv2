@@ -110,7 +110,6 @@ struct Node {
     swarm_rx: mpsc::Receiver<SwarmSend<ResponseChannel<Message>>>,
     chain_store_handle: ChainStoreHandle,
     request_response_handler: RequestResponseHandler<ResponseChannel<Message>>,
-    config: Config,
     monitoring_event_sender: MonitoringEventSender,
     peer_reconnector: peer_reconnector::PeerReconnector,
     connection_tracker: ConnectionTracker,
@@ -277,7 +276,6 @@ impl Node {
             swarm_rx,
             chain_store_handle,
             request_response_handler,
-            config,
             monitoring_event_sender,
             peer_reconnector,
             connection_tracker: ConnectionTracker::new(blocked_ips),
@@ -297,16 +295,6 @@ impl Node {
     pub fn shutdown(&mut self) -> Result<(), Box<dyn Error>> {
         for peer_id in self.swarm.connected_peers().cloned().collect::<Vec<_>>() {
             self.swarm.disconnect_peer_id(peer_id).unwrap_or_default();
-        }
-        Ok(())
-    }
-
-    /// Send Message to all peers
-    pub fn send_to_all_peers(&mut self, message: Message) -> Result<(), Box<dyn Error>> {
-        debug!("Sending message to all peers");
-        let peer_ids: Vec<_> = self.swarm.connected_peers().cloned().collect();
-        for peer_id in peer_ids {
-            self.send_to_peer(&peer_id, message.clone())?;
         }
         Ok(())
     }

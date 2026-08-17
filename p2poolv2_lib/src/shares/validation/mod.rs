@@ -3221,6 +3221,9 @@ mod tests {
         let mut share_block = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
+        share_block.header.coinbase_value = 312_500_000;
+        share_block.header.bitcoin_height = 840_000;
+        share_block.header.bitcoin_header.merkle_root = coinbase_tx.compute_txid().into();
 
         let mut mock_window = PplnsWindow::default();
         mock_window

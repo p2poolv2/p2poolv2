@@ -16,7 +16,7 @@
 
 use crate::store::{
     ColumnFamily, Store,
-    block_tx_metadata::{BlockMetadata, ChainMembership, Status},
+    block_tx_metadata::{BlockMetadata, ChainMembership},
     writer::StoreError,
 };
 use bitcoin::{
@@ -429,6 +429,7 @@ impl Store {
 mod tests {
     use super::*;
     use crate::shares::share_block::ShareTransaction;
+    use crate::store::block_tx_metadata::Status;
     use crate::test_utils::TestShareBlockBuilder;
     use bitcoin::hashes::Hash;
     use tempfile::tempdir;
