@@ -105,10 +105,46 @@ pub struct OrganiseWorker {
     pplns_window: Arc<RwLock<PplnsWindow>>,
     share_validator: Arc<dyn ShareValidator + Send + Sync>,
     metrics: MetricsHandle,
-    /// Blocks whose parent height exceeds the confirmed tip, keyed by the
+    /// Blocks deferred because their parent is not yet validated, keyed by the
     /// parent's expected height. Multiple blocks may share the same parent
-    /// height during forks or rapid sync.
+    /// height during forks or rapid sync. Drained when the parent becomes
+    /// BlockValid or confirmed.
     pending_blocks: BTreeMap<u32, Vec<ShareBlock>>,
+}
+
+/// Validation state of a block's parent, deciding how the block is handled.
+///
+/// Chain-context validation runs only when the parent is `Valid`; until then
+/// the block is deferred. This keeps the `BlockValid` chain transitive from the
+/// confirmed tip up, and guarantees that once we do validate, every dependency
+/// is present in the store.
+enum ParentState {
+    /// Parent is `BlockValid` or on the confirmed chain. Carries its height.
+    Valid(u32),
+    /// Parent is only `HeaderValid`/`Pending`; defer the block. Carries the
+    /// parent height used as the buffer key.
+    Pending(u32),
+    /// Parent is `Invalid`; the block is invalid by descent.
+    Invalid,
+    /// Parent metadata is missing or has no height. This is an anomaly (the
+    /// block receiver admits a block only after its parent is `HeaderValid`),
+    /// so the block is dropped and left for re-delivery.
+    Unknown,
+}
+
+/// Outcome of processing one share block through organise.
+enum ProcessOutcome {
+    /// The block became `BlockValid` or was promoted. Carries the block's own
+    /// height, from which dependent buffered blocks are drained.
+    Advanced(u32),
+    /// The block was deferred (parent not yet validated).
+    Buffered,
+    /// The block was dropped (invalid-by-descent or unknown parent).
+    Dropped,
+    /// Validated with a valid parent but neither marked Invalid nor promoted (below
+    /// the PPLNS zone and not yet promotable, or a consensus failure that marked
+    /// it Invalid).
+    NotAdvanced,
 }
 
 impl OrganiseWorker {
@@ -172,62 +208,84 @@ impl OrganiseWorker {
         Ok(())
     }
 
-    /// Validate, promote, and follow up on a single share block.
+    /// Handle a single share block: gate it on its parent, then follow up.
     ///
-    /// Validation failures and non-fatal store errors are logged and
-    /// dropped so the worker keeps running. Only `StoreError::ChannelClosed`
-    /// during promotion is propagated as a fatal `OrganiseError`.
+    /// A block that advances (becomes BlockValid or is promoted) drains its
+    /// dependents. A buffered block opportunistically tries to advance the
+    /// confirmed chain from the candidate chain (which may have reorged). Only
+    /// `StoreError::ChannelClosed` (and, in Phase 2, a store error during
+    /// validation) is propagated as a fatal `OrganiseError`.
     async fn handle_organise_block_event(
         &mut self,
         share_block: ShareBlock,
     ) -> Result<(), OrganiseError> {
-        if let Some(parent_height) = self.should_buffer_block(&share_block) {
-            self.buffer_block(parent_height, share_block);
-            // The buffered block is too far ahead to promote, but the
-            // candidate chain may have reorged since the last
-            // organise_block call. The block at confirmed_tip + 1 on
-            // the candidate chain might already have its body stored
-            // (e.g. it failed context-free validation but was stored
-            // by the block receiver). Try to advance the confirmed
-            // chain from the candidate chain, then drain any buffered
-            // blocks that become processable.
-            match self.chain_store_handle.organise_block().await {
-                Ok(Some(_)) => {
-                    self.update_pplns_window();
-                    self.drain_pending_blocks().await?;
-                }
-                Ok(None) => {}
-                Err(StoreError::ChannelClosed) => {
-                    return Err(OrganiseError {
-                        message: "Store writer channel closed".to_string(),
-                    });
-                }
-                Err(error) => {
-                    error!("Error advancing confirmed from buffer trigger: {error}");
+        match self.process_share_block(share_block).await? {
+            ProcessOutcome::Advanced(height) => {
+                self.drain_pending_blocks(height).await?;
+            }
+            ProcessOutcome::Buffered => {
+                // The candidate chain may have reorged since the last
+                // organise_block call; try to advance the confirmed chain from
+                // it, then drain anything that becomes processable.
+                match self.chain_store_handle.organise_block().await {
+                    Ok(Some(height)) => {
+                        self.update_pplns_window();
+                        self.drain_pending_blocks(height).await?;
+                    }
+                    Ok(None) => {}
+                    Err(StoreError::ChannelClosed) => {
+                        return Err(OrganiseError {
+                            message: "Store writer channel closed".to_string(),
+                        });
+                    }
+                    Err(error) => {
+                        error!("Error advancing confirmed from buffer trigger: {error}");
+                    }
                 }
             }
-            return Ok(());
+            ProcessOutcome::Dropped | ProcessOutcome::NotAdvanced => {}
         }
-
-        let promoted_height = self.validate_and_promote_block(&share_block).await?;
-
-        if let Some(height) = promoted_height {
-            self.post_promote(&share_block, height).await;
-            self.drain_pending_blocks().await?;
-        }
-
         Ok(())
     }
 
-    /// Validate a block with chain context and promote it to confirmed.
+    /// Gate a block on its parent's state, then buffer, drop, or
+    /// validate-and-promote it. Shared by fresh events and the drain path.
+    async fn process_share_block(
+        &mut self,
+        share_block: ShareBlock,
+    ) -> Result<ProcessOutcome, OrganiseError> {
+        let blockhash = share_block.block_hash();
+        match self.parent_state(&share_block.header.prev_share_blockhash) {
+            ParentState::Invalid => {
+                debug!("Dropping {blockhash}: parent is Invalid (invalid by descent)");
+                Ok(ProcessOutcome::Dropped)
+            }
+            ParentState::Unknown => {
+                debug!("Dropping {blockhash}: parent metadata unavailable");
+                Ok(ProcessOutcome::Dropped)
+            }
+            ParentState::Pending(parent_height) => {
+                self.buffer_block(parent_height, share_block);
+                Ok(ProcessOutcome::Buffered)
+            }
+            ParentState::Valid(parent_height) => {
+                self.validate_mark_promote(share_block, parent_height).await
+            }
+        }
+    }
+
+    /// Validate a block whose parent is already valid, mark it BlockValid, and
+    /// promote it.
     ///
-    /// Returns the confirmed height on successful promotion, None when
-    /// validation fails or the block is not promoted, or a fatal error
-    /// when the store channel is closed.
-    async fn validate_and_promote_block(
+    /// Because the parent is validated, every dependency the checks need is
+    /// present, so a validation failure is a genuine consensus violation (the
+    /// block is marked Invalid). Returns `Advanced(height)` when the block
+    /// becomes BlockValid or is promoted, so its dependents can be drained.
+    async fn validate_mark_promote(
         &self,
-        share_block: &ShareBlock,
-    ) -> Result<Option<u32>, OrganiseError> {
+        share_block: ShareBlock,
+        parent_height: u32,
+    ) -> Result<ProcessOutcome, OrganiseError> {
         let blockhash = share_block.block_hash();
         debug!("Organising block: {blockhash:?}");
 
@@ -235,26 +293,32 @@ impl OrganiseWorker {
             Ok(result) => result,
             Err(error_message) => {
                 error!("Error checking for zone: {error_message}");
-                return Ok(None);
+                return Ok(ProcessOutcome::NotAdvanced);
             }
         };
 
+        let mut marked_valid = false;
         if in_pplns_zone {
             if let Err(validation_error) = self.share_validator.validate_with_chain_context(
-                share_block,
+                &share_block,
                 &self.chain_store_handle,
                 Arc::clone(&self.pplns_window),
             ) {
                 error!("Chain-context validation failed for {blockhash}: {validation_error}");
-                // Mark the block Invalid so it is never promoted -- including
-                // via organise_block's fallback path -- and so confirmation can
-                // advance past it onto a valid sibling.
+                // The parent is validated, so all dependencies are present: this
+                // is a genuine consensus violation. Mark Invalid so confirmation
+                // can advance onto a valid sibling. (Phase 2 will treat a store
+                // error here -- data that must exist -- as fatal instead.)
                 if let Err(mark_error) = self.chain_store_handle.mark_invalid(blockhash).await {
                     error!("Failed to mark {blockhash} Invalid: {mark_error}");
                 }
-                return Ok(None);
+                return Ok(ProcessOutcome::NotAdvanced);
             }
-            self.mark_valid_if_parent_validated(share_block).await;
+            if let Err(mark_error) = self.chain_store_handle.mark_block_valid(blockhash).await {
+                error!("Failed to mark {blockhash} BlockValid: {mark_error}");
+                return Ok(ProcessOutcome::NotAdvanced);
+            }
+            marked_valid = true;
         }
 
         match self
@@ -262,8 +326,19 @@ impl OrganiseWorker {
             .promote_block(share_block.header.clone())
             .await
         {
-            Ok(Some(height)) => Ok(Some(height)),
-            Ok(None) => Ok(None),
+            Ok(Some(height)) => {
+                self.post_promote(&share_block, height).await;
+                // Drain dependents from this block's own height, not the
+                // confirmed height, so a promotion cascade doesn't skip them.
+                Ok(ProcessOutcome::Advanced(parent_height + 1))
+            }
+            Ok(None) => {
+                if marked_valid {
+                    Ok(ProcessOutcome::Advanced(parent_height + 1))
+                } else {
+                    Ok(ProcessOutcome::NotAdvanced)
+                }
+            }
             Err(StoreError::ChannelClosed) => {
                 error!("Store writer channel closed during promote block");
                 Err(OrganiseError {
@@ -272,54 +347,35 @@ impl OrganiseWorker {
             }
             Err(error) => {
                 error!("Error promoting block {blockhash}: {error}");
-                Ok(None)
+                Ok(ProcessOutcome::NotAdvanced)
             }
         }
     }
 
-    /// Mark a block BlockValid, but only once its parent is itself BlockValid
-    /// or on the confirmed chain.
+    /// Classify a block's parent for the organise gate.
     ///
-    /// This keeps the BlockValid chain fully validated from the confirmed tip
-    /// up (transitivity): an attacker who withholds an early dependency can
-    /// grow header-work, but nothing above the gap ever becomes BlockValid, so
-    /// nothing we mine on follows it.
-    ///
-    /// If the parent is not yet validated the block is left HeaderValid. No
-    /// re-trigger is needed: the block stays on the candidate chain with its
-    /// body, so confirmation still sweeps through it, and the mining base
-    /// (max of confirmed tip and highest BlockValid) tracks it via confirmed.
-    /// The BlockValid pointer only needs to lead the confirmed tip where
-    /// confirmation cannot advance -- a case the gate itself already stops.
-    async fn mark_valid_if_parent_validated(&self, share_block: &ShareBlock) {
-        let blockhash = share_block.block_hash();
-        if !self.has_valid_parent(&share_block.header.prev_share_blockhash) {
-            debug!("Leaving {blockhash} HeaderValid: parent not yet BlockValid/confirmed");
-            return;
-        }
-        if let Err(mark_error) = self.chain_store_handle.mark_block_valid(blockhash).await {
-            error!("Failed to mark {blockhash} BlockValid: {mark_error}");
-        }
-    }
-
-    /// Whether a parent block is BlockValid or on the confirmed chain, the
-    /// precondition for marking a child BlockValid. Missing parent metadata is
-    /// treated as not-yet-validated so the child stays HeaderValid.
-    ///
-    /// We need to allow either block valid or confirmed as below pplns window,
-    /// the blocks are confirmed without being blockvalid.
-    fn has_valid_parent(&self, parent_hash: &BlockHash) -> bool {
-        match self.chain_store_handle.get_block_metadata(parent_hash) {
-            Ok(metadata) => {
-                metadata.status == Status::BlockValid
-                    || metadata.chain == ChainMembership::Confirmed
-            }
+    /// `Valid` (BlockValid, or confirmed for below-zone blocks that are only
+    /// HeaderValid) lets the block be validated and marked; `Pending` defers
+    /// it; `Invalid` drops it by descent; `Unknown` (missing metadata/height)
+    /// drops it for re-delivery.
+    fn parent_state(&self, parent_hash: &BlockHash) -> ParentState {
+        let metadata = match self.chain_store_handle.get_block_metadata(parent_hash) {
+            Ok(metadata) => metadata,
             Err(error) => {
-                debug!(
-                    "Parent {parent_hash} metadata unavailable, treating as unvalidated: {error}"
-                );
-                false
+                debug!("Parent {parent_hash} metadata unavailable, deferring: {error}");
+                return ParentState::Unknown;
             }
+        };
+        if metadata.status == Status::Invalid {
+            return ParentState::Invalid;
+        }
+        let Some(height) = metadata.expected_height else {
+            return ParentState::Unknown;
+        };
+        if metadata.status == Status::BlockValid || metadata.chain == ChainMembership::Confirmed {
+            ParentState::Valid(height)
+        } else {
+            ParentState::Pending(height)
         }
     }
 
@@ -369,30 +425,6 @@ impl OrganiseWorker {
         self.emit_share_monitoring_event(share_block, height);
     }
 
-    /// Check whether a block's parent height exceeds the confirmed tip.
-    ///
-    /// Returns `Some(parent_height)` when the block should be buffered
-    /// because the confirmed chain has not yet reached the parent's
-    /// height. Returns `None` when the block can proceed to validation
-    /// immediately.
-    fn should_buffer_block(&self, share_block: &ShareBlock) -> Option<u32> {
-        let parent_hash = share_block.header.prev_share_blockhash;
-        let parent_metadata = match self.chain_store_handle.get_block_metadata(&parent_hash) {
-            Ok(metadata) => metadata,
-            Err(_) => return None,
-        };
-        let parent_height = parent_metadata.expected_height?;
-        let confirmed_tip = match self.chain_store_handle.get_tip_height() {
-            Ok(Some(tip)) => tip,
-            Ok(None) => 0,
-            Err(_) => return None,
-        };
-        if parent_height > confirmed_tip {
-            return Some(parent_height);
-        }
-        None
-    }
-
     /// Insert a block into the pending buffer, keyed by its parent height.
     ///
     /// Drops the block with an error log if the buffer is at capacity.
@@ -416,53 +448,37 @@ impl OrganiseWorker {
             .push(share_block);
     }
 
-    /// Process buffered blocks whose parent height is now at or below the
-    /// confirmed tip.
+    /// Re-attempt buffered blocks whose parent just became valid, from
+    /// `from_height` upward.
     ///
-    /// After each successful promotion the confirmed tip advances, so
-    /// additional buffered blocks may become processable. Uses an
-    /// iterative loop that terminates when no more buffered blocks are
-    /// ready or no promotions occurred in the last pass.
-    async fn drain_pending_blocks(&mut self) -> Result<(), OrganiseError> {
+    /// Blocks are keyed in the buffer by their parent's height, so the children
+    /// of a block that just became valid at height `h` sit under key `h`. The
+    /// scan walks heights contiguously from `from_height`, advancing to the
+    /// next height only when the current one advanced something -- so it follows
+    /// the newly-validated frontier and stops as soon as nothing more proceeds.
+    /// This keeps a full sync linear rather than quadratic. A re-attempted block
+    /// whose parent is still pending cheaply re-buffers (a metadata read, not a
+    /// full validation).
+    async fn drain_pending_blocks(&mut self, from_height: u32) -> Result<(), OrganiseError> {
+        let mut height = from_height;
         loop {
-            let confirmed_tip = match self.chain_store_handle.get_tip_height() {
-                Ok(Some(tip)) => tip,
-                Ok(None) => return Ok(()),
-                Err(error) => {
-                    error!("Failed to get confirmed tip during drain: {error}");
-                    return Ok(());
-                }
+            let Some(blocks) = self.pending_blocks.remove(&height) else {
+                return Ok(());
             };
-
-            // split_off returns entries with key >= confirmed_tip + 1,
-            // leaving entries with key <= confirmed_tip in self.pending_blocks.
-            let not_ready = self.pending_blocks.split_off(&(confirmed_tip + 1));
-            // Move not_ready into pending_blocks and return the current pending_blocks as processable
-            let processable = std::mem::replace(&mut self.pending_blocks, not_ready);
-
-            if processable.is_empty() {
-                return Ok(());
-            }
-
-            let total_processable: usize = processable.values().map(|v| v.len()).sum();
             debug!(
-                "Draining {total_processable} buffered blocks with parent height <= confirmed tip {confirmed_tip}",
+                "Draining {} buffered blocks waiting on height {height}",
+                blocks.len()
             );
-
-            let mut promoted_any = false;
-            for (_parent_height, blocks) in processable {
-                for share_block in blocks {
-                    let promoted_height = self.validate_and_promote_block(&share_block).await?;
-                    if let Some(height) = promoted_height {
-                        self.post_promote(&share_block, height).await;
-                        promoted_any = true;
-                    }
+            let mut advanced = false;
+            for share_block in blocks {
+                if let ProcessOutcome::Advanced(_) = self.process_share_block(share_block).await? {
+                    advanced = true;
                 }
             }
-
-            if !promoted_any {
+            if !advanced {
                 return Ok(());
             }
+            height += 1;
         }
     }
 
@@ -593,44 +609,53 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_has_valid_parent() {
+    async fn test_parent_state() {
         let parent = TestShareBlockBuilder::new()
             .nonce(0xe9695791)
             .build()
             .block_hash();
 
-        // A BlockValid parent (even off-chain) satisfies the gate.
+        // A BlockValid parent (even off-chain) is Valid.
         let worker = worker_with_parent_metadata(Ok(parent_metadata(
             Status::BlockValid,
             ChainMembership::None,
         )));
-        assert!(worker.has_valid_parent(&parent));
+        assert!(matches!(
+            worker.parent_state(&parent),
+            ParentState::Valid(1)
+        ));
 
         // A confirmed parent that is only HeaderValid (genesis, or a block
-        // confirmed below the PPLNS zone) also satisfies the gate.
+        // confirmed below the PPLNS zone) is also Valid.
         let worker = worker_with_parent_metadata(Ok(parent_metadata(
             Status::HeaderValid,
             ChainMembership::Confirmed,
         )));
-        assert!(worker.has_valid_parent(&parent));
+        assert!(matches!(
+            worker.parent_state(&parent),
+            ParentState::Valid(1)
+        ));
 
-        // A HeaderValid candidate parent is not yet validated.
+        // A HeaderValid candidate parent is Pending (not yet validated).
         let worker = worker_with_parent_metadata(Ok(parent_metadata(
             Status::HeaderValid,
             ChainMembership::Candidate,
         )));
-        assert!(!worker.has_valid_parent(&parent));
+        assert!(matches!(
+            worker.parent_state(&parent),
+            ParentState::Pending(1)
+        ));
 
-        // An Invalid parent is not validated.
+        // An Invalid parent is Invalid (block is invalid by descent).
         let worker = worker_with_parent_metadata(Ok(parent_metadata(
             Status::Invalid,
             ChainMembership::None,
         )));
-        assert!(!worker.has_valid_parent(&parent));
+        assert!(matches!(worker.parent_state(&parent), ParentState::Invalid));
 
-        // Missing parent metadata is treated as not-yet-validated.
+        // Missing parent metadata is Unknown.
         let worker = worker_with_parent_metadata(Err(StoreError::NotFound("missing".to_string())));
-        assert!(!worker.has_valid_parent(&parent));
+        assert!(matches!(worker.parent_state(&parent), ParentState::Unknown));
     }
 
     #[tokio::test]
@@ -754,9 +779,8 @@ mod tests {
     }
 
     /// Transitivity gate: a block whose parent is only HeaderValid on the
-    /// candidate chain (not BlockValid, not confirmed) must NOT be marked
-    /// BlockValid even after its own chain-context validation passes. It is
-    /// left HeaderValid until the parent is validated.
+    /// candidate chain (not BlockValid, not confirmed) must NOT be validated or
+    /// marked BlockValid. It is buffered until the parent is validated.
     #[tokio::test]
     async fn test_block_not_marked_valid_when_parent_unvalidated() {
         let (organise_tx, organise_rx) = create_organise_channel();
@@ -781,11 +805,14 @@ mod tests {
         mock_chain_handle
             .expect_get_tip_height()
             .returning(|| Ok(Some(1)));
-        // The gate must block the upgrade entirely.
+        // The block is buffered (parent not validated): never validated, never
+        // marked, never promoted. The worker opportunistically tries
+        // organise_block from the buffer branch.
         mock_chain_handle.expect_mark_block_valid().never();
+        mock_chain_handle.expect_promote_block().never();
         mock_chain_handle
-            .expect_promote_block()
-            .returning(|_| Ok(None));
+            .expect_organise_block()
+            .returning(|| Ok(None));
 
         let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
@@ -822,8 +849,8 @@ mod tests {
                 Ok(BlockMetadata {
                     expected_height: Some(10),
                     chain_work: bitcoin::Work::from_hex("0x00").unwrap(),
-                    status: Status::HeaderValid,
-                    chain: ChainMembership::Candidate,
+                    status: Status::BlockValid,
+                    chain: ChainMembership::Confirmed,
                 })
             });
         mock_chain_handle
@@ -882,8 +909,8 @@ mod tests {
                 Ok(BlockMetadata {
                     expected_height: Some(1),
                     chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
-                    status: Status::HeaderValid,
-                    chain: ChainMembership::Candidate,
+                    status: Status::BlockValid,
+                    chain: ChainMembership::Confirmed,
                 })
             });
         mock_chain_handle
@@ -932,8 +959,8 @@ mod tests {
                 Ok(BlockMetadata {
                     expected_height: Some(1),
                     chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
-                    status: Status::HeaderValid,
-                    chain: ChainMembership::Candidate,
+                    status: Status::BlockValid,
+                    chain: ChainMembership::Confirmed,
                 })
             });
         mock_chain_handle
@@ -983,8 +1010,8 @@ mod tests {
                 Ok(BlockMetadata {
                     expected_height: Some(1),
                     chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
-                    status: Status::HeaderValid,
-                    chain: ChainMembership::Candidate,
+                    status: Status::BlockValid,
+                    chain: ChainMembership::Confirmed,
                 })
             });
         mock_chain_handle
@@ -1042,8 +1069,8 @@ mod tests {
                 Ok(BlockMetadata {
                     expected_height: Some(1),
                     chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
-                    status: Status::HeaderValid,
-                    chain: ChainMembership::Candidate,
+                    status: Status::BlockValid,
+                    chain: ChainMembership::Confirmed,
                 })
             });
         mock_chain_handle
@@ -1406,64 +1433,45 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_buffer_block_overwrites_when_two_blocks_share_parent_height() {
-        let (organise_tx, organise_rx) = create_organise_channel();
+    async fn test_drain_reattempts_all_blocks_sharing_a_parent_height() {
+        // Two distinct blocks buffered under the same parent height must both be
+        // re-attempted when that height is drained -- the buffer keeps a Vec per
+        // height, not a single block.
+        let (_organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
-        mock_chain_handle
-            .expect_clone()
-            .return_once(MockChainStoreHandle::new);
-        mock_chain_handle
-            .expect_mark_block_valid()
-            .returning(|_| Ok(()));
 
-        // All blocks return valid metadata with height 10.
+        // Parent is confirmed (Valid); the blocks sit below the PPLNS zone, so
+        // no chain-context validation runs and they promote directly.
         mock_chain_handle
             .expect_get_block_metadata()
             .returning(|_| {
                 Ok(BlockMetadata {
-                    expected_height: Some(10),
+                    expected_height: Some(5),
                     chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
-                    status: Status::HeaderValid,
-                    chain: ChainMembership::Candidate,
+                    status: Status::BlockValid,
+                    chain: ChainMembership::Confirmed,
                 })
             });
-
-        // First two calls (should_buffer for A and B): tip is 5 -> buffer.
-        // Third call (should_buffer for C): tip is 10 -> not buffered.
-        // Remaining calls (drain after C promotes): tip is 10 -> drain.
-        let tip_call_count = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
-        let tip_counter = tip_call_count.clone();
         mock_chain_handle
-            .expect_get_tip_height()
-            .returning(move || {
-                let count = tip_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                let tip = if count < 2 { 5 } else { 10 };
-                Ok(Some(tip))
-            });
+            .expect_get_candidate_tip_height()
+            .returning(|| Ok(Some(200_000)));
 
-        // Count how many times promote_block is called.
         let promote_count = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
         let promote_counter = promote_count.clone();
         mock_chain_handle
             .expect_promote_block()
             .returning(move |_| {
                 promote_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                Ok(Some(10))
+                Ok(Some(6))
             });
-        mock_chain_handle
-            .expect_organise_block()
-            .returning(|| Ok(None));
-        mock_chain_handle
-            .expect_get_candidate_tip_height()
-            .returning(|| Ok(Some(10)));
-        mock_chain_handle.expect_is_current().returning(|| true);
+        mock_chain_handle.expect_is_current().returning(|| false);
         mock_chain_handle
             .expect_get_uncle_infos()
             .returning(|_| Vec::new());
 
         let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
-        let worker = OrganiseWorker::new(
+        let mut worker = OrganiseWorker::new(
             organise_rx,
             mock_chain_handle,
             monitoring_tx,
@@ -1473,42 +1481,20 @@ mod tests {
             stub_share_validator_with_success(),
         );
 
-        // Block A: parent height 10, tip is 5 -> buffered at key 10
+        // Two distinct blocks buffered under the same parent height (5).
         let share_a = TestShareBlockBuilder::new().nonce(0xe9695791).build();
-        organise_tx
-            .send(OrganiseEvent::Block(share_a))
-            .await
-            .unwrap();
-
-        // Block B: different nonce (different hash), same parent height 10
-        // -> should also be buffered, but currently overwrites A
         let share_b = TestShareBlockBuilder::new().nonce(0xe9695792).build();
-        organise_tx
-            .send(OrganiseEvent::Block(share_b))
-            .await
-            .unwrap();
+        worker.buffer_block(5, share_a);
+        worker.buffer_block(5, share_b);
 
-        // Block C: parent height 10, tip is now 10 -> not buffered,
-        // goes to promote, which triggers drain of the buffered blocks
-        let share_c = TestShareBlockBuilder::new().nonce(0xe9695793).build();
-        organise_tx
-            .send(OrganiseEvent::Block(share_c))
-            .await
-            .unwrap();
-        drop(organise_tx);
+        worker.drain_pending_blocks(5).await.unwrap();
 
-        let result = worker.run().await;
-        assert!(result.is_ok());
-
-        // promote_block should be called 3 times: once for C (direct),
-        // once for A (drained), once for B (drained).
-        // With the current BTreeMap<u32, ShareBlock>, block A is silently
-        // overwritten by B, so promote is only called twice.
-        let total_promotes = promote_count.load(std::sync::atomic::Ordering::SeqCst);
+        // Both buffered blocks were re-attempted and promoted (neither was
+        // overwritten by the other).
         assert_eq!(
-            total_promotes, 3,
-            "Expected 3 promotions (C + drained A + drained B), got {total_promotes}. \
-             Second block buffered at same parent height likely overwrote the first."
+            promote_count.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "both blocks sharing a parent height must be drained"
         );
     }
 }
