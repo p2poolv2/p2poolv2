@@ -57,20 +57,77 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::{Arc, RwLock};
 
-/// Validation error wrapping a descriptive message string.
+/// Why a validation check failed, so callers can react appropriately.
+///
+/// The distinction turns on *when* the check runs and what data it needs:
+///
+/// - `Consensus`: a rule was broken with all required data present. The block
+///   is genuinely invalid and is marked `Invalid`.
+/// - `StoreAccess`: a *chain-context* check could not read data that
+///   must exist. Those checks run only once a block's parent is validated (the
+///   organise worker gates on this), so the confirmed ancestry they need is in
+///   the store; a read failing there is corruption or a bug, and the organise
+///   worker treats it as fatal rather than wrongly marking a valid block Invalid.
+/// - `Recoverable`: a *pre chain-context* check is missing a dependency that
+///   can still arrive -- an uncle, the parent, or an ancestor header not yet
+///   synced. This is neither a rule violation nor corruption: the block is
+///   retried when the dependency lands (the block receiver buffers it), so it is
+///   never marked `Invalid` and never fatal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FailureKind {
+    /// A consensus rule was broken with all required data present.
+    Consensus,
+    /// A chain-context check could not read data that must exist.
+    StoreAccess,
+    /// A pre-context check is missing a dependency that can still arrive.
+    Recoverable,
+}
+
+/// Validation error: a descriptive message plus its failure kind.
 #[derive(Debug)]
-pub struct ValidationError(String);
+pub struct ValidationError {
+    message: String,
+    kind: FailureKind,
+}
 
 impl ValidationError {
-    /// Create a new ValidationError with the given message.
-    pub fn new(message: impl Into<String>) -> Self {
-        Self(message.into())
+    /// Create a consensus-violation error. The block is genuinely invalid.
+    pub fn consensus(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            kind: FailureKind::Consensus,
+        }
+    }
+
+    /// Create a store/data-access error: data that should be present could not
+    /// be read. When the parent is validated this indicates store corruption.
+    pub fn store_access(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            kind: FailureKind::StoreAccess,
+        }
+    }
+
+    /// Create a recoverable error: a dependency (uncle, parent, or ancestor)
+    /// that can still arrive is not yet present. The block is retried when it
+    /// lands, so it is never marked Invalid.
+    pub fn recoverable(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            kind: FailureKind::Recoverable,
+        }
+    }
+
+    /// The failure kind, used by the organise worker to decide between marking
+    /// the block Invalid and treating the failure as fatal.
+    pub fn kind(&self) -> FailureKind {
+        self.kind
     }
 }
 
 impl fmt::Display for ValidationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}", self.0)
+        write!(formatter, "{}", self.message)
     }
 }
 
@@ -317,13 +374,13 @@ impl DefaultShareValidator {
         let parent_height = metadata_by_hash
             .get(&parent_hash)
             .ok_or_else(|| {
-                ValidationError::new(format!(
+                ValidationError::recoverable(format!(
                     "Parent share {parent_hash} metadata not found for uncle position check"
                 ))
             })?
             .expected_height
             .ok_or_else(|| {
-                ValidationError::new(format!(
+                ValidationError::recoverable(format!(
                     "Parent share {parent_hash} has no expected height for uncle position check"
                 ))
             })?;
@@ -335,29 +392,29 @@ impl DefaultShareValidator {
             let uncle_height = metadata_by_hash
                 .get(uncle)
                 .ok_or_else(|| {
-                    ValidationError::new(format!(
+                    ValidationError::recoverable(format!(
                         "Uncle {uncle} metadata not found for position check"
                     ))
                 })?
                 .expected_height
                 .ok_or_else(|| {
-                    ValidationError::new(format!(
+                    ValidationError::recoverable(format!(
                         "Uncle {uncle} has no expected height for position check"
                     ))
                 })?;
 
             if uncle_height >= nephew_height {
-                return Err(ValidationError::new(format!(
+                return Err(ValidationError::consensus(format!(
                     "Uncle {uncle} at height {uncle_height} is not below nephew height {nephew_height}"
                 )));
             }
             if nephew_height - uncle_height > MAX_UNCLES_DEPTH as u32 {
-                return Err(ValidationError::new(format!(
+                return Err(ValidationError::consensus(format!(
                     "Uncle {uncle} at height {uncle_height} is more than {MAX_UNCLES_DEPTH} below nephew height {nephew_height}"
                 )));
             }
             if ancestors.contains(uncle) {
-                return Err(ValidationError::new(format!(
+                return Err(ValidationError::consensus(format!(
                     "Uncle {uncle} is an ancestor of the nephew"
                 )));
             }
@@ -380,7 +437,7 @@ impl DefaultShareValidator {
         while steps < MAX_UNCLES_DEPTH as usize && !is_terminal_blockhash(&current) {
             ancestors.insert(current);
             let header = chain_store_handle.get_share_header(&current).map_err(|_| {
-                ValidationError::new(format!(
+                ValidationError::recoverable(format!(
                     "Ancestor {current} header not found for uncle ancestry check"
                 ))
             })?;
@@ -394,7 +451,7 @@ impl DefaultShareValidator {
     fn validate_block_size(&self, share: &ShareBlock) -> Result<(), ValidationError> {
         let total_size: usize = share.transactions.iter().map(|tx| tx.total_size()).sum();
         if total_size > BLOCK_TXS_SIZE_LIMIT as usize {
-            return Err(ValidationError::new(format!(
+            return Err(ValidationError::consensus(format!(
                 "Block transactions size {total_size} exceeds limit of {BLOCK_TXS_SIZE_LIMIT}"
             )));
         }
@@ -406,11 +463,13 @@ impl DefaultShareValidator {
         let computed_root: TxMerkleNode = bitcoin::merkle_tree::calculate_root(
             share.transactions.iter().map(|tx| tx.compute_txid()),
         )
-        .ok_or_else(|| ValidationError::new("Cannot compute merkle root from empty transactions"))?
+        .ok_or_else(|| {
+            ValidationError::consensus("Cannot compute merkle root from empty transactions")
+        })?
         .into();
 
         if share.header.merkle_root != computed_root {
-            return Err(ValidationError::new(format!(
+            return Err(ValidationError::consensus(format!(
                 "Merkle root mismatch: header has {} but transactions compute to {}",
                 share.header.merkle_root, computed_root
             )));
@@ -422,7 +481,7 @@ impl DefaultShareValidator {
     fn validate_transaction_count(&self, share: &ShareBlock) -> Result<(), ValidationError> {
         let count = share.transactions.len() as u32;
         if count > TXS_COUNT_LIMIT {
-            return Err(ValidationError::new(format!(
+            return Err(ValidationError::consensus(format!(
                 "Transaction count {count} exceeds limit of {TXS_COUNT_LIMIT}"
             )));
         }
@@ -466,7 +525,7 @@ impl DefaultShareValidator {
         }
 
         if total_sigop_cost > MAX_BLOCK_SIGOPS_COST {
-            return Err(ValidationError::new(format!(
+            return Err(ValidationError::consensus(format!(
                 "Block sigop cost {total_sigop_cost} exceeds maximum {MAX_BLOCK_SIGOPS_COST}"
             )));
         }
@@ -487,7 +546,7 @@ impl DefaultShareValidator {
         chain_store_handle
             .get_all_prevouts(&transaction.0)
             .map_err(|error| {
-                ValidationError::new(format!(
+                ValidationError::consensus(format!(
                     "Failed to look up spent outputs for transaction {txid}: {error}"
                 ))
             })
@@ -524,7 +583,7 @@ impl DefaultShareValidator {
                 *input_index,
             )
             .map_err(|error| {
-                ValidationError::new(format!(
+                ValidationError::consensus(format!(
                     "Script verification failed for transaction {txid} input {input_index}: {error:?}"
                 ))
             })?;
@@ -542,11 +601,11 @@ impl DefaultShareValidator {
         let mut total_input = Amount::ZERO;
         for (_index, txout) in spent_outputs {
             total_input = total_input.checked_add(txout.value).ok_or_else(|| {
-                ValidationError::new(format!("Transaction {txid} total input value overflow"))
+                ValidationError::consensus(format!("Transaction {txid} total input value overflow"))
             })?;
         }
         if total_input > Amount::MAX_MONEY {
-            return Err(ValidationError::new(format!(
+            return Err(ValidationError::consensus(format!(
                 "Transaction {txid} total input value {total_input} exceeds maximum"
             )));
         }
@@ -554,12 +613,14 @@ impl DefaultShareValidator {
         let mut total_output = Amount::ZERO;
         for output in &transaction.output {
             total_output = total_output.checked_add(output.value).ok_or_else(|| {
-                ValidationError::new(format!("Transaction {txid} total output value overflow"))
+                ValidationError::consensus(format!(
+                    "Transaction {txid} total output value overflow"
+                ))
             })?;
         }
 
         if total_input < total_output {
-            return Err(ValidationError::new(format!(
+            return Err(ValidationError::consensus(format!(
                 "Transaction {txid} outputs {total_output} exceed inputs {total_input}"
             )));
         }
@@ -603,18 +664,18 @@ impl DefaultShareValidator {
         for transaction in &share.transactions {
             let txid = transaction.compute_txid();
             if !seen_txids.insert(txid) {
-                return Err(ValidationError::new(format!(
+                return Err(ValidationError::consensus(format!(
                     "Duplicate transaction {txid} in block"
                 )));
             }
             if transaction.output.is_empty() {
-                return Err(ValidationError::new(format!(
+                return Err(ValidationError::consensus(format!(
                     "Transaction {txid} has no outputs",
                 )));
             }
 
             if !transaction.is_coinbase() && transaction.input.is_empty() {
-                return Err(ValidationError::new(format!(
+                return Err(ValidationError::consensus(format!(
                     "Non-coinbase transaction {txid} has no inputs",
                 )));
             }
@@ -624,7 +685,7 @@ impl DefaultShareValidator {
                 let mut seen_outpoints = HashSet::with_capacity(capacity);
                 for input in &transaction.input {
                     if !seen_outpoints.insert(input.previous_output) {
-                        return Err(ValidationError::new(format!(
+                        return Err(ValidationError::consensus(format!(
                             "Transaction {txid} has duplicate input {}",
                             input.previous_output
                         )));
@@ -635,17 +696,19 @@ impl DefaultShareValidator {
             let mut total_output = Amount::ZERO;
             for output in &transaction.output {
                 if output.value > Amount::MAX_MONEY {
-                    return Err(ValidationError::new(format!(
+                    return Err(ValidationError::consensus(format!(
                         "Transaction {txid} output value {} exceeds maximum",
                         output.value
                     )));
                 }
                 total_output = total_output.checked_add(output.value).ok_or_else(|| {
-                    ValidationError::new(format!("Transaction {txid} total output value overflow",))
+                    ValidationError::consensus(format!(
+                        "Transaction {txid} total output value overflow",
+                    ))
                 })?;
             }
             if total_output > Amount::MAX_MONEY {
-                return Err(ValidationError::new(format!(
+                return Err(ValidationError::consensus(format!(
                     "Transaction {txid} total output value {total_output} exceeds maximum",
                 )));
             }
@@ -659,17 +722,17 @@ impl DefaultShareValidator {
         let coinbase = share
             .transactions
             .first()
-            .ok_or_else(|| ValidationError::new("Share block has no transactions"))?;
+            .ok_or_else(|| ValidationError::consensus("Share block has no transactions"))?;
 
         if !coinbase.is_coinbase() {
-            return Err(ValidationError::new(
+            return Err(ValidationError::consensus(
                 "First transaction in share block is not a coinbase transaction",
             ));
         }
 
         // Two coinbase outputs: first to the miner and second a witness commitment output
         if coinbase.output.len() != 2 {
-            return Err(ValidationError::new(format!(
+            return Err(ValidationError::consensus(format!(
                 "Share coinbase has {} outputs, expected 2",
                 coinbase.output.len()
             )));
@@ -677,7 +740,7 @@ impl DefaultShareValidator {
 
         let output = &coinbase.output[0];
         if output.value != Amount::ONE_BTC {
-            return Err(ValidationError::new(format!(
+            return Err(ValidationError::consensus(format!(
                 "Share coinbase pays {} but expected {}",
                 output.value,
                 Amount::ONE_BTC
@@ -686,7 +749,7 @@ impl DefaultShareValidator {
 
         let expected_script = share.header.miner_bitcoin_address.script_pubkey();
         if output.script_pubkey != expected_script {
-            return Err(ValidationError::new(
+            return Err(ValidationError::consensus(
                 "Share coinbase output does not pay to the miner address in header",
             ));
         }
@@ -705,11 +768,11 @@ impl DefaultShareValidator {
         let coinbase = share
             .transactions
             .first()
-            .ok_or_else(|| ValidationError::new("Share block has no transactions"))?;
+            .ok_or_else(|| ValidationError::consensus("Share block has no transactions"))?;
 
         let witness_stack: Vec<&[u8]> = coinbase.input[0].witness.iter().collect();
         if witness_stack.len() != 1 || witness_stack[0].len() != 32 {
-            return Err(ValidationError::new(
+            return Err(ValidationError::consensus(
                 "Share coinbase input witness must be a single 32-byte reserved value",
             ));
         }
@@ -719,7 +782,7 @@ impl DefaultShareValidator {
         // then a witnesscommitment output
         let commitment_output = &coinbase.output[1];
         if commitment_output.value != Amount::ZERO {
-            return Err(ValidationError::new(format!(
+            return Err(ValidationError::consensus(format!(
                 "Share coinbase witness commitment output must have zero value, got {}",
                 commitment_output.value
             )));
@@ -728,7 +791,7 @@ impl DefaultShareValidator {
         if commitment_script.len() != WITNESS_COMMITMENT_LENGTH
             || commitment_script[..6] != [0x6a, 0x24, 0xaa, 0x21, 0xa9, 0xed]
         {
-            return Err(ValidationError::new(
+            return Err(ValidationError::consensus(
                 "Share coinbase witness commitment output has invalid BIP141 header",
             ));
         }
@@ -738,7 +801,7 @@ impl DefaultShareValidator {
         let expected_commitment = compute_commitment_hash(&witness_root, witness_reserved_value);
 
         if commitment_script[6..] != expected_commitment.as_byte_array()[..] {
-            return Err(ValidationError::new(
+            return Err(ValidationError::consensus(
                 "Share coinbase witness commitment does not match recomputed witness root",
             ));
         }
@@ -795,7 +858,7 @@ impl DefaultShareValidator {
                 chain_store_handle,
             )
             .map_err(|error| {
-                ValidationError::new(format!(
+                ValidationError::store_access(format!(
                     "Failed to resolve PPLNS window from prev_share_blockhash: {error}"
                 ))
             })?;
@@ -822,7 +885,7 @@ impl DefaultShareValidator {
             share.header.coinbase_nsecs,
             Some(share.header.extranonce.as_bytes()),
         )
-        .map_err(|error| ValidationError(format!("Error building coinbase {error}")))?;
+        .map_err(|error| ValidationError::consensus(format!("Error building coinbase {error}")))?;
 
         let reconstructed_coinbase_txid = reconstructed_coinbase.compute_txid();
         let recomputed_root = compute_merkle_root_from_branches(
@@ -831,8 +894,8 @@ impl DefaultShareValidator {
         );
 
         if recomputed_root != share.header.bitcoin_header.merkle_root {
-            Err(ValidationError(
-                "Coinbase and template merkle root don't match merkle root".into(),
+            Err(ValidationError::consensus(
+                "Coinbase and template merkle root don't match merkle root",
             ))
         } else {
             Ok(())
@@ -848,7 +911,9 @@ impl DefaultShareValidator {
         coinbase_value: u64,
     ) -> Result<Vec<OutputPair>, ValidationError> {
         if address_difficulty_map.is_empty() {
-            return Err(ValidationError("Can't build output from empty distribution. There should be at least one payout address".into()));
+            return Err(ValidationError::consensus(
+                "Can't build output from empty distribution. There should be at least one payout address",
+            ));
         }
 
         let mut distribution = Vec::with_capacity(address_difficulty_map.len() + 2);
@@ -872,7 +937,7 @@ impl DefaultShareValidator {
             &mut distribution,
         )
         .map_err(|error| {
-            ValidationError::new(format!("Failed to compute payout distribution: {error}"))
+            ValidationError::consensus(format!("Failed to compute payout distribution: {error}"))
         })?;
 
         Ok(distribution)
@@ -897,17 +962,21 @@ impl ShareValidator for DefaultShareValidator {
         let parent_header = chain_store_handle
             .get_share_header(&parent_hash)
             .map_err(|_| {
-                ValidationError::new(format!("Parent share {parent_hash} not found in store"))
+                ValidationError::recoverable(format!(
+                    "Parent share {parent_hash} not found in store"
+                ))
             })?;
 
         let parent_metadata = chain_store_handle
             .get_block_metadata(&parent_hash)
             .map_err(|_| {
-                ValidationError::new(format!("Parent share {parent_hash} not found in store"))
+                ValidationError::recoverable(format!(
+                    "Parent share {parent_hash} not found in store"
+                ))
             })?;
 
         let parent_height = parent_metadata.expected_height.ok_or_else(|| {
-            ValidationError::new(format!("Parent share {parent_hash} not found in store"))
+            ValidationError::recoverable(format!("Parent share {parent_hash} not found in store"))
         })?;
 
         let parent_time = parent_header.time;
@@ -920,7 +989,7 @@ impl ShareValidator for DefaultShareValidator {
 
         // Ensure the advertised header bits match the calculated pool target.
         if share_header.bits != calculated_target {
-            return Err(ValidationError::new(format!(
+            return Err(ValidationError::consensus(format!(
                 "Share header bits {:#010x} does not match calculated pool target {:#010x}",
                 share_header.bits.to_consensus(),
                 calculated_target.to_consensus()
@@ -928,7 +997,7 @@ impl ShareValidator for DefaultShareValidator {
         }
 
         if !sim_overrides::pow_meets(target, bitcoin_block_hash) {
-            return Err(ValidationError::new(format!(
+            return Err(ValidationError::consensus(format!(
                 "Bitcoin block hash {bitcoin_block_hash} does not meet share target {target}"
             )));
         }
@@ -941,7 +1010,7 @@ impl ShareValidator for DefaultShareValidator {
         share_header: &ShareHeader,
     ) -> Result<(), ValidationError> {
         if share_header.uncles.len() > MAX_UNCLES {
-            return Err(ValidationError::new(format!(
+            return Err(ValidationError::consensus(format!(
                 "Too many uncles: {} exceeds maximum of {}",
                 share_header.uncles.len(),
                 MAX_UNCLES
@@ -951,14 +1020,14 @@ impl ShareValidator for DefaultShareValidator {
         let declared_target = Target::from_compact(share_header.bits);
         let max_pool_target = Target::from_compact(CompactTarget::from_consensus(MAX_POOL_TARGET));
         if declared_target > max_pool_target {
-            return Err(ValidationError::new(format!(
+            return Err(ValidationError::consensus(format!(
                 "Share target {declared_target} is easier than maximum pool target {max_pool_target}"
             )));
         }
 
         let bitcoin_block_hash = share_header.bitcoin_header.block_hash();
         if !sim_overrides::pow_meets(declared_target, bitcoin_block_hash) {
-            return Err(ValidationError::new(format!(
+            return Err(ValidationError::consensus(format!(
                 "Bitcoin block hash {bitcoin_block_hash} does not meet declared target {declared_target}"
             )));
         }
@@ -1016,7 +1085,7 @@ impl ShareValidator for DefaultShareValidator {
         chain_store_handle: &ChainStoreHandle,
     ) -> Result<(), ValidationError> {
         if share.header.uncles.len() > MAX_UNCLES {
-            return Err(ValidationError::new(format!(
+            return Err(ValidationError::consensus(format!(
                 "Too many uncles: {} exceeds maximum of {}",
                 share.header.uncles.len(),
                 MAX_UNCLES
@@ -1024,11 +1093,11 @@ impl ShareValidator for DefaultShareValidator {
         }
         let unique_uncles: HashSet<&BlockHash> = share.header.uncles.iter().collect();
         if share.header.uncles.len() != unique_uncles.len() {
-            return Err(ValidationError::new("Share has duplicate uncles"));
+            return Err(ValidationError::consensus("Share has duplicate uncles"));
         }
         for uncle in &share.header.uncles {
             if !chain_store_handle.share_block_exists(uncle) {
-                return Err(ValidationError::new(format!(
+                return Err(ValidationError::recoverable(format!(
                     "Uncle {uncle} not found in store"
                 )));
             };
@@ -1047,7 +1116,7 @@ impl ShareValidator for DefaultShareValidator {
         let share_timestamp = share.header.time as u64;
 
         if share_timestamp > current_time + MAX_FUTURE_TIME_SECS {
-            return Err(ValidationError::new(format!(
+            return Err(ValidationError::consensus(format!(
                 "Share timestamp {share_timestamp} is more than {MAX_FUTURE_TIME_SECS} seconds ahead of local time {current_time}"
             )));
         }
@@ -1056,12 +1125,12 @@ impl ShareValidator for DefaultShareValidator {
         let parent_metadata = chain_store_handle
             .get_block_metadata(&parent_hash)
             .map_err(|_| {
-                ValidationError::new(format!(
+                ValidationError::store_access(format!(
                     "Parent share {parent_hash} metadata not found for MTP check"
                 ))
             })?;
         let parent_height = parent_metadata.expected_height.ok_or_else(|| {
-            ValidationError::new(format!(
+            ValidationError::store_access(format!(
                 "Parent share {parent_hash} has no expected height for MTP check"
             ))
         })?;
@@ -1069,12 +1138,12 @@ impl ShareValidator for DefaultShareValidator {
         let confirmed_headers = chain_store_handle
             .get_confirmed_headers_in_range(from_height, parent_height)
             .map_err(|err| {
-                ValidationError::new(format!(
+                ValidationError::store_access(format!(
                     "Failed to fetch ancestor headers for MTP check: {err}"
                 ))
             })?;
         if confirmed_headers.is_empty() {
-            return Err(ValidationError::new(format!(
+            return Err(ValidationError::store_access(format!(
                 "No confirmed ancestor headers found for MTP check at height {parent_height}"
             )));
         }
@@ -1085,7 +1154,7 @@ impl ShareValidator for DefaultShareValidator {
         sorted_times.sort_unstable();
         let median = sorted_times[sorted_times.len() / 2];
         if share.header.time <= median {
-            return Err(ValidationError::new(format!(
+            return Err(ValidationError::consensus(format!(
                 "Share timestamp {share_timestamp} is not greater than median time past {median}"
             )));
         }
@@ -1146,7 +1215,7 @@ impl DefaultShareValidator {
                 for input in &transaction.input {
                     let outpoint = input.previous_output;
                     if !seen_prevouts.insert(outpoint) {
-                        return Err(ValidationError::new(format!(
+                        return Err(ValidationError::consensus(format!(
                             "Duplicate prevout {}:{} spent by two inputs in the same share block",
                             outpoint.txid, outpoint.vout
                         )));
@@ -1164,26 +1233,30 @@ impl DefaultShareValidator {
         if !chain_store_handle
             .are_all_txids_confirmed(&external_source_txids)
             .map_err(|error| {
-                ValidationError::new(format!("Failed to query confirmed status: {error}"))
+                ValidationError::store_access(format!("Failed to query confirmed status: {error}"))
             })?
         {
-            return Err(ValidationError::new("prevout not on confirmed chain"));
+            return Err(ValidationError::consensus("prevout not on confirmed chain"));
         }
         let tip_height = chain_store_handle
             .get_tip_height()
-            .map_err(|error| ValidationError::new(format!("Failed to get tip height: {error}")))?
+            .map_err(|error| {
+                ValidationError::store_access(format!("Failed to get tip height: {error}"))
+            })?
             .unwrap_or(0);
         let min_coinbase_root_height = tip_height.saturating_sub(MAX_PPLNS_WINDOW_SHARES as u32);
         let coinbase_outpoints = chain_store_handle
             .check_prevouts_and_find_coinbase(&all_outpoints, min_coinbase_root_height)
-            .map_err(|error| ValidationError::new(format!("Prevout check failed: {error}")))?;
+            .map_err(|error| {
+                ValidationError::store_access(format!("Prevout check failed: {error}"))
+            })?;
         if chain_store_handle
             .is_any_prevout_spent(&all_outpoints)
             .map_err(|error| {
-                ValidationError::new(format!("Failed to query SpendsIndex: {error}"))
+                ValidationError::store_access(format!("Failed to query SpendsIndex: {error}"))
             })?
         {
-            return Err(ValidationError::new(
+            return Err(ValidationError::consensus(
                 "One or more prevouts are already spent",
             ));
         }
@@ -1191,10 +1264,12 @@ impl DefaultShareValidator {
             && let Some(immature) = chain_store_handle
                 .find_immature_coinbase_prevout(&coinbase_outpoints, COINBASE_MATURITY)
                 .map_err(|error| {
-                    ValidationError::new(format!("Failed to check coinbase maturity: {error}"))
+                    ValidationError::store_access(format!(
+                        "Failed to check coinbase maturity: {error}"
+                    ))
                 })?
         {
-            return Err(ValidationError::new(format!(
+            return Err(ValidationError::consensus(format!(
                 "Coinbase output {}:{} is not yet mature (requires at least {} blocks of depth)",
                 immature.txid, immature.vout, COINBASE_MATURITY
             )));
@@ -1643,14 +1718,41 @@ mod tests {
             .miner_pubkey(PUBKEY_3G)
             .build();
 
-        let result = validator().validate_uncles(&invalid_share, &chain_store_handle);
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("is an ancestor of the nephew")
-        );
+        let error = validator()
+            .validate_uncles(&invalid_share, &chain_store_handle)
+            .unwrap_err();
+        // A rule violation with all data present is a Consensus failure.
+        assert_eq!(error.kind(), FailureKind::Consensus);
+        assert!(error.to_string().contains("is an ancestor of the nephew"));
+    }
+
+    /// A uncle-position check that cannot read the parent's metadata is a
+    /// Recoverable failure (a stage-1 dependency that can still arrive), not a
+    /// consensus violation and not fatal -- the block is retried when the data
+    /// lands, never marked Invalid.
+    #[tokio::test]
+    async fn test_validate_uncle_positions_missing_parent_is_recoverable() {
+        let mut chain_store_handle = ChainStoreHandle::default();
+        let uncle = TestShareBlockBuilder::new().miner_pubkey(PUBKEY_G).build();
+
+        chain_store_handle
+            .expect_share_block_exists()
+            .returning(|_| true);
+        // The batch returns nothing, so the parent's metadata is missing.
+        chain_store_handle
+            .expect_get_block_metadata_batch()
+            .returning(|_| Vec::new());
+
+        let share = TestShareBlockBuilder::new()
+            .uncles(vec![uncle.block_hash()])
+            .miner_pubkey(PUBKEY_2G)
+            .build();
+
+        let error = validator()
+            .validate_uncles(&share, &chain_store_handle)
+            .unwrap_err();
+        assert_eq!(error.kind(), FailureKind::Recoverable);
+        assert!(error.to_string().contains("metadata not found"));
     }
 
     #[tokio::test]

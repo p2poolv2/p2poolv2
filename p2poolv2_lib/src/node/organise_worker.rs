@@ -36,6 +36,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
+use crate::shares::validation::FailureKind;
 use crate::shares::validation::ShareValidator;
 use crate::shares::validation::check_pplns_zone;
 use crate::store::block_tx_metadata::{ChainMembership, Status};
@@ -304,15 +305,45 @@ impl OrganiseWorker {
                 &self.chain_store_handle,
                 Arc::clone(&self.pplns_window),
             ) {
-                error!("Chain-context validation failed for {blockhash}: {validation_error}");
-                // The parent is validated, so all dependencies are present: this
-                // is a genuine consensus violation. Mark Invalid so confirmation
-                // can advance onto a valid sibling. (Phase 2 will treat a store
-                // error here -- data that must exist -- as fatal instead.)
-                if let Err(mark_error) = self.chain_store_handle.mark_invalid(blockhash).await {
-                    error!("Failed to mark {blockhash} Invalid: {mark_error}");
+                match validation_error.kind() {
+                    FailureKind::Consensus => {
+                        // The parent is validated, so all dependencies are
+                        // present: this is a genuine consensus violation. Mark
+                        // Invalid so confirmation can advance onto a valid sibling.
+                        error!(
+                            "Chain-context validation failed for {blockhash}: {validation_error}"
+                        );
+                        if let Err(mark_error) =
+                            self.chain_store_handle.mark_invalid(blockhash).await
+                        {
+                            error!("Failed to mark {blockhash} Invalid: {mark_error}");
+                        }
+                        return Ok(ProcessOutcome::NotAdvanced);
+                    }
+                    FailureKind::StoreAccess => {
+                        // The parent is validated, so the data these checks need
+                        // must exist. A store read failing here is corruption or
+                        // a bug -- fail fast rather than silently diverge.
+                        error!(
+                            "Fatal store error validating {blockhash} (parent is valid): {validation_error}"
+                        );
+                        return Err(OrganiseError {
+                            message: format!(
+                                "Store error validating {blockhash} with a valid parent: {validation_error}"
+                            ),
+                        });
+                    }
+                    FailureKind::Recoverable => {
+                        // Recoverable failures come from pre-context
+                        // checks and cannot arise from validate_with_chain_context,
+                        // so this is unexpected here. Defensively leave the block
+                        // for retry rather than marking it Invalid or crashing.
+                        error!(
+                            "Unexpected recoverable validation error for {blockhash} at organise: {validation_error}"
+                        );
+                        return Ok(ProcessOutcome::NotAdvanced);
+                    }
                 }
-                return Ok(ProcessOutcome::NotAdvanced);
             }
             if let Err(mark_error) = self.chain_store_handle.mark_block_valid(blockhash).await {
                 error!("Failed to mark {blockhash} BlockValid: {mark_error}");
@@ -870,7 +901,7 @@ mod tests {
         let mut mock_validator = MockDefaultShareValidator::new();
         mock_validator
             .expect_validate_with_chain_context()
-            .returning(|_, _, _| Err(ValidationError::new("rejected for test")));
+            .returning(|_, _, _| Err(ValidationError::consensus("rejected for test")));
         let share_validator: Arc<dyn ShareValidator + Send + Sync> = Arc::new(mock_validator);
 
         let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
@@ -1612,6 +1643,65 @@ mod tests {
         assert!(
             marked.contains(&c_hash),
             "child C must become BlockValid after its parent, not be stranded"
+        );
+    }
+
+    /// A StoreAccess validation failure with a valid parent is fatal (data that
+    /// must exist could not be read -- corruption or a bug). The block must NOT
+    /// be marked Invalid, and the worker must stop with an error rather than
+    /// silently diverge.
+    #[tokio::test]
+    async fn test_organise_worker_fatal_on_store_access_validation_error() {
+        let (organise_tx, organise_rx) = create_organise_channel();
+        let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_clone()
+            .return_once(MockChainStoreHandle::new);
+        // Parent is valid and the block is in the PPLNS zone, so validation runs.
+        mock_chain_handle
+            .expect_get_block_metadata()
+            .returning(|_| {
+                Ok(BlockMetadata {
+                    expected_height: Some(10),
+                    chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
+                    status: Status::BlockValid,
+                    chain: ChainMembership::Confirmed,
+                })
+            });
+        mock_chain_handle
+            .expect_get_candidate_tip_height()
+            .returning(|| Ok(Some(10)));
+        // Must not mark Invalid/BlockValid, must not promote.
+        mock_chain_handle.expect_mark_invalid().never();
+        mock_chain_handle.expect_mark_block_valid().never();
+        mock_chain_handle.expect_promote_block().never();
+
+        let mut mock_validator = MockDefaultShareValidator::new();
+        mock_validator
+            .expect_validate_with_chain_context()
+            .returning(|_, _, _| Err(ValidationError::store_access("store read failed")));
+        let share_validator: Arc<dyn ShareValidator + Send + Sync> = Arc::new(mock_validator);
+
+        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let (notify_tx, _notify_rx) = create_test_notify_channel();
+        let worker = OrganiseWorker::new(
+            organise_rx,
+            mock_chain_handle,
+            monitoring_tx,
+            notify_tx,
+            create_test_metrics_handle(),
+            create_test_pplns_window(),
+            share_validator,
+        );
+
+        let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        organise_tx.send(OrganiseEvent::Block(share)).await.unwrap();
+        drop(organise_tx);
+
+        let result = worker.run().await;
+        assert!(
+            result.is_err(),
+            "a store error with a valid parent must be fatal"
         );
     }
 }
