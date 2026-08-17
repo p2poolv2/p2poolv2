@@ -1497,4 +1497,121 @@ mod tests {
             "both blocks sharing a parent height must be drained"
         );
     }
+
+    /// Fail-first regression for the out-of-order stranding (#2). Validation
+    /// runs one tokio task per block, so a child's OrganiseEvent can be handled
+    /// before its parent's. The child must still become BlockValid once the
+    /// parent does -- otherwise the contiguous promotion prefix wedges at the
+    /// stranded child, and confirmation (which the child blocks) can never
+    /// revisit it.
+    ///
+    /// Layout: GP is confirmed (height 2); P (height 3) and C (height 4) are a
+    /// candidate fork at/below the confirmed tip. C is delivered before P. On
+    /// the pre-fix code C is validated immediately, gate-blocked to HeaderValid,
+    /// and never re-marked; here it is buffered and re-marked via the drain.
+    #[tokio::test]
+    async fn test_out_of_order_child_becomes_valid_after_parent() {
+        use std::collections::HashSet;
+        use std::sync::Mutex;
+
+        let (organise_tx, organise_rx) = create_organise_channel();
+        let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_clone()
+            .return_once(MockChainStoreHandle::new);
+
+        let gp = TestShareBlockBuilder::new().nonce(0xe9695790).build();
+        let gp_hash = gp.block_hash();
+        let p = TestShareBlockBuilder::new()
+            .prev_share_blockhash(gp_hash.to_string())
+            .nonce(0xe9695791)
+            .build();
+        let p_hash = p.block_hash();
+        let c = TestShareBlockBuilder::new()
+            .prev_share_blockhash(p_hash.to_string())
+            .nonce(0xe9695792)
+            .build();
+        let c_hash = c.block_hash();
+
+        // Records which blocks have been marked BlockValid; the metadata mock
+        // reflects the transition so a drained child sees a now-valid parent.
+        let marked: Arc<Mutex<HashSet<BlockHash>>> = Arc::new(Mutex::new(HashSet::new()));
+
+        let marked_meta = marked.clone();
+        mock_chain_handle
+            .expect_get_block_metadata()
+            .returning(move |hash| {
+                let hash = *hash;
+                let (height, status, chain) = if hash == gp_hash {
+                    (2, Status::BlockValid, ChainMembership::Confirmed)
+                } else if hash == p_hash {
+                    let status = if marked_meta.lock().unwrap().contains(&p_hash) {
+                        Status::BlockValid
+                    } else {
+                        Status::HeaderValid
+                    };
+                    (3, status, ChainMembership::Candidate)
+                } else if hash == c_hash {
+                    let status = if marked_meta.lock().unwrap().contains(&c_hash) {
+                        Status::BlockValid
+                    } else {
+                        Status::HeaderValid
+                    };
+                    (4, status, ChainMembership::Candidate)
+                } else {
+                    (0, Status::BlockValid, ChainMembership::Confirmed)
+                };
+                Ok(BlockMetadata {
+                    expected_height: Some(height),
+                    chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
+                    status,
+                    chain,
+                })
+            });
+        let marked_mark = marked.clone();
+        mock_chain_handle
+            .expect_mark_block_valid()
+            .returning(move |hash| {
+                marked_mark.lock().unwrap().insert(hash);
+                Ok(())
+            });
+        // Small candidate tip so heights 3 and 4 are inside the PPLNS zone.
+        mock_chain_handle
+            .expect_get_candidate_tip_height()
+            .returning(|| Ok(Some(5)));
+        // The fork is not promotable yet (candidate, off the confirmed chain).
+        mock_chain_handle
+            .expect_promote_block()
+            .returning(|_| Ok(None));
+        // Buffering C triggers an opportunistic organise_block.
+        mock_chain_handle
+            .expect_organise_block()
+            .returning(|| Ok(None));
+
+        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let (notify_tx, _notify_rx) = create_test_notify_channel();
+        let worker = OrganiseWorker::new(
+            organise_rx,
+            mock_chain_handle,
+            monitoring_tx,
+            notify_tx,
+            create_test_metrics_handle(),
+            create_test_pplns_window(),
+            stub_share_validator_with_success(),
+        );
+
+        // Deliver the child before the parent (out of order).
+        organise_tx.send(OrganiseEvent::Block(c)).await.unwrap();
+        organise_tx.send(OrganiseEvent::Block(p)).await.unwrap();
+        drop(organise_tx);
+
+        worker.run().await.unwrap();
+
+        let marked = marked.lock().unwrap();
+        assert!(marked.contains(&p_hash), "parent P must be BlockValid");
+        assert!(
+            marked.contains(&c_hash),
+            "child C must become BlockValid after its parent, not be stranded"
+        );
+    }
 }
