@@ -949,9 +949,8 @@ impl Store {
         let inputs = self.get_inputs(txids, &metadatas)?;
         let outputs = self.get_outputs(txids, &metadatas)?;
         let mut txs = Vec::with_capacity(txids.len());
-        for (metadata, (tx_inputs, tx_outputs)) in metadatas
-            .into_iter()
-            .zip(inputs.into_iter().zip(outputs.into_iter()))
+        for (metadata, (tx_inputs, tx_outputs)) in
+            metadatas.into_iter().zip(inputs.into_iter().zip(outputs))
         {
             txs.push(Transaction {
                 version: metadata.version,

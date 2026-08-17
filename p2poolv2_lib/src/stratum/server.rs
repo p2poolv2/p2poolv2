@@ -257,10 +257,10 @@ impl StratumServer {
             &bitcoinrpc_config.password,
         )
         .map_err(|e| -> Box<dyn std::error::Error + Send> {
-            Box::new(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("Failed to create BitcoindRpcClient: {}", e),
-            ))
+            Box::new(std::io::Error::other(format!(
+                "Failed to create BitcoindRpcClient: {}",
+                e
+            )))
         })?;
 
         if !wait_for_chain_sync(

@@ -55,6 +55,12 @@ pub struct RequestContext<C, T> {
 #[derive(Clone)]
 pub struct P2PService;
 
+impl Default for P2PService {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl P2PService {
     pub fn new() -> Self {
         Self

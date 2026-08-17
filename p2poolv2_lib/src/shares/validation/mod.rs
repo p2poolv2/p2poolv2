@@ -1187,18 +1187,17 @@ impl DefaultShareValidator {
                 "One or more prevouts are already spent",
             ));
         }
-        if !coinbase_outpoints.is_empty() {
-            if let Some(immature) = chain_store_handle
+        if !coinbase_outpoints.is_empty()
+            && let Some(immature) = chain_store_handle
                 .find_immature_coinbase_prevout(&coinbase_outpoints, COINBASE_MATURITY)
                 .map_err(|error| {
                     ValidationError::new(format!("Failed to check coinbase maturity: {error}"))
                 })?
-            {
-                return Err(ValidationError::new(format!(
-                    "Coinbase output {}:{} is not yet mature (requires at least {} blocks of depth)",
-                    immature.txid, immature.vout, COINBASE_MATURITY
-                )));
-            }
+        {
+            return Err(ValidationError::new(format!(
+                "Coinbase output {}:{} is not yet mature (requires at least {} blocks of depth)",
+                immature.txid, immature.vout, COINBASE_MATURITY
+            )));
         }
         Ok(())
     }

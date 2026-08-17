@@ -431,10 +431,10 @@ impl PplnsWindow {
     fn collect_distribution(&self, difficulty_by_key: &[u128]) -> HashMap<Address, u128> {
         let mut result = HashMap::with_capacity(difficulty_by_key.len());
         for (index, difficulty) in difficulty_by_key.iter().enumerate() {
-            if *difficulty > 0 {
-                if let Some(address) = self.address_keys.value_for(index) {
-                    result.insert(address.clone(), *difficulty);
-                }
+            if *difficulty > 0
+                && let Some(address) = self.address_keys.value_for(index)
+            {
+                result.insert(address.clone(), *difficulty);
             }
         }
         result

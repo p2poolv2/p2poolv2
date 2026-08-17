@@ -346,12 +346,11 @@ impl MetricsActor {
     /// Decrement pool wide worker counts, if worker found as authorised. Unauthorised workers are not counted.
     /// Also marks Worker inactive, if found.
     fn mark_worker_inactive(&mut self, btcaddress: Option<String>, workername: String) {
-        if let Some(btcaddress) = btcaddress {
-            if let Some(user) = self.metrics.users.get_mut(&btcaddress) {
-                if let Some(worker) = user.workers.get_mut(&workername) {
-                    worker.active = false;
-                }
-            }
+        if let Some(btcaddress) = btcaddress
+            && let Some(user) = self.metrics.users.get_mut(&btcaddress)
+            && let Some(worker) = user.workers.get_mut(&workername)
+        {
+            worker.active = false;
         }
     }
 
@@ -365,9 +364,9 @@ impl MetricsActor {
     /// Set last update time. Largely used for testing.
     fn set_last_update(&mut self, lastupdate: u64) {
         self.metrics.lastupdate = Some(lastupdate);
-        for (_btcaddress, user) in self.metrics.users.iter_mut() {
+        for user in self.metrics.users.values_mut() {
             user.last_share_at = lastupdate;
-            for (_workername, worker) in user.workers.iter_mut() {
+            for worker in user.workers.values_mut() {
                 worker.last_share_at = lastupdate;
             }
         }
