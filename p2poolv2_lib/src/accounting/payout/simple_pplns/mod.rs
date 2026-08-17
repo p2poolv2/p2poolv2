@@ -46,6 +46,7 @@ pub struct SimplePplnsShare {
 }
 
 impl SimplePplnsShare {
+    #[allow(clippy::too_many_arguments)] // mirrors the stored share record field-for-field
     pub fn new(
         user_id: u64,
         difficulty: u64,

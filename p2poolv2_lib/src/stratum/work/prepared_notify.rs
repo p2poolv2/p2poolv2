@@ -108,6 +108,7 @@ fn serialize_merkle_branches_json(branches: &[String]) -> String {
 /// coinbase1 is static. coinbase2 gets a placeholder that is replaced per-miner.
 /// Returns the JSON string, the byte offset of the job_id placeholder,
 /// the byte offset of the coinbase2 placeholder, and the placeholder length.
+#[allow(clippy::too_many_arguments)] // wiring constructor: each parameter is a distinct collaborator, a params struct would only move the list
 fn build_json_template(
     coinbase1: &str,
     coinbase2_placeholder: &str,

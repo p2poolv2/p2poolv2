@@ -161,6 +161,7 @@ pub async fn handle_request<C: Send + Sync, T: TimeProvider + Send + Sync>(
 /// The swarm_tx channel is provided so that individual response handlers can
 /// send follow-up messages (e.g. GetShareBlocks after receiving ShareHeaders)
 /// back to the peer.
+#[allow(clippy::too_many_arguments)] // wiring constructor: each parameter is a distinct collaborator, a params struct would only move the list
 pub async fn handle_response<C: Send + Sync>(
     peer: libp2p::PeerId,
     response: Message,

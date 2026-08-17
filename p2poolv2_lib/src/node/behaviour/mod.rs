@@ -50,6 +50,9 @@ pub struct P2PoolBehaviour {
 // Define the events that can be emitted by our behavior
 #[derive(Debug)]
 #[allow(dead_code)]
+// Variant sizes are set by the libp2p event types we wrap; boxing them would
+// force an allocation on every swarm event.
+#[allow(clippy::large_enum_variant)]
 pub enum P2PoolBehaviourEvent {
     Kademlia(kad::Event),
     Identify(identify::Event),

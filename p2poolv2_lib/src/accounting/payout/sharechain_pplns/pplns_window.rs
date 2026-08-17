@@ -772,6 +772,7 @@ impl PplnsWindow {
     /// Accepts confirmed shares and uncles as tuples of primitives,
     /// bypassing the chain store. Confirmed shares should be ordered
     /// newest-to-oldest. Uncle data is provided as (miner_address_string, difficulty).
+    #[allow(clippy::type_complexity)] // benchmark-only shim: tuples mirror the store rows verbatim
     pub fn populate_for_benchmark(
         &mut self,
         confirmed_shares: Vec<(BlockHash, String, u128, Vec<(String, u128)>)>,

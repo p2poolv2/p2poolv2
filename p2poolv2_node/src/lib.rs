@@ -330,8 +330,10 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
                 template_rx.clone(),
             )
             .await;
-        if result.is_err() && *exit_receiver_stratum.borrow() == ShutdownReason::None {
-            error!("Failed to start Stratum server: {}", result.unwrap_err());
+        if let Err(error) = result
+            && *exit_receiver_stratum.borrow() == ShutdownReason::None
+        {
+            error!("Failed to start Stratum server: {}", error);
             let _ = exit_sender_stratum.send(ShutdownReason::Error);
         }
         info!("Stratum server stopped");

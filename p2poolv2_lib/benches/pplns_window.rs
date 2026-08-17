@@ -67,6 +67,7 @@ fn build_miner_addresses() -> Vec<String> {
 ///
 /// Creates `share_count` confirmed entries with every `UNCLE_INTERVAL`th
 /// entry referencing one uncle, giving roughly 10% uncle ratio.
+#[allow(clippy::type_complexity)] // tuples mirror populate_for_benchmark's signature
 fn build_benchmark_window(share_count: usize) -> PplnsWindow {
     let miner_addresses = build_miner_addresses();
     let miner_count = miner_addresses.len();

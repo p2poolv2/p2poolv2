@@ -441,6 +441,7 @@ pub(crate) struct StratumContext {
 /// Handling new notify on new templates. Watches for new prepared
 /// templates via the watch channel and builds per-miner notify
 /// messages.
+#[allow(clippy::too_many_arguments)] // wiring constructor: each parameter is a distinct collaborator, a params struct would only move the list
 async fn handle_connection<R, W, T: TimeProvider>(
     reader: R,
     mut writer: W,

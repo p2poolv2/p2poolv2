@@ -156,6 +156,7 @@ impl ShareHeader {
     ///
     /// We do not validate the commitment is actually present in the
     /// bitcoin header. That happens at the receiving node.
+    #[allow(clippy::too_many_arguments)] // wiring constructor: each parameter is a distinct collaborator, a params struct would only move the list
     pub(crate) fn from_commitment_and_header(
         commitment: ShareCommitment,
         bitcoin_header: Header,

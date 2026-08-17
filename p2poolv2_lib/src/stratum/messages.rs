@@ -584,7 +584,7 @@ mod tests {
 
         let notify_str =
             include_str!("../../../p2poolv2_tests/test_data/validation/stratum/a/notify.json");
-        let notify: Notify = serde_json::from_str(&notify_str).unwrap();
+        let notify: Notify = serde_json::from_str(notify_str).unwrap();
         assert_eq!(notify.method, "mining.notify");
         assert_eq!(
             notify.params.merkle_branches.len(),

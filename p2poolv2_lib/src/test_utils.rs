@@ -637,6 +637,7 @@ pub fn multiplied_compact_target_as_work(bits: u32, multiplier: u32) -> bitcoin:
 }
 
 #[cfg(any(test, feature = "test-utils"))]
+#[allow(clippy::too_many_arguments)] // wiring constructor: each parameter is a distinct collaborator, a params struct would only move the list
 fn test_share_block(
     bitcoin_block: Option<Block>,
     prev_share_blockhash: &str,
@@ -743,23 +744,12 @@ fn test_share_block(
 
 /// Builder for creating test ShareHeader instances
 #[cfg(test)]
+#[derive(Default)]
 pub struct TestShareHeaderBuilder {
     prev_share_blockhash: Option<BlockHash>,
     uncles: Vec<BlockHash>,
     btcaddress: Option<Address>,
     transactions: Vec<Transaction>,
-}
-
-#[cfg(test)]
-impl Default for TestShareHeaderBuilder {
-    fn default() -> Self {
-        Self {
-            prev_share_blockhash: None,
-            uncles: Vec::new(),
-            btcaddress: None,
-            transactions: Vec::new(),
-        }
-    }
 }
 
 #[cfg(test)]

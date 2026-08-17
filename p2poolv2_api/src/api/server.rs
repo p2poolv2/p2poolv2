@@ -152,6 +152,7 @@ fn build_router(app_state: Arc<AppState>, app_config: AppConfig) -> Router {
 }
 
 /// Start the API server and return a shutdown channel and the actual bound port.
+#[allow(clippy::too_many_arguments)] // wiring constructor: each parameter is a distinct collaborator, a params struct would only move the list
 pub async fn start_api_server(
     config: ApiConfig,
     chain_store_handle: ChainStoreHandle,

@@ -464,7 +464,7 @@ impl Store {
             .collect();
 
         // Sort by chain_work descending and take top MAX_UNCLES
-        uncles_with_work.sort_by(|a, b| b.1.cmp(&a.1));
+        uncles_with_work.sort_by_key(|(_, work)| std::cmp::Reverse(*work));
         let uncles = uncles_with_work
             .into_iter()
             .take(MAX_UNCLES)

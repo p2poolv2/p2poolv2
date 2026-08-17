@@ -24,12 +24,20 @@ use bitcoin::{CompactTarget, Target};
 use std::error::Error;
 use std::fmt;
 
-uint::construct_uint! {
-    /// 512-bit unsigned integer used as an intermediate type for ASERT target
-    /// arithmetic. Using 512 bits avoids overflow when multiplying a 256-bit
-    /// anchor target by the polynomial factor and applying bit shifts.
-    struct U512(8);
+// The generated arithmetic trips these lints inside the external macro body,
+// where they cannot be fixed. An outer #[allow] on the macro invocation is
+// ignored, so the allow has to be an inner attribute on a wrapping module.
+mod u512 {
+    #![allow(clippy::manual_div_ceil, clippy::assign_op_pattern)]
+
+    uint::construct_uint! {
+        /// 512-bit unsigned integer used as an intermediate type for ASERT target
+        /// arithmetic. Using 512 bits avoids overflow when multiplying a 256-bit
+        /// anchor target by the polynomial factor and applying bit shifts.
+        pub struct U512(8);
+    }
 }
+use u512::U512;
 
 use crate::sim_overrides;
 

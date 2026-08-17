@@ -308,6 +308,7 @@ struct NodeActor {
 }
 
 impl NodeActor {
+    #[allow(clippy::too_many_arguments)] // wiring constructor: each parameter is a distinct collaborator, a params struct would only move the list
     fn new(
         config: Config,
         chain_store_handle: ChainStoreHandle,

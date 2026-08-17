@@ -52,6 +52,9 @@ mod getdata_discriminants {
 
 /// P2P network messages, encoded using bitcoin consensus_encode
 #[derive(Debug, Clone, PartialEq, Eq)]
+// Boxing the large variants would ripple through every match site and every
+// consensus encode/decode impl for marginal benefit.
+#[allow(clippy::large_enum_variant)]
 pub enum Message {
     Inventory(InventoryMessage),
     NotFound(GetData),
@@ -637,7 +640,7 @@ mod tests {
         msg.consensus_encode(&mut serialized).unwrap();
 
         // Test deserialization
-        let deserialized = encode::deserialize::<Message>(&mut serialized).unwrap();
+        let deserialized = encode::deserialize::<Message>(&serialized).unwrap();
 
         let deserialized: Vec<BlockHash> = match deserialized {
             Message::Inventory(InventoryMessage::BlockHashes(have_shares)) => have_shares,
