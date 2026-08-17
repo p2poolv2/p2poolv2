@@ -308,7 +308,7 @@ mod tests {
         mock_validator
             .expect_validate_share_header()
             .returning(|_| {
-                Err(ValidationError::new(
+                Err(ValidationError::consensus(
                     "Insufficient work: block hash does not meet share target",
                 ))
             });

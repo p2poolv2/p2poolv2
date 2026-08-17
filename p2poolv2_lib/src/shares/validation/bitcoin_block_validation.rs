@@ -41,7 +41,7 @@ pub async fn validate_bitcoin_block(
 
     match result {
         Ok(response) => Ok(response == "duplicate"),
-        Err(e) => Err(ValidationError::new(format!(
+        Err(e) => Err(ValidationError::consensus(format!(
             "Bitcoin block validation failed: {e}"
         ))),
     }
