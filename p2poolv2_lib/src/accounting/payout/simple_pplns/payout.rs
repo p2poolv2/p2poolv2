@@ -298,7 +298,7 @@ mod tests {
         assert_eq!(result.get(&make_test_address(1)), Some(&400));
         assert_eq!(result.get(&make_test_address(2)), Some(&300));
         assert_eq!(result.get(&make_test_address(3)), Some(&200));
-        assert!(result.get(&make_test_address(4)).is_none());
+        assert!(!result.contains_key(&make_test_address(4)));
 
         let total: u128 = result.values().sum();
         assert_eq!(total, 900);

@@ -87,6 +87,7 @@ impl JobTracker {
     }
 
     /// Insert a block template with the specified job id
+    #[allow(clippy::too_many_arguments)] // wiring constructor: each parameter is a distinct collaborator, a params struct would only move the list
     pub fn insert_job(
         &self,
         block_template: Arc<BlockTemplate>,
@@ -290,7 +291,7 @@ mod tests {
             "../../../../../p2poolv2_tests/test_data/gbt/signet/gbt-no-transactions.json"
         );
 
-        let template: BlockTemplate = serde_json::from_str(&template_str).unwrap();
+        let template: BlockTemplate = serde_json::from_str(template_str).unwrap();
         let cloned_template = template.clone();
 
         let tracker = start_tracker_actor();
@@ -334,7 +335,7 @@ mod tests {
             "../../../../../p2poolv2_tests/test_data/gbt/signet/gbt-no-transactions.json"
         );
 
-        let template: BlockTemplate = serde_json::from_str(&template_str).unwrap();
+        let template: BlockTemplate = serde_json::from_str(template_str).unwrap();
 
         // Create tracker directly
         let tracker = JobTracker::new();
@@ -412,7 +413,7 @@ mod tests {
         let template_str = include_str!(
             "../../../../../p2poolv2_tests/test_data/gbt/signet/gbt-no-transactions.json"
         );
-        let template: BlockTemplate = serde_json::from_str(&template_str).unwrap();
+        let template: BlockTemplate = serde_json::from_str(template_str).unwrap();
 
         let tracker = JobTracker::new();
         let job_id = JobId(1);

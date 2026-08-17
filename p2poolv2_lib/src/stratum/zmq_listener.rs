@@ -118,7 +118,7 @@ mod zmq_tests {
         let publisher_thread = thread::spawn(move || {
             let ctx = zmq::Context::new();
             let publisher = ctx.socket(zmq::PUB).unwrap();
-            publisher.bind(&address).unwrap();
+            publisher.bind(address).unwrap();
 
             // Signal that we're ready
             ready_tx.send(()).unwrap();
@@ -136,7 +136,7 @@ mod zmq_tests {
 
             // Send the multipart message
             publisher
-                .send_multipart(&[topic.as_bytes(), &hash[..], &seq[..]], 0)
+                .send_multipart([topic.as_bytes(), &hash[..], &seq[..]], 0)
                 .unwrap();
 
             // Keep the socket alive for a bit

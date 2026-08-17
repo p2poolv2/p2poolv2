@@ -109,6 +109,7 @@ fn append_default_witness_commitment(
 /// When `extranonce` is provided, it replaces the placeholder separator
 /// in the scriptSig. When `None`, the separator placeholder is left in
 /// place (used by the stratum server before split_coinbase).
+#[allow(clippy::too_many_arguments)] // wiring constructor: each parameter is a distinct collaborator, a params struct would only move the list
 pub(crate) fn build_bitcoin_coinbase_transaction(
     version: Version,
     output_data: &[OutputPair],
@@ -470,12 +471,12 @@ mod tests {
         let data = include_str!(
             "../../../../p2poolv2_tests/test_data/gbt/regtest/ckpool/four-txns/gbt.json"
         );
-        let template: BlockTemplate = serde_json::from_str(&data).expect("Invalid JSON");
+        let template: BlockTemplate = serde_json::from_str(data).expect("Invalid JSON");
 
         let data = include_str!(
             "../../../../p2poolv2_tests/test_data/gbt/regtest/ckpool/four-txns/notify.json"
         );
-        let _notify: serde_json::Value = serde_json::from_str(&data).expect("Invalid JSON");
+        let _notify: serde_json::Value = serde_json::from_str(data).expect("Invalid JSON");
 
         // Address used in ckpool regtest conf
         let address = parse_address(
@@ -570,12 +571,12 @@ mod tests {
         let data = include_str!(
             "../../../../p2poolv2_tests/test_data/gbt/regtest/ckpool/four-txns/gbt.json"
         );
-        let template: BlockTemplate = serde_json::from_str(&data).expect("Invalid JSON");
+        let template: BlockTemplate = serde_json::from_str(data).expect("Invalid JSON");
 
         let data = include_str!(
             "../../../../p2poolv2_tests/test_data/gbt/regtest/ckpool/four-txns/notify.json"
         );
-        let _notify: serde_json::Value = serde_json::from_str(&data).expect("Invalid JSON");
+        let _notify: serde_json::Value = serde_json::from_str(data).expect("Invalid JSON");
 
         // Address used in ckpool regtest conf
         let address = parse_address(

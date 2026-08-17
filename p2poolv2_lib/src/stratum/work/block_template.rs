@@ -158,7 +158,7 @@ mod tests {
 
         // Parse the JSON into BlockTemplate
         let block_template: BlockTemplate =
-            serde_json::from_str(&json_content).expect("Failed to parse JSON into BlockTemplate");
+            serde_json::from_str(json_content).expect("Failed to parse JSON into BlockTemplate");
 
         // Verify we have transactions
         assert!(!block_template.transactions.is_empty());

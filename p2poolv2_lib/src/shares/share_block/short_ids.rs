@@ -122,7 +122,7 @@ mod tests {
                     idx: 0,
                     tx: tx.clone(),
                 },
-                PrefilledTransaction { idx: 2, tx: tx },
+                PrefilledTransaction { idx: 2, tx },
             ],
         };
 

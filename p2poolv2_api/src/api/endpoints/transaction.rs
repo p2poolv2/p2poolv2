@@ -232,7 +232,7 @@ mod tests {
         assert_eq!(json["txid"], txid.to_string());
         assert!(json["hex"].is_string());
         let hex_str = json["hex"].as_str().unwrap();
-        assert!(hex_str.len() > 0);
+        assert!(!hex_str.is_empty());
         assert!(hex::decode(hex_str).is_ok());
     }
 }

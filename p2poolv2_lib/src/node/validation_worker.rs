@@ -50,6 +50,9 @@ use tracing::{debug, error, info};
 const VALIDATION_CHANNEL_CAPACITY: usize = 8192;
 
 /// Events for the validation worker.
+// ValidateShareBlock intentionally carries the block by value to avoid a
+// redundant store read; that size difference is the point of the variant.
+#[allow(clippy::large_enum_variant)]
 pub enum ValidationEvent {
     /// Validate a stored ShareBlock by its hash (reads from store).
     ValidateBlockHash(BlockHash),

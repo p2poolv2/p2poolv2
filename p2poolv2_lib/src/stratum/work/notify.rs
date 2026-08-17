@@ -360,7 +360,7 @@ mod tests {
         let data = include_str!(
             "../../../../p2poolv2_tests/test_data/gbt/regtest/ckpool/one-txn/gbt.json"
         );
-        let gbt_json: serde_json::Value = serde_json::from_str(&data).expect("Invalid JSON");
+        let gbt_json: serde_json::Value = serde_json::from_str(data).expect("Invalid JSON");
         let template: BlockTemplate =
             serde_json::from_value(gbt_json.clone()).expect("Failed to parse BlockTemplate");
 
@@ -405,7 +405,7 @@ mod tests {
         let data = include_str!(
             "../../../../p2poolv2_tests/test_data/gbt/regtest/ckpool/one-txn/gbt.json"
         );
-        let gbt_json: serde_json::Value = serde_json::from_str(&data).expect("Invalid JSON");
+        let gbt_json: serde_json::Value = serde_json::from_str(data).expect("Invalid JSON");
         let template: BlockTemplate =
             serde_json::from_value(gbt_json.clone()).expect("Failed to parse BlockTemplate");
 

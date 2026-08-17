@@ -50,6 +50,9 @@ impl<C, T> PeerHandle<C, T> {
     ///
     /// Returns an error if the channel is full, meaning the peer's
     /// task cannot keep up with the inbound request rate.
+    // The Err variant is tokio's TrySendError, which hands the request back so
+    // the caller can retry or drop it; boxing would defeat that.
+    #[allow(clippy::result_large_err)]
     pub fn try_send(
         &self,
         request: RequestContext<C, T>,
