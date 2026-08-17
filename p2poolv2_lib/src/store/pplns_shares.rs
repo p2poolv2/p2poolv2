@@ -97,8 +97,8 @@ impl Store {
         let use_limit = limit.unwrap_or(INITIAL_SHARE_VEC_CAPACITY);
         let mut shares: Vec<SimplePplnsShare> = Vec::with_capacity(use_limit);
 
-        for (_key, mut value) in iter.take(use_limit).flatten() {
-            if let Ok(share) = encode::deserialize::<SimplePplnsShare>(&mut value) {
+        for (_key, value) in iter.take(use_limit).flatten() {
+            if let Ok(share) = encode::deserialize::<SimplePplnsShare>(&value) {
                 shares.push(share);
             }
         }

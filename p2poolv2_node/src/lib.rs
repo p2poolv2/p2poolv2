@@ -242,11 +242,10 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
             zmq_trigger_rx,
         )
         .await
+            && *exit_receiver_gbt.borrow() == ShutdownReason::None
         {
-            if *exit_receiver_gbt.borrow() == ShutdownReason::None {
-                tracing::error!("Failed to fetch block template. Shutting down. \n {e}");
-                let _ = exit_sender_gbt.send(ShutdownReason::Error);
-            }
+            tracing::error!("Failed to fetch block template. Shutting down. \n {e}");
+            let _ = exit_sender_gbt.send(ShutdownReason::Error);
         }
     });
 

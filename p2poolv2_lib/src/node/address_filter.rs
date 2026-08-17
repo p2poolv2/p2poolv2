@@ -57,7 +57,7 @@ fn is_ipv4_global(ip: &std::net::Ipv4Addr) -> bool {
         return false;
     }
     // Multicast (224.0.0.0/4)
-    if first >= 224 && first <= 239 {
+    if (224..=239).contains(&first) {
         return false;
     }
     // Reserved for future use (240.0.0.0/4, excluding broadcast)

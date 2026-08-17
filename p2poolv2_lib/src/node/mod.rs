@@ -351,11 +351,11 @@ impl Node {
         match event {
             SwarmEvent::NewListenAddr { address, .. } => {
                 info!("Listening on {address:?}");
-                if self.listen_port.is_none() {
-                    if let Some(port) = address_filter::extract_tcp_port(&address) {
-                        info!("Resolved actual listen port: {port}");
-                        self.listen_port = Some(port);
-                    }
+                if self.listen_port.is_none()
+                    && let Some(port) = address_filter::extract_tcp_port(&address)
+                {
+                    info!("Resolved actual listen port: {port}");
+                    self.listen_port = Some(port);
                 }
                 if !self.external_address_confirmed
                     && address_filter::is_routable_multiaddr(&address)

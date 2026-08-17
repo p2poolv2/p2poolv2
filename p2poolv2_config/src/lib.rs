@@ -58,19 +58,15 @@ const MAX_POOL_SIGNATURE_LENGTH: usize = 16;
 /// the share chain ASERT difficulty is not enforced.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum PoolMode {
     /// Full P2Poolv2 share chain mode (default)
     #[serde(alias = "P2Poolv2", alias = "p2poolv2")]
+    #[default]
     P2poolv2,
     /// Standalone PPLNS pool mode
     #[serde(alias = "Hydrapool", alias = "hydrapool")]
     Hydrapool,
-}
-
-impl Default for PoolMode {
-    fn default() -> Self {
-        PoolMode::P2poolv2
-    }
 }
 
 /// Marker type for raw (unparsed) StratumConfig state

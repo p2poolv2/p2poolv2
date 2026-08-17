@@ -214,10 +214,11 @@ impl Store {
         let metadata_results: HashMap<BlockHash, BlockMetadata> =
             self.get_block_metadata_batch(locator).into_iter().collect();
         for blockhash in locator {
-            if let Some(metadata) = metadata_results.get(blockhash) {
-                if metadata.status != Status::Pending && metadata.status != Status::Invalid {
-                    return Some(*blockhash);
-                }
+            if let Some(metadata) = metadata_results.get(blockhash)
+                && metadata.status != Status::Pending
+                && metadata.status != Status::Invalid
+            {
+                return Some(*blockhash);
             }
         }
         None

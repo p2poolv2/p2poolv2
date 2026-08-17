@@ -40,23 +40,23 @@ pub struct ParsedPassword {
 /// Returns `ParsedPassword { difficulty: None }` if no valid option is found.
 pub fn parse_password(password: &str) -> ParsedPassword {
     let difficulty_value = extract_value(password, "d=");
-    if let Some(value) = difficulty_value {
-        if value > 0 {
-            return ParsedPassword {
-                difficulty: Some(value),
-            };
-        }
+    if let Some(value) = difficulty_value
+        && value > 0
+    {
+        return ParsedPassword {
+            difficulty: Some(value),
+        };
     }
 
     let terahash_value = extract_value(password, "th=");
-    if let Some(value) = terahash_value {
-        if value > 0 {
-            let difficulty = terahash_to_difficulty(value);
-            if difficulty > 0 {
-                return ParsedPassword {
-                    difficulty: Some(difficulty),
-                };
-            }
+    if let Some(value) = terahash_value
+        && value > 0
+    {
+        let difficulty = terahash_to_difficulty(value);
+        if difficulty > 0 {
+            return ParsedPassword {
+                difficulty: Some(difficulty),
+            };
         }
     }
 
@@ -72,9 +72,9 @@ fn extract_value(password: &str, key: &str) -> Option<u64> {
     let mut search_from = 0;
 
     while search_from < password_lower_case.len() {
-        let position = match password_lower_case[search_from..].find(key) {
-            Some(pos) => search_from + pos,
-            None => return None,
+        let position = {
+            let pos = password_lower_case[search_from..].find(key)?;
+            search_from + pos
         };
 
         let at_valid_boundary = position == 0

@@ -143,12 +143,12 @@ impl BlockReceiver {
         let pending_block = self.pending.remove(block_hash)?;
 
         let parent_hash = pending_block.share_block.header.prev_share_blockhash;
-        if !is_terminal_blockhash(&parent_hash) {
-            if let Some(descendants_list) = self.descendants.get_mut(&parent_hash) {
-                descendants_list.retain(|hash| hash != block_hash);
-                if descendants_list.is_empty() {
-                    self.descendants.remove(&parent_hash);
-                }
+        if !is_terminal_blockhash(&parent_hash)
+            && let Some(descendants_list) = self.descendants.get_mut(&parent_hash)
+        {
+            descendants_list.retain(|hash| hash != block_hash);
+            if descendants_list.is_empty() {
+                self.descendants.remove(&parent_hash);
             }
         }
         for uncle_hash in &pending_block.share_block.header.uncles {

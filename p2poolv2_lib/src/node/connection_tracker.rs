@@ -106,20 +106,20 @@ impl ConnectionTracker {
 
         let ip = extract_ip_from_multiaddr(&address);
 
-        if let Some(peer_ip) = ip {
-            if self.blocked_ips.contains(&peer_ip) {
-                warn!(
-                    "Blocking connection from {} (IP {}), disconnecting",
-                    peer_id, peer_ip
-                );
-                return ConnectionAction::Block;
-            }
+        if let Some(peer_ip) = ip
+            && self.blocked_ips.contains(&peer_ip)
+        {
+            warn!(
+                "Blocking connection from {} (IP {}), disconnecting",
+                peer_id, peer_ip
+            );
+            return ConnectionAction::Block;
         }
 
-        if let ConnectedPoint::Dialer { address, .. } = endpoint {
-            if !self.connected_dial_addresses.contains(address) {
-                self.connected_dial_addresses.push(address.clone());
-            }
+        if let ConnectedPoint::Dialer { address, .. } = endpoint
+            && !self.connected_dial_addresses.contains(address)
+        {
+            self.connected_dial_addresses.push(address.clone());
         }
 
         let peer_info = PeerInfo {

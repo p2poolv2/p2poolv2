@@ -346,6 +346,10 @@ impl NodeActor {
         let pool_difficulty = PoolDifficulty::build(&chain_store_handle)
             .map_err(|error| -> Box<dyn Error> { Box::new(error) })?;
 
+        // The clone is redundant for the real PoolDifficulty, which is Copy, but
+        // mockall_double swaps in the non-Copy MockPoolDifficulty under cfg(test)
+        // and pool_difficulty is used again below.
+        #[allow(clippy::clone_on_copy)]
         let share_validator: Arc<dyn ShareValidator + Send + Sync> =
             Arc::new(DefaultShareValidator::new(
                 pool_difficulty.clone(),
@@ -383,7 +387,7 @@ impl NodeActor {
             node.swarm_tx.clone(),
             difficulty_multiplier,
             pool_signature,
-            pool_difficulty.clone(),
+            pool_difficulty,
         );
         let validation_handle = tokio::spawn(validation_worker.run());
 

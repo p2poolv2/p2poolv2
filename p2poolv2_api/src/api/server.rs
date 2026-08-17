@@ -250,17 +250,17 @@ async fn metrics(State(state): State<Arc<AppState>>) -> String {
     // make rate() report replay speed as an inflated hashrate. Suppressing the
     // sample during sync leaves a gap instead; Prometheus staleness then keeps
     // rate() from bridging the sync jump when work resumes.
-    if state.chain_store_handle.is_current() {
-        if let Ok(total_work) = state.chain_store_handle.get_total_work() {
-            exposition.push_str(
+    if state.chain_store_handle.is_current()
+        && let Ok(total_work) = state.chain_store_handle.get_total_work()
+    {
+        exposition.push_str(
                 "# HELP sharechain_work_total Cumulative confirmed sharechain work in expected hashes; pool hashrate is rate() of this\n",
             );
-            exposition.push_str("# TYPE sharechain_work_total counter\n");
-            exposition.push_str(&format!(
-                "sharechain_work_total {}\n",
-                work_to_f64(total_work)
-            ));
-        }
+        exposition.push_str("# TYPE sharechain_work_total counter\n");
+        exposition.push_str(&format!(
+            "sharechain_work_total {}\n",
+            work_to_f64(total_work)
+        ));
     }
 
     exposition

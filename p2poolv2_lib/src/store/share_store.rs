@@ -230,7 +230,7 @@ impl Store {
         let results = self.db.multi_get_cf(keys);
 
         let mut missing = Vec::new();
-        for (blockhash, result) in blockhashes.iter().zip(results.into_iter()) {
+        for (blockhash, result) in blockhashes.iter().zip(results) {
             if !matches!(result, Ok(Some(_))) {
                 missing.push(*blockhash);
             }
@@ -285,11 +285,11 @@ impl Store {
             .collect::<Vec<_>>();
         let results = self.db.multi_get_cf(keys);
         let mut share_headers = Vec::with_capacity(blockhashes.len());
-        for (blockhash, result) in blockhashes.iter().zip(results.into_iter()) {
-            if let Ok(Some(data)) = result {
-                if let Ok(header) = encode::deserialize::<ShareHeader>(&data) {
-                    share_headers.push((*blockhash, header));
-                }
+        for (blockhash, result) in blockhashes.iter().zip(results) {
+            if let Ok(Some(data)) = result
+                && let Ok(header) = encode::deserialize::<ShareHeader>(&data)
+            {
+                share_headers.push((*blockhash, header));
             }
         }
         Ok(share_headers)
@@ -306,7 +306,7 @@ impl Store {
             .map(|hash| (&header_cf, consensus::serialize(hash)))
             .collect::<Vec<_>>();
         let results = self.db.multi_get_cf(keys);
-        for (blockhash, result) in blockhashes.iter().zip(results.into_iter()) {
+        for (blockhash, result) in blockhashes.iter().zip(results) {
             if let Ok(Some(_)) = result {
                 return Some(*blockhash);
             }
@@ -475,11 +475,11 @@ impl Store {
             .collect();
         let results = self.db.multi_get_cf(keys);
         let mut metadata_results = Vec::with_capacity(unique_blockhashes.len());
-        for (blockhash, result) in unique_blockhashes.iter().zip(results.into_iter()) {
-            if let Ok(Some(data)) = result {
-                if let Ok(metadata) = encode::deserialize::<BlockMetadata>(&data) {
-                    metadata_results.push((*blockhash, metadata));
-                }
+        for (blockhash, result) in unique_blockhashes.iter().zip(results) {
+            if let Ok(Some(data)) = result
+                && let Ok(metadata) = encode::deserialize::<BlockMetadata>(&data)
+            {
+                metadata_results.push((*blockhash, metadata));
             }
         }
         metadata_results
