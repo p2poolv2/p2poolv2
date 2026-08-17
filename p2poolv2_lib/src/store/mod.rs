@@ -291,7 +291,7 @@ impl Store {
         );
         let height_entries = self.get_blockhashes_for_height_range(start_height, end_height);
 
-        for (height, raw_hashes) in height_entries {
+        for (_height, raw_hashes) in height_entries {
             let mut hashes_at_height: Vec<BlockHash> = self
                 .get_block_metadata_batch(&raw_hashes)
                 .into_iter()

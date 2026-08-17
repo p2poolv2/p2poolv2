@@ -59,7 +59,7 @@ pub struct RawTransactionOutput {
     pub hex: String,
 }
 
-pub async fn transaction(
+pub(crate) async fn transaction(
     State(state): State<Arc<AppState>>,
     Query(query): Query<TransactionQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {

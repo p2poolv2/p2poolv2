@@ -325,7 +325,6 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
         let result = stratum_server
             .start(
                 None,
-                notify_tx,
                 tracker_handle_cloned,
                 bitcoinrpc_config,
                 metrics_cloned,

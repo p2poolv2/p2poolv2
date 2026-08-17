@@ -171,7 +171,6 @@ mod tests {
             "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx".to_string(),
             Some("x".to_string()),
         );
-        let (notify_tx, mut notify_rx) = mpsc::channel(1);
         let (emissions_tx, _emissions_rx) = mpsc::channel(10);
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let stats_dir = tempfile::tempdir().unwrap();
@@ -182,7 +181,6 @@ mod tests {
         let tracker_handle = start_tracker_actor();
 
         let ctx = StratumContext {
-            notify_tx,
             tracker_handle,
             bitcoindrpc_client: BitcoindRpcClient::new(
                 &bitcoinrpc_config.url,
@@ -235,14 +233,6 @@ mod tests {
         assert!(session.user_id.is_some(), "user_id should be set");
         assert!(session.user_id.is_some());
 
-        // After authorization, no NotifyCmd is sent -- the connection handler
-        // picks up the current template from the watch channel instead.
-        let notify_cmd = notify_rx.try_recv();
-        assert!(
-            notify_cmd.is_err(),
-            "No NotifyCmd should be sent after authorization (handled by watch channel)"
-        );
-
         // Verify the session's needs_first_notify flag was set
         assert!(
             session.needs_first_notify,
@@ -270,7 +260,6 @@ mod tests {
             "worker1".to_string(),
             Some("password".to_string()),
         );
-        let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel(1);
         let (emissions_tx, _emissions_rx) = mpsc::channel(10);
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let tracker_handle = start_tracker_actor();
@@ -281,7 +270,6 @@ mod tests {
         let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
         let ctx = StratumContext {
-            notify_tx,
             tracker_handle,
             bitcoindrpc_client: BitcoindRpcClient::new(
                 &bitcoinrpc_config.url,
@@ -311,12 +299,6 @@ mod tests {
             Some("tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx".to_string())
         );
         assert!(session.password.is_none());
-
-        let notify_cmd = notify_rx.try_recv();
-        assert!(
-            notify_cmd.is_err(),
-            "No notification should be sent when already authorized"
-        );
     }
 
     #[tokio::test]
@@ -407,7 +389,6 @@ mod tests {
             "invalid_address_format".to_string(),
             Some("x".to_string()),
         );
-        let (notify_tx, _notify_rx) = mpsc::channel(1);
         let (emissions_tx, _emissions_rx) = mpsc::channel(10);
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let tracker_handle = start_tracker_actor();
@@ -419,7 +400,6 @@ mod tests {
         let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
         let ctx = StratumContext {
-            notify_tx,
             tracker_handle,
             bitcoindrpc_client: BitcoindRpcClient::new(
                 &bitcoinrpc_config.url,
@@ -505,7 +485,6 @@ mod tests {
             "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx".to_string(),
             Some("d=500".to_string()),
         );
-        let (notify_tx, _notify_rx) = mpsc::channel(1);
         let (emissions_tx, _emissions_rx) = mpsc::channel(10);
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let stats_dir = tempfile::tempdir().unwrap();
@@ -516,7 +495,6 @@ mod tests {
         let tracker_handle = start_tracker_actor();
 
         let ctx = StratumContext {
-            notify_tx,
             tracker_handle,
             bitcoindrpc_client: BitcoindRpcClient::new(
                 &bitcoinrpc_config.url,
@@ -563,7 +541,6 @@ mod tests {
             "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx".to_string(),
             Some("d=50".to_string()),
         );
-        let (notify_tx, _notify_rx) = mpsc::channel(1);
         let (emissions_tx, _emissions_rx) = mpsc::channel(10);
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let stats_dir = tempfile::tempdir().unwrap();
@@ -574,7 +551,6 @@ mod tests {
         let tracker_handle = start_tracker_actor();
 
         let ctx = StratumContext {
-            notify_tx,
             tracker_handle,
             bitcoindrpc_client: BitcoindRpcClient::new(
                 &bitcoinrpc_config.url,
@@ -622,7 +598,6 @@ mod tests {
             "invalid_address_format".to_string(),
             Some("x".to_string()),
         );
-        let (notify_tx, _notify_rx) = mpsc::channel(1);
         let (emissions_tx, _emissions_rx) = mpsc::channel(10);
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let tracker_handle = start_tracker_actor();
@@ -634,7 +609,6 @@ mod tests {
         let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
         let ctx = StratumContext {
-            notify_tx,
             tracker_handle,
             bitcoindrpc_client: BitcoindRpcClient::new(
                 &bitcoinrpc_config.url,
@@ -687,7 +661,6 @@ mod tests {
             method: std::borrow::Cow::Owned("mining.authorize".to_string()),
             params: std::borrow::Cow::Owned(vec![]),
         };
-        let (notify_tx, _) = mpsc::channel(1);
         let (emissions_tx, _) = mpsc::channel(10);
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let tracker_handle = start_tracker_actor();
@@ -698,7 +671,6 @@ mod tests {
         let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
         let ctx = StratumContext {
-            notify_tx,
             tracker_handle,
             bitcoindrpc_client: BitcoindRpcClient::new(
                 &bitcoinrpc_config.url,

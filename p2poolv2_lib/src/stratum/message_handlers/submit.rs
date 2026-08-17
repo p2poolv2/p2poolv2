@@ -360,12 +360,9 @@ mod handle_submit_tests {
         let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
             .await
             .unwrap();
-
-        let (notify_tx, _notify_rx) = mpsc::channel(10);
         let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
         let ctx = StratumContext {
-            notify_tx,
             tracker_handle: tracker_handle.clone(),
             bitcoindrpc_client: BitcoindRpcClient::new(
                 &bitcoinrpc_config.url,
@@ -455,12 +452,9 @@ mod handle_submit_tests {
             .await
             .unwrap();
 
-        let (notify_tx, _notify_rx) = mpsc::channel(10);
-
         let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
         let ctx = StratumContext {
-            notify_tx,
             tracker_handle: tracker_handle.clone(),
             bitcoindrpc_client: BitcoindRpcClient::new(
                 &bitcoinrpc_config.url,
@@ -550,12 +544,9 @@ mod handle_submit_tests {
         let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
             .await
             .unwrap();
-
-        let (notify_tx, _notify_rx) = mpsc::channel(10);
         let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
         let ctx = StratumContext {
-            notify_tx,
             tracker_handle: tracker_handle.clone(),
             bitcoindrpc_client: BitcoindRpcClient::new(
                 &bitcoinrpc_config.url,
@@ -643,12 +634,9 @@ mod handle_submit_tests {
             .await
             .unwrap();
 
-        let (notify_tx, _notify_rx) = mpsc::channel(10);
-
         let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
         let ctx = StratumContext {
-            notify_tx,
             tracker_handle: tracker_handle.clone(),
             bitcoindrpc_client: BitcoindRpcClient::new(
                 &bitcoinrpc_config.url,
@@ -712,12 +700,9 @@ mod handle_submit_tests {
         let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
             .await
             .unwrap();
-
-        let (notify_tx, _notify_rx) = mpsc::channel(10);
         let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
         let ctx = StratumContext {
-            notify_tx,
             tracker_handle: tracker_handle.clone(),
             bitcoindrpc_client: BitcoindRpcClient::new(
                 &bitcoinrpc_config.url,
@@ -789,12 +774,9 @@ mod handle_submit_tests {
         let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
             .await
             .unwrap();
-
-        let (notify_tx, _notify_rx) = mpsc::channel(10);
         let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
         let ctx = StratumContext {
-            notify_tx,
             tracker_handle: tracker_handle.clone(),
             bitcoindrpc_client: BitcoindRpcClient::new(
                 &bitcoinrpc_config.url,
@@ -881,13 +863,10 @@ mod handle_submit_tests {
         let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
             .await
             .unwrap();
-
-        let (notify_tx, _notify_rx) = mpsc::channel(10);
         let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
         // First submission should succeed
         let ctx = StratumContext {
-            notify_tx: notify_tx.clone(),
             tracker_handle: tracker_handle.clone(),
             bitcoindrpc_client: BitcoindRpcClient::new(
                 &bitcoinrpc_config.url,
@@ -924,7 +903,6 @@ mod handle_submit_tests {
 
         // Second submission of the same share should be rejected as duplicate
         let ctx2 = StratumContext {
-            notify_tx,
             tracker_handle: tracker_handle.clone(),
             bitcoindrpc_client: BitcoindRpcClient::new(
                 &bitcoinrpc_config.url,
@@ -1002,12 +980,9 @@ mod handle_submit_tests {
         let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
             .await
             .unwrap();
-
-        let (notify_tx, _notify_rx) = mpsc::channel(10);
         let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
         let ctx = StratumContext {
-            notify_tx,
             tracker_handle: tracker_handle.clone(),
             bitcoindrpc_client: BitcoindRpcClient::new(
                 &bitcoinrpc_config.url,
@@ -1067,7 +1042,6 @@ mod handle_submit_tests {
         );
         let tracker_handle = start_tracker_actor();
         let (emissions_tx, _) = mpsc::channel(10);
-        let (notify_tx, _) = mpsc::channel(10);
         let (chain_store_handle, _) = setup_test_chain_store_handle(true).await;
         let (_mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let stats_dir = tempfile::tempdir().unwrap();
@@ -1076,7 +1050,6 @@ mod handle_submit_tests {
             .unwrap();
 
         let ctx = StratumContext {
-            notify_tx,
             tracker_handle: tracker_handle.clone(),
             bitcoindrpc_client: BitcoindRpcClient::new(
                 &bitcoinrpc_config.url,
@@ -1152,12 +1125,9 @@ mod handle_submit_tests {
         let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
             .await
             .unwrap();
-
-        let (notify_tx, _) = mpsc::channel(10);
         let (chain_store_handle, _) = setup_test_chain_store_handle(true).await;
 
         let ctx = StratumContext {
-            notify_tx,
             tracker_handle: tracker_handle.clone(),
             bitcoindrpc_client: BitcoindRpcClient::new(
                 &bitcoinrpc_config.url,
@@ -1247,7 +1217,6 @@ mod handle_submit_tests {
 
         let (_mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let (emissions_tx, _) = mpsc::channel(10);
-        let (notify_tx, _) = mpsc::channel(10);
         let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
         let stats_dir = tempfile::tempdir().unwrap();
         let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
@@ -1255,7 +1224,6 @@ mod handle_submit_tests {
             .unwrap();
 
         let ctx = StratumContext {
-            notify_tx,
             tracker_handle: tracker_handle.clone(),
             bitcoindrpc_client: BitcoindRpcClient::new(
                 &bitcoinrpc_config.url,
@@ -1329,7 +1297,6 @@ mod handle_submit_tests {
 
         let (_mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let (emissions_tx, _) = mpsc::channel(10);
-        let (notify_tx, _) = mpsc::channel(10);
         let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
         let stats_dir = tempfile::tempdir().unwrap();
         let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
@@ -1337,7 +1304,6 @@ mod handle_submit_tests {
             .unwrap();
 
         let ctx = StratumContext {
-            notify_tx,
             tracker_handle: tracker_handle.clone(),
             bitcoindrpc_client: BitcoindRpcClient::new(
                 &bitcoinrpc_config.url,
@@ -1412,7 +1378,6 @@ mod handle_submit_tests {
 
         let (_mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let (emissions_tx, _) = mpsc::channel(10);
-        let (notify_tx, _) = mpsc::channel(10);
         let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
         let stats_dir = tempfile::tempdir().unwrap();
         let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
@@ -1420,7 +1385,6 @@ mod handle_submit_tests {
             .unwrap();
 
         let ctx = StratumContext {
-            notify_tx,
             tracker_handle: tracker_handle.clone(),
             bitcoindrpc_client: BitcoindRpcClient::new(
                 &bitcoinrpc_config.url,
@@ -1472,7 +1436,6 @@ mod handle_submit_tests {
         );
         let tracker_handle = start_tracker_actor();
         let (emissions_tx, _emissions_rx) = mpsc::channel(10);
-        let (notify_tx, _notify_rx) = mpsc::channel(10);
         let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
         let (_mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let stats_dir = tempfile::tempdir().unwrap();
@@ -1481,7 +1444,6 @@ mod handle_submit_tests {
             .unwrap();
 
         let ctx = StratumContext {
-            notify_tx,
             tracker_handle: tracker_handle.clone(),
             bitcoindrpc_client: BitcoindRpcClient::new(
                 &bitcoinrpc_config.url,
@@ -1568,11 +1530,9 @@ mod handle_submit_tests {
         let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
             .await
             .unwrap();
-        let (notify_tx, _notify_rx) = mpsc::channel(10);
         let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
         let ctx = StratumContext {
-            notify_tx,
             tracker_handle: tracker_handle.clone(),
             bitcoindrpc_client: BitcoindRpcClient::new(
                 &bitcoinrpc_config.url,
@@ -1652,11 +1612,9 @@ mod handle_submit_tests {
         let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
             .await
             .unwrap();
-        let (notify_tx, _notify_rx) = mpsc::channel(10);
         let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
         let ctx = StratumContext {
-            notify_tx,
             tracker_handle: tracker_handle.clone(),
             bitcoindrpc_client: BitcoindRpcClient::new(
                 &bitcoinrpc_config.url,

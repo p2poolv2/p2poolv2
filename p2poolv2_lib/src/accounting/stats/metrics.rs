@@ -16,7 +16,6 @@
 
 use crate::accounting::stats::pool_local_stats::load_pool_local_stats;
 use crate::accounting::stats::user::User;
-use crate::accounting::stats::worker::Worker;
 use crate::accounting::{payout::simple_pplns::SimplePplnsShare, stats::pool_local_stats};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};

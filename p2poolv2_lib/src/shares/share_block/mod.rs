@@ -572,7 +572,6 @@ impl Decodable for MerkleBranches {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::accounting::OutputPair;
     use crate::accounting::payout::payout_distribution::{
         append_proportional_distribution, include_address_and_cut,
     };
