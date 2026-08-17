@@ -159,8 +159,8 @@ to confirmed), operating independently.
 - Solo mode (no commitment): stores PPLNS share via `ChainStoreHandle::add_pplns_share()`, returns `None`
 
 Locally-mined blocks are not validated or marked `BlockValid` here. Like peer
-blocks, they are enqueued for validation (see EmissionWorker), and
-`validate_and_promote_block` marks them `BlockValid` after chain-context
+blocks, they are enqueued for validation (see EmissionWorker), and the organise
+worker's `validate_mark_promote` marks them `BlockValid` after chain-context
 validation, just before confirmation.
 
 ### OrganiseWorker (`node/organise_worker.rs`)
@@ -168,10 +168,17 @@ validation, just before confirmation.
 - Receives `OrganiseEvent` via bounded mpsc channel (capacity 8192)
 - Matches on event type:
   - `Header(header)`: calls `ChainStoreHandle::organise_header(header)`
-  - `Block(share_block)`: calls `ChainStoreHandle::organise_block()`
-- Error handling:
-  - `StoreError::ChannelClosed` is fatal -- returns `Err(OrganiseError)`, triggers node shutdown
-  - Other errors are logged, worker continues
+  - `Block(share_block)`: gated on its parent's validation state before any
+    chain-context validation runs (see "Parent-gated block processing" under
+    Organisation Logic)
+- Error handling reacts to the validation failure kind (`FailureKind`):
+  - `Consensus` (a rule broken with all data present): mark the block `Invalid`
+    and continue; confirmation can then advance onto a valid sibling.
+  - `StoreAccess` (a chain-context check cannot read data that must exist given
+    a valid parent) and `StoreError::ChannelClosed`: both fatal -- return
+    `Err(OrganiseError)`, triggering node shutdown.
+  - `Recoverable` (a pre-context dependency that can still arrive): leave the
+    block for a later retry; never `Invalid`, never fatal.
   - Channel close (all senders dropped) is clean shutdown
 
 ### NodeActor (`node/actor.rs`)
@@ -257,21 +264,56 @@ const TOP_CONFIRMED_KEY: &str = "meta:top_confirmed_height";
 
 2. **Reorg confirmed chain** (`should_reorg_confirmed`): If the candidate chain has more work than the confirmed chain, replace the confirmed chain with the candidate chain.
 
-3. **Fallback confirmation** (`try_fallback_confirmation`): When no candidate chain block can be promoted, look for a child of the confirmed tip at the next height that has full block and uncle data, and confirm it directly. This lets a locally-mined block that could not reorg the candidate chain (so it is not on the candidate chain) still advance the confirmed chain.
+3. **No-op**: No promotion conditions met.
 
-4. **No-op**: No promotion conditions met.
+Confirmation only ever follows the candidate chain; there is no forward-by-height
+fallback. A block that could not yet reorg the candidate chain (for example a
+locally-mined block whose parent is not yet validated) is not chased by height --
+it advances only once the candidate chain incorporates it and its parent is
+`BlockValid` (see "Parent-gated block processing").
 
 All writes go into a single `WriteBatch` for atomicity.
 
-**Validated-only promotion**: promotion accepts only *validated* blocks --
-status `Candidate` or `BlockValid`. Both `contiguous_candidates_with_block_data`
-(the candidate-chain scan) and `try_fallback_confirmation` gate on
-`Store::is_candidate_or_block_valid`, rejecting `HeaderValid` (PoW-valid but
-not chain-context validated), `Pending`, and `Invalid` blocks. So an
-unvalidated or rejected block is never promoted, even when its body is stored.
-`validate_and_promote_block` marks a block `BlockValid` after chain-context
-validation and *before* it calls `promote_block` (which runs `organise_block`),
-so the block is already validated by the time this promotion path sees it.
+**Validated-only promotion**: inside the PPLNS zone, promotion accepts only
+*validated* blocks. `contiguous_candidates_with_block_data` (the candidate-chain
+scan) gates on `Store::is_candidate_and_block_valid`, which requires both
+`Candidate` membership and `BlockValid` status -- rejecting `HeaderValid`
+(PoW-valid but not chain-context validated), `Pending`, and `Invalid` blocks. So
+an unvalidated or rejected block is never promoted, even when its body is stored.
+The organise worker's `validate_mark_promote` marks a block `BlockValid` after
+chain-context validation and *before* it calls `organise_block`, so the block is
+already validated by the time this promotion path sees it.
+
+### Parent-gated block processing
+
+`OrganiseEvent::Block`s arrive in validation-completion order, not parent-child
+order (the validation worker runs one task per block). To validate each block
+exactly once with all its dependencies present, `process_share_block` gates a
+block on its parent's state (`parent_state`) *before* any chain-context
+validation:
+
+- **Parent `Invalid`** -- the block is invalid by descent; drop it.
+- **Parent metadata `Unknown`** -- drop it; it re-arrives when its parent does.
+- **Parent `Pending`** (stored but not yet `BlockValid`) -- buffer the block in
+  `pending_blocks`, keyed by the parent's height. This is the only wait-and-retry
+  state, and the decision is a cheap metadata read, not a validation attempt.
+- **Parent `Valid`** (`BlockValid` or `Confirmed`) -- run `validate_mark_promote`.
+  Because the parent is validated, every dependency the checks need is present, so
+  a failure is classified by `FailureKind` and handled as above (Consensus ->
+  Invalid, StoreAccess -> fatal, Recoverable -> retry).
+
+Deferral is driven purely by *parent validation state*, not by the block's height
+relative to the confirmed tip. There is no forward-by-height scan chasing children
+of the confirmed tip -- the removed `try_fallback_confirmation`.
+
+When a block becomes `BlockValid` (or is promoted), `drain_pending_blocks`
+re-attempts the blocks buffered under that height and walks contiguously upward,
+stopping as soon as a height advances nothing. The parent height is only an index
+for locating a validated parent's waiting children; a re-attempted block whose
+parent is still `Pending` cheaply re-buffers. This keeps a full sync linear rather
+than quadratic. Separately, the validation worker chases dependents by pointer
+(`schedule_dependents` via `get_children_blockhashes` / `get_nephews`), not by
+height (see "Hole-filling cascade").
 
 ### WriteBatch stale-read pattern
 
