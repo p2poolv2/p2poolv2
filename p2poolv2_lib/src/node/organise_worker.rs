@@ -142,9 +142,13 @@ enum ProcessOutcome {
     Buffered,
     /// The block was dropped (invalid-by-descent or unknown parent).
     Dropped,
-    /// Validated with a valid parent but did not advance: a consensus failure
-    /// that marked the block Invalid, an unexpected Recoverable error, or a
-    /// failed BlockValid mark or promote.
+    /// The block failed chain-context validation and was marked Invalid, which
+    /// reorged the candidate chain -- rebuilding it from the invalid block's
+    /// parent onto the best surviving branch (a sibling if one remains, else the
+    /// parent itself). Confirmation should try to advance onto the rebuilt chain.
+    Invalidated,
+    /// Validated with a valid parent but did not advance: an unexpected
+    /// Recoverable error, or a failed BlockValid mark or promote.
     NotAdvanced,
 }
 
@@ -224,10 +228,15 @@ impl OrganiseWorker {
             ProcessOutcome::Advanced(height) => {
                 self.drain_pending_blocks(height).await?;
             }
-            ProcessOutcome::Buffered => {
-                // The candidate chain may have reorged since the last
-                // organise_block call; try to advance the confirmed chain from
-                // it, then drain anything that becomes processable.
+            ProcessOutcome::Buffered | ProcessOutcome::Invalidated => {
+                // The candidate and confirmed chains advance on different events:
+                // Header events reorg the candidate chain (organise_header)
+                // without touching confirmed. Buffered: a Header event may have
+                // reorged the candidate onto an already-BlockValid fork since the
+                // last organise_block. Invalidated: mark_invalid just rebuilt the
+                // candidate chain from the invalid block's parent (best surviving
+                // branch). Either way, run organise_block to catch confirmed up,
+                // then drain anything that becomes processable.
                 match self.chain_store_handle.organise_block().await {
                     Ok(Some(height)) => {
                         self.update_pplns_window();
@@ -315,14 +324,17 @@ impl OrganiseWorker {
         {
             match validation_error.kind() {
                 FailureKind::Consensus => {
-                    // The parent is validated, so all dependencies are
-                    // present: this is a genuine consensus violation. Mark
-                    // Invalid so confirmation can advance onto a valid sibling.
+                    // The parent is validated, so all dependencies are present:
+                    // this is a genuine consensus violation. Mark Invalid, which
+                    // rebuilds the candidate chain from the invalid block's parent
+                    // onto the best surviving branch, and return Invalidated so the
+                    // caller advances confirmation onto it instead of waiting for
+                    // the next event.
                     error!("Chain-context validation failed for {blockhash}: {validation_error}");
                     if let Err(mark_error) = self.chain_store_handle.mark_invalid(blockhash).await {
                         error!("Failed to mark {blockhash} Invalid: {mark_error}");
                     }
-                    return Ok(ProcessOutcome::NotAdvanced);
+                    return Ok(ProcessOutcome::Invalidated);
                 }
                 FailureKind::StoreAccess => {
                     // The parent is validated, so the data these checks need
@@ -933,8 +945,13 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    /// A Consensus validation failure marks the block Invalid (rebuilding the
+    /// candidate chain from the invalid block's parent onto the best surviving
+    /// branch) and then advances the confirmed chain onto it via organise_block
+    /// -- it must not wait for the next event. The invalid block itself is never
+    /// promoted.
     #[tokio::test]
-    async fn test_organise_worker_marks_invalid_and_skips_promote_when_validator_rejects() {
+    async fn test_organise_worker_advances_confirmed_after_consensus_invalidation() {
         let (organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
         mock_chain_handle
@@ -959,12 +976,20 @@ mod tests {
             .expect_get_tip_height()
             .returning(|| Ok(Some(10)));
         // On chain-context validation failure the block must be marked Invalid
-        // (so promotion never confirms it) and promote_block must NOT be called.
+        // (so promotion never confirms it) and promote_block must NOT be called
+        // for it. mark_invalid rebuilds the candidate chain from the invalid
+        // block's parent onto the best surviving branch, and the worker then
+        // calls organise_block to advance the confirmed chain onto it -- rather
+        // than waiting for the next event.
         mock_chain_handle
             .expect_mark_invalid()
             .times(1)
             .returning(|_| Ok(()));
         mock_chain_handle.expect_promote_block().never();
+        mock_chain_handle
+            .expect_organise_block()
+            .times(1)
+            .returning(|| Ok(Some(6)));
 
         let mut mock_validator = MockDefaultShareValidator::new();
         mock_validator
