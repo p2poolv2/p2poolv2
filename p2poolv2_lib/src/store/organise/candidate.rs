@@ -448,6 +448,32 @@ impl Store {
         }
     }
 
+    /// Whether the reorg branch ending at `blockhash` passes through an
+    /// `Invalid` block.
+    ///
+    /// `reorg_candidate` walks `get_branch_to_chain` back to the first
+    /// candidate/confirmed ancestor and writes every block above it as a
+    /// candidate. A detached `Invalid` block has `chain == None`, so it does not
+    /// stop that walk and would be silently re-admitted. This lets the caller
+    /// refuse such a reorg, so an invalid-by-descent branch never becomes the
+    /// candidate chain.
+    pub(super) fn reorg_branch_has_invalid(
+        &self,
+        blockhash: &BlockHash,
+    ) -> Result<bool, StoreError> {
+        let Some(branch) =
+            self.get_branch_to_chain(blockhash, |h| self.is_candidate(h) || self.is_confirmed(h))?
+        else {
+            return Ok(false);
+        };
+        for hash in &branch {
+            if self.get_block_metadata(hash)?.status == Status::Invalid {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     /// Reorgs the candidate chain to the branch ending at `blockhash`.
     ///
     /// Walks back from `blockhash` to the first ancestor on the
@@ -2435,5 +2461,164 @@ mod tests {
             .unwrap();
         store.commit_batch(batch).unwrap();
         assert_eq!(store.get_highest_block_valid().unwrap(), None);
+    }
+
+    // -- reorg_branch_has_invalid tests --
+
+    /// Returns false when no block on the branch to the candidate chain is Invalid.
+    #[test]
+    fn test_reorg_branch_has_invalid_false_when_all_valid() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Candidate branch point at h1.
+        let share_p = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        store.push_to_candidate_chain(&share_p).unwrap();
+
+        // share_a (h2) -> share_b (h3): HeaderValid, detached (chain = None).
+        let share_a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_p.block_hash().to_string())
+            .nonce(0xe9695793)
+            .build();
+        store.store_with_valid_metadata(&share_a);
+        let share_b = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_a.block_hash().to_string())
+            .nonce(0xe9695794)
+            .build();
+        store.store_with_valid_metadata(&share_b);
+
+        assert!(
+            !store
+                .reorg_branch_has_invalid(&share_b.block_hash())
+                .unwrap()
+        );
+    }
+
+    /// Returns true when an Invalid block lies between the target and the branch
+    /// point (the case that would otherwise re-admit it via write_branch_as_candidates).
+    #[test]
+    fn test_reorg_branch_has_invalid_true_for_invalid_ancestor() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share_p = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        store.push_to_candidate_chain(&share_p).unwrap();
+
+        // share_a is Invalid and detached; share_b (HeaderValid) descends from it.
+        let share_a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_p.block_hash().to_string())
+            .nonce(0xe9695793)
+            .build();
+        store.store_with_valid_metadata(&share_a);
+        let mut a_metadata = store.get_block_metadata(&share_a.block_hash()).unwrap();
+        a_metadata.status = Status::Invalid;
+        let mut batch = Store::get_write_batch();
+        store
+            .update_block_metadata(&share_a.block_hash(), &a_metadata, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share_b = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_a.block_hash().to_string())
+            .nonce(0xe9695794)
+            .build();
+        store.store_with_valid_metadata(&share_b);
+
+        assert!(
+            store
+                .reorg_branch_has_invalid(&share_b.block_hash())
+                .unwrap()
+        );
+    }
+
+    /// Returns true when the target block itself is Invalid.
+    #[test]
+    fn test_reorg_branch_has_invalid_true_when_target_invalid() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share_p = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        store.push_to_candidate_chain(&share_p).unwrap();
+
+        let share_a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_p.block_hash().to_string())
+            .nonce(0xe9695793)
+            .build();
+        store.store_with_valid_metadata(&share_a);
+        let mut a_metadata = store.get_block_metadata(&share_a.block_hash()).unwrap();
+        a_metadata.status = Status::Invalid;
+        let mut batch = Store::get_write_batch();
+        store
+            .update_block_metadata(&share_a.block_hash(), &a_metadata, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert!(
+            store
+                .reorg_branch_has_invalid(&share_a.block_hash())
+                .unwrap()
+        );
+    }
+
+    /// Returns false when the branch does not reach the candidate/confirmed
+    /// chain (get_branch_to_chain yields None because a parent header is missing).
+    #[test]
+    fn test_reorg_branch_has_invalid_false_when_branch_unresolved() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Orphan whose parent header is not stored, so the walk cannot reach the
+        // candidate/confirmed chain.
+        let orphan = TestShareBlockBuilder::new().nonce(0xe9695795).build();
+        let mut batch = Store::get_write_batch();
+        store.add_share_header(&orphan.header, &mut batch).unwrap();
+        store
+            .update_block_metadata(
+                &orphan.block_hash(),
+                &BlockMetadata {
+                    expected_height: Some(1),
+                    chain_work: orphan.header.get_work(),
+                    status: Status::HeaderValid,
+                    chain: ChainMembership::None,
+                },
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert!(
+            !store
+                .reorg_branch_has_invalid(&orphan.block_hash())
+                .unwrap()
+        );
     }
 }
