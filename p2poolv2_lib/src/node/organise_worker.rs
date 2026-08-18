@@ -142,9 +142,9 @@ enum ProcessOutcome {
     Buffered,
     /// The block was dropped (invalid-by-descent or unknown parent).
     Dropped,
-    /// Validated with a valid parent but neither marked Invalid nor promoted (below
-    /// the PPLNS zone and not yet promotable, or a consensus failure that marked
-    /// it Invalid).
+    /// Validated with a valid parent but did not advance: a consensus failure
+    /// that marked the block Invalid, an unexpected Recoverable error, or a
+    /// failed BlockValid mark or promote.
     NotAdvanced,
 }
 
@@ -278,10 +278,18 @@ impl OrganiseWorker {
     /// Validate a block whose parent is already valid, mark it BlockValid, and
     /// promote it.
     ///
-    /// Because the parent is validated, every dependency the checks need is
-    /// present, so a validation failure is a genuine consensus violation (the
-    /// block is marked Invalid). Returns `Advanced(height)` when the block
-    /// becomes BlockValid or is promoted, so its dependents can be drained.
+    /// In the PPLNS zone the block runs chain-context validation here; because
+    /// the parent is validated every dependency is present, so a failure is a
+    /// genuine consensus violation (the block is marked Invalid). Below the zone
+    /// (the prune window) the block was already ASERT/PoW-validated by the
+    /// validation worker (`validate_below_pplns_depth`), so it is marked
+    /// BlockValid without re-validation.
+    ///
+    /// Both tiers are marked BlockValid before promotion, so the
+    /// promotion gate -- which requires BlockValid down to the prune
+    /// depth -- can confirm them. Returns `Advanced(height)` when the
+    /// block becomes BlockValid or is promoted, so its dependents can
+    /// be drained.
     async fn validate_mark_promote(
         &self,
         share_block: ShareBlock,
@@ -298,58 +306,54 @@ impl OrganiseWorker {
             }
         };
 
-        let mut marked_valid = false;
-        if in_pplns_zone {
-            if let Err(validation_error) = self.share_validator.validate_with_chain_context(
+        if in_pplns_zone
+            && let Err(validation_error) = self.share_validator.validate_with_chain_context(
                 &share_block,
                 &self.chain_store_handle,
                 Arc::clone(&self.pplns_window),
-            ) {
-                match validation_error.kind() {
-                    FailureKind::Consensus => {
-                        // The parent is validated, so all dependencies are
-                        // present: this is a genuine consensus violation. Mark
-                        // Invalid so confirmation can advance onto a valid sibling.
-                        error!(
-                            "Chain-context validation failed for {blockhash}: {validation_error}"
-                        );
-                        if let Err(mark_error) =
-                            self.chain_store_handle.mark_invalid(blockhash).await
-                        {
-                            error!("Failed to mark {blockhash} Invalid: {mark_error}");
-                        }
-                        return Ok(ProcessOutcome::NotAdvanced);
+            )
+        {
+            match validation_error.kind() {
+                FailureKind::Consensus => {
+                    // The parent is validated, so all dependencies are
+                    // present: this is a genuine consensus violation. Mark
+                    // Invalid so confirmation can advance onto a valid sibling.
+                    error!("Chain-context validation failed for {blockhash}: {validation_error}");
+                    if let Err(mark_error) = self.chain_store_handle.mark_invalid(blockhash).await {
+                        error!("Failed to mark {blockhash} Invalid: {mark_error}");
                     }
-                    FailureKind::StoreAccess => {
-                        // The parent is validated, so the data these checks need
-                        // must exist. A store read failing here is corruption or
-                        // a bug -- fail fast rather than silently diverge.
-                        error!(
-                            "Fatal store error validating {blockhash} (parent is valid): {validation_error}"
-                        );
-                        return Err(OrganiseError {
-                            message: format!(
-                                "Store error validating {blockhash} with a valid parent: {validation_error}"
-                            ),
-                        });
-                    }
-                    FailureKind::Recoverable => {
-                        // Recoverable failures come from pre-context
-                        // checks and cannot arise from validate_with_chain_context,
-                        // so this is unexpected here. Defensively leave the block
-                        // for retry rather than marking it Invalid or crashing.
-                        error!(
-                            "Unexpected recoverable validation error for {blockhash} at organise: {validation_error}"
-                        );
-                        return Ok(ProcessOutcome::NotAdvanced);
-                    }
+                    return Ok(ProcessOutcome::NotAdvanced);
+                }
+                FailureKind::StoreAccess => {
+                    // The parent is validated, so the data these checks need
+                    // must exist. A store read failing here is corruption or
+                    // a bug -- fail fast rather than silently diverge.
+                    error!(
+                        "Fatal store error validating {blockhash} (parent is valid): {validation_error}"
+                    );
+                    return Err(OrganiseError {
+                        message: format!(
+                            "Store error validating {blockhash} with a valid parent: {validation_error}"
+                        ),
+                    });
+                }
+                FailureKind::Recoverable => {
+                    // Recoverable failures come from pre-context
+                    // checks and cannot arise from validate_with_chain_context,
+                    // so this is unexpected here. Defensively leave the block
+                    // for retry rather than marking it Invalid or crashing.
+                    error!(
+                        "Unexpected recoverable validation error for {blockhash} at organise: {validation_error}"
+                    );
+                    return Ok(ProcessOutcome::NotAdvanced);
                 }
             }
-            if let Err(mark_error) = self.chain_store_handle.mark_block_valid(blockhash).await {
-                error!("Failed to mark {blockhash} BlockValid: {mark_error}");
-                return Ok(ProcessOutcome::NotAdvanced);
-            }
-            marked_valid = true;
+        }
+
+        // Mark BlockValid for both promotion tiers before promoting.
+        if let Err(mark_error) = self.chain_store_handle.mark_block_valid(blockhash).await {
+            error!("Failed to mark {blockhash} BlockValid: {mark_error}");
+            return Ok(ProcessOutcome::NotAdvanced);
         }
 
         match self
@@ -364,11 +368,10 @@ impl OrganiseWorker {
                 Ok(ProcessOutcome::Advanced(parent_height + 1))
             }
             Ok(None) => {
-                if marked_valid {
-                    Ok(ProcessOutcome::Advanced(parent_height + 1))
-                } else {
-                    Ok(ProcessOutcome::NotAdvanced)
-                }
+                // Marked BlockValid above even if it did not promote to confirmed
+                // yet (e.g. its parent is not confirmed), so its dependents can be
+                // drained from its height.
+                Ok(ProcessOutcome::Advanced(parent_height + 1))
             }
             Err(StoreError::ChannelClosed) => {
                 error!("Store writer channel closed during promote block");
@@ -570,6 +573,7 @@ impl OrganiseWorker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::accounting::payout::sharechain_pplns::pplns_window::MAX_PPLNS_WINDOW_SHARES;
     use crate::monitoring_events::create_monitoring_event_channel;
     use crate::shares::chain::chain_store_handle::MockChainStoreHandle;
     use crate::shares::validation::MockDefaultShareValidator;
@@ -799,6 +803,70 @@ mod tests {
             create_test_metrics_handle(),
             create_test_pplns_window(),
             stub_share_validator_with_success(),
+        );
+
+        let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        organise_tx.send(OrganiseEvent::Block(share)).await.unwrap();
+        drop(organise_tx);
+
+        let result = worker.run().await;
+        assert!(result.is_ok());
+    }
+
+    /// A prune-window block (below the PPLNS zone) must be marked BlockValid so
+    /// the promotion gate -- which requires BlockValid down to the prune depth
+    /// -- can confirm it. It was ASERT/PoW-validated by the validation worker,
+    /// so chain-context validation must NOT run again here.
+    #[tokio::test]
+    async fn test_organise_worker_marks_prune_window_block_block_valid() {
+        let (organise_tx, organise_rx) = create_organise_channel();
+        let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_clone()
+            .return_once(MockChainStoreHandle::new);
+        // Parent is confirmed (parent_state == Valid) and the block sits at
+        // height 5, far below the candidate tip, so check_pplns_zone is false.
+        mock_chain_handle
+            .expect_get_block_metadata()
+            .returning(|_| {
+                Ok(BlockMetadata {
+                    expected_height: Some(5),
+                    chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
+                    status: Status::HeaderValid,
+                    chain: ChainMembership::Confirmed,
+                })
+            });
+        // Candidate tip more than one PPLNS window above height 5, so
+        // is_in_pplns_zone(5, tip) is false (prune window).
+        let candidate_tip = MAX_PPLNS_WINDOW_SHARES as u32 + 100;
+        mock_chain_handle
+            .expect_get_candidate_tip_height()
+            .returning(move || Ok(Some(candidate_tip)));
+        // The prune-window block must be marked BlockValid even though it is
+        // below the zone.
+        mock_chain_handle
+            .expect_mark_block_valid()
+            .times(1)
+            .returning(|_| Ok(()));
+        mock_chain_handle
+            .expect_promote_block()
+            .returning(|_| Ok(None));
+
+        // Below the zone, chain-context validation must NOT run.
+        let mut mock_validator = MockDefaultShareValidator::new();
+        mock_validator.expect_validate_with_chain_context().never();
+        let share_validator: Arc<dyn ShareValidator + Send + Sync> = Arc::new(mock_validator);
+
+        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let (notify_tx, _notify_rx) = create_test_notify_channel();
+        let worker = OrganiseWorker::new(
+            organise_rx,
+            mock_chain_handle,
+            monitoring_tx,
+            notify_tx,
+            create_test_metrics_handle(),
+            create_test_pplns_window(),
+            share_validator,
         );
 
         let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
@@ -1472,7 +1540,8 @@ mod tests {
         let mut mock_chain_handle = MockChainStoreHandle::new();
 
         // Parent is confirmed (Valid); the blocks sit below the PPLNS zone, so
-        // no chain-context validation runs and they promote directly.
+        // no chain-context validation runs. They are still marked BlockValid
+        // (prune-window blocks) and then promote directly.
         mock_chain_handle
             .expect_get_block_metadata()
             .returning(|_| {
@@ -1486,6 +1555,9 @@ mod tests {
         mock_chain_handle
             .expect_get_candidate_tip_height()
             .returning(|| Ok(Some(200_000)));
+        mock_chain_handle
+            .expect_mark_block_valid()
+            .returning(|_| Ok(()));
 
         let promote_count = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
         let promote_counter = promote_count.clone();
