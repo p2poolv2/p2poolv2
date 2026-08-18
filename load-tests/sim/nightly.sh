@@ -260,6 +260,24 @@ verify_all_chains() {
   done
 }
 
+# Locate (or build) the p2poolv2_cli binary, used for the store-based
+# convergence check. Sets CLI_BIN.
+ensure_cli_built() {
+  local profile="${PROFILE:-release}"
+  if [ "$profile" = "release" ]; then
+    CLI_BIN="$REPO_ROOT/target/release/p2poolv2_cli"
+  else
+    CLI_BIN="$REPO_ROOT/target/debug/p2poolv2_cli"
+  fi
+
+  if [ ! -x "$CLI_BIN" ]; then
+    log_message "Building p2poolv2_cli ($profile)..."
+    local profile_flag=""
+    [ "$profile" = "release" ] && profile_flag="--release"
+    ( cd "$REPO_ROOT" && cargo build -p p2poolv2_cli $profile_flag )
+  fi
+}
+
 stop_bitcoind_if_started() {
   if [ "$STARTED_BITCOIND" -eq 1 ]; then
     log_message "Stopping bitcoind (started by this script)..."
@@ -303,16 +321,91 @@ check_all_nodes_alive() {
   [ "$ALIVE_COUNT" -eq "$ALIVE_TOTAL" ] && [ "$ALIVE_TOTAL" -gt 0 ]
 }
 
+# Confirmed tip height of a store, or empty on error. Uses `shares --num 1`
+# (not `info`, which reads chain-tip metadata that can fail to decode on some
+# stores).
+store_tip_height() {
+  local store="$1"
+  "$CLI_BIN" --db-path "$store" shares --num 1 2>/dev/null \
+    | python3 -c "
+import sys, json
+try:
+    shares = json.load(sys.stdin).get('shares', [])
+    print(shares[0]['height'] if shares else '')
+except Exception:
+    print('')
+" || true
+}
+
+# Confirmed block hash at a specific height in a store, or empty if the store
+# has no confirmed block at that height (or on error).
+store_hash_at_height() {
+  local store="$1" height="$2"
+  "$CLI_BIN" --db-path "$store" shares --to "$height" --num 1 2>/dev/null \
+    | python3 -c "
+import sys, json
+want = int(sys.argv[1])
+try:
+    shares = json.load(sys.stdin).get('shares', [])
+    print(shares[0]['blockhash'] if shares and shares[0].get('height') == want else '')
+except Exception:
+    print('')
+" "$height" || true
+}
+
+# Convergence is checked against the actual store state, not the logs. Reorgs
+# resolve transient forks, but reorg_confirmed does not emit per-block
+# "Promoted ... Some(H)" lines, so a log-based check reads stale pre-reorg
+# hashes and reports false divergence. Compare the confirmed block hash two
+# heights below the shallowest tip (a height every node has confirmed) across
+# all stores; converged iff all stores agree and are within 2 of the deepest
+# tip.
 check_chain_converged() {
-  DISTINCT_HASHES=$(echo "$METRICS_OUTPUT" \
-    | grep -oE "distinct block hash at height [0-9]+ across nodes: [0-9]+" \
-    | grep -oE "[0-9]+$" || echo "-1")
-  WITHIN2=$(echo "$METRICS_OUTPUT" \
-    | grep -oE "nodes within 2 of tip: [0-9]+/[0-9]+" \
-    | grep -oE "[0-9]+/[0-9]+$" || echo "0/0")
-  WITHIN2_COUNT=$(echo "$WITHIN2" | cut -d/ -f1)
-  WITHIN2_TOTAL=$(echo "$WITHIN2" | cut -d/ -f2)
-  [ "$DISTINCT_HASHES" -eq 1 ] && [ "$WITHIN2_COUNT" -eq "$WITHIN2_TOTAL" ] && [ "$WITHIN2_TOTAL" -gt 0 ]
+  local tips=() min_tip="" max_tip=""
+  for i in $(seq 0 $((NODE_COUNT - 1))); do
+    local store="$RUN_DIR/store-$i.db"
+    [ -d "$store" ] || continue
+    local tip_height
+    tip_height=$(store_tip_height "$store")
+    [ -n "$tip_height" ] || continue
+    tips+=("$tip_height")
+    if [ -z "$min_tip" ] || [ "$tip_height" -lt "$min_tip" ]; then min_tip="$tip_height"; fi
+    if [ -z "$max_tip" ] || [ "$tip_height" -gt "$max_tip" ]; then max_tip="$tip_height"; fi
+  done
+
+  if [ "${#tips[@]}" -eq 0 ]; then
+    DISTINCT_HASHES=-1
+    WITHIN2="0/$NODE_COUNT"
+    return 1
+  fi
+
+  local within=0
+  for tip_height in "${tips[@]}"; do
+    if [ "$tip_height" -ge "$((max_tip - 2))" ]; then within=$((within + 1)); fi
+  done
+  WITHIN2="$within/$NODE_COUNT"
+
+  local converge_height
+  converge_height=$([ "$min_tip" -gt 2 ] && echo $((min_tip - 2)) || echo "$min_tip")
+
+  local hashes=()
+  for i in $(seq 0 $((NODE_COUNT - 1))); do
+    local store="$RUN_DIR/store-$i.db"
+    [ -d "$store" ] || continue
+    local block_hash
+    block_hash=$(store_hash_at_height "$store" "$converge_height")
+    if [ -n "$block_hash" ]; then hashes+=("$block_hash"); fi
+  done
+
+  if [ "${#hashes[@]}" -gt 0 ]; then
+    DISTINCT_HASHES=$(printf "%s\n" "${hashes[@]}" | sort -u | wc -l | tr -d ' ')
+  else
+    DISTINCT_HASHES=-1
+  fi
+
+  [ "$DISTINCT_HASHES" -eq 1 ] \
+    && [ "${#hashes[@]}" -eq "$NODE_COUNT" ] \
+    && [ "$within" -eq "$NODE_COUNT" ]
 }
 
 check_chain_grew() {
@@ -436,5 +529,6 @@ check_all_nodes_alive || true
 collect_metrics
 stop_swarm
 verify_all_chains
+ensure_cli_built
 
 evaluate_results
