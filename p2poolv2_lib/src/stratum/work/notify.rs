@@ -48,12 +48,14 @@ pub(crate) struct NotifyContext {
 /// The total difficulty threshold is computed by `sim_overrides::pplns_total_difficulty`,
 /// which uses the production formula (bitcoin_difficulty * multiplier) in normal
 /// builds and a sim-specific formula in sim builds.
+///
+/// Returns `Err` if the payout distribution cannot be resolved.
 fn build_output_distribution(
     template: &BlockTemplate,
     pool_target: bitcoin::CompactTarget,
     anchor: bitcoin::BlockHash,
     context: &mut NotifyContext,
-) -> Vec<OutputPair> {
+) -> Result<Vec<OutputPair>, WorkError> {
     let total_amount = bitcoin::Amount::from_sat(template.coinbasevalue);
 
     let compact_target = bitcoin::pow::CompactTarget::from_unprefixed_hex(&template.bits).unwrap();
@@ -68,19 +70,18 @@ fn build_output_distribution(
         share_pool_difficulty,
     );
 
-    match context.payout.get_output_distribution(
-        &context.chain_store_handle,
-        anchor,
-        total_difficulty,
-        total_amount,
-        &context.config,
-    ) {
-        Ok(distribution) => distribution,
-        Err(e) => {
-            error!("Payout distribution failed: {}", e);
-            Vec::new()
-        }
-    }
+    context
+        .payout
+        .get_output_distribution(
+            &context.chain_store_handle,
+            anchor,
+            total_difficulty,
+            total_amount,
+            &context.config,
+        )
+        .map_err(|error| WorkError {
+            message: format!("Payout distribution failed: {error}"),
+        })
 }
 
 /// Build a PreparedNotifyParams from a template using the notify context.
@@ -111,7 +112,7 @@ fn build_prepared_notify(
     //* Anchor the payout on the same `tip` we commit as prev_share_blockhash
     //* below, so a confirmed-chain advance between reads cannot make the
     //* coinbase pay a window inconsistent with its declared prev.
-    let output_distribution = build_output_distribution(template, target, tip, context);
+    let output_distribution = build_output_distribution(template, target, tip, context)?;
 
     PreparedNotifyParamsBuilder::new(
         Arc::clone(template),
