@@ -65,13 +65,9 @@ impl Store {
             }
         };
 
-        // A Confirmed block must not be re-organised into the candidate
-        // chain. This can happen when a peer re-sends a block we already
-        // confirmed. Without this guard, should_extend_candidates would match
-        // (parent == top candidate, height and work match) and
-        // append_to_candidates would overwrite the Confirmed status to
-        // Candidate.
-        if metadata.chain == ChainMembership::Confirmed {
+        // A Confirmed or Invalid block must not be re-organised into the candidate
+        // chain.
+        if metadata.chain == ChainMembership::Confirmed || metadata.status == Status::Invalid {
             return Ok(None);
         }
 
@@ -92,6 +88,13 @@ impl Store {
         }
 
         if self.should_reorg_candidate(&blockhash, &metadata, top_candidate.as_ref()) {
+            // Refuse a reorg whose branch descends through an Invalid block.
+            if self.reorg_branch_has_invalid(&blockhash)? {
+                debug!(
+                    "Refusing candidate reorg to {blockhash}: branch passes through an Invalid block"
+                );
+                return Ok(None);
+            }
             return self.reorg_candidate_chain(&blockhash, top_candidate.as_ref(), batch);
         }
 
@@ -915,5 +918,189 @@ mod tests {
         let result = store.organise_header(&share.header, &mut batch);
         store.commit_batch(batch).unwrap();
         assert!(result.is_ok());
+    }
+
+    /// A reorg whose branch descends through an Invalid block must be refused,
+    /// so the Invalid block is never re-admitted to the candidate chain.
+    ///
+    /// Layout: genesis(confirmed) -> share_s(candidate h1) is the valid chain.
+    /// share_a(h1, Invalid, detached) is a sibling; share_b(h2) is share_a's
+    /// heavier child. Organising share_b's header makes should_reorg_candidate
+    /// fire (share_b outweighs share_s), but the branch share_b -> share_a ->
+    /// genesis passes through Invalid share_a, so the reorg is refused.
+    ///
+    /// Fail-first: before the fix, reorg_candidate re-wrote share_a (and
+    /// share_b) as candidates because get_branch_to_chain walks straight through
+    /// a detached Invalid block.
+    #[test]
+    fn test_organise_header_refuses_reorg_through_invalid_block() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // share_s: valid candidate chain at h1.
+        let share_s = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        store.push_to_candidate_chain(&share_s).unwrap();
+
+        // share_a: sibling of share_s at h1, Invalid and detached (chain = None).
+        let share_a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695793)
+            .build();
+        let genesis_meta = store.get_block_metadata(&genesis.block_hash()).unwrap();
+        let a_work = genesis_meta.chain_work + share_a.header.get_work();
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&share_a, &mut batch).unwrap();
+        store
+            .set_height_to_blockhash(&share_a.block_hash(), 1, &mut batch)
+            .unwrap();
+        store
+            .update_block_metadata(
+                &share_a.block_hash(),
+                &BlockMetadata {
+                    expected_height: Some(1),
+                    chain_work: a_work,
+                    status: Status::Invalid,
+                    chain: ChainMembership::None,
+                },
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // share_b: child of share_a at h2 with more cumulative work than
+        // share_s, so it triggers a reorg. Stored HeaderValid and detached.
+        let share_b = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_a.block_hash().to_string())
+            .work(2)
+            .nonce(0xe9695794)
+            .build();
+        let b_work = a_work + share_b.header.get_work();
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&share_b, &mut batch).unwrap();
+        store
+            .set_height_to_blockhash(&share_b.block_hash(), 2, &mut batch)
+            .unwrap();
+        store
+            .update_block_metadata(
+                &share_b.block_hash(),
+                &BlockMetadata {
+                    expected_height: Some(2),
+                    chain_work: b_work,
+                    status: Status::HeaderValid,
+                    chain: ChainMembership::None,
+                },
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Organise share_b's header: the reorg must be refused.
+        let mut batch = Store::get_write_batch();
+        let result = store.organise_header(&share_b.header, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert!(
+            result.is_none(),
+            "reorg through Invalid share_a must be refused"
+        );
+
+        // share_a stays Invalid and off the candidate chain; share_b is not admitted.
+        let a_meta = store.get_block_metadata(&share_a.block_hash()).unwrap();
+        assert_eq!(a_meta.status, Status::Invalid);
+        assert_ne!(a_meta.chain, ChainMembership::Candidate);
+        assert_ne!(
+            store
+                .get_block_metadata(&share_b.block_hash())
+                .unwrap()
+                .chain,
+            ChainMembership::Candidate
+        );
+
+        // Candidate tip is unchanged (still share_s at h1).
+        assert_eq!(
+            store.get_top_candidate().unwrap().hash,
+            share_s.block_hash()
+        );
+    }
+
+    /// An Invalid block re-gossiped as a header must not re-enter the candidate
+    /// chain via the extend path.
+    ///
+    /// Layout: genesis(confirmed) -> share_p(candidate h1). share_a(h2) is
+    /// share_p's child that was invalidated and detached. Re-organising
+    /// share_a's header would otherwise extend the candidate chain (its parent
+    /// share_p is the top candidate); the Invalid-status guard refuses it.
+    ///
+    /// Fail-first: before the fix the guard only checked Confirmed, so
+    /// should_extend_candidates re-admitted share_a.
+    #[test]
+    fn test_organise_header_refuses_extend_of_invalid_block() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // share_p: candidate tip at h1.
+        let share_p = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        store.push_to_candidate_chain(&share_p).unwrap();
+
+        // share_a: child of share_p at h2, invalidated and detached, but heavier
+        // than share_p so it would extend the candidate chain without the guard.
+        let share_a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_p.block_hash().to_string())
+            .work(2)
+            .nonce(0xe9695793)
+            .build();
+        let p_meta = store.get_block_metadata(&share_p.block_hash()).unwrap();
+        let a_work = p_meta.chain_work + share_a.header.get_work();
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&share_a, &mut batch).unwrap();
+        store
+            .set_height_to_blockhash(&share_a.block_hash(), 2, &mut batch)
+            .unwrap();
+        store
+            .update_block_metadata(
+                &share_a.block_hash(),
+                &BlockMetadata {
+                    expected_height: Some(2),
+                    chain_work: a_work,
+                    status: Status::Invalid,
+                    chain: ChainMembership::None,
+                },
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = Store::get_write_batch();
+        let result = store.organise_header(&share_a.header, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert!(
+            result.is_none(),
+            "extending with Invalid share_a must be refused"
+        );
+        let a_meta = store.get_block_metadata(&share_a.block_hash()).unwrap();
+        assert_eq!(a_meta.status, Status::Invalid);
+        assert_ne!(a_meta.chain, ChainMembership::Candidate);
+        // Candidate tip unchanged (still share_p at h1).
+        assert_eq!(
+            store.get_top_candidate().unwrap().hash,
+            share_p.block_hash()
+        );
     }
 }
