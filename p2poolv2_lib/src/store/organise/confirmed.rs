@@ -16,7 +16,7 @@
 
 use crate::store::{
     ColumnFamily, Store,
-    block_tx_metadata::{BlockMetadata, ChainMembership},
+    block_tx_metadata::{BlockMetadata, ChainMembership, Status},
     writer::StoreError,
 };
 use bitcoin::{
@@ -73,6 +73,52 @@ impl Store {
         }
         Ok(true)
     }
+
+    /// Check that every in-prune-depth block in the list is `BlockValid`.
+    ///
+    /// Mirrors the extend path's promotion gate
+    /// (`contiguous_candidates_with_block_data`): within the prune depth
+    /// (`height >= prune_height`) a block must have passed validation and been
+    /// marked `BlockValid` before it can be confirmed. Blocks below
+    /// `prune_height` are skipped -- they are promoted header-only (ASERT/PoW).
+    ///
+    /// Checks status only (not candidate membership): `reorg_confirmed` derives
+    /// its branch by walking parent pointers, and a block being reorged in is
+    /// about to become confirmed, so the gate is about validation, not chain
+    /// membership.
+    ///
+    /// Already-confirmed blocks (the fork point) are skipped: they were
+    /// validated when confirmed, and genesis and below-zone confirmed blocks are
+    /// `HeaderValid`, not `BlockValid`. The gate applies only to the blocks the
+    /// reorg newly confirms.
+    ///
+    /// Returns `Ok(false)` (with a debug log) on the first in-depth block that
+    /// is not `BlockValid`. Used by `reorg_confirmed` so a deep reorg cannot
+    /// confirm an unvalidated fork block that the gated `candidates` list did
+    /// not cover.
+    pub(super) fn all_in_zone_blocks_block_valid(
+        &self,
+        blockhashes: &[BlockHash],
+        prune_height: u32,
+    ) -> Result<bool, StoreError> {
+        for (blockhash, metadata) in self.get_block_metadata_batch(blockhashes) {
+            if metadata.chain == ChainMembership::Confirmed {
+                continue;
+            }
+            let block_height = metadata.expected_height.ok_or_else(|| {
+                StoreError::NotFound(format!("Block {blockhash} has no expected_height"))
+            })?;
+            if block_height < prune_height {
+                continue;
+            }
+            if metadata.status != Status::BlockValid {
+                debug!("Reorg block {blockhash} in prune depth is not BlockValid");
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     /// Check if the candidate chain should reorg the confirmed chain.
     ///
     /// Returns true when the last candidate has more cumulative work
@@ -152,6 +198,12 @@ impl Store {
         let fork_hashes: Vec<BlockHash> = fork_branch.iter().copied().collect();
         if !self.all_block_and_uncle_data_available(&fork_hashes, prune_height)? {
             debug!("Reorg skipped: block or uncle missing block data");
+            return Ok(None);
+        }
+
+        // Do not reorg if any block above the prune boundary is not BlockValid.
+        if !self.all_in_zone_blocks_block_valid(&fork_hashes, prune_height)? {
+            debug!("Reorg skipped: in-zone fork block not BlockValid");
             return Ok(None);
         }
 
@@ -1300,7 +1352,8 @@ mod tests {
 
         let top_confirmed = store.get_top_confirmed().unwrap();
 
-        // Fork F from genesis with more work, stored as candidate
+        // Fork F from genesis with more work, stored as candidate.
+        // BlockValid because reorg_confirmed only confirms validated in-zone blocks.
         let fork_share = TestShareBlockBuilder::new()
             .prev_share_blockhash(genesis.block_hash().to_string())
             .work(3)
@@ -1311,7 +1364,7 @@ mod tests {
         let mut fork_metadata = BlockMetadata {
             expected_height: Some(1),
             chain_work: fork_share.header.get_work(),
-            status: Status::HeaderValid,
+            status: Status::BlockValid,
             chain: ChainMembership::None,
         };
         store
@@ -1425,10 +1478,11 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store.add_share_block(&fork_1, &mut batch).unwrap();
+        // BlockValid because reorg_confirmed only confirms validated in-zone blocks.
         let mut fork_1_metadata = BlockMetadata {
             expected_height: Some(1),
             chain_work: fork_1.header.get_work(),
-            status: Status::HeaderValid,
+            status: Status::BlockValid,
             chain: ChainMembership::None,
         };
         store
@@ -1449,7 +1503,7 @@ mod tests {
         let mut fork_2_metadata = BlockMetadata {
             expected_height: Some(2),
             chain_work: fork_1_metadata.chain_work + fork_2.header.get_work(),
-            status: Status::HeaderValid,
+            status: Status::BlockValid,
             chain: ChainMembership::None,
         };
         store
@@ -1586,7 +1640,8 @@ mod tests {
 
         let top_confirmed = store.get_top_confirmed().unwrap();
 
-        // Fork F from genesis with much more work
+        // Fork F from genesis with much more work.
+        // BlockValid because reorg_confirmed only confirms validated in-zone blocks.
         let fork_share = TestShareBlockBuilder::new()
             .prev_share_blockhash(genesis.block_hash().to_string())
             .work(4)
@@ -1597,7 +1652,7 @@ mod tests {
         let mut fork_metadata = BlockMetadata {
             expected_height: Some(1),
             chain_work: fork_share.header.get_work(),
-            status: Status::HeaderValid,
+            status: Status::BlockValid,
             chain: ChainMembership::None,
         };
         store
@@ -1715,7 +1770,7 @@ mod tests {
         let mut fork_metadata = BlockMetadata {
             expected_height: Some(2),
             chain_work: metadata_a.chain_work + fork_share.header.get_work(),
-            status: Status::HeaderValid,
+            status: Status::BlockValid,
             chain: ChainMembership::None,
         };
         store
@@ -1875,10 +1930,11 @@ mod tests {
             .build();
         let mut batch = Store::get_write_batch();
         store.add_share_block(&fork_1, &mut batch).unwrap();
+        // BlockValid because reorg_confirmed only confirms validated in-zone blocks.
         let mut fork_1_metadata = BlockMetadata {
             expected_height: Some(1),
             chain_work: fork_1.header.get_work(),
-            status: Status::HeaderValid,
+            status: Status::BlockValid,
             chain: ChainMembership::None,
         };
         store
@@ -1988,6 +2044,68 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         // Reorg should not have happened
+        assert_eq!(result, None);
+        assert_eq!(store.get_top_confirmed_height().unwrap(), 1);
+        assert_eq!(
+            store.get_confirmed_at_height(1).unwrap(),
+            share1.block_hash()
+        );
+    }
+
+    /// A reorg must not confirm an in-zone fork block that is not `BlockValid`,
+    /// even when its body is present. This mirrors, on the reorg path, the
+    /// extend path's promotion gate (`contiguous_candidates_with_block_data`).
+    ///
+    /// Setup: genesis(confirmed h:0) -> share1(confirmed h:1)
+    ///        fork(h:1, more work, parent=genesis) -- body present but HeaderValid
+    /// Action: call reorg_confirmed with fork as the candidate tip
+    /// After:  reorg does not happen, confirmed chain unchanged
+    ///
+    /// Fail-first: before the status gate the fork's present body passed
+    /// all_block_and_uncle_data_available and the reorg confirmed an unvalidated
+    /// block.
+    #[test]
+    fn test_reorg_confirmed_skipped_when_fork_block_not_block_valid() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // share1: confirmed at h:1.
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        store.push_to_confirmed_chain(&share1).unwrap();
+        assert_eq!(store.get_top_confirmed_height().unwrap(), 1);
+
+        // fork: child of genesis at h:1 with more work, body present but only
+        // HeaderValid (never chain-context validated).
+        let fork = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .work(2)
+            .nonce(0xe9695793)
+            .build();
+        store.store_with_valid_metadata(&fork);
+        assert!(store.share_block_exists(&fork.block_hash()));
+        assert_eq!(
+            store.get_block_metadata(&fork.block_hash()).unwrap().status,
+            Status::HeaderValid
+        );
+
+        let top_confirmed = store.get_top_confirmed().unwrap();
+        let candidates = vec![(1u32, fork.block_hash())];
+
+        let mut batch = Store::get_write_batch();
+        let result = store
+            .reorg_confirmed(&top_confirmed, &candidates, 0, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Reorg refused: the fork is not BlockValid.
         assert_eq!(result, None);
         assert_eq!(store.get_top_confirmed_height().unwrap(), 1);
         assert_eq!(
