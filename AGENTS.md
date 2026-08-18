@@ -152,3 +152,12 @@ Before introducing a new utility, helper, or dependency:
 
 - Avoid unnecessary cloning, temporary allocations, and repeated RocksDB lookups.
 - When performance and readability conflict, ask before making a large refactor.
+
+## Security
+
+- Never add support for generating private keys. This should be done
+  by external third party tools and wallets. Tools that generate
+  private keys end up eventually having a security flaw. The only use
+  of `rand` crate is for generating session nonces, compact block salt
+  and sim jitter.
+  
