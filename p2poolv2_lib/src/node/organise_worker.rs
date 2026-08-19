@@ -236,11 +236,22 @@ impl OrganiseWorker {
                 // last organise_block. Invalidated: mark_invalid just rebuilt the
                 // candidate chain from the invalid block's parent (best surviving
                 // branch). Either way, run organise_block to catch confirmed up,
-                // then drain anything that becomes processable.
+                // then drain anything that becomes processable from previous tip onward
+                let previous_tip = match self.chain_store_handle.get_tip_height() {
+                    Ok(tip) => tip,
+                    Err(error) => {
+                        error!("Error reading confirmed tip before drain: {error}");
+                        None
+                    }
+                };
                 match self.chain_store_handle.organise_block().await {
                     Ok(Some(height)) => {
                         self.update_pplns_window();
-                        self.drain_pending_blocks(height).await?;
+                        // Drain each newly-confirmed height
+                        let from = previous_tip.map_or(height, |tip| (tip + 1).min(height));
+                        for drain_height in from..=height {
+                            self.drain_pending_blocks(drain_height).await?;
+                        }
                     }
                     Ok(None) => {}
                     Err(StoreError::ChannelClosed) => {
@@ -506,26 +517,25 @@ impl OrganiseWorker {
     /// whose parent is still pending cheaply re-buffers (a metadata read, not a
     /// full validation).
     async fn drain_pending_blocks(&mut self, from_height: u32) -> Result<(), OrganiseError> {
-        let mut height = from_height;
-        loop {
-            let Some(blocks) = self.pending_blocks.remove(&height) else {
-                return Ok(());
-            };
+        let mut height = Some(from_height);
+        while let Some(current) = height
+            && let Some(blocks) = self.pending_blocks.remove(&current)
+        {
             debug!(
-                "Draining {} buffered blocks waiting on height {height}",
+                "Draining {} buffered blocks waiting on height {current}",
                 blocks.len()
             );
-            let mut advanced = false;
+            let mut next_height = None;
             for share_block in blocks {
-                if let ProcessOutcome::Advanced(_) = self.process_share_block(share_block).await? {
-                    advanced = true;
+                if let ProcessOutcome::Advanced(advanced_height) =
+                    self.process_share_block(share_block).await?
+                {
+                    next_height = Some(advanced_height);
                 }
             }
-            if !advanced {
-                return Ok(());
-            }
-            height += 1;
+            height = next_height;
         }
+        Ok(())
     }
 
     /// Update the shared PplnsWindow cache after a block is promoted.
@@ -1715,6 +1725,9 @@ mod tests {
         mock_chain_handle
             .expect_organise_block()
             .returning(|| Ok(None));
+        mock_chain_handle
+            .expect_get_tip_height()
+            .returning(|| Ok(Some(2)));
 
         let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
@@ -1740,6 +1753,101 @@ mod tests {
         assert!(
             marked.contains(&c_hash),
             "child C must become BlockValid after its parent, not be stranded"
+        );
+    }
+
+    /// When organise_block confirms a contiguous range of
+    /// heights at once (common during sync), the Buffered/Invalidated follow-up
+    /// must drain dependents buffered under the intermediate heights, not only
+    /// the new top.
+    ///
+    /// C is buffered under intermediate height 7; organise_block advances the
+    /// confirmed tip from 5 to 10. The drain must visit height 7 and process C.
+    /// On the pre-fix code the drain started at the top (10) and walked only
+    /// upward, skipping 6..9 and stranding C.
+    #[tokio::test]
+    async fn test_buffered_follow_up_drains_intermediate_confirmed_heights() {
+        let (_organise_tx, organise_rx) = create_organise_channel();
+        let mut mock_chain_handle = MockChainStoreHandle::new();
+
+        // Distinct parent hashes so the metadata mock can give T a Pending parent
+        // (T buffers, triggering the follow-up) and C a Valid parent (C promotes).
+        let t_parent = TestShareBlockBuilder::new()
+            .nonce(0x0000aaaa)
+            .build()
+            .block_hash();
+        let c_parent = TestShareBlockBuilder::new()
+            .nonce(0x0000bbbb)
+            .build()
+            .block_hash();
+        let share_t = TestShareBlockBuilder::new()
+            .prev_share_blockhash(t_parent.to_string())
+            .nonce(0x0000cccc)
+            .build();
+        let share_c = TestShareBlockBuilder::new()
+            .prev_share_blockhash(c_parent.to_string())
+            .nonce(0x0000dddd)
+            .build();
+        let c_hash = share_c.block_hash();
+
+        mock_chain_handle
+            .expect_get_block_metadata()
+            .returning(move |hash| {
+                let (height, status, chain) = if *hash == t_parent {
+                    (5, Status::HeaderValid, ChainMembership::Candidate)
+                } else if *hash == c_parent {
+                    (7, Status::BlockValid, ChainMembership::Confirmed)
+                } else if *hash == c_hash {
+                    (7, Status::HeaderValid, ChainMembership::Candidate)
+                } else {
+                    (0, Status::BlockValid, ChainMembership::Confirmed)
+                };
+                Ok(BlockMetadata {
+                    expected_height: Some(height),
+                    chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
+                    status,
+                    chain,
+                })
+            });
+        // Previous confirmed tip 5; organise_block confirms up to 10 in one call.
+        mock_chain_handle
+            .expect_get_tip_height()
+            .returning(|| Ok(Some(5)));
+        mock_chain_handle
+            .expect_organise_block()
+            .returning(|| Ok(Some(10)));
+        // Large candidate tip so C (height 7) is below the PPLNS zone and promotes
+        // without chain-context validation.
+        mock_chain_handle
+            .expect_get_candidate_tip_height()
+            .returning(|| Ok(Some(200_000)));
+        mock_chain_handle
+            .expect_mark_block_valid()
+            .returning(|_| Ok(()));
+        mock_chain_handle
+            .expect_promote_block()
+            .returning(|_| Ok(None));
+
+        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let (notify_tx, _notify_rx) = create_test_notify_channel();
+        let mut worker = OrganiseWorker::new(
+            organise_rx,
+            mock_chain_handle,
+            monitoring_tx,
+            notify_tx,
+            create_test_metrics_handle(),
+            create_test_pplns_window(),
+            stub_share_validator_with_success(),
+        );
+
+        // C buffered under intermediate height 7 (between old tip 5 and new tip 10).
+        worker.buffer_block(7, share_c);
+        // T buffers (Pending parent), triggering the organise_block + drain follow-up.
+        worker.handle_organise_block_event(share_t).await.unwrap();
+
+        assert!(
+            !worker.pending_blocks.contains_key(&7),
+            "dependent buffered under an intermediate confirmed height must be drained"
         );
     }
 
