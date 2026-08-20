@@ -17,12 +17,14 @@
 use crate::store::{
     ColumnFamily, Store,
     block_tx_metadata::{BlockMetadata, ChainMembership, Status},
+    transaction_store::ConfirmationOverlay,
     writer::StoreError,
 };
 use bitcoin::{
     BlockHash,
     consensus::{self, encode},
 };
+use std::collections::HashSet;
 use tracing::debug;
 
 use super::{Chain, Height, TopResult, height_to_key_with_suffix};
@@ -457,30 +459,57 @@ impl Store {
 
     /// Promote candidates to confirmed.
     ///
-    /// Writes each candidate entry to the confirmed index and updates
-    /// metadata to Confirmed status. The candidate chain is left intact
-    /// so it coexists with the confirmed chain.
+    /// Each candidate's prevouts are re-checked against the confirmed state
+    /// this batch is building before it is confirmed, because a candidate was
+    /// prevout-validated at ingest when a later candidate's spend was not yet
+    /// confirmed. Only the leading run that passes is confirmed; the first
+    /// candidate that fails is marked Invalid (rebuilding the candidate chain)
+    /// and nothing above it is promoted. Extending is append-only, so
+    /// confirming a shorter prefix never regresses the confirmed chain.
+    ///
+    /// Writes each confirmed entry to the confirmed index and updates metadata
+    /// to Confirmed status. The candidate chain is left intact so it coexists
+    /// with the confirmed chain. Returns the new top confirmed height, or None
+    /// when the first candidate itself failed the re-check.
     pub(super) fn extend_confirmed(
         &self,
-        to: Height,
-        candidates: &Vec<(Height, BlockHash)>,
+        candidates: &[(Height, BlockHash)],
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<Option<Height>, StoreError> {
-        for (candidate_height, candidate_hash) in candidates {
+        // An extend removes nothing from the confirmed chain, so only the
+        // in-batch spends accumulate.
+        let mut overlay = ConfirmationOverlay {
+            spent_in_batch: HashSet::with_capacity(candidates.len()),
+            ..Default::default()
+        };
+        let (prefix_len, first_invalid) = self.confirmable_prefix(candidates, &mut overlay)?;
+
+        for (candidate_height, candidate_hash) in &candidates[..prefix_len] {
             self.put_confirmed_entry(*candidate_height, candidate_hash, batch)?;
             let mut metadata = self.get_block_metadata(candidate_hash)?;
             metadata.chain = ChainMembership::Confirmed;
             self.update_block_metadata(candidate_hash, &metadata, batch)?;
         }
-        self.set_top_confirmed_height(to, batch);
-        Ok(Some(to))
+
+        if let Some(invalid_hash) = first_invalid {
+            debug!("Extend stopped at {invalid_hash}: prevout re-check failed, marking Invalid");
+            self.mark_invalid(&invalid_hash, batch)?;
+        }
+
+        match candidates[..prefix_len].last() {
+            Some((top_height, _)) => {
+                self.set_top_confirmed_height(*top_height, batch);
+                Ok(Some(*top_height))
+            }
+            None => Ok(None),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shares::share_block::ShareTransaction;
+    use crate::shares::share_block::{ShareTransaction, Txids};
     use crate::store::block_tx_metadata::Status;
     use crate::test_utils::TestShareBlockBuilder;
     use bitcoin::hashes::Hash;
@@ -1872,6 +1901,16 @@ mod tests {
         store
             .add_sharechain_txs(&[ShareTransaction(funding_tx)], 0, &mut batch)
             .unwrap();
+        // Index the funding tx into the confirmed genesis block so its output
+        // has a confirmed source. Confirming a spender re-checks that its
+        // prevout sources are on the confirmed chain.
+        store
+            .add_txids_to_blocks_index(
+                &genesis.block_hash(),
+                &Txids(vec![funding_txid]),
+                &mut batch,
+            )
+            .unwrap();
         store.commit_batch(batch).unwrap();
 
         let prevout = bitcoin::OutPoint::new(funding_txid, 0);
@@ -1987,7 +2026,7 @@ mod tests {
         // Extend confirmed by promoting fork_2.
         let mut batch = Store::get_write_batch();
         store
-            .extend_confirmed(2, &vec![(2, fork_2.block_hash())], &mut batch)
+            .extend_confirmed(&[(2, fork_2.block_hash())], &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -1996,6 +2035,133 @@ mod tests {
             fork_2.block_hash()
         );
         assert!(store.is_any_prevout_spent(&[prevout]).unwrap());
+    }
+
+    /// Two candidates on the same chain that spend the same confirmed output
+    /// must not both be confirmed.
+    ///
+    /// Each passed ingest prevout validation because, at its own validation
+    /// time, the other spender was still an unconfirmed candidate and so had no
+    /// SpendsIndex entry. Confirming them in one batch would record both
+    /// spends, the second silently overwriting the first.
+    ///
+    /// Setup: genesis(confirmed h:0), a confirmed funding output
+    ///        spender_1(h:1, BlockValid, candidate) spends the output
+    ///        spender_2(h:2, BlockValid, candidate) spends the SAME output
+    /// Action: extend_confirmed over both candidates
+    /// After:  only spender_1 is confirmed, spender_2 is Invalid, top is 1
+    #[test]
+    fn test_extend_confirmed_rejects_same_chain_double_spend() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xf0000001).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // A funding output whose source tx is on the confirmed chain (genesis).
+        let funding_tx = bitcoin::Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint::new(bitcoin::Txid::all_zeros(), u32::MAX),
+                script_sig: bitcoin::ScriptBuf::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::new(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(1_000),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        };
+        let funding_txid = funding_tx.compute_txid();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_sharechain_txs(&[ShareTransaction(funding_tx)], 0, &mut batch)
+            .unwrap();
+        store
+            .add_txids_to_blocks_index(
+                &genesis.block_hash(),
+                &Txids(vec![funding_txid]),
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Two distinct transactions (different output values, so different
+        // txids) that spend the same prevout.
+        let prevout = bitcoin::OutPoint::new(funding_txid, 0);
+        let spend_of = |value: u64| bitcoin::Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: prevout,
+                script_sig: bitcoin::ScriptBuf::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::new(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(value),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        };
+
+        let spender_1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xf0000002)
+            .add_transaction(spend_of(1_000))
+            .build();
+        let spender_2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(spender_1.block_hash().to_string())
+            .nonce(0xf0000003)
+            .add_transaction(spend_of(900))
+            .build();
+
+        // Both reached the candidate chain as BlockValid: neither saw the
+        // other's spend at ingest. Commit each separately because storing a
+        // block reads its parent's committed metadata.
+        for (height, block) in [(1u32, &spender_1), (2u32, &spender_2)] {
+            let mut batch = Store::get_write_batch();
+            store.add_share_block(block, &mut batch).unwrap();
+            let mut metadata = BlockMetadata {
+                expected_height: Some(height),
+                chain_work: block.header.get_work(),
+                status: Status::BlockValid,
+                chain: ChainMembership::None,
+            };
+            store
+                .update_block_metadata(&block.block_hash(), &metadata, &mut batch)
+                .unwrap();
+            store
+                .append_to_candidates(&block.block_hash(), height, &mut metadata, &mut batch)
+                .unwrap();
+            store.commit_batch(batch).unwrap();
+        }
+
+        let candidates = vec![(1, spender_1.block_hash()), (2, spender_2.block_hash())];
+        let mut batch = Store::get_write_batch();
+        let new_top = store.extend_confirmed(&candidates, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert_eq!(new_top, Some(1), "only the first spender may be confirmed");
+        assert_eq!(
+            store.get_confirmed_at_height(1).unwrap(),
+            spender_1.block_hash()
+        );
+        assert!(
+            store.get_confirmed_at_height(2).is_err(),
+            "the double-spending block must not be confirmed"
+        );
+        assert_eq!(store.get_top_confirmed_height().unwrap(), 1);
+        assert_eq!(
+            store
+                .get_block_metadata(&spender_2.block_hash())
+                .unwrap()
+                .status,
+            Status::Invalid,
+            "the double-spending block must be marked Invalid"
+        );
     }
 
     /// When a block in the fork branch lacks block data, the reorg
