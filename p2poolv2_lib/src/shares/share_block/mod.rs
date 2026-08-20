@@ -33,7 +33,9 @@ use bitcoin::{
 };
 use core::mem;
 use serde::{Deserialize, Serialize};
-pub use share_transaction::ShareTransaction;
+pub use share_transaction::{
+    DuplicatePrevoutError, ShareTransaction, SpendingPrevouts, extract_spending_prevouts,
+};
 use std::error::Error;
 
 /// The maximum target a share needs to have to be a valid share.
