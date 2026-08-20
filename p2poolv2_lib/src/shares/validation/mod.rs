@@ -37,7 +37,10 @@ use crate::pool_difficulty::PoolDifficulty;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
-use crate::shares::share_block::{ShareBlock, ShareTransaction, is_terminal_blockhash};
+use crate::shares::share_block::{
+    ShareBlock, ShareTransaction, SpendingPrevouts, extract_spending_prevouts,
+    is_terminal_blockhash,
+};
 use crate::shares::share_commitment::ShareCommitment;
 use crate::shares::transactions::coinbase::{compute_commitment_hash, compute_witness_root};
 use crate::shares::witness_commitment::WITNESS_COMMITMENT_LENGTH;
@@ -1192,39 +1195,11 @@ impl DefaultShareValidator {
         share: &ShareBlock,
         chain_store_handle: &ChainStoreHandle,
     ) -> Result<(), ValidationError> {
-        let total_inputs: usize = share
-            .transactions
-            .iter()
-            .filter(|share_transaction| !share_transaction.0.is_coinbase())
-            .map(|share_transaction| share_transaction.0.input.len())
-            .sum();
-        let mut all_outpoints: Vec<bitcoin::OutPoint> = Vec::with_capacity(total_inputs);
-        let mut external_source_txids: HashSet<bitcoin::Txid> =
-            HashSet::with_capacity(total_inputs);
-        let mut seen_prevouts: HashSet<bitcoin::OutPoint> = HashSet::with_capacity(total_inputs);
-        let mut in_block_txids: HashSet<bitcoin::Txid> =
-            HashSet::with_capacity(share.transactions.len());
-        for share_transaction in &share.transactions {
-            let transaction = &share_transaction.0;
-            if !transaction.is_coinbase() {
-                for input in &transaction.input {
-                    let outpoint = input.previous_output;
-                    if !seen_prevouts.insert(outpoint) {
-                        return Err(ValidationError::consensus(format!(
-                            "Duplicate prevout {}:{} spent by two inputs in the same share block",
-                            outpoint.txid, outpoint.vout
-                        )));
-                    }
-                    all_outpoints.push(outpoint);
-                    if !in_block_txids.contains(&outpoint.txid) {
-                        external_source_txids.insert(outpoint.txid);
-                    }
-                }
-            }
-            in_block_txids.insert(transaction.compute_txid());
-        }
-
-        let external_source_txids: Vec<bitcoin::Txid> = external_source_txids.into_iter().collect();
+        let SpendingPrevouts {
+            all_outpoints,
+            external_source_txids,
+        } = extract_spending_prevouts(&share.transactions)
+            .map_err(|duplicate| ValidationError::consensus(duplicate.to_string()))?;
         if !chain_store_handle
             .are_all_txids_confirmed(&external_source_txids)
             .map_err(|error| {
