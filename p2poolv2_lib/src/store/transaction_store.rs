@@ -15,7 +15,9 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use super::{ColumnFamily, Store, writer::StoreError};
-use crate::shares::share_block::{ShareTransaction, Txids};
+use crate::shares::share_block::{
+    ShareTransaction, SpendingPrevouts, Txids, extract_spending_prevouts,
+};
 use crate::store::block_tx_metadata::{ChainMembership, TxMetadata};
 use bitcoin::consensus::{self, Decodable, Encodable, encode};
 use bitcoin::{BlockHash, OutPoint, Transaction, Txid};
@@ -100,6 +102,30 @@ impl Decodable for StoredTxIn {
         tx_in.witness = bitcoin::Witness::consensus_decode(reader)?;
         Ok(StoredTxIn { tx_in })
     }
+}
+
+/// The in-memory deltas that a single confirmation `WriteBatch` applies. It is
+/// used to re-check prevouts against the confirmed state the batch itself is
+/// building.
+///
+/// A `WriteBatch` is opaque to reads until committed, so the committed-state
+/// queries cannot see the batch's own writes mid-flight. This overlay carries
+/// those deltas. It tracks block/outpoint, not just txids, because a
+/// transaction can appear in more than one block across forks or an extend
+/// chain control flow.
+#[derive(Debug, Default)]
+pub(crate) struct ConfirmationOverlay {
+    /// Blocks leaving the confirmed chain in this batch (reorged-out suffix;
+    /// empty for an extend). A source txid is not counted as confirmed when its
+    /// only confirmed block is in this set.
+    pub removed_blockhashes: HashSet<BlockHash>,
+    /// Outpoints whose committed spend the rewind removes. Their committed
+    /// spend is ignored, so a fork block may re-spend an output the reorged-out
+    /// branch had spent.
+    pub removed_spends: HashSet<OutPoint>,
+    /// Outpoints spent by blocks confirmed earlier in this batch, so a later
+    /// block that double-spends one of them is rejected.
+    pub spent_in_batch: HashSet<OutPoint>,
 }
 
 #[allow(dead_code)]
@@ -225,6 +251,31 @@ impl Store {
         Ok(false)
     }
 
+    /// `is_any_prevout_spent` adjusted by a confirmation batch's deltas.
+    ///
+    /// An outpoint is spent when it is spent by a block confirmed earlier in
+    /// this batch (`spent_in_batch`), OR its committed spend still stands after
+    /// the batch's reorg-out removals (committed and not in `removed_spends`).
+    pub(crate) fn is_any_prevout_spent_with_overlay(
+        &self,
+        outpoints: &[OutPoint],
+        removed_spends_in_batch: &HashSet<OutPoint>,
+        already_spent_in_batch: &HashSet<OutPoint>,
+    ) -> Result<bool, StoreError> {
+        if outpoints
+            .iter()
+            .any(|outpoint| already_spent_in_batch.contains(outpoint))
+        {
+            return Ok(true);
+        }
+        let still_being_spent_in_batch: Vec<OutPoint> = outpoints
+            .iter()
+            .filter(|outpoint| !removed_spends_in_batch.contains(*outpoint))
+            .copied()
+            .collect();
+        self.is_any_prevout_spent(&still_being_spent_in_batch)
+    }
+
     /// Given coinbase outpoints (already known to be on the confirmed chain),
     /// return the first outpoint whose confirmed block is shallower than
     /// `min_depth`. Returns `Ok(None)` if all coinbase outpoints are mature.
@@ -292,6 +343,22 @@ impl Store {
     /// `ChainMembership::Confirmed`). Returns false on the first txid that
     /// has no confirmed blockhash.
     pub(crate) fn are_all_txids_confirmed(&self, txids: &[Txid]) -> Result<bool, StoreError> {
+        self.are_all_txids_confirmed_excluding(txids, &HashSet::new())
+    }
+
+    /// As `are_all_txids_confirmed`, but treats any blockhash in `excluded` as
+    /// not confirmed.
+    ///
+    /// Used at confirmation time so a source whose only confirmed block is
+    /// being reorged out in the current batch is not counted as confirmed. The
+    /// exclusion is block-level (not txid-level) because a txid can appear in
+    /// more than one block: a source still counts as confirmed if a surviving
+    /// (non-excluded) confirmed block includes it.
+    pub(crate) fn are_all_txids_confirmed_excluding(
+        &self,
+        txids: &[Txid],
+        excluded: &HashSet<BlockHash>,
+    ) -> Result<bool, StoreError> {
         let per_txid_blockhashes = self.get_blockhashes_for_all_txids(txids)?;
 
         let all_blockhashes: Vec<BlockHash> = per_txid_blockhashes
@@ -302,7 +369,9 @@ impl Store {
         let metadata_pairs = self.get_block_metadata_batch(&all_blockhashes);
         let confirmed_set: HashSet<BlockHash> = metadata_pairs
             .into_iter()
-            .filter(|(_, metadata)| metadata.chain == ChainMembership::Confirmed)
+            .filter(|(blockhash, metadata)| {
+                metadata.chain == ChainMembership::Confirmed && !excluded.contains(blockhash)
+            })
             .map(|(blockhash, _)| blockhash)
             .collect();
 
@@ -974,6 +1043,94 @@ impl Store {
             share_txs.push(ShareTransaction(tx));
         }
         Ok(share_txs)
+    }
+
+    /// Re-validate one about-to-be-confirmed block's prevouts against committed
+    /// state adjusted by `overlay`.
+    ///
+    /// Returns `Ok(true)` if the block may be confirmed, `Ok(false)` if a
+    /// prevout's source has left the confirmed chain or the prevout is now
+    /// double-spent. A prune-zone block without body data has no prevouts to
+    /// check and returns `Ok(true)` (mirrors `put_confirmed_entry`). Coinbase
+    /// maturity is not re-checked here: it is made deterministic at ingest
+    /// against the block's own height (see `validate_prevouts`).
+    pub(crate) fn recheck_block_prevouts_with_overlay(
+        &self,
+        blockhash: &BlockHash,
+        overlay: &ConfirmationOverlay,
+    ) -> Result<bool, StoreError> {
+        if !self.share_block_exists(blockhash) {
+            return Ok(true);
+        }
+        let transactions = self.get_txs_by_blockhash_index(blockhash)?;
+        let SpendingPrevouts {
+            all_outpoints,
+            external_source_txids,
+        } = extract_spending_prevouts(&transactions).map_err(|duplicate| {
+            StoreError::Database(format!("Confirming block {blockhash} has {duplicate}"))
+        })?;
+        if !self.are_all_txids_confirmed_excluding(
+            &external_source_txids,
+            &overlay.removed_blockhashes,
+        )? {
+            return Ok(false);
+        }
+        if self.is_any_prevout_spent_with_overlay(
+            &all_outpoints,
+            &overlay.removed_spends,
+            &overlay.spent_in_batch,
+        )? {
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
+    /// Record every outpoint spent by `blockhash`'s non-coinbase inputs into
+    /// `spent_in_batch`, mirroring `add_spends_for_block` so the overlay tracks
+    /// the same spends the batch will write.
+    pub(crate) fn accumulate_spent_outpoints(
+        &self,
+        blockhash: &BlockHash,
+        spent_in_batch: &mut HashSet<OutPoint>,
+    ) -> Result<(), StoreError> {
+        if !self.share_block_exists(blockhash) {
+            return Ok(());
+        }
+        for share_transaction in self.get_txs_by_blockhash_index(blockhash)? {
+            let transaction = &share_transaction.0;
+            if !transaction.is_coinbase() {
+                for input in &transaction.input {
+                    spent_in_batch.insert(input.previous_output);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Walk `blocks` in confirmation order, re-checking each block's prevouts
+    /// against the running `overlay`, and return `(prefix_len, first_invalid)`.
+    ///
+    /// The prefix is the leading run of blocks that pass the re-check; the walk
+    /// stops at the first block that fails and reports its hash. Each accepted
+    /// block's spends are folded into `overlay.spent_in_batch` so a later block
+    /// double-spending an earlier one is caught.
+    pub(crate) fn confirmable_prefix(
+        &self,
+        blocks: &[(u32, BlockHash)],
+        overlay: &mut ConfirmationOverlay,
+    ) -> Result<(usize, Option<BlockHash>), StoreError> {
+        let mut prefix_len = 0;
+        let mut first_invalid = None;
+        while prefix_len < blocks.len() && first_invalid.is_none() {
+            let (_, blockhash) = &blocks[prefix_len];
+            if self.recheck_block_prevouts_with_overlay(blockhash, overlay)? {
+                self.accumulate_spent_outpoints(blockhash, &mut overlay.spent_in_batch)?;
+                prefix_len += 1;
+            } else {
+                first_invalid = Some(*blockhash);
+            }
+        }
+        Ok((prefix_len, first_invalid))
     }
 }
 
@@ -1703,6 +1860,375 @@ mod tests {
         let unknown_txid: bitcoin::Txid =
             bitcoin::hashes::sha256d::Hash::from_byte_array([9u8; 32]).into();
         assert!(!store.are_all_txids_confirmed(&[unknown_txid]).unwrap());
+    }
+
+    fn confirmed_metadata(height: u32) -> BlockMetadata {
+        BlockMetadata {
+            expected_height: Some(height),
+            chain_work: Work::from_le_bytes([1u8; 32]),
+            status: Status::BlockValid,
+            chain: ChainMembership::Confirmed,
+        }
+    }
+
+    #[test]
+    fn test_are_all_txids_confirmed_excluding_drops_only_confirming_block() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let source_txid: bitcoin::Txid =
+            bitcoin::hashes::sha256d::Hash::from_byte_array([11u8; 32]).into();
+        let blockhash = TestShareBlockBuilder::new().build().block_hash();
+
+        let mut batch = Store::get_write_batch();
+        store
+            .update_block_metadata(&blockhash, &confirmed_metadata(1), &mut batch)
+            .unwrap();
+        store
+            .add_txids_to_blocks_index(&blockhash, &Txids(vec![source_txid]), &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Not excluded: confirmed.
+        assert!(
+            store
+                .are_all_txids_confirmed_excluding(&[source_txid], &HashSet::new())
+                .unwrap()
+        );
+        // The only confirming block excluded: no longer confirmed.
+        let excluded = HashSet::from([blockhash]);
+        assert!(
+            !store
+                .are_all_txids_confirmed_excluding(&[source_txid], &excluded)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn test_are_all_txids_confirmed_excluding_keeps_surviving_block() {
+        // The same txid is included in two confirmed blocks; excluding one still
+        // leaves it confirmed via the surviving block (block-level exclusion).
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let source_txid: bitcoin::Txid =
+            bitcoin::hashes::sha256d::Hash::from_byte_array([12u8; 32]).into();
+        let reorged_out = TestShareBlockBuilder::new()
+            .nonce(0xbb01)
+            .build()
+            .block_hash();
+        let surviving = TestShareBlockBuilder::new()
+            .nonce(0xbb02)
+            .build()
+            .block_hash();
+
+        let mut batch = Store::get_write_batch();
+        store
+            .update_block_metadata(&reorged_out, &confirmed_metadata(1), &mut batch)
+            .unwrap();
+        store
+            .update_block_metadata(&surviving, &confirmed_metadata(1), &mut batch)
+            .unwrap();
+        store
+            .add_txids_to_blocks_index(&reorged_out, &Txids(vec![source_txid]), &mut batch)
+            .unwrap();
+        store
+            .add_txids_to_blocks_index(&surviving, &Txids(vec![source_txid]), &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let excluded = HashSet::from([reorged_out]);
+        assert!(
+            store
+                .are_all_txids_confirmed_excluding(&[source_txid], &excluded)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn test_is_any_prevout_spent_with_overlay_masks_and_adds() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let funding_txid: bitcoin::Txid =
+            bitcoin::hashes::sha256d::Hash::from_byte_array([21u8; 32]).into();
+        let spending_txid: bitcoin::Txid =
+            bitcoin::hashes::sha256d::Hash::from_byte_array([22u8; 32]).into();
+        let committed = bitcoin::OutPoint::new(funding_txid, 0);
+        let batch_only = bitcoin::OutPoint::new(funding_txid, 1);
+
+        let mut batch = Store::get_write_batch();
+        store
+            .add_spend(&funding_txid, 0, &spending_txid, 0, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let empty = HashSet::new();
+        // Committed spend, no overlay: spent.
+        assert!(
+            store
+                .is_any_prevout_spent_with_overlay(&[committed], &empty, &empty)
+                .unwrap()
+        );
+        // removed_spends masks the committed spend: unspent.
+        let removed = HashSet::from([committed]);
+        assert!(
+            !store
+                .is_any_prevout_spent_with_overlay(&[committed], &removed, &empty)
+                .unwrap()
+        );
+        // spent_in_batch reports an otherwise-unspent outpoint as spent.
+        let in_batch = HashSet::from([batch_only]);
+        assert!(
+            store
+                .is_any_prevout_spent_with_overlay(&[batch_only], &empty, &in_batch)
+                .unwrap()
+        );
+        // Neither committed, removed, nor in-batch: unspent.
+        assert!(
+            !store
+                .is_any_prevout_spent_with_overlay(&[batch_only], &empty, &empty)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn test_accumulate_spent_outpoints_records_non_coinbase_inputs() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Fund a coinbase output so the spender's prevout exists in the store.
+        let funding_tx = Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint::null(),
+                script_sig: bitcoin::ScriptBuf::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::new(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(50_000),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        };
+        let funding_txid = funding_tx.compute_txid();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_sharechain_txs(&[ShareTransaction(funding_tx)], 0, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let prevout = bitcoin::OutPoint::new(funding_txid, 0);
+        let spending_tx = Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: prevout,
+                script_sig: bitcoin::ScriptBuf::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::new(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(10_000),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        };
+        let block = TestShareBlockBuilder::new()
+            .add_transaction(spending_tx)
+            .build();
+        let blockhash = block.block_hash();
+
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&block, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut spent = HashSet::new();
+        store
+            .accumulate_spent_outpoints(&blockhash, &mut spent)
+            .unwrap();
+
+        // The spender's prevout is recorded; the coinbase's null input is not.
+        assert_eq!(spent, HashSet::from([prevout]));
+    }
+
+    #[test]
+    fn test_accumulate_spent_outpoints_noop_for_missing_body() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let missing = TestShareBlockBuilder::new().build().block_hash();
+
+        let mut spent = HashSet::new();
+        store
+            .accumulate_spent_outpoints(&missing, &mut spent)
+            .unwrap();
+
+        assert!(spent.is_empty());
+    }
+
+    #[test]
+    fn test_recheck_block_prevouts_true_for_missing_body() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let header_only = TestShareBlockBuilder::new().build().block_hash();
+
+        // A prune-zone header-only block has no body / no prevouts to check.
+        assert!(
+            store
+                .recheck_block_prevouts_with_overlay(&header_only, &ConfirmationOverlay::default())
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn test_recheck_block_prevouts_with_overlay_conditions() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // A confirmed source output, indexed to a confirmed producing block.
+        let funding_tx = Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint::null(),
+                script_sig: bitcoin::ScriptBuf::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::new(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(50_000),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        };
+        let source_txid = funding_tx.compute_txid();
+        let source_outpoint = bitcoin::OutPoint::new(source_txid, 0);
+        let producing_hash = TestShareBlockBuilder::new()
+            .nonce(0xdd01)
+            .build()
+            .block_hash();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_sharechain_txs(&[ShareTransaction(funding_tx)], 0, &mut batch)
+            .unwrap();
+        store
+            .update_block_metadata(&producing_hash, &confirmed_metadata(1), &mut batch)
+            .unwrap();
+        store
+            .add_txids_to_blocks_index(&producing_hash, &Txids(vec![source_txid]), &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // A stored (unconfirmed) spender block that spends the source. Storing a
+        // block does not touch SpendsIndex, so the source is still unspent.
+        let spending_tx = Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: source_outpoint,
+                script_sig: bitcoin::ScriptBuf::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::new(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(10_000),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        };
+        let spender_block = TestShareBlockBuilder::new()
+            .nonce(0xdd02)
+            .add_transaction(spending_tx)
+            .build();
+        let spender_hash = spender_block.block_hash();
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&spender_block, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Source confirmed and unspent: confirmable.
+        assert!(
+            store
+                .recheck_block_prevouts_with_overlay(&spender_hash, &ConfirmationOverlay::default())
+                .unwrap()
+        );
+
+        // The source's only confirmed block is reorged out this batch: its
+        // source txid is no longer confirmed.
+        let overlay = ConfirmationOverlay {
+            removed_blockhashes: HashSet::from([producing_hash]),
+            ..Default::default()
+        };
+        assert!(
+            !store
+                .recheck_block_prevouts_with_overlay(&spender_hash, &overlay)
+                .unwrap()
+        );
+
+        // The source was spent by an earlier block in this batch: double-spend.
+        let overlay = ConfirmationOverlay {
+            spent_in_batch: HashSet::from([source_outpoint]),
+            ..Default::default()
+        };
+        assert!(
+            !store
+                .recheck_block_prevouts_with_overlay(&spender_hash, &overlay)
+                .unwrap()
+        );
+
+        // Record a committed spend of the source (as if a confirmed block spent
+        // it). With no overlay it is now rejected.
+        let other_spender: bitcoin::Txid =
+            bitcoin::hashes::sha256d::Hash::from_byte_array([55u8; 32]).into();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_spend(&source_txid, 0, &other_spender, 0, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+        assert!(
+            !store
+                .recheck_block_prevouts_with_overlay(&spender_hash, &ConfirmationOverlay::default())
+                .unwrap()
+        );
+
+        // If the rewind removes that committed spend, the source is free again
+        // and the spender is confirmable.
+        let overlay = ConfirmationOverlay {
+            removed_spends: HashSet::from([source_outpoint]),
+            ..Default::default()
+        };
+        assert!(
+            store
+                .recheck_block_prevouts_with_overlay(&spender_hash, &overlay)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn test_confirmable_prefix_accepts_all_when_no_bodies() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let blocks = vec![
+            (
+                1u32,
+                TestShareBlockBuilder::new()
+                    .nonce(0xcc01)
+                    .build()
+                    .block_hash(),
+            ),
+            (
+                2u32,
+                TestShareBlockBuilder::new()
+                    .nonce(0xcc02)
+                    .build()
+                    .block_hash(),
+            ),
+        ];
+
+        let mut overlay = ConfirmationOverlay::default();
+        let (prefix_len, first_invalid) = store.confirmable_prefix(&blocks, &mut overlay).unwrap();
+
+        // Header-only blocks all pass the prevout re-check.
+        assert_eq!(prefix_len, 2);
+        assert!(first_invalid.is_none());
+        assert!(overlay.spent_in_batch.is_empty());
     }
 
     #[test]
