@@ -56,15 +56,13 @@ impl Store {
             self.find_promotable_candidates(&top_confirmed, candidate_tip_height, prune_height)?;
 
         if !candidates.is_empty() {
-            let promotable_height = candidates.last().unwrap().0;
-
             if self.should_extend_confirmed(
                 &candidates,
                 top_confirmed.height,
                 top_confirmed.hash,
                 prune_height,
             )? {
-                return self.extend_confirmed(promotable_height, &candidates, batch);
+                return self.extend_confirmed(&candidates, batch);
             }
 
             if self.should_reorg_confirmed(&top_confirmed, &candidates) {
