@@ -248,10 +248,10 @@ const TOP_CONFIRMED_KEY: &str = "meta:top_confirmed_height";
 1. **Extend candidate chain** (`extends_chain`): If the header's `prev_share_blockhash` matches the top candidate (or top confirmed as fallback), height is consecutive, and chain work is greater, it appends to the candidate index via `append_to_candidates`.
 
 2. **Reorg candidate chain** (`should_reorg_candidate` / `reorg_candidate`): If the header has more cumulative work than the current top candidate but doesn't extend it, the candidate chain is replaced:
-   - `get_branch_to_candidates` walks backward from the new share to find the branch point (first ancestor with `Candidate` status)
+   - `get_branch_to_chain` walks backward from the new share to find the branch point (the first ancestor already on the candidate or confirmed chain)
    - `get_candidates_chain` fetches the old candidate entries from the branch point to the top
-   - Old entries are deleted and reorged-out shares have their metadata set to `Status::Valid` (so `is_candidate()` stays correct for future branch point lookups)
-   - New branch entries are written and their metadata set to `Status::Candidate`
+   - Old entries are deleted and reorged-out shares have their membership cleared to `ChainMembership::None` (so `is_candidate()` stays correct for future branch point lookups). Their `Status` is left untouched: status records validation only, so a reorged-out block stays `BlockValid`
+   - New branch entries are written and their membership set to `ChainMembership::Candidate`
    - Top candidate height is set once at the end
 
 3. **No-op**: Header doesn't extend or outwork the current candidate chain.
@@ -283,6 +283,24 @@ an unvalidated or rejected block is never promoted, even when its body is stored
 The organise worker's `validate_mark_promote` marks a block `BlockValid` after
 chain-context validation and *before* it calls `organise_block`, so the block is
 already validated by the time this promotion path sees it.
+
+**Prevout re-check at confirmation**: `BlockValid` is not sufficient on its own,
+because prevout validity is relative to the confirmed chain and a block is
+validated before it is confirmed. Two cases slip past ingest validation: a reorg
+can move a spent output's source off the confirmed chain, and two blocks on one
+candidate chain can each spend the same output (neither sees the other's spend,
+since `SpendsIndex` is written only at confirmation). So `extend_confirmed` and
+`reorg_confirmed` re-check each block's prevouts as they promote it, against the
+confirmed state *the batch itself is building* -- a `WriteBatch` is opaque to
+reads, so the deltas are carried in a `ConfirmationOverlay` (blocks leaving the
+confirmed chain, the spends they release, and the spends applied so far in this
+batch). Only the leading run that passes is confirmed; the first block that fails
+is marked `Invalid`, which rebuilds the candidate chain from its parent. On a
+reorg the re-check and the work comparison both run *before* the rewind, so a
+fork whose surviving prefix no longer outweighs the confirmed chain leaves it
+untouched rather than regressing the tip. Coinbase maturity needs no re-check: it
+is measured at ingest against the block's own height (parent height + 1), which
+is fixed by chain position and so is reorg-invariant.
 
 ### Parent-gated block processing
 
@@ -370,8 +388,10 @@ same parent -- closing a race where a confirmation advancing between reads made
 a mined share's coinbase inconsistent with its declared parent.
 
 Resolving the window walks parent pointers back to a confirmed ancestor and:
-- only steps through *validated* (`Candidate` or `BlockValid`) blocks, so an
-  unvalidated block never contributes to a payout distribution;
+- follows `prev_share_blockhash` with no status or membership filter, stopping at
+  the first ancestor already inside the cached confirmed window. The blocks it
+  steps through are validated in practice because chain-context validation is
+  parent-gated, not because the walk itself checks;
 - returns an `Err` -- rather than a bootstrap or empty distribution -- on a
   store failure or an unresolvable anchor, so a transient read error cannot
   silently misdirect the reward. The producer pays the bootstrap address only
