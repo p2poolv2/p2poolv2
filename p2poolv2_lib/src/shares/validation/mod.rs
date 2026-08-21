@@ -47,6 +47,7 @@ use crate::shares::witness_commitment::WITNESS_COMMITMENT_LENGTH;
 use crate::sim_overrides;
 use crate::store::block_tx_metadata::{BlockMetadata, Status};
 use crate::store::dag_store::MAX_UNCLES_DEPTH;
+use crate::store::transaction_store::PrevoutCheck;
 use crate::store::writer::StoreError;
 use crate::stratum::work::coinbase::build_bitcoin_coinbase_transaction;
 use crate::stratum::work::gbt::compute_merkle_root_from_branches;
@@ -66,15 +67,18 @@ use std::sync::{Arc, RwLock};
 ///
 /// - `Consensus`: a rule was broken with all required data present. The block
 ///   is genuinely invalid and is marked `Invalid`.
-/// - `StoreAccess`: a *chain-context* check could not read data that
-///   must exist. Those checks run only once a block's parent is validated (the
-///   organise worker gates on this), so the confirmed ancestry they need is in
-///   the store; a read failing there is corruption or a bug, and the organise
-///   worker treats it as fatal rather than wrongly marking a valid block Invalid.
-/// - `Recoverable`: a *pre chain-context* check is missing a dependency that
-///   can still arrive -- an uncle, the parent, or an ancestor header not yet
-///   synced. This is neither a rule violation nor corruption: the block is
-///   retried when the dependency lands (the block receiver buffers it), so it is
+/// - `StoreAccess`: a read against the store itself failed -- a RocksDB error
+///   or an undecodable row -- or a chain-context check could not read data
+///   whose absence can only mean corruption. Those checks run only once a
+///   block's parent is validated (the organise worker gates on this), so the
+///   organise worker treats this as fatal rather than wrongly marking a valid
+///   block Invalid. It must never be used for a verdict a peer's block can
+///   provoke, or any peer could shut the node down.
+/// - `Recoverable`: a check could not be decided because data it needs is
+///   unavailable -- an uncle, the parent, or an ancestor header not yet synced,
+///   or a PPLNS anchor that no longer resolves against this node's window. This
+///   is neither a rule violation nor corruption: the block is left for a later
+///   retry (the block receiver buffers pre-context dependencies), so it is
 ///   never marked `Invalid` and never fatal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FailureKind {
@@ -102,8 +106,10 @@ impl ValidationError {
         }
     }
 
-    /// Create a store/data-access error: data that should be present could not
-    /// be read. When the parent is validated this indicates store corruption.
+    /// Create a store/data-access error: the read failed, or data whose
+    /// absence can only mean corruption could not be read. Never use this for
+    /// a verdict a peer-supplied block can provoke: the organise worker treats
+    /// it as fatal.
     pub fn store_access(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
@@ -111,9 +117,10 @@ impl ValidationError {
         }
     }
 
-    /// Create a recoverable error: a dependency (uncle, parent, or ancestor)
-    /// that can still arrive is not yet present. The block is retried when it
-    /// lands, so it is never marked Invalid.
+    /// Create a recoverable error: data the check needs (an uncle, the parent,
+    /// an ancestor header, or a resolvable PPLNS anchor) is not available, so
+    /// the block cannot be judged now. It is left for a later retry, never
+    /// marked Invalid and never fatal.
     pub fn recoverable(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
@@ -863,7 +870,7 @@ impl DefaultShareValidator {
                 chain_store_handle,
             )
             .map_err(|error| {
-                ValidationError::store_access(format!(
+                ValidationError::recoverable(format!(
                     "Failed to resolve PPLNS window from prev_share_blockhash: {error}"
                 ))
             })?;
@@ -1133,16 +1140,25 @@ impl ShareValidator for DefaultShareValidator {
         let mut ancestor_times = Vec::with_capacity(MTP_WINDOW);
         let mut current = share.header.prev_share_blockhash;
         while ancestor_times.len() < MTP_WINDOW && !is_terminal_blockhash(&current) {
-            let header = chain_store_handle
-                .get_share_header(&current)
-                .map_err(|err| {
-                    ValidationError::store_access(format!(
-                        "Failed to fetch ancestor header {current} for MTP check: {err}"
-                    ))
-                })?;
+            let header =
+                chain_store_handle
+                    .get_share_header(&current)
+                    .map_err(|err| match err {
+                        StoreError::NotFound(_) => ValidationError::recoverable(format!(
+                            "Ancestor header {current} for MTP check is not in the store: {err}"
+                        )),
+                        _ => ValidationError::store_access(format!(
+                            "Failed to fetch ancestor header {current} for MTP check: {err}"
+                        )),
+                    })?;
             ancestor_times.push(header.time);
             current = header.prev_share_blockhash;
         }
+        // The walk is empty only when the loop never ran, which needs a terminal
+        // (all-zeros) parent pointer: a share claiming to have no parent. The
+        // organise worker drops those before validation, because parent_state()
+        // finds no metadata for the terminal hash and reports the parent
+        // Unknown. So this is a fatal error.
         if ancestor_times.is_empty() {
             return Err(ValidationError::store_access(format!(
                 "No ancestor headers found for MTP check from parent {}",
@@ -1224,11 +1240,16 @@ impl DefaultShareValidator {
             })?
             + 1;
         let min_coinbase_root_height = block_height.saturating_sub(MAX_PPLNS_WINDOW_SHARES as u32);
-        let coinbase_outpoints = chain_store_handle
+        let coinbase_outpoints = match chain_store_handle
             .check_prevouts_and_find_coinbase(&all_outpoints, min_coinbase_root_height)
             .map_err(|error| {
                 ValidationError::store_access(format!("Prevout check failed: {error}"))
-            })?;
+            })? {
+            PrevoutCheck::Accepted(coinbase_outpoints) => coinbase_outpoints,
+            PrevoutCheck::Rejected(rejection) => {
+                return Err(ValidationError::consensus(rejection.to_string()));
+            }
+        };
         if chain_store_handle
             .is_any_prevout_spent(&all_outpoints)
             .map_err(|error| {
@@ -1330,6 +1351,7 @@ mod tests {
     use crate::shares::share_commitment::ShareCommitment;
     use crate::shares::witness_commitment::WitnessCommitment;
     use crate::store::block_tx_metadata::{BlockMetadata, ChainMembership};
+    use crate::store::transaction_store::PrevoutRejection;
     use crate::store::writer::StoreError;
     use crate::stratum::work::block_template::BlockTemplate;
     use crate::stratum::work::gbt::build_merkle_branches_for_template;
@@ -1495,11 +1517,32 @@ mod tests {
             .validate_timestamp(&share, &chain_store_handle, &time_provider)
             .unwrap_err();
         assert!(
-            error
-                .to_string()
-                .contains("Failed to fetch ancestor header"),
+            error.to_string().contains("is not in the store"),
             "unexpected error: {error}"
         );
+        // A header this node has not synced is not corruption: classifying it
+        // StoreAccess would make the organise worker treat it as fatal.
+        assert_eq!(error.kind(), FailureKind::Recoverable);
+    }
+
+    #[tokio::test]
+    async fn test_validate_timestamp_store_read_failure_is_store_access() {
+        let mut share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+        let mut time_provider = TestTimeProvider::new(SystemTime::now());
+        time_provider.set_time(bitcoin::absolute::Time::from_consensus(share.header.time).unwrap());
+
+        share.header.prev_share_blockhash = BlockHash::from_byte_array([7u8; 32]);
+        let mut chain_store_handle = ChainStoreHandle::default();
+        chain_store_handle
+            .expect_get_share_header()
+            .returning(|_hash| Err(StoreError::Database("rocksdb read failed".to_string())));
+
+        let error = validator()
+            .validate_timestamp(&share, &chain_store_handle, &time_provider)
+            .unwrap_err();
+        assert_eq!(error.kind(), FailureKind::StoreAccess);
     }
 
     #[tokio::test]
@@ -2573,7 +2616,9 @@ mod tests {
             .returning(|_txids| Ok(true));
         chain_store_handle
             .expect_check_prevouts_and_find_coinbase()
-            .returning(|_outpoints, _min_coinbase_root_height| Ok(Vec::new()));
+            .returning(|_outpoints, _min_coinbase_root_height| {
+                Ok(PrevoutCheck::Accepted(Vec::new()))
+            });
         chain_store_handle
             .expect_is_any_prevout_spent()
             .returning(|_outpoints| Ok(false));
@@ -2582,6 +2627,110 @@ mod tests {
             .build();
         let result = validator().validate_prevouts(&share, &chain_store_handle);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_prevouts_missing_output_is_a_consensus_failure() {
+        let mut chain_store_handle = ChainStoreHandle::default();
+        let (_spent_output, spending_tx) = build_p2sh_op_true_spent_output_and_spending_tx();
+        let missing = spending_tx.input[0].previous_output;
+
+        chain_store_handle
+            .expect_get_block_metadata()
+            .returning(|_| Ok(metadata_at_height(99)));
+        chain_store_handle
+            .expect_are_all_txids_confirmed()
+            .returning(|_txids| Ok(true));
+        chain_store_handle
+            .expect_check_prevouts_and_find_coinbase()
+            .returning(move |_outpoints, _min_coinbase_root_height| {
+                Ok(PrevoutCheck::Rejected(PrevoutRejection::MissingOutput(
+                    missing,
+                )))
+            });
+
+        let share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .add_transaction(spending_tx)
+            .build();
+
+        let error = validator()
+            .validate_prevouts(&share, &chain_store_handle)
+            .unwrap_err();
+        // A peer block spending an output this node does not have is invalid,
+        // not a local fault: StoreAccess here would stop the node.
+        assert_eq!(error.kind(), FailureKind::Consensus);
+        assert!(
+            error.to_string().contains("Output not found"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn test_validate_prevouts_expired_coinbase_root_is_a_consensus_failure() {
+        let mut chain_store_handle = ChainStoreHandle::default();
+        let (_spent_output, spending_tx) = build_p2sh_op_true_spent_output_and_spending_tx();
+        let outpoint = spending_tx.input[0].previous_output;
+
+        chain_store_handle
+            .expect_get_block_metadata()
+            .returning(|_| Ok(metadata_at_height(99)));
+        chain_store_handle
+            .expect_are_all_txids_confirmed()
+            .returning(|_txids| Ok(true));
+        chain_store_handle
+            .expect_check_prevouts_and_find_coinbase()
+            .returning(move |_outpoints, _min_coinbase_root_height| {
+                Ok(PrevoutCheck::Rejected(
+                    PrevoutRejection::CoinbaseRootTooOld {
+                        outpoint,
+                        coinbase_root_height: 1,
+                        minimum_height: 50,
+                    },
+                ))
+            });
+
+        let share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .add_transaction(spending_tx)
+            .build();
+
+        let error = validator()
+            .validate_prevouts(&share, &chain_store_handle)
+            .unwrap_err();
+        assert_eq!(error.kind(), FailureKind::Consensus);
+        assert!(
+            error.to_string().contains("coinbase_root_height"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn test_validate_prevouts_store_read_failure_is_store_access() {
+        let mut chain_store_handle = ChainStoreHandle::default();
+        let (_spent_output, spending_tx) = build_p2sh_op_true_spent_output_and_spending_tx();
+
+        chain_store_handle
+            .expect_get_block_metadata()
+            .returning(|_| Ok(metadata_at_height(99)));
+        chain_store_handle
+            .expect_are_all_txids_confirmed()
+            .returning(|_txids| Ok(true));
+        chain_store_handle
+            .expect_check_prevouts_and_find_coinbase()
+            .returning(|_outpoints, _min_coinbase_root_height| {
+                Err(StoreError::Database("rocksdb read failed".to_string()))
+            });
+
+        let share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .add_transaction(spending_tx)
+            .build();
+
+        let error = validator()
+            .validate_prevouts(&share, &chain_store_handle)
+            .unwrap_err();
+        assert_eq!(error.kind(), FailureKind::StoreAccess);
     }
 
     #[test]
@@ -2597,7 +2746,9 @@ mod tests {
             .returning(|_txids| Ok(true));
         chain_store_handle
             .expect_check_prevouts_and_find_coinbase()
-            .returning(|_outpoints, _min_coinbase_root_height| Ok(Vec::new()));
+            .returning(|_outpoints, _min_coinbase_root_height| {
+                Ok(PrevoutCheck::Accepted(Vec::new()))
+            });
         chain_store_handle
             .expect_is_any_prevout_spent()
             .returning(|_outpoints| Ok(false));
@@ -2681,7 +2832,9 @@ mod tests {
             .returning(|_txids| Ok(true));
         chain_store_handle
             .expect_check_prevouts_and_find_coinbase()
-            .returning(|_outpoints, _min_coinbase_root_height| Ok(Vec::new()));
+            .returning(|_outpoints, _min_coinbase_root_height| {
+                Ok(PrevoutCheck::Accepted(Vec::new()))
+            });
         chain_store_handle
             .expect_is_any_prevout_spent()
             .returning(|_outpoints| Ok(true));
@@ -2762,7 +2915,9 @@ mod tests {
                         .iter()
                         .any(|outpoint| outpoint.txid == producing_txid_for_check)
             })
-            .returning(|_outpoints, _min_coinbase_root_height| Ok(Vec::new()));
+            .returning(|_outpoints, _min_coinbase_root_height| {
+                Ok(PrevoutCheck::Accepted(Vec::new()))
+            });
         chain_store_handle
             .expect_is_any_prevout_spent()
             .withf(move |outpoints| outpoints.len() == 2)
@@ -2922,7 +3077,9 @@ mod tests {
         let coinbase_outpoint = bitcoin::OutPoint::new(bitcoin::Txid::all_zeros(), 0);
         chain_store_handle
             .expect_check_prevouts_and_find_coinbase()
-            .returning(move |_outpoints, _min_coinbase_root_height| Ok(vec![coinbase_outpoint]));
+            .returning(move |_outpoints, _min_coinbase_root_height| {
+                Ok(PrevoutCheck::Accepted(vec![coinbase_outpoint]))
+            });
         chain_store_handle
             .expect_is_any_prevout_spent()
             .returning(|_outpoints| Ok(false));
@@ -2971,7 +3128,9 @@ mod tests {
         let coinbase_outpoint = bitcoin::OutPoint::new(bitcoin::Txid::all_zeros(), 0);
         chain_store_handle
             .expect_check_prevouts_and_find_coinbase()
-            .returning(move |_outpoints, _min_coinbase_root_height| Ok(vec![coinbase_outpoint]));
+            .returning(move |_outpoints, _min_coinbase_root_height| {
+                Ok(PrevoutCheck::Accepted(vec![coinbase_outpoint]))
+            });
         chain_store_handle
             .expect_is_any_prevout_spent()
             .returning(|_outpoints| Ok(false));
@@ -3021,7 +3180,9 @@ mod tests {
         let coinbase_outpoint = bitcoin::OutPoint::new(bitcoin::Txid::all_zeros(), 0);
         chain_store_handle
             .expect_check_prevouts_and_find_coinbase()
-            .returning(move |_outpoints, _min_coinbase_root_height| Ok(vec![coinbase_outpoint]));
+            .returning(move |_outpoints, _min_coinbase_root_height| {
+                Ok(PrevoutCheck::Accepted(vec![coinbase_outpoint]))
+            });
         chain_store_handle
             .expect_is_any_prevout_spent()
             .returning(|_outpoints| Ok(false));
