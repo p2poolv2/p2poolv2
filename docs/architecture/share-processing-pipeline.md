@@ -174,11 +174,17 @@ validation, just before confirmation.
 - Error handling reacts to the validation failure kind (`FailureKind`):
   - `Consensus` (a rule broken with all data present): mark the block `Invalid`
     and continue; confirmation can then advance onto a valid sibling.
-  - `StoreAccess` (a chain-context check cannot read data that must exist given
-    a valid parent) and `StoreError::ChannelClosed`: both fatal -- return
-    `Err(OrganiseError)`, triggering node shutdown.
-  - `Recoverable` (a pre-context dependency that can still arrive): leave the
-    block for a later retry; never `Invalid`, never fatal.
+  - `StoreAccess` (the store read itself failed, or data whose absence can only
+    mean corruption is gone) and `StoreError::ChannelClosed`: both fatal --
+    return `Err(OrganiseError)`, triggering node shutdown. No verdict a
+    peer-supplied block can provoke may be classified this way, or any peer
+    could shut the node down: a prevout that is missing or outside the payout
+    window is `Consensus`, and an ancestor header or PPLNS anchor this node
+    cannot resolve locally is `Recoverable`.
+  - `Recoverable` (data the check needs is unavailable, so the block cannot be
+    judged now -- a pre-context dependency that can still arrive, a missing
+    ancestor header, or an unresolvable PPLNS anchor): leave the block for a
+    later retry; never `Invalid`, never fatal.
   - Channel close (all senders dropped) is clean shutdown
 
 ### NodeActor (`node/actor.rs`)

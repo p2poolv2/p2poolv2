@@ -48,7 +48,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 /// Channel capacity for shares pending organisation.
 const ORGANISE_CHANNEL_CAPACITY: usize = 8192;
@@ -348,9 +348,11 @@ impl OrganiseWorker {
                     return Ok(ProcessOutcome::Invalidated);
                 }
                 FailureKind::StoreAccess => {
-                    // The parent is validated, so the data these checks need
-                    // must exist. A store read failing here is corruption or
-                    // a bug -- fail fast rather than silently diverge.
+                    // The read against the store itself failed, or data whose
+                    // absence can only mean corruption is gone. Verdicts a
+                    // peer's block can provoke are classified Consensus or
+                    // Recoverable, so reaching here is a local fault: fail fast
+                    // rather than silently diverge.
                     error!(
                         "Fatal store error validating {blockhash} (parent is valid): {validation_error}"
                     );
@@ -361,12 +363,13 @@ impl OrganiseWorker {
                     });
                 }
                 FailureKind::Recoverable => {
-                    // Recoverable failures come from pre-context
-                    // checks and cannot arise from validate_with_chain_context,
-                    // so this is unexpected here. Defensively leave the block
-                    // for retry rather than marking it Invalid or crashing.
-                    error!(
-                        "Unexpected recoverable validation error for {blockhash} at organise: {validation_error}"
+                    // A chain-context check could not be decided because data
+                    // it needs is missing locally (an ancestor header, or a
+                    // PPLNS anchor this node's window can no longer resolve).
+                    // The block may well be valid, so leave it for retry rather
+                    // than marking it Invalid or crashing.
+                    warn!(
+                        "Recoverable validation error for {blockhash} at organise: {validation_error}"
                     );
                     return Ok(ProcessOutcome::NotAdvanced);
                 }

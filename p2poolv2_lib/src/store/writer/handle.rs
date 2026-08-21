@@ -25,6 +25,7 @@ use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::store::Store;
 use crate::store::stored_user::StoredUser;
+use crate::store::transaction_store::PrevoutCheck;
 use bitcoin::{BlockHash, Work};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -64,13 +65,13 @@ impl StoreHandle {
     }
 
     /// Batch-read all outpoints from the Outputs CF.
-    /// Returns an error if any is missing or has coinbase_root_height
-    /// below min_coinbase_root_height. Returns coinbase outpoints.
+    /// A missing outpoint or one below min_coinbase_root_height comes back as
+    /// `PrevoutCheck::Rejected`; `Err` means the read itself failed.
     pub fn check_prevouts_and_find_coinbase(
         &self,
         outpoints: &[bitcoin::OutPoint],
         min_coinbase_root_height: u32,
-    ) -> Result<Vec<bitcoin::OutPoint>, StoreError> {
+    ) -> Result<PrevoutCheck, StoreError> {
         self.store
             .check_prevouts_and_find_coinbase(outpoints, min_coinbase_root_height)
     }

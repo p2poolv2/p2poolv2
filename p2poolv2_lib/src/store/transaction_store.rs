@@ -23,6 +23,7 @@ use bitcoin::consensus::{self, Decodable, Encodable, encode};
 use bitcoin::{BlockHash, OutPoint, Transaction, Txid};
 use rocksdb::WriteBatch;
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use tracing::debug;
 
 /// Serialized outpoint size: 32B for Txid hash, 4B for index
@@ -128,6 +129,60 @@ pub(crate) struct ConfirmationOverlay {
     pub spent_in_batch: HashSet<OutPoint>,
 }
 
+/// Why a prevout check rejected a block.
+///
+/// These are facts about the block's inputs, established with all the data
+/// present, not failures to read the store: a block carrying either of them
+/// breaks a consensus rule and must be marked Invalid, never treated as
+/// corruption.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PrevoutRejection {
+    /// The outpoint has no entry in the `Outputs` column family, so the
+    /// output it spends does not exist on this node's view of the chain.
+    MissingOutput(OutPoint),
+    /// The output's coinbase root is older than the payout window allows.
+    CoinbaseRootTooOld {
+        outpoint: OutPoint,
+        coinbase_root_height: u32,
+        minimum_height: u32,
+    },
+}
+
+impl fmt::Display for PrevoutRejection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PrevoutRejection::MissingOutput(outpoint) => write!(
+                f,
+                "Output not found for {}:{}",
+                outpoint.txid, outpoint.vout
+            ),
+            PrevoutRejection::CoinbaseRootTooOld {
+                outpoint,
+                coinbase_root_height,
+                minimum_height,
+            } => write!(
+                f,
+                "Output {}:{} has coinbase_root_height {} below minimum {}",
+                outpoint.txid, outpoint.vout, coinbase_root_height, minimum_height
+            ),
+        }
+    }
+}
+
+/// Outcome of checking a block's prevouts against the `Outputs` column family.
+///
+/// Separates a consensus verdict from a store failure: the enum carries the
+/// verdict, while `Err(StoreError)` from the check is reserved for reads that
+/// actually failed (RocksDB errors, undecodable rows).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PrevoutCheck {
+    /// Every outpoint exists and is within the window. Carries the subset of
+    /// outpoints that belong to coinbase transactions.
+    Accepted(Vec<OutPoint>),
+    /// A consensus rule about the prevouts is broken.
+    Rejected(PrevoutRejection),
+}
+
 #[allow(dead_code)]
 impl Store {
     /// Retrieve all previous outputs being spent by a transaction's inputs.
@@ -175,17 +230,21 @@ impl Store {
 
     /// Batch-read all outpoints from the Outputs CF in a single multi_get.
     ///
-    /// Returns an error if any outpoint is missing or has a
-    /// coinbase_root_height below `min_coinbase_root_height`. On success,
-    /// returns the subset of outpoints that belong to coinbase
-    /// transactions.
+    /// A missing outpoint or one whose `coinbase_root_height` is below
+    /// `min_coinbase_root_height` is a fact about the block's inputs, not a
+    /// store failure, so it comes back as `Ok(PrevoutCheck::Rejected)` and the
+    /// caller can mark the block Invalid. `Err` is reserved for reads that
+    /// genuinely failed: a RocksDB error or an undecodable row.
+    ///
+    /// On acceptance the returned vector is the subset of `outpoints` that
+    /// belong to coinbase transactions.
     pub(crate) fn check_prevouts_and_find_coinbase(
         &self,
         outpoints: &[OutPoint],
         min_coinbase_root_height: u32,
-    ) -> Result<Vec<OutPoint>, StoreError> {
+    ) -> Result<PrevoutCheck, StoreError> {
         if outpoints.is_empty() {
-            return Ok(Vec::new());
+            return Ok(PrevoutCheck::Accepted(Vec::new()));
         }
         let outputs_cf = self.db.cf_handle(&ColumnFamily::Outputs).unwrap();
         let keys: Vec<String> = outpoints
@@ -198,29 +257,28 @@ impl Store {
             .collect();
         let mut coinbase_outpoints = Vec::new();
         for (index, result) in self.db.multi_get_cf(cf_keys).into_iter().enumerate() {
-            let data = result?.ok_or_else(|| {
-                StoreError::NotFound(format!(
-                    "Output not found for {}:{}",
-                    outpoints[index].txid, outpoints[index].vout
-                ))
-            })?;
+            let Some(data) = result? else {
+                return Ok(PrevoutCheck::Rejected(PrevoutRejection::MissingOutput(
+                    outpoints[index],
+                )));
+            };
             let stored: StoredTxOut = encode::deserialize(&data).map_err(|_| {
                 StoreError::Serialization("Failed to deserialize output".to_string())
             })?;
             if stored.coinbase_root_height < min_coinbase_root_height {
-                return Err(StoreError::Database(format!(
-                    "Output {}:{} has coinbase_root_height {} below minimum {}",
-                    outpoints[index].txid,
-                    outpoints[index].vout,
-                    stored.coinbase_root_height,
-                    min_coinbase_root_height,
-                )));
+                return Ok(PrevoutCheck::Rejected(
+                    PrevoutRejection::CoinbaseRootTooOld {
+                        outpoint: outpoints[index],
+                        coinbase_root_height: stored.coinbase_root_height,
+                        minimum_height: min_coinbase_root_height,
+                    },
+                ));
             }
             if stored.is_coinbase {
                 coinbase_outpoints.push(outpoints[index]);
             }
         }
-        Ok(coinbase_outpoints)
+        Ok(PrevoutCheck::Accepted(coinbase_outpoints))
     }
 
     /// Batch check the SpendsIndex column family: returns true if any
@@ -1425,7 +1483,7 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
         let result = store.check_prevouts_and_find_coinbase(&[], 0).unwrap();
-        assert!(result.is_empty());
+        assert_eq!(result, PrevoutCheck::Accepted(Vec::new()));
     }
 
     #[test]
@@ -1460,14 +1518,14 @@ mod tests {
             bitcoin::OutPoint::new(funding_txid, 0),
             bitcoin::OutPoint::new(funding_txid, 1),
         ];
-        let coinbase_outpoints = store
+        let result = store
             .check_prevouts_and_find_coinbase(&outpoints, 0)
             .unwrap();
-        assert!(coinbase_outpoints.is_empty());
+        assert_eq!(result, PrevoutCheck::Accepted(Vec::new()));
     }
 
     #[test]
-    fn test_check_prevouts_and_find_coinbase_errors_when_one_missing() {
+    fn test_check_prevouts_and_find_coinbase_rejects_when_one_missing() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
@@ -1494,8 +1552,16 @@ mod tests {
             bitcoin::OutPoint::new(funding_txid, 0),
             bitcoin::OutPoint::new(unknown_txid, 0),
         ];
-        let result = store.check_prevouts_and_find_coinbase(&outpoints, 0);
-        assert!(result.is_err());
+        let result = store
+            .check_prevouts_and_find_coinbase(&outpoints, 0)
+            .expect("a missing output is a rejection, not a store error");
+        assert_eq!(
+            result,
+            PrevoutCheck::Rejected(PrevoutRejection::MissingOutput(bitcoin::OutPoint::new(
+                unknown_txid,
+                0
+            )))
+        );
     }
 
     #[test]
@@ -1544,11 +1610,13 @@ mod tests {
             bitcoin::OutPoint::new(coinbase_txid, 0),
             bitcoin::OutPoint::new(regular_txid, 0),
         ];
-        let coinbase_outpoints = store
+        let result = store
             .check_prevouts_and_find_coinbase(&outpoints, 0)
             .unwrap();
-        assert_eq!(coinbase_outpoints.len(), 1);
-        assert_eq!(coinbase_outpoints[0].txid, coinbase_txid);
+        assert_eq!(
+            result,
+            PrevoutCheck::Accepted(vec![bitcoin::OutPoint::new(coinbase_txid, 0)])
+        );
     }
 
     #[test]
@@ -1582,23 +1650,25 @@ mod tests {
         let outpoints = vec![bitcoin::OutPoint::new(coinbase_txid, 0)];
 
         // min_coinbase_root_height = 100: output at height 50 is expired
-        let result = store.check_prevouts_and_find_coinbase(&outpoints, 100);
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("coinbase_root_height"),
-            "Expected coinbase_root_height error"
+        let result = store
+            .check_prevouts_and_find_coinbase(&outpoints, 100)
+            .expect("an expired coinbase root is a rejection, not a store error");
+        assert_eq!(
+            result,
+            PrevoutCheck::Rejected(PrevoutRejection::CoinbaseRootTooOld {
+                outpoint: bitcoin::OutPoint::new(coinbase_txid, 0),
+                coinbase_root_height: 50,
+                minimum_height: 100,
+            })
         );
 
         // min_coinbase_root_height = 50: output at height 50 is exactly at boundary
         let result = store.check_prevouts_and_find_coinbase(&outpoints, 50);
-        assert!(result.is_ok());
+        assert!(matches!(result, Ok(PrevoutCheck::Accepted(_))));
 
         // min_coinbase_root_height = 0: no filtering
         let result = store.check_prevouts_and_find_coinbase(&outpoints, 0);
-        assert!(result.is_ok());
+        assert!(matches!(result, Ok(PrevoutCheck::Accepted(_))));
     }
 
     #[test]
@@ -1683,18 +1753,21 @@ mod tests {
         let outpoints = vec![bitcoin::OutPoint::new(spend2_txid, 0)];
 
         // min = 100: root height 50 is expired
-        let result = store.check_prevouts_and_find_coinbase(&outpoints, 100);
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("coinbase_root_height"),
+        let result = store
+            .check_prevouts_and_find_coinbase(&outpoints, 100)
+            .expect("an expired coinbase root is a rejection, not a store error");
+        assert_eq!(
+            result,
+            PrevoutCheck::Rejected(PrevoutRejection::CoinbaseRootTooOld {
+                outpoint: bitcoin::OutPoint::new(spend2_txid, 0),
+                coinbase_root_height: 50,
+                minimum_height: 100,
+            })
         );
 
         // min = 50: root height 50 is at boundary, passes
         let result = store.check_prevouts_and_find_coinbase(&outpoints, 50);
-        assert!(result.is_ok());
+        assert!(matches!(result, Ok(PrevoutCheck::Accepted(_))));
     }
 
     #[test]
