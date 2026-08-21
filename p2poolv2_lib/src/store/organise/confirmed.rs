@@ -173,6 +173,15 @@ impl Store {
     /// Walks from the candidate tip backward to the first confirmed ancestor
     /// (fork point), replaces the confirmed entries from fork point to top
     /// with the new branch, and cleans up the candidate index.
+    ///
+    /// Each fork block's prevouts are re-checked against the confirmed state
+    /// this reorg produces before it is confirmed: the reorged-out suffix stops
+    /// counting as a confirmed prevout source, its spends are removed, and
+    /// spends by earlier fork blocks are applied. Only the leading run that
+    /// passes is confirmed and the first failing block is marked Invalid. The
+    /// re-check and the work comparison run before any rewind, so a fork whose
+    /// surviving prefix no longer outweighs the confirmed chain leaves it
+    /// untouched rather than regressing it.
     pub(super) fn reorg_confirmed(
         &self,
         top_confirmed: &TopResult,
@@ -210,41 +219,142 @@ impl Store {
         }
 
         let reorged_out_chain = self.get_confirmed_chain(fork_point, Some(top_confirmed))?;
+        let mut overlay = self.reorg_out_overlay(&reorged_out_chain, fork_point)?;
 
-        // Delete old confirmed index entries, remove their spends from
-        // SpendsIndex, and set reorged-out shares to HeaderValid.
-        for (height, unconfirm) in &reorged_out_chain {
+        // The fork branch heads with the already-confirmed fork point; the rest
+        // are the blocks this reorg would newly confirm, in confirmation order.
+        let fork_blocks_with_heights = self.blocks_with_heights(&fork_hashes)?;
+        let (fork_block_and_height, new_blocks_with_heights) =
+            fork_blocks_with_heights.split_first().ok_or_else(|| {
+                StoreError::NotFound("Empty branch returned from get_branch_to_chain.".into())
+            })?;
+
+        let (prefix_len, first_invalid) =
+            self.confirmable_prefix(new_blocks_with_heights, &mut overlay)?;
+        let confirmable = &new_blocks_with_heights[..prefix_len];
+
+        // Reorg only if the fork blocks that survive the re-check still outweigh
+        // the confirmed chain, so a truncated fork never regresses the tip.
+        let (_, prefix_tip) = confirmable.last().unwrap_or(fork_block_and_height);
+        if self.get_block_metadata(prefix_tip)?.chain_work <= top_confirmed.work {
+            debug!("Reorg skipped: validated fork prefix does not outweigh confirmed chain");
+            if let Some(invalid_hash) = first_invalid {
+                self.mark_invalid(&invalid_hash, batch)?;
+            }
+            return Ok(None);
+        }
+
+        self.rewind_confirmed_entries(&reorged_out_chain, batch)?;
+
+        // Rewrite the fork point (the rewind removed it) followed by the
+        // validated prefix of the fork branch.
+        let mut to_confirm_list = Vec::with_capacity(prefix_len + 1);
+        to_confirm_list.push(*fork_block_and_height);
+        to_confirm_list.extend_from_slice(confirmable);
+        let new_top_height = self.confirm_blocks(&to_confirm_list, batch)?;
+
+        if let Some(invalid_hash) = first_invalid {
+            debug!("Reorg stopped at {invalid_hash}: prevout re-check failed, marking Invalid");
+            self.mark_invalid(&invalid_hash, batch)?;
+        }
+
+        tracing::info!("Chain reorg completed to height {new_top_height:?}");
+        Ok(new_top_height)
+    }
+
+    /// Describe what a reorg removes from the confirmed chain: the blocks that
+    /// leave it and the spends they unspend.
+    ///
+    /// `reorged_out_chain` heads with the fork point, which stays confirmed (it
+    /// is rewritten after the rewind), so the fork point is excluded.
+    fn reorg_out_overlay(
+        &self,
+        reorged_out_chain: &Chain,
+        fork_point: &BlockHash,
+    ) -> Result<ConfirmationOverlay, StoreError> {
+        let mut overlay = ConfirmationOverlay {
+            removed_blockhashes: HashSet::with_capacity(reorged_out_chain.len()),
+            ..Default::default()
+        };
+        for (_, unconfirm) in reorged_out_chain {
+            if unconfirm != fork_point {
+                overlay.removed_blockhashes.insert(*unconfirm);
+                self.accumulate_spent_outpoints(unconfirm, &mut overlay.removed_spends)?;
+            }
+        }
+        Ok(overlay)
+    }
+
+    /// Pair each blockhash with its expected height, preserving order.
+    ///
+    /// Errors when a block has no metadata or no expected height: both are
+    /// required to place it on the confirmed chain.
+    fn blocks_with_heights(
+        &self,
+        blockhashes: &[BlockHash],
+    ) -> Result<Vec<(Height, BlockHash)>, StoreError> {
+        let mut blocks = Vec::with_capacity(blockhashes.len());
+        for blockhash in blockhashes {
+            let height = self
+                .get_block_metadata(blockhash)?
+                .expected_height
+                .ok_or_else(|| {
+                    StoreError::NotFound(format!(
+                        "Block {blockhash} metadata missing expected_height for confirmation"
+                    ))
+                })?;
+            blocks.push((height, *blockhash));
+        }
+        Ok(blocks)
+    }
+
+    /// Take `reorged_out_chain` off the confirmed chain: drop each confirmed
+    /// index entry, remove the spends its transactions recorded, and clear its
+    /// chain membership.
+    ///
+    /// Membership drops to `None` rather than `Candidate` because `Candidate`
+    /// is reserved for blocks on the candidate chain; a block that is later
+    /// reorged back into the candidate chain is marked then.
+    fn rewind_confirmed_entries(
+        &self,
+        reorged_out_chain: &Chain,
+        batch: &mut rocksdb::WriteBatch,
+    ) -> Result<(), StoreError> {
+        for (height, unconfirm) in reorged_out_chain {
             self.delete_confirmed_entry(*height, batch);
             let reorged_out_txs = self.get_txs_by_blockhash_index(unconfirm)?;
             self.remove_spends_for_block(&reorged_out_txs, batch);
             let mut metadata = self.get_block_metadata(unconfirm)?;
-
-            // Mark as valid, because Candidate status is limited to those on candidate chain
-            // When these are again reorged into candidates chain, they will be marked as candidate again
             metadata.chain = ChainMembership::None;
             self.update_block_metadata(unconfirm, &metadata, batch)?;
         }
+        Ok(())
+    }
 
-        // Write new fork entries and update their metadata status to Confirmed
-        let mut new_top_height = 0u32;
-        for to_confirm in &fork_branch {
-            let mut metadata = self.get_block_metadata(to_confirm)?;
-            let height = metadata.expected_height.ok_or_else(|| {
-                StoreError::NotFound(
-                    "Block metadata missing expected_height for confirmed reorg".into(),
-                )
-            })?;
-            self.put_confirmed_entry(height, to_confirm, batch)?;
-
+    /// Confirm `blocks` in order: write each confirmed index entry, mark its
+    /// metadata Confirmed, and advance the top confirmed height to the last of
+    /// them. Returns the new top confirmed height, or None when `blocks` is
+    /// empty (nothing was confirmed, so the top is left alone).
+    ///
+    /// Shared by the extend and reorg paths, which differ only in which blocks
+    /// they hand over.
+    fn confirm_blocks(
+        &self,
+        blocks: &[(Height, BlockHash)],
+        batch: &mut rocksdb::WriteBatch,
+    ) -> Result<Option<Height>, StoreError> {
+        let mut new_top_height = None;
+        for (height, blockhash) in blocks {
+            self.put_confirmed_entry(*height, blockhash, batch)?;
+            let mut metadata = self.get_block_metadata(blockhash)?;
             metadata.chain = ChainMembership::Confirmed;
-            self.update_block_metadata(to_confirm, &metadata, batch)?;
-
-            new_top_height = height;
+            self.update_block_metadata(blockhash, &metadata, batch)?;
+            new_top_height = Some(*height);
         }
-
-        self.set_top_confirmed_height(new_top_height, batch);
-        tracing::info!("Chain reorg completed to height {new_top_height}");
-        Ok(Some(new_top_height))
+        if let Some(top_height) = new_top_height {
+            self.set_top_confirmed_height(top_height, batch);
+        }
+        Ok(new_top_height)
     }
 
     /// Write a confirmed index entry and record every spend that the
@@ -483,26 +593,14 @@ impl Store {
             ..Default::default()
         };
         let (prefix_len, first_invalid) = self.confirmable_prefix(candidates, &mut overlay)?;
-
-        for (candidate_height, candidate_hash) in &candidates[..prefix_len] {
-            self.put_confirmed_entry(*candidate_height, candidate_hash, batch)?;
-            let mut metadata = self.get_block_metadata(candidate_hash)?;
-            metadata.chain = ChainMembership::Confirmed;
-            self.update_block_metadata(candidate_hash, &metadata, batch)?;
-        }
+        let new_top_height = self.confirm_blocks(&candidates[..prefix_len], batch)?;
 
         if let Some(invalid_hash) = first_invalid {
             debug!("Extend stopped at {invalid_hash}: prevout re-check failed, marking Invalid");
             self.mark_invalid(&invalid_hash, batch)?;
         }
 
-        match candidates[..prefix_len].last() {
-            Some((top_height, _)) => {
-                self.set_top_confirmed_height(*top_height, batch);
-                Ok(Some(*top_height))
-            }
-            None => Ok(None),
-        }
+        Ok(new_top_height)
     }
 }
 
@@ -2161,6 +2259,533 @@ mod tests {
                 .status,
             Status::Invalid,
             "the double-spending block must be marked Invalid"
+        );
+    }
+
+    /// A fork block that spends an output whose source leaves the confirmed
+    /// chain in this very reorg must not be confirmed.
+    ///
+    /// Setup: genesis(confirmed h:0) -> share_a(confirmed h:1)
+    ///        fork_1(h:1, more work, parent=genesis)
+    ///        fork_2(h:2, parent=fork_1) spends share_a's coinbase output
+    /// Action: reorg_confirmed with fork_2 as the candidate tip
+    /// After:  fork_1 is confirmed, fork_2 is Invalid and not confirmed
+    #[test]
+    fn test_reorg_confirmed_rejects_fork_block_spending_reorged_out_source() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xf1000001).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // share_a is confirmed at height 1 and carries a funding transaction
+        // that exists only in it, so the reorg takes that source off the
+        // confirmed chain. (Every builder block shares one coinbase txid, so a
+        // coinbase cannot serve as a source unique to one block.)
+        let funding_tx = bitcoin::Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint::new(bitcoin::Txid::all_zeros(), u32::MAX),
+                script_sig: bitcoin::ScriptBuf::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::new(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(4_242),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        };
+        let source_outpoint = bitcoin::OutPoint::new(funding_tx.compute_txid(), 0);
+        let share_a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xf1000002)
+            .add_transaction(funding_tx)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&share_a, &mut batch).unwrap();
+        let mut metadata_a = BlockMetadata {
+            expected_height: Some(1),
+            chain_work: share_a.header.get_work(),
+            status: Status::BlockValid,
+            chain: ChainMembership::None,
+        };
+        store
+            .update_block_metadata(&share_a.block_hash(), &metadata_a, &mut batch)
+            .unwrap();
+        store
+            .append_to_confirmed(&share_a.block_hash(), 1, &mut metadata_a, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let fork_1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .work(4)
+            .nonce(0xf1000003)
+            .build();
+        assert!(
+            fork_1.header.get_work() > share_a.header.get_work(),
+            "test precondition: the fork must outweigh the confirmed chain"
+        );
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&fork_1, &mut batch).unwrap();
+        let mut fork_1_metadata = BlockMetadata {
+            expected_height: Some(1),
+            chain_work: fork_1.header.get_work(),
+            status: Status::BlockValid,
+            chain: ChainMembership::None,
+        };
+        store
+            .update_block_metadata(&fork_1.block_hash(), &fork_1_metadata, &mut batch)
+            .unwrap();
+        store
+            .append_to_candidates(&fork_1.block_hash(), 1, &mut fork_1_metadata, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // fork_2 spends share_a's coinbase, which this reorg unconfirms.
+        let spending_tx = bitcoin::Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: source_outpoint,
+                script_sig: bitcoin::ScriptBuf::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::new(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(1_000),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        };
+        let fork_2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(fork_1.block_hash().to_string())
+            .work(4)
+            .nonce(0xf1000004)
+            .add_transaction(spending_tx)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&fork_2, &mut batch).unwrap();
+        let mut fork_2_metadata = BlockMetadata {
+            expected_height: Some(2),
+            chain_work: fork_1_metadata.chain_work + fork_2.header.get_work(),
+            status: Status::BlockValid,
+            chain: ChainMembership::None,
+        };
+        store
+            .update_block_metadata(&fork_2.block_hash(), &fork_2_metadata, &mut batch)
+            .unwrap();
+        store
+            .append_to_candidates(&fork_2.block_hash(), 2, &mut fork_2_metadata, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let top_confirmed = store.get_top_confirmed().unwrap();
+        let candidates = vec![(2, fork_2.block_hash())];
+        let mut batch = Store::get_write_batch();
+        let new_top = store
+            .reorg_confirmed(&top_confirmed, &candidates, 0, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert_eq!(new_top, Some(1), "the reorg must stop below fork_2");
+        assert_eq!(
+            store.get_confirmed_at_height(1).unwrap(),
+            fork_1.block_hash()
+        );
+        assert!(
+            store.get_confirmed_at_height(2).is_err(),
+            "fork_2 spends a source this reorg unconfirmed, so it must not confirm"
+        );
+        assert_eq!(
+            store
+                .get_block_metadata(&fork_2.block_hash())
+                .unwrap()
+                .status,
+            Status::Invalid
+        );
+    }
+
+    /// When the fork blocks that survive the prevout re-check no longer
+    /// outweigh the confirmed chain, the reorg is abandoned rather than
+    /// regressing the confirmed tip onto a weaker branch.
+    ///
+    /// Setup: genesis(confirmed h:0) -> share_a(confirmed h:1, heavy)
+    ///        fork_1(h:1, lighter than share_a, parent=genesis)
+    ///        fork_2(h:2, parent=fork_1) spends share_a's coinbase output,
+    ///        so the full fork outweighs share_a but fork_1 alone does not
+    /// Action: reorg_confirmed with fork_2 as the candidate tip
+    /// After:  no reorg, share_a stays confirmed, fork_2 is Invalid
+    #[test]
+    fn test_reorg_confirmed_aborts_when_validated_prefix_lacks_work() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xf2000001).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // A funding transaction that exists only in share_a, so the reorg takes
+        // its source off the confirmed chain.
+        let funding_tx = bitcoin::Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint::new(bitcoin::Txid::all_zeros(), u32::MAX),
+                script_sig: bitcoin::ScriptBuf::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::new(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(5_353),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        };
+        let source_outpoint = bitcoin::OutPoint::new(funding_tx.compute_txid(), 0);
+        let share_a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .work(4)
+            .nonce(0xf2000002)
+            .add_transaction(funding_tx)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&share_a, &mut batch).unwrap();
+        let mut metadata_a = BlockMetadata {
+            expected_height: Some(1),
+            chain_work: share_a.header.get_work(),
+            status: Status::BlockValid,
+            chain: ChainMembership::None,
+        };
+        store
+            .update_block_metadata(&share_a.block_hash(), &metadata_a, &mut batch)
+            .unwrap();
+        store
+            .append_to_confirmed(&share_a.block_hash(), 1, &mut metadata_a, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let fork_1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xf2000003)
+            .build();
+        assert!(
+            fork_1.header.get_work() < share_a.header.get_work(),
+            "test precondition: fork_1 alone must not outweigh share_a"
+        );
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&fork_1, &mut batch).unwrap();
+        let mut fork_1_metadata = BlockMetadata {
+            expected_height: Some(1),
+            chain_work: fork_1.header.get_work(),
+            status: Status::BlockValid,
+            chain: ChainMembership::None,
+        };
+        store
+            .update_block_metadata(&fork_1.block_hash(), &fork_1_metadata, &mut batch)
+            .unwrap();
+        store
+            .append_to_candidates(&fork_1.block_hash(), 1, &mut fork_1_metadata, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let spending_tx = bitcoin::Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: source_outpoint,
+                script_sig: bitcoin::ScriptBuf::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::new(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(1_000),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        };
+        let fork_2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(fork_1.block_hash().to_string())
+            .work(8)
+            .nonce(0xf2000004)
+            .add_transaction(spending_tx)
+            .build();
+        let fork_2_work = fork_1_metadata.chain_work + fork_2.header.get_work();
+        assert!(
+            fork_2_work > share_a.header.get_work(),
+            "test precondition: the full fork must outweigh share_a"
+        );
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&fork_2, &mut batch).unwrap();
+        let mut fork_2_metadata = BlockMetadata {
+            expected_height: Some(2),
+            chain_work: fork_2_work,
+            status: Status::BlockValid,
+            chain: ChainMembership::None,
+        };
+        store
+            .update_block_metadata(&fork_2.block_hash(), &fork_2_metadata, &mut batch)
+            .unwrap();
+        store
+            .append_to_candidates(&fork_2.block_hash(), 2, &mut fork_2_metadata, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let top_confirmed = store.get_top_confirmed().unwrap();
+        let candidates = vec![(2, fork_2.block_hash())];
+        let mut batch = Store::get_write_batch();
+        let new_top = store
+            .reorg_confirmed(&top_confirmed, &candidates, 0, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert_eq!(new_top, None, "the reorg must be abandoned");
+        assert_eq!(
+            store.get_confirmed_at_height(1).unwrap(),
+            share_a.block_hash(),
+            "the confirmed chain must be left untouched"
+        );
+        assert_eq!(store.get_top_confirmed_height().unwrap(), 1);
+        assert_eq!(
+            store
+                .get_block_metadata(&share_a.block_hash())
+                .unwrap()
+                .chain,
+            ChainMembership::Confirmed
+        );
+        assert_eq!(
+            store
+                .get_block_metadata(&fork_2.block_hash())
+                .unwrap()
+                .status,
+            Status::Invalid
+        );
+    }
+
+    /// A fork block may re-spend an output that the reorged-out branch had
+    /// spent: the rewind releases that spend, so the output is free again.
+    /// Guards against rejecting a valid fork block by consulting the committed
+    /// SpendsIndex without accounting for the spends this reorg removes.
+    ///
+    /// Setup: genesis(confirmed h:0) holds the funding coinbase output
+    ///        share_a(confirmed h:1) spends it
+    ///        fork_1(h:1, more work, parent=genesis) spends the SAME output
+    /// Action: reorg_confirmed with fork_1 as the candidate tip
+    /// After:  fork_1 is confirmed and stays BlockValid
+    #[test]
+    fn test_reorg_confirmed_allows_respend_of_reorged_out_spend() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xf3000001).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // The funding output lives in genesis, which is the fork point and so
+        // stays confirmed across the reorg.
+        let source_outpoint = bitcoin::OutPoint::new(genesis.transactions[0].0.compute_txid(), 0);
+        let spend_of = |value: u64| bitcoin::Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: source_outpoint,
+                script_sig: bitcoin::ScriptBuf::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::new(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(value),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        };
+
+        let share_a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xf3000002)
+            .add_transaction(spend_of(1_000))
+            .build();
+        // Commit the block before confirming it: put_confirmed_entry reads the
+        // committed body to record its spends.
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&share_a, &mut batch).unwrap();
+        let mut metadata_a = BlockMetadata {
+            expected_height: Some(1),
+            chain_work: share_a.header.get_work(),
+            status: Status::BlockValid,
+            chain: ChainMembership::None,
+        };
+        store
+            .update_block_metadata(&share_a.block_hash(), &metadata_a, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let mut batch = Store::get_write_batch();
+        store
+            .append_to_confirmed(&share_a.block_hash(), 1, &mut metadata_a, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+        assert!(
+            store.is_any_prevout_spent(&[source_outpoint]).unwrap(),
+            "test precondition: the confirmed chain spends the output"
+        );
+
+        // fork_1 spends the same output with a different transaction.
+        let fork_1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .work(4)
+            .nonce(0xf3000003)
+            .add_transaction(spend_of(900))
+            .build();
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&fork_1, &mut batch).unwrap();
+        let mut fork_1_metadata = BlockMetadata {
+            expected_height: Some(1),
+            chain_work: fork_1.header.get_work(),
+            status: Status::BlockValid,
+            chain: ChainMembership::None,
+        };
+        store
+            .update_block_metadata(&fork_1.block_hash(), &fork_1_metadata, &mut batch)
+            .unwrap();
+        store
+            .append_to_candidates(&fork_1.block_hash(), 1, &mut fork_1_metadata, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let top_confirmed = store.get_top_confirmed().unwrap();
+        let candidates = vec![(1, fork_1.block_hash())];
+        let mut batch = Store::get_write_batch();
+        let new_top = store
+            .reorg_confirmed(&top_confirmed, &candidates, 0, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert_eq!(new_top, Some(1));
+        assert_eq!(
+            store.get_confirmed_at_height(1).unwrap(),
+            fork_1.block_hash(),
+            "the re-spending fork block is valid once the old spend is released"
+        );
+        assert_eq!(
+            store
+                .get_block_metadata(&fork_1.block_hash())
+                .unwrap()
+                .status,
+            Status::BlockValid,
+            "a valid re-spend must not be marked Invalid"
+        );
+        assert!(
+            store.is_any_prevout_spent(&[source_outpoint]).unwrap(),
+            "the output is now spent by the fork block"
+        );
+    }
+
+    /// When the very first candidate fails the prevout re-check, nothing is
+    /// confirmed and the confirmed chain is left exactly as it was. Guards
+    /// against resetting the top confirmed height when the confirmable prefix
+    /// is empty.
+    ///
+    /// Setup: genesis(confirmed h:0) -> share_a(confirmed h:1) spends an output
+    ///        spender(h:2, BlockValid, candidate) spends the SAME output
+    /// Action: extend_confirmed over the single double-spending candidate
+    /// After:  nothing confirmed, top stays at 1, the spender is Invalid
+    #[test]
+    fn test_extend_confirmed_keeps_chain_when_first_candidate_fails() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xf6000001).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let source_outpoint = bitcoin::OutPoint::new(genesis.transactions[0].0.compute_txid(), 0);
+        let spend_of = |value: u64| bitcoin::Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: source_outpoint,
+                script_sig: bitcoin::ScriptBuf::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::new(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(value),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        };
+
+        // share_a is confirmed at height 1 and spends the output.
+        let share_a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xf6000002)
+            .add_transaction(spend_of(1_000))
+            .build();
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&share_a, &mut batch).unwrap();
+        let mut metadata_a = BlockMetadata {
+            expected_height: Some(1),
+            chain_work: share_a.header.get_work(),
+            status: Status::BlockValid,
+            chain: ChainMembership::None,
+        };
+        store
+            .update_block_metadata(&share_a.block_hash(), &metadata_a, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+        let mut batch = Store::get_write_batch();
+        store
+            .append_to_confirmed(&share_a.block_hash(), 1, &mut metadata_a, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // The only candidate spends the same output, so the confirmable prefix
+        // is empty.
+        let spender = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_a.block_hash().to_string())
+            .nonce(0xf6000003)
+            .add_transaction(spend_of(900))
+            .build();
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&spender, &mut batch).unwrap();
+        let mut spender_metadata = BlockMetadata {
+            expected_height: Some(2),
+            chain_work: spender.header.get_work(),
+            status: Status::BlockValid,
+            chain: ChainMembership::None,
+        };
+        store
+            .update_block_metadata(&spender.block_hash(), &spender_metadata, &mut batch)
+            .unwrap();
+        store
+            .append_to_candidates(&spender.block_hash(), 2, &mut spender_metadata, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let candidates = vec![(2, spender.block_hash())];
+        let mut batch = Store::get_write_batch();
+        let new_top = store.extend_confirmed(&candidates, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert_eq!(new_top, None, "nothing may be confirmed");
+        assert_eq!(
+            store.get_top_confirmed_height().unwrap(),
+            1,
+            "the confirmed tip must not move"
+        );
+        assert_eq!(
+            store.get_confirmed_at_height(1).unwrap(),
+            share_a.block_hash()
+        );
+        assert!(store.get_confirmed_at_height(2).is_err());
+        assert_eq!(
+            store
+                .get_block_metadata(&spender.block_hash())
+                .unwrap()
+                .status,
+            Status::Invalid
         );
     }
 
