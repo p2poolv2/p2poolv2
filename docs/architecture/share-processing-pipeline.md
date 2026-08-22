@@ -58,8 +58,8 @@ The share processing pipeline is designed to:
     |   | - On Consensus failure:                  |
     |   |   sends InvalidBlock to organise         |
     |   | - On Recoverable failure:                |
-    |   |   nothing (see "Recoverable failures     |
-    |   |   have no retry path" below)             |
+    |   |   nothing (see "Retrying a block that    |
+    |   |   failed without a verdict" below)       |
     |   +----+-----------------+-------------------+
     |        |                 |
     |        | organise_tx     | swarm_tx
@@ -139,13 +139,32 @@ the body since `share_block_exists` is true. The retry is therefore
 opportunistic -- it depends on a peer sending the block again, which this node
 does not solicit.
 
-The BlockReceiver's gate makes the common causes unreachable (the parent is
-`HeaderValid+` and every uncle body is stored before dispatch), but not all of
-them: `collect_recent_ancestors` walks `MAX_UNCLES_DEPTH` of ancestry, and an
-uncle's `expected_height` may be absent. Note the parent gate accepts a header
-without a body, since header sync writes `HeaderValid` in `organise_header`
-before any body is fetched. Until a re-delivery arrives, such a block stalls,
-and in the PPLNS zone a stalled candidate stops confirmation at its height.
+The BlockReceiver's ancestry gate (below) makes the common causes unreachable,
+but not all of them: `collect_recent_ancestors` walks `MAX_UNCLES_DEPTH` of
+ancestry, and an uncle's `expected_height` may be absent. Until a re-delivery
+arrives, such a block stalls, and in the PPLNS zone a stalled candidate stops
+confirmation at its height.
+
+### BlockReceiver ancestry gate
+
+`process_share_block` holds a block in `pending` until its parent and every
+uncle either has its **block body** stored or sits below `prune_height`
+(`candidate tip - PRUNE_DEPTH`), checked by
+`ChainStoreHandle::all_block_and_uncle_data_available`. `drive_descendants`
+re-checks and releases buffered blocks each time one commits.
+
+Gating on bodies rather than header status is what makes ancestry data an
+induction: every ancestor down to the prune boundary has its body, so the
+Outputs CF holds the transactions of every block a descendant may spend from.
+Header status would not give this -- header sync marks a whole range
+`HeaderValid` via `organise_header` before any body is fetched, so a child
+could otherwise be validated while its parent's transactions are still missing,
+and `collect_spent_outputs` would fail on a block that is perfectly valid.
+
+Blocks below `prune_height` are exempt because their bodies are never fetched;
+requiring one would stall the chain permanently at the boundary. Spends cannot
+reach below it either: `min_coinbase_root_height` caps them one window back
+(`MAX_PPLNS_WINDOW_SHARES`) while bodies are retained for two (`PRUNE_DEPTH`).
 
 ### OrganiseEvent::InvalidBlock(BlockHash)
 - **Purpose**: Record that a block failed pre-context validation
