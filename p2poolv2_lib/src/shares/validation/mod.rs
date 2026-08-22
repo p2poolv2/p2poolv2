@@ -297,6 +297,16 @@ pub trait ShareValidator {
         share_header: &ShareHeader,
     ) -> Result<(), ValidationError>;
 
+    /// Validate that the total size of the share's transactions is within
+    /// `BLOCK_TXS_SIZE_LIMIT`.
+    ///
+    /// Part of the ddos prevention gate alongside `validate_header_minimum_difficulty`:
+    /// it reads only the block's own transactions, so it can run before the
+    /// block is buffered or stored. Without it the only size bound on an
+    /// incoming block is the transport's `MAX_MSG_SIZE`, letting one
+    /// minimum-difficulty share pin far more memory than it costs to produce.
+    fn validate_block_size(&self, share: &ShareBlock) -> Result<(), ValidationError>;
+
     /// Return a reference to the pool difficulty anchored at the chain genesis.
     ///
     /// Used by header-sync validation to run ASERT checks without rebuilding a
@@ -457,17 +467,6 @@ impl DefaultShareValidator {
             steps += 1;
         }
         Ok(ancestors)
-    }
-
-    /// Validate that the total size of share transactions does not exceed BLOCK_TXS_SIZE_LIMIT.
-    fn validate_block_size(&self, share: &ShareBlock) -> Result<(), ValidationError> {
-        let total_size: usize = share.transactions.iter().map(|tx| tx.total_size()).sum();
-        if total_size > BLOCK_TXS_SIZE_LIMIT as usize {
-            return Err(ValidationError::consensus(format!(
-                "Block transactions size {total_size} exceeds limit of {BLOCK_TXS_SIZE_LIMIT}"
-            )));
-        }
-        Ok(())
     }
 
     /// Validate the merkle root in the header matches the computed merkle root from transactions.
@@ -961,6 +960,16 @@ impl ShareValidator for DefaultShareValidator {
         self.validate_header_minimum_difficulty(share_header)
     }
 
+    fn validate_block_size(&self, share: &ShareBlock) -> Result<(), ValidationError> {
+        let total_size: usize = share.transactions.iter().map(|tx| tx.total_size()).sum();
+        if total_size > BLOCK_TXS_SIZE_LIMIT as usize {
+            return Err(ValidationError::consensus(format!(
+                "Block transactions size {total_size} exceeds limit of {BLOCK_TXS_SIZE_LIMIT}"
+            )));
+        }
+        Ok(())
+    }
+
     fn pool_difficulty(&self) -> &PoolDifficulty {
         &self.pool_difficulty
     }
@@ -1340,6 +1349,8 @@ mockall::mock! {
             &self,
             share_header: &ShareHeader,
         ) -> Result<(), ValidationError>;
+
+        fn validate_block_size(&self, share: &ShareBlock) -> Result<(), ValidationError>;
 
         fn pool_difficulty(&self) -> &PoolDifficulty;
     }
