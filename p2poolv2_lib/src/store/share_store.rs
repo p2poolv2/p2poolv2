@@ -556,10 +556,6 @@ impl Store {
     ///
     /// Chain membership is a separate field, so this never affects
     /// candidate/confirmed position. Errors if the block has no metadata.
-    ///
-    /// On a successful upgrade this also advances the highest-work
-    /// BlockValid pointer (see `update_highest_block_valid_if_new_high_work`),
-    /// which tracks the best base to mine on and anchor payouts against.
     pub fn mark_block_valid(
         &self,
         blockhash: &BlockHash,
@@ -570,11 +566,6 @@ impl Store {
             HeaderValid => {
                 metadata.status = BlockValid;
                 self.update_block_metadata(blockhash, &metadata, batch)?;
-                self.update_highest_block_valid_if_new_high_work(
-                    blockhash,
-                    metadata.chain_work,
-                    batch,
-                )?;
                 Ok(())
             }
             // Already validated: idempotent no-op.

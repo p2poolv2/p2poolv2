@@ -23,13 +23,13 @@
 use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::store::block_tx_metadata::{BlockMetadata, Status};
-use crate::store::dag_store::{ShareDag, UncleInfo};
+use crate::store::dag_store::{BlockValidSearch, ShareDag, UncleInfo};
 use crate::store::transaction_store::PrevoutCheck;
 use crate::store::writer::{StoreError, StoreHandle};
 use bitcoin::{BlockHash, Work};
 use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// A confirmed header with its height, blockhash, and share header.
 #[derive(Clone, Debug)]
@@ -541,18 +541,25 @@ impl ChainStoreHandle {
     pub fn get_mining_base(&self) -> Result<BlockHash, StoreError> {
         let store = self.store_handle.store();
         let top_confirmed = store.get_top_confirmed()?;
-        match store.get_highest_block_valid()? {
-            Some((block_valid_hash, block_valid_work)) => {
-                let block_valid_wins = block_valid_work > top_confirmed.work
-                    || (block_valid_work == top_confirmed.work
-                        && block_valid_hash < top_confirmed.hash);
-                if block_valid_wins {
-                    Ok(block_valid_hash)
-                } else {
-                    Ok(top_confirmed.hash)
-                }
+        match store.find_best_block_valid_descendant(&top_confirmed.hash)? {
+            BlockValidSearch::Found(blockhash) => Ok(blockhash),
+            // Nothing above the confirmed tip: the ordinary state when
+            // confirmation is keeping up with what we have validated.
+            BlockValidSearch::NotFound { visited: 0 } => Ok(top_confirmed.hash),
+            BlockValidSearch::NotFound { visited } => {
+                warn!(
+                    "Mining on confirmed tip {}: none of the {visited} blocks above it is BlockValid",
+                    top_confirmed.hash
+                );
+                Ok(top_confirmed.hash)
             }
-            None => Ok(top_confirmed.hash),
+            BlockValidSearch::BoundReached { visited } => {
+                warn!(
+                    "Mining on confirmed tip {}: gave up searching for a validated block after {visited} blocks",
+                    top_confirmed.hash
+                );
+                Ok(top_confirmed.hash)
+            }
         }
     }
 
@@ -904,7 +911,6 @@ mockall::mock! {
 #[cfg(test)]
 mod tests {
     use crate::store::Store;
-    use crate::store::writer::StoreError;
     use crate::test_utils::{
         TestShareBlockBuilder, genesis_for_tests, setup_test_chain_store_handle,
     };
@@ -960,8 +966,12 @@ mod tests {
         assert_eq!(chain_handle.get_mining_base().unwrap(), block.block_hash());
     }
 
+    /// A validated block that forks off below the confirmed tip is never the
+    /// mining base, however much work it carries: the base must descend from
+    /// the confirmed tip. Adopting a heavier branch is `reorg_confirmed`'s job,
+    /// not the mining base's.
     #[tokio::test]
-    async fn test_get_mining_base_keeps_confirmed_when_it_outworks_the_fork() {
+    async fn test_get_mining_base_ignores_validated_sibling_of_confirmed_tip() {
         let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
         let genesis = genesis_for_tests();
         chain_handle
@@ -970,37 +980,36 @@ mod tests {
             .unwrap();
 
         let store = chain_handle.store_handle().store();
-        // Confirm two blocks so the confirmed tip accumulates more work than
-        // a shallow fork.
-        let share1 = TestShareBlockBuilder::new()
+        let confirmed = TestShareBlockBuilder::new()
             .prev_share_blockhash(genesis.block_hash().to_string())
             .nonce(0xe9695792)
             .work(2)
             .build();
-        store.push_to_confirmed_chain(&share1).unwrap();
-        let share2 = TestShareBlockBuilder::new()
-            .prev_share_blockhash(share1.block_hash().to_string())
-            .nonce(0xe9695793)
-            .work(2)
-            .build();
-        store.push_to_confirmed_chain(&share2).unwrap();
+        store.push_to_confirmed_chain(&confirmed).unwrap();
 
-        // A validated fork off genesis carries less cumulative work than share2.
-        let fork = TestShareBlockBuilder::new()
+        // A validated sibling of the confirmed tip, with far more work.
+        let sibling = TestShareBlockBuilder::new()
             .prev_share_blockhash(genesis.block_hash().to_string())
             .nonce(0xe9695799)
-            .work(1)
+            .work(8)
             .build();
-        store.store_with_valid_metadata(&fork);
+        store.store_with_valid_metadata(&sibling);
         let mut batch = Store::get_write_batch();
         store
-            .mark_block_valid(&fork.block_hash(), &mut batch)
+            .mark_block_valid(&sibling.block_hash(), &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
-        assert_eq!(chain_handle.get_mining_base().unwrap(), share2.block_hash());
+        assert_eq!(
+            chain_handle.get_mining_base().unwrap(),
+            confirmed.block_hash(),
+            "a sibling of the confirmed tip is not a descendant of it"
+        );
     }
 
+    /// Two validated descendants of the confirmed tip with equal cumulative
+    /// work: the lexicographically smaller hash wins, so every node picks the
+    /// same base.
     #[tokio::test]
     async fn test_get_mining_base_tiebreak_smallest_hash_on_equal_work() {
         let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
@@ -1011,30 +1020,65 @@ mod tests {
             .unwrap();
 
         let store = chain_handle.store_handle().store();
-        // Two sibling blocks off genesis with equal work -> equal cumulative
-        // work. Confirm one and mark the other BlockValid so the confirmed
-        // tip and the highest-BlockValid pointer tie on work.
-        let share_a = TestShareBlockBuilder::new()
+        // Both build on the confirmed (genesis) tip with the same work, so
+        // they tie on cumulative work.
+        let child_a = TestShareBlockBuilder::new()
             .prev_share_blockhash(genesis.block_hash().to_string())
             .nonce(0xe9695792)
             .work(3)
             .build();
-        let share_b = TestShareBlockBuilder::new()
+        let child_b = TestShareBlockBuilder::new()
             .prev_share_blockhash(genesis.block_hash().to_string())
             .nonce(0xe9695793)
             .work(3)
             .build();
-        store.push_to_confirmed_chain(&share_a).unwrap();
-        store.store_with_valid_metadata(&share_b);
+        store.store_with_valid_metadata(&child_a);
+        store.store_with_valid_metadata(&child_b);
         let mut batch = Store::get_write_batch();
         store
-            .mark_block_valid(&share_b.block_hash(), &mut batch)
+            .mark_block_valid(&child_a.block_hash(), &mut batch)
+            .unwrap();
+        store
+            .mark_block_valid(&child_b.block_hash(), &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
-        // Equal work: the lexicographically smaller hash wins.
-        let expected = std::cmp::min(share_a.block_hash(), share_b.block_hash());
+        let expected = std::cmp::min(child_a.block_hash(), child_b.block_hash());
+        let other = std::cmp::max(child_a.block_hash(), child_b.block_hash());
+        assert_ne!(expected, other, "fixture must produce two distinct hashes");
         assert_eq!(chain_handle.get_mining_base().unwrap(), expected);
+    }
+
+    /// Blocks sit above the confirmed tip but none is validated yet -- the
+    /// state header sync leaves behind. The base is the confirmed tip, and
+    /// get_mining_base warns because confirmation is not keeping up.
+    #[tokio::test]
+    async fn test_get_mining_base_returns_confirmed_tip_when_nothing_above_is_validated() {
+        let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let genesis = genesis_for_tests();
+        chain_handle
+            .init_or_setup_genesis(genesis.clone())
+            .await
+            .unwrap();
+
+        let store = chain_handle.store_handle().store();
+        // Header-only, as header sync stores it: metadata but no BlockValid.
+        let header_only = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .work(5)
+            .build();
+        store.create_valid_metadata_only(&header_only);
+        let mut batch = Store::get_write_batch();
+        store
+            .update_block_index(&genesis.block_hash(), &header_only.block_hash(), &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert_eq!(
+            chain_handle.get_mining_base().unwrap(),
+            genesis.block_hash()
+        );
     }
 
     #[tokio::test]
@@ -1108,10 +1152,10 @@ mod tests {
             .build();
         store.push_to_confirmed_chain(&confirmed).unwrap();
 
-        // An off-chain BlockValid fork off genesis that out-works the confirmed
-        // tip becomes the mining base.
+        // A BlockValid block above the confirmed tip, off the candidate chain,
+        // becomes the mining base.
         let fork = TestShareBlockBuilder::new()
-            .prev_share_blockhash(genesis.block_hash().to_string())
+            .prev_share_blockhash(confirmed.block_hash().to_string())
             .nonce(0xe9695793)
             .work(5)
             .build();
@@ -1132,44 +1176,14 @@ mod tests {
         store.store_with_valid_metadata(&sibling);
 
         let (base, uncles) = chain_handle.get_mining_base_and_uncles().unwrap();
-        // The mining base is the fork; it and its ancestry (down to genesis)
-        // are excluded from the uncle set.
+        // The mining base is the validated block above the confirmed tip; it
+        // and its ancestry (down to genesis) are excluded from the uncle set.
         assert_eq!(base, fork.block_hash());
         assert!(!uncles.contains(&fork.block_hash()));
         assert!(!uncles.contains(&genesis.block_hash()));
         // The confirmed tip is never an uncle, but the unrelated sibling is.
         assert!(!uncles.contains(&confirmed.block_hash()));
         assert!(uncles.contains(&sibling.block_hash()));
-    }
-
-    #[tokio::test]
-    async fn test_get_mining_base_and_uncles_errors_when_base_disconnected() {
-        let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
-        let genesis = genesis_for_tests();
-        chain_handle
-            .init_or_setup_genesis(genesis.clone())
-            .await
-            .unwrap();
-
-        // Simulate an inconsistent store: the highest-BlockValid pointer names a
-        // block that has no stored header, so its ancestry cannot be traced to
-        // the confirmed chain. This must surface as an error, not silently
-        // return an empty ancestry (which would let the base be its own uncle).
-        let store = chain_handle.store_handle().store();
-        let orphan = BlockHash::from_byte_array([7u8; 32]);
-        let mut batch = Store::get_write_batch();
-        store.set_highest_block_valid(
-            &orphan,
-            bitcoin::Work::from_le_bytes([0xff; 32]),
-            &mut batch,
-        );
-        store.commit_batch(batch).unwrap();
-
-        let result = chain_handle.get_mining_base_and_uncles();
-        assert!(
-            matches!(result, Err(StoreError::NotFound(_))),
-            "expected NotFound, got {result:?}"
-        );
     }
 
     #[tokio::test]

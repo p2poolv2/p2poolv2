@@ -29,6 +29,28 @@ use tracing::debug;
 /// Max depth to look for uncles when building new share blocks
 pub const MAX_UNCLES_DEPTH: u8 = 3;
 
+/// Largest number of blocks `find_best_block_valid_descendant` will visit
+/// before giving up and letting the caller mine on the confirmed tip.
+///
+/// The subtree above the confirmed tip holds only blocks that have not been
+/// confirmed yet, which is a handful in normal operation and a short local
+/// branch when the candidate chain is parked on a body-less fork. A far larger
+/// subtree means confirmation is stalled or a peer is feeding us forks, and in
+/// both cases the confirmed tip is the right base to fall back to.
+const MAX_MINING_BASE_SEARCH_BLOCKS: usize = 1024;
+
+/// Outcome of the mining base search, `find_best_block_valid_descendant`.
+pub(crate) enum BlockValidSearch {
+    /// A validated descendant of the confirmed tip to mine on.
+    Found(BlockHash),
+    /// No validated descendant was found. `visited` distinguishes "nothing
+    /// above the confirmed tip yet" (zero) from "blocks are there but none of
+    /// them is validated", which means confirmation is not keeping up.
+    NotFound { visited: usize },
+    /// The search bound was reached before the subtree was exhausted.
+    BoundReached { visited: usize },
+}
+
 /// Maximum number of blocks included per height in getheaders responses.
 ///
 /// In normal operation a height has at most 3-5 blocks. Even during
@@ -476,6 +498,84 @@ impl Store {
             .collect();
 
         Ok(uncles)
+    }
+
+    /// Find the highest-work `BlockValid` descendant of `from`, or `None` when
+    /// there is no such block within the search bound.
+    ///
+    /// This is the mining base search. It walks forward from the confirmed tip
+    /// over the descendant subtree, so it finds blocks we have fully validated
+    /// even when they sit off the candidate chain -- which is the normal state
+    /// when the candidate chain has reorged onto a peer's header-only fork and
+    /// our own mined blocks are the only validated ones above the confirmed
+    /// tip. Reading the answer from the DAG on demand, rather than caching a
+    /// pointer, means there is no invariant to maintain across invalidation,
+    /// reorg and restart.
+    ///
+    /// `Invalid` blocks are not traversed, so an invalidated block hides its
+    /// whole subtree: those descendants can never be confirmed, since the
+    /// candidate chain cannot reorg through an `Invalid` ancestor.
+    ///
+    /// Ranking is by cumulative work, ties broken by the lexicographically
+    /// smallest hash, so every node picks the same base. A `BlockValid` block
+    /// with a `BlockValid` child always loses to that child on work, so the
+    /// winner is a tip of the validated subtree without needing a separate
+    /// check for it.
+    ///
+    /// Returns `Ok(None)` with the number of blocks visited when the bound is
+    /// reached, so the caller can report a degraded search.
+    pub(crate) fn find_best_block_valid_descendant(
+        &self,
+        from: &BlockHash,
+    ) -> Result<BlockValidSearch, StoreError> {
+        let mut queue: VecDeque<BlockHash> = self.children_blockhashes(from).into();
+        let mut visited = 0;
+        let mut best: Option<(BlockHash, Work)> = None;
+
+        while let Some(blockhash) = queue.pop_front() {
+            if visited >= MAX_MINING_BASE_SEARCH_BLOCKS {
+                return Ok(BlockValidSearch::BoundReached { visited });
+            }
+            visited += 1;
+
+            // An Invalid block is not traversed, so its whole subtree drops
+            // out: none of it can ever be confirmed.
+            if let Ok(metadata) = self.get_block_metadata(&blockhash)
+                && metadata.status != Status::Invalid
+            {
+                let outranks_best = match best {
+                    Some((best_hash, best_work)) => {
+                        metadata.chain_work > best_work
+                            || (metadata.chain_work == best_work && blockhash < best_hash)
+                    }
+                    None => true,
+                };
+                if metadata.status == Status::BlockValid && outranks_best {
+                    best = Some((blockhash, metadata.chain_work));
+                }
+                queue.extend(self.children_blockhashes(&blockhash));
+            }
+        }
+
+        match best {
+            Some((blockhash, _)) => Ok(BlockValidSearch::Found(blockhash)),
+            None => Ok(BlockValidSearch::NotFound { visited }),
+        }
+    }
+
+    /// Children that actually name `blockhash` as their parent.
+    ///
+    /// `BlockIndex` also holds uncle -> nephew edges under the same key, so
+    /// the raw entry cannot be walked as a descendant list (see
+    /// `find_uncles`). Read errors yield no children.
+    fn children_blockhashes(&self, blockhash: &BlockHash) -> Vec<BlockHash> {
+        self.get_children_blockhashes(blockhash)
+            .ok()
+            .flatten()
+            .into_iter()
+            .flatten()
+            .filter(|child| self.is_child_of(child, blockhash))
+            .collect()
     }
 
     /// Whether `blockhash` names `parent_hash` as its parent.
@@ -2881,6 +2981,113 @@ mod tests {
     /// ancestor. A nephew sits at or above the new share's own height, and
     /// `validate_uncle_positions` rejects such an uncle -- meaning the node
     /// would mine a share its own organise worker marks Invalid.
+    /// An invalidated block hides its whole subtree: those descendants can
+    /// never be confirmed, because the candidate chain cannot reorg through an
+    /// Invalid ancestor. The cached pointer this search replaced kept naming
+    /// such a descendant, so the pool mined on a dead branch.
+    #[test]
+    fn test_find_best_block_valid_descendant_skips_invalid_subtree() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // c1 is validated, and x1 above it has more work.
+        let c1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(1)
+            .build();
+        store.store_with_valid_metadata(&c1);
+        let x1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(c1.block_hash().to_string())
+            .nonce(2)
+            .build();
+        store.store_with_valid_metadata(&x1);
+        let mut batch = Store::get_write_batch();
+        store
+            .mark_block_valid(&c1.block_hash(), &mut batch)
+            .unwrap();
+        store
+            .mark_block_valid(&x1.block_hash(), &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert!(matches!(
+            store
+                .find_best_block_valid_descendant(&genesis.block_hash())
+                .unwrap(),
+            BlockValidSearch::Found(hash) if hash == x1.block_hash()
+        ));
+
+        // Invalidating c1 takes x1 out of reach even though x1 is untouched.
+        let mut batch = Store::get_write_batch();
+        store.mark_invalid(&c1.block_hash(), &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert_eq!(
+            store.get_block_metadata(&x1.block_hash()).unwrap().status,
+            Status::BlockValid,
+            "x1 itself is still BlockValid; only its ancestor was invalidated"
+        );
+        assert!(matches!(
+            store
+                .find_best_block_valid_descendant(&genesis.block_hash())
+                .unwrap(),
+            BlockValidSearch::NotFound { visited: 1 }
+        ));
+    }
+
+    /// A validated block not on the candidate chain is still a mining base: this
+    /// is the normal state when the candidate chain has reorged onto a peer's
+    /// header-only fork and our own mined blocks are the only validated ones
+    /// above the confirmed tip.
+    #[test]
+    fn test_find_best_block_valid_descendant_finds_off_candidate_chain_block() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // A header-only block with more work, as header sync would leave it.
+        let header_only = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(1)
+            .work(8)
+            .build();
+        store.create_valid_metadata_only(&header_only);
+        let mut batch = Store::get_write_batch();
+        store
+            .update_block_index(&genesis.block_hash(), &header_only.block_hash(), &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Our own validated block, off the candidate chain and with less work.
+        let mined = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(2)
+            .work(1)
+            .build();
+        store.store_with_valid_metadata(&mined);
+        let mut batch = Store::get_write_batch();
+        store
+            .mark_block_valid(&mined.block_hash(), &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert!(matches!(
+            store
+                .find_best_block_valid_descendant(&genesis.block_hash())
+                .unwrap(),
+            BlockValidSearch::Found(hash) if hash == mined.block_hash()
+        ));
+    }
+
     #[test]
     fn test_find_uncles_excludes_nephew_read_as_child() {
         let temp_dir = tempdir().unwrap();

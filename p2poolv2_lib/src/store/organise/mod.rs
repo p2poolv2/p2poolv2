@@ -18,7 +18,6 @@ use super::{ColumnFamily, Store, writer::StoreError};
 use bitcoin::{BlockHash, Work, consensus::encode};
 use std::collections::VecDeque;
 
-mod block_valid;
 mod candidate;
 mod confirmed;
 pub mod organise_block;
