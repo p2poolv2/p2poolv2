@@ -63,19 +63,6 @@ fn check_synced(bitcoind: &BitcoindRpcClient) -> impl std::future::Future<Output
     }
 }
 
-pub async fn ensure_bitcoin_node_synced(
-    bitcoinrpc_config: &BitcoinRpcConfig,
-) -> Result<(), PreflightError> {
-    let bitcoind = BitcoindRpcClient::new(
-        &bitcoinrpc_config.url,
-        &bitcoinrpc_config.username,
-        &bitcoinrpc_config.password,
-    )
-    .map_err(|e| PreflightError::Rpc(e.into()))?;
-
-    check_synced(&bitcoind).await
-}
-
 /// Waits for the Bitcoin node to finish initial block download, checking
 /// periodically and logging progress, instead of failing immediately.
 ///
@@ -144,7 +131,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ensure_bitcoin_node_synced_returns_ok_when_not_in_ibd() {
+    async fn check_synced_returns_ok_when_not_in_ibd() {
         let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
 
         Mock::given(method("POST"))
@@ -164,15 +151,18 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let result = ensure_bitcoin_node_synced(&bitcoinrpc_config).await;
-        assert!(
-            result.is_ok(),
-            "ensure_bitcoin_node_synced returned an error"
-        );
+        let bitcoind = BitcoindRpcClient::new(
+            &bitcoinrpc_config.url,
+            &bitcoinrpc_config.username,
+            &bitcoinrpc_config.password,
+        )
+        .unwrap();
+        let result = check_synced(&bitcoind).await;
+        assert!(result.is_ok(), "check_synced returned an error");
     }
 
     #[tokio::test]
-    async fn ensure_bitcoin_node_synced_returns_err_when_in_ibd() {
+    async fn check_synced_returns_err_when_in_ibd() {
         let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
 
         Mock::given(method("POST"))
@@ -192,10 +182,16 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let result = ensure_bitcoin_node_synced(&bitcoinrpc_config).await;
+        let bitcoind = BitcoindRpcClient::new(
+            &bitcoinrpc_config.url,
+            &bitcoinrpc_config.username,
+            &bitcoinrpc_config.password,
+        )
+        .unwrap();
+        let result = check_synced(&bitcoind).await;
         assert!(
             result.is_err(),
-            "ensure_bitcoin_node_synced should return error when in IBD"
+            "check_synced should return error when in IBD"
         );
     }
 
