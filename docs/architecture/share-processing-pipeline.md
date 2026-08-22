@@ -55,9 +55,11 @@ The share processing pipeline is designed to:
     |   | - On success:                            |
     |   |   sends Block to organise                |
     |   |   sends Inv to swarm                     |
-    |   |   schedule_dependents: sends             |
-    |   |   ValidateBlock for children/nephews     |
-    |   |   back through validation channel        |
+    |   | - On Consensus failure:                  |
+    |   |   sends InvalidBlock to organise         |
+    |   | - On Recoverable failure:                |
+    |   |   nothing (see "Recoverable failures     |
+    |   |   have no retry path" below)             |
     |   +----+-----------------+-------------------+
     |        |                 |
     |        | organise_tx     | swarm_tx
@@ -125,6 +127,37 @@ The organisation pipeline processes two distinct event types:
   Only requires a `ShareHeader`, not a full `ShareBlock`.
 - **Does NOT**: Touch the confirmed chain
 
+### Retrying a block that failed without a verdict
+
+A `Recoverable` or `StoreAccess` validation failure leaves the block at
+`HeaderValid`, never `Invalid`. Only re-delivery revalidates it:
+`handle_share_block` re-sends `ValidationEvent::ValidateBlockHash` for any block
+already in the store that is not yet confirmed (`share_blocks.rs`), and that
+handler serves both peer broadcasts and `GetData` responses. Nothing else does:
+a candidate reorg never re-validates, and the block fetcher will not re-request
+the body since `share_block_exists` is true. The retry is therefore
+opportunistic -- it depends on a peer sending the block again, which this node
+does not solicit.
+
+The BlockReceiver's gate makes the common causes unreachable (the parent is
+`HeaderValid+` and every uncle body is stored before dispatch), but not all of
+them: `collect_recent_ancestors` walks `MAX_UNCLES_DEPTH` of ancestry, and an
+uncle's `expected_height` may be absent. Note the parent gate accepts a header
+without a body, since header sync writes `HeaderValid` in `organise_header`
+before any body is fetched. Until a re-delivery arrives, such a block stalls,
+and in the PPLNS zone a stalled candidate stops confirmation at its height.
+
+### OrganiseEvent::InvalidBlock(BlockHash)
+- **Purpose**: Record that a block failed pre-context validation
+- **Sent by**: the ValidationWorker, on a `Consensus` failure from
+  `validate_share_block` / `validate_below_pplns_depth`
+- **Behavior**: `mark_invalid` (which rebuilds the candidate chain from the
+  invalid block's parent onto the best surviving branch), then `organise_block`
+  to catch the confirmed chain up
+- **Why**: the block's header may already be on the candidate chain. Left
+  `HeaderValid`, it stops `contiguous_candidates_with_block_data` at its height
+  and confirmation stalls there, with nothing to re-fetch or re-queue it.
+
 ### OrganiseEvent::Block(ShareBlock)
 - **Purpose**: Promote candidates to confirmed
 - **Called by**: `Store::organise_block(batch)`
@@ -147,7 +180,8 @@ to confirmed), operating independently.
   `ValidationEvent::ValidateShareBlock(share_block)` straight to the
   ValidationWorker (avoiding a redundant store read). The ValidationWorker
   emits `OrganiseEvent::Block` for confirmed promotion and broadcasts to peers
-  after validation succeeds.
+  after validation succeeds, and `OrganiseEvent::InvalidBlock` when validation
+  fails with `FailureKind::Consensus`.
 - On success with `None`: solo mode, no broadcast or organisation needed
 
 ### handle_stratum_share (`shares/handle_stratum_share.rs`)
@@ -171,6 +205,8 @@ validation, just before confirmation.
   - `Block(share_block)`: gated on its parent's validation state before any
     chain-context validation runs (see "Parent-gated block processing" under
     Organisation Logic)
+  - `InvalidBlock(blockhash)`: marks the block `Invalid` and advances the
+    confirmed chain; no validation or promotion runs for it
 - Error handling reacts to the validation failure kind (`FailureKind`):
   - `Consensus` (a rule broken with all data present): mark the block `Invalid`
     and continue; confirmation can then advance onto a valid sibling.
