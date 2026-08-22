@@ -443,20 +443,24 @@ impl Store {
             steps += 1;
         }
 
-        let children = ancestors
-            .iter()
-            .filter_map(|ancestor| self.get_children_blockhashes(ancestor).ok())
-            .flatten()
-            .flatten();
+        let children = ancestors.iter().flat_map(|ancestor| {
+            self.get_children_blockhashes(ancestor)
+                .ok()
+                .flatten()
+                .into_iter()
+                .flatten()
+                .map(move |child| (*ancestor, child))
+        });
 
         let mut uncles_with_work: Vec<(BlockHash, Work)> = children
-            .filter(|blockhash| {
+            .filter(|(_, blockhash)| {
                 !ancestry.contains(blockhash)
                     && !self.is_confirmed(blockhash)
                     && !self.is_already_uncle(blockhash)
                     && self.share_block_exists(blockhash)
             })
-            .filter_map(|blockhash| {
+            .filter(|(ancestor, blockhash)| self.is_child_of(blockhash, ancestor))
+            .filter_map(|(_, blockhash)| {
                 self.get_block_metadata(&blockhash)
                     .ok()
                     .map(|metadata| (blockhash, metadata.chain_work))
@@ -472,6 +476,18 @@ impl Store {
             .collect();
 
         Ok(uncles)
+    }
+
+    /// Whether `blockhash` names `parent_hash` as its parent.
+    ///
+    /// Distinguishes a real parent -> child edge from the uncle -> nephew edge
+    /// stored under the same `BlockIndex` key. A block whose header cannot be
+    /// read is not treated as a child.
+    fn is_child_of(&self, blockhash: &BlockHash, parent_hash: &BlockHash) -> bool {
+        self.get_share_header(blockhash)
+            .ok()
+            .flatten()
+            .is_some_and(|header| header.prev_share_blockhash == *parent_hash)
     }
 
     /// Batch fetches uncle headers and metadata using multi_get_cf.
@@ -2858,6 +2874,109 @@ mod tests {
         assert_eq!(uncles.len(), 1);
         assert!(uncles.contains(&uncle_within.block_hash()));
         assert!(!uncles.contains(&uncle_deep.block_hash()));
+    }
+
+    /// `BlockIndex` stores uncle -> nephew edges under the same key as
+    /// parent -> child ones, so a nephew can be read back as a "child" of an
+    /// ancestor. A nephew sits at or above the new share's own height, and
+    /// `validate_uncle_positions` rejects such an uncle -- meaning the node
+    /// would mine a share its own organise worker marks Invalid.
+    #[test]
+    fn test_find_uncles_excludes_nephew_read_as_child() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Confirmed chain, with a fork at height 2:
+        //
+        //   genesis(0) - a(1) - b(2) --- base(3)
+        //                  |        \
+        //                  |         sibling(3)
+        //                  |
+        //                  \ b_fork(2) - p(3) - nephew(4)
+        //                                          uncles b(2)
+        //
+        // nephew is a valid block: b is two below it and is not on its own
+        // ancestry (p, b_fork, a, genesis). But b IS an ancestor of base, so
+        // organising nephew's header files it under b in the block index, and
+        // a share mined on base would pick it up as an uncle at its own
+        // height.
+        let genesis = TestShareBlockBuilder::new().nonce(0).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(1)
+            .build();
+        store.push_to_confirmed_chain(&a).unwrap();
+
+        let b = TestShareBlockBuilder::new()
+            .prev_share_blockhash(a.block_hash().to_string())
+            .nonce(2)
+            .build();
+        store.push_to_confirmed_chain(&b).unwrap();
+
+        let base = TestShareBlockBuilder::new()
+            .prev_share_blockhash(b.block_hash().to_string())
+            .nonce(3)
+            .build();
+        store.push_to_confirmed_chain(&base).unwrap();
+
+        // Two genuine uncle candidates for a share mined on base: a sibling of
+        // base, and the head of the fork branch at height 2.
+        let sibling = TestShareBlockBuilder::new()
+            .prev_share_blockhash(b.block_hash().to_string())
+            .nonce(100)
+            .build();
+        store.store_with_valid_metadata(&sibling);
+
+        let b_fork = TestShareBlockBuilder::new()
+            .prev_share_blockhash(a.block_hash().to_string())
+            .nonce(101)
+            .build();
+        store.store_with_valid_metadata(&b_fork);
+
+        let p = TestShareBlockBuilder::new()
+            .prev_share_blockhash(b_fork.block_hash().to_string())
+            .nonce(102)
+            .build();
+        store.store_with_valid_metadata(&p);
+
+        let nephew = TestShareBlockBuilder::new()
+            .prev_share_blockhash(p.block_hash().to_string())
+            .uncles(vec![b.block_hash()])
+            .nonce(103)
+            .build();
+        store.store_with_valid_metadata(&nephew);
+
+        // Mirror what organise_header writes for a declared uncle.
+        let mut batch = Store::get_write_batch();
+        store
+            .update_block_index(&b.block_hash(), &nephew.block_hash(), &mut batch)
+            .unwrap();
+        store
+            .add_to_uncles_index(&b.block_hash(), &nephew.block_hash(), &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // The nephew is reachable as a "child" of b and passes every other
+        // filter: off base's ancestry, unconfirmed, never itself used as an
+        // uncle, body present.
+        let children = store
+            .get_children_blockhashes(&b.block_hash())
+            .unwrap()
+            .unwrap();
+        assert!(children.contains(&nephew.block_hash()));
+
+        let uncles = store.find_uncles(&base.block_hash()).unwrap();
+        assert!(
+            !uncles.contains(&nephew.block_hash()),
+            "A nephew must never be selected as an uncle: it is not below the new share"
+        );
+        assert!(uncles.contains(&sibling.block_hash()));
+        assert!(uncles.contains(&b_fork.block_hash()));
+        assert_eq!(uncles.len(), 2);
     }
 
     #[test]
