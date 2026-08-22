@@ -15,23 +15,69 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use bitcoindrpc::{BitcoinRpcConfig, BitcoindRpcClient};
+use std::time::Duration;
+use tracing::warn;
+
+#[derive(Debug)]
+pub enum PreflightError {
+    NotSynced,
+    Rpc(Box<dyn std::error::Error + Send + Sync>),
+}
+
+impl std::fmt::Display for PreflightError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PreflightError::NotSynced => write!(f, "Bitcoin node still in initial block download"),
+            PreflightError::Rpc(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for PreflightError {}
 
 pub async fn ensure_bitcoin_node_synced(
     bitcoinrpc_config: &BitcoinRpcConfig,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<(), PreflightError> {
     let bitcoind = BitcoindRpcClient::new(
         &bitcoinrpc_config.url,
         &bitcoinrpc_config.username,
         &bitcoinrpc_config.password,
-    )?;
+    )
+    .map_err(|e| PreflightError::Rpc(e.into()))?;
 
-    let is_in_ibd = bitcoind.getblockchaininfo().await?.initial_block_download;
+    let is_in_ibd = bitcoind
+        .getblockchaininfo()
+        .await
+        .map_err(|e| PreflightError::Rpc(e.into()))?
+        .initial_block_download;
 
     if is_in_ibd {
-        return Err("Bitcoin node still in initial block download".into());
+        return Err(PreflightError::NotSynced);
     }
 
     Ok(())
+}
+
+/// Waits for the Bitcoin node to finish initial block download, checking
+/// periodically and logging progress, instead of failing immediately.
+/// Any error other than "still syncing" is returned right away.
+pub async fn wait_for_bitcoin_node_synced(
+    bitcoinrpc_config: &BitcoinRpcConfig,
+    poll_interval: Duration,
+) -> Result<(), PreflightError> {
+    loop {
+        match ensure_bitcoin_node_synced(bitcoinrpc_config).await {
+            Ok(()) => return Ok(()),
+            Err(PreflightError::NotSynced) => {
+                warn!(
+                    "Bitcoin node still syncing, checking again in {}s...",
+                    poll_interval.as_secs()
+                );
+                tokio::time::sleep(poll_interval).await;
+            }
+            Err(e) => return Err(e),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -114,6 +160,57 @@ mod tests {
         assert!(
             result.is_err(),
             "ensure_bitcoin_node_synced should return error when in IBD"
+        );
+    }
+
+    #[tokio::test]
+    async fn wait_for_bitcoin_node_synced_retries_until_synced() {
+        let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+
+        // First two checks: still syncing
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(header("Authorization", test_auth_header().as_str()))
+            .and(body_partial_json(serde_json::json!({
+                "method": "getblockchaininfo",
+                "params": [],
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": {
+                    "initialblockdownload": true,
+                },
+                "error": null,
+                "id": 0
+            })))
+            .up_to_n_times(2)
+            .with_priority(1)
+            .mount(&mock_server)
+            .await;
+
+        // After that: synced
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(header("Authorization", test_auth_header().as_str()))
+            .and(body_partial_json(serde_json::json!({
+                "method": "getblockchaininfo",
+                "params": [],
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": {
+                    "initialblockdownload": false,
+                },
+                "error": null,
+                "id": 0
+            })))
+            .with_priority(2)
+            .mount(&mock_server)
+            .await;
+
+        let result =
+            wait_for_bitcoin_node_synced(&bitcoinrpc_config, Duration::from_millis(10)).await;
+        assert!(
+            result.is_ok(),
+            "wait_for_bitcoin_node_synced should eventually succeed once the node is synced"
         );
     }
 }

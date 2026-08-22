@@ -199,8 +199,10 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
     };
     info!("Latest tip {} at height {}", tip, height);
 
-    if let Err(error) = preflight::ensure_bitcoin_node_synced(&config.bitcoinrpc).await {
-        error!("Bitcoin node still in IBD: {error}");
+    if let Err(error) =
+        preflight::wait_for_bitcoin_node_synced(&config.bitcoinrpc, Duration::from_secs(300)).await
+    {
+        error!("Failed to verify Bitcoin node is ready: {error}");
         return Err(ExitCode::FAILURE);
     }
 
