@@ -40,10 +40,11 @@ impl Store {
     ///
     /// Returns `Ok(false)` (with a debug log) on the first missing block
     /// body or uncle body. Returns `Err` if block metadata is missing or
-    /// has no expected_height. Used by both `should_extend_confirmed` and
+    /// has no expected_height. Used by `should_extend_confirmed` and
     /// `reorg_confirmed` to ensure PPLNS can resolve all uncle data
-    /// before a block is promoted.
-    pub(super) fn all_block_and_uncle_data_available(
+    /// before a block is promoted, and by the BlockReceiver to hold a block
+    /// back until its parent's body is stored.
+    pub(crate) fn all_block_and_uncle_data_available(
         &self,
         blockhashes: &[BlockHash],
         prune_height: u32,
