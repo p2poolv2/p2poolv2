@@ -76,6 +76,18 @@ impl StoreHandle {
             .check_prevouts_and_find_coinbase(outpoints, min_coinbase_root_height)
     }
 
+    /// Return true when every listed block, and every uncle it references,
+    /// either has its block body stored or sits below `prune_height`, where
+    /// bodies are never fetched.
+    pub fn all_block_and_uncle_data_available(
+        &self,
+        blockhashes: &[BlockHash],
+        prune_height: u32,
+    ) -> Result<bool, StoreError> {
+        self.store
+            .all_block_and_uncle_data_available(blockhashes, prune_height)
+    }
+
     /// Return the first coinbase outpoint that is not yet mature, or None.
     pub fn find_immature_coinbase_prevout(
         &self,
