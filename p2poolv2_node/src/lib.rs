@@ -199,11 +199,23 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
     };
     info!("Latest tip {} at height {}", tip, height);
 
-    if let Err(error) =
-        preflight::wait_for_bitcoin_node_synced(&config.bitcoinrpc, Duration::from_secs(300)).await
+    if let Err(error) = preflight::wait_for_bitcoin_node_synced(
+        &config.bitcoinrpc,
+        Duration::from_secs(300),
+        exit_sender.subscribe(),
+    )
+    .await
     {
-        error!("Failed to verify Bitcoin node is ready: {error}");
-        return Err(ExitCode::FAILURE);
+        match error {
+            preflight::PreflightError::ShutdownRequested => {
+                info!("Shutdown requested while waiting for Bitcoin node to sync, exiting.");
+                return Err(ExitCode::SUCCESS);
+            }
+            _ => {
+                error!("Failed to verify Bitcoin node is ready: {error}");
+                return Err(ExitCode::FAILURE);
+            }
+        }
     }
 
     background_tasks::start_background_tasks(
