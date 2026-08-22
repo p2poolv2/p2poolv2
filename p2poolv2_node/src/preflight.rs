@@ -32,7 +32,10 @@ impl std::fmt::Display for PreflightError {
         match self {
             PreflightError::NotSynced => write!(f, "Bitcoin node still in initial block download"),
             PreflightError::Rpc(e) => write!(f, "{e}"),
-            PreflightError::ShutdownRequested => write!(f, "shutdown requested while waiting for Bitcoin node to sync"),
+            PreflightError::ShutdownRequested => write!(
+                f,
+                "shutdown requested while waiting for Bitcoin node to sync"
+            ),
         }
     }
 }
@@ -47,7 +50,9 @@ impl std::error::Error for PreflightError {
     }
 }
 
-fn check_synced(bitcoind: &BitcoindRpcClient) -> impl std::future::Future<Output = Result<(), PreflightError>> + '_ {
+fn check_synced(
+    bitcoind: &BitcoindRpcClient,
+) -> impl std::future::Future<Output = Result<(), PreflightError>> + '_ {
     async move {
         let is_in_ibd = bitcoind
             .getblockchaininfo()
