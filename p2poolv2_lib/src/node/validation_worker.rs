@@ -37,14 +37,14 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::ShareBlock;
 use crate::shares::validation::check_pplns_zone;
-use crate::shares::validation::{DefaultShareValidator, ShareValidator};
+use crate::shares::validation::{DefaultShareValidator, FailureKind, ShareValidator};
 use crate::utils::cpu::available_cpus;
 use bitcoin::BlockHash;
 use libp2p::request_response::ResponseChannel;
 use std::fmt;
 use std::sync::Arc;
 use tokio::sync::{Semaphore, mpsc};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 /// Channel capacity for blocks pending validation.
 const VALIDATION_CHANNEL_CAPACITY: usize = 8192;
@@ -137,11 +137,12 @@ impl ValidationWorker {
     pub async fn run(mut self) -> Result<(), ValidationWorkerError> {
         info!("Validation worker started");
 
-        let share_validator = Arc::new(DefaultShareValidator::new(
-            self.pool_difficulty,
-            self.difficulty_multiplier,
-            self.pool_signature.clone(),
-        ));
+        let share_validator: Arc<dyn ShareValidator + Send + Sync> =
+            Arc::new(DefaultShareValidator::new(
+                self.pool_difficulty,
+                self.difficulty_multiplier,
+                self.pool_signature.clone(),
+            ));
 
         while let Some(event) = self.validation_rx.recv().await {
             let (block_hash, prefetched_block) = match event {
@@ -200,7 +201,7 @@ impl ValidationWorker {
 async fn validate_and_emit(
     block_hash: BlockHash,
     prefetched_block: Option<ShareBlock>,
-    share_validator: Arc<DefaultShareValidator>,
+    share_validator: Arc<dyn ShareValidator + Send + Sync>,
     chain_store_handle: ChainStoreHandle,
     organise_tx: OrganiseSender,
     swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
@@ -232,7 +233,34 @@ async fn validate_and_emit(
     };
 
     if let Err(validation_error) = validation_result {
-        error!("Share block {block_hash} validation failed: {validation_error}");
+        match validation_error.kind() {
+            FailureKind::Consensus => {
+                // Every dependency this check needed was present, so the block
+                // is genuinely invalid. Report it: left alone it keeps its
+                // HeaderValid status on the candidate chain and blocks
+                // confirmation at that height.
+                error!("Share block {block_hash} validation failed: {validation_error}");
+                if let Err(send_error) = organise_tx
+                    .send(OrganiseEvent::InvalidBlock(block_hash))
+                    .await
+                {
+                    error!(
+                        "Failed to report invalid block {block_hash} to organise worker: {send_error}"
+                    );
+                }
+            }
+            FailureKind::Recoverable => {
+                // A dependency (a deeper ancestor's header, an uncle's height)
+                // has not arrived yet, so the block may still be valid and must
+                // not be marked Invalid. It stays HeaderValid until a peer
+                // sends it again, which handle_share_block re-queues for
+                // validation; this node does not solicit that re-delivery.
+                warn!("Share block {block_hash} cannot be validated yet: {validation_error}");
+            }
+            FailureKind::StoreAccess => {
+                error!("Store error validating share block {block_hash}: {validation_error}");
+            }
+        }
         return;
     }
 
@@ -269,6 +297,7 @@ mod tests {
     use super::*;
     use crate::node::organise_worker;
     use crate::shares::chain::chain_store_handle::MockChainStoreHandle;
+    use crate::shares::validation::{MockDefaultShareValidator, ValidationError};
     use crate::store::block_tx_metadata::{BlockMetadata, ChainMembership, Status};
     use crate::test_utils::TestShareBlockBuilder;
 
@@ -566,77 +595,92 @@ mod tests {
         worker_handle.abort();
     }
 
+    /// Build a validator whose `validate_share_block` fails with `error`.
+    fn validator_failing_with(error: ValidationError) -> Arc<dyn ShareValidator + Send + Sync> {
+        let mut mock_validator = MockDefaultShareValidator::new();
+        let mut error_slot = Some(error);
+        mock_validator
+            .expect_validate_share_block()
+            .returning(move |_, _| Err(error_slot.take().expect("validated more than once")));
+        Arc::new(mock_validator)
+    }
+
+    /// A Consensus failure means every dependency was present and the block
+    /// broke a rule, so the organise worker must be told to mark it Invalid.
+    /// Left alone the block keeps its HeaderValid status on the candidate chain
+    /// and confirmation stalls at that height.
     #[tokio::test]
-    async fn test_validation_worker_skips_invalid_block() {
-        let (validation_tx, validation_rx) = create_validation_channel();
-        let mut mock_chain_handle = MockChainStoreHandle::new();
-
-        // Build a share with an uncle that does not exist in the store
-        let uncle_hash = "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7"
-            .parse::<BlockHash>()
-            .unwrap();
-        let share_block = TestShareBlockBuilder::new()
-            .uncles(vec![uncle_hash])
-            .build();
+    async fn test_consensus_failure_reports_invalid_block_to_organise_worker() {
+        let share_block = TestShareBlockBuilder::new().build();
         let block_hash = share_block.block_hash();
-        let share_block_clone = share_block.clone();
 
-        let mut mock_clone = MockChainStoreHandle::new();
-        mock_clone
-            .expect_get_share()
-            .withf(move |hash| *hash == block_hash)
-            .returning(move |_| Some(share_block_clone.clone()));
-        mock_clone
-            .expect_get_share()
-            .withf(move |hash| *hash == uncle_hash)
-            .returning(|_| None);
-        mock_clone
+        let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
             .expect_get_block_metadata()
             .returning(|_| Ok(pplns_zone_metadata()));
-        mock_clone
+        mock_chain_handle
             .expect_get_candidate_tip_height()
             .returning(|| Ok(Some(1)));
-        // validate_share_block calls has_status
-        mock_clone.expect_has_status().returning(|_, _| false);
-        mock_chain_handle
-            .expect_clone()
-            .return_once(move || mock_clone);
 
         let (organise_tx, mut organise_rx) = organise_worker::create_organise_channel();
         let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
 
-        let worker = ValidationWorker::new(
-            validation_rx,
+        validate_and_emit(
+            block_hash,
+            Some(share_block),
+            validator_failing_with(ValidationError::consensus("share has duplicate uncles")),
             mock_chain_handle,
             organise_tx,
             swarm_tx,
-            1,
-            b"P2Poolv2".to_vec(),
-            PoolDifficulty::default(),
-        );
+        )
+        .await;
 
-        let worker_handle = tokio::spawn(worker.run());
-
-        validation_tx
-            .send(ValidationEvent::ValidateBlockHash(block_hash))
-            .await
-            .unwrap();
-
-        // Validation fails (uncle not found) -- no events should be produced.
-        let organise_result =
-            tokio::time::timeout(Duration::from_millis(500), organise_rx.recv()).await;
+        // validate_and_emit has returned and dropped both senders, so recv()
+        // resolves immediately: Some(event) if one was sent, None if not.
+        match organise_rx.recv().await {
+            Some(OrganiseEvent::InvalidBlock(reported)) => assert_eq!(reported, block_hash),
+            _ => panic!("Expected OrganiseEvent::InvalidBlock for {block_hash}"),
+        }
         assert!(
-            organise_result.is_err(),
-            "No OrganiseEvent expected for invalid block"
+            swarm_rx.recv().await.is_none(),
+            "An invalid block must not be broadcast"
         );
+    }
 
-        let swarm_result = tokio::time::timeout(Duration::from_millis(500), swarm_rx.recv()).await;
+    /// A Recoverable failure means a dependency has not arrived yet. The block
+    /// is re-delivered once it lands, so the verdict stays open: nothing is
+    /// reported to the organise worker and nothing is broadcast.
+    #[tokio::test]
+    async fn test_recoverable_failure_leaves_block_for_retry() {
+        let share_block = TestShareBlockBuilder::new().build();
+        let block_hash = share_block.block_hash();
+
+        let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_get_block_metadata()
+            .returning(|_| Ok(pplns_zone_metadata()));
+        mock_chain_handle
+            .expect_get_candidate_tip_height()
+            .returning(|| Ok(Some(1)));
+
+        let (organise_tx, mut organise_rx) = organise_worker::create_organise_channel();
+        let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
+
+        validate_and_emit(
+            block_hash,
+            Some(share_block),
+            validator_failing_with(ValidationError::recoverable("uncle not found in store")),
+            mock_chain_handle,
+            organise_tx,
+            swarm_tx,
+        )
+        .await;
+
         assert!(
-            swarm_result.is_err(),
-            "No SwarmSend expected for invalid block"
+            organise_rx.recv().await.is_none(),
+            "No OrganiseEvent expected while a dependency is still missing"
         );
-
-        worker_handle.abort();
+        assert!(swarm_rx.recv().await.is_none(), "No SwarmSend expected");
     }
 
     #[tokio::test]

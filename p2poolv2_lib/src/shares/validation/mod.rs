@@ -1047,16 +1047,16 @@ impl ShareValidator for DefaultShareValidator {
         Ok(())
     }
 
+    /// Validations run in parallel that don't require the chain context.
     fn validate_share_block(
         &self,
         share: &ShareBlock,
         chain_store_handle: &ChainStoreHandle,
     ) -> Result<(), ValidationError> {
-        // When a hole in the chain is filled, schedule_dependents
-        // re-schedules children that were already validated but could
-        // not be promoted because their parent was not yet confirmed.
-        // Return Ok immediately so organise_block gets another chance
-        // to promote them without re-running validation.
+        // A block re-delivered by a peer after it was already validated
+        // reaches here again (process_share_block only short-circuits on
+        // BlockValid and Invalid). Return Ok so organise_block gets another
+        // chance to promote it without re-running validation.
         // Note: validate_and_emit also checks this before calling us,
         // but that check avoids duplicate organise/inv events, while
         // this one avoids redundant validation work if a caller bypasses
@@ -1175,6 +1175,9 @@ impl ShareValidator for DefaultShareValidator {
         Ok(())
     }
 
+    /// Validation run at confirmation time, run in sequence as we need the chain context when running these validations.
+    ///
+    /// We again run the validate_prevouts at confirmation time, but they are checked here too.
     fn validate_with_chain_context(
         &self,
         share: &ShareBlock,

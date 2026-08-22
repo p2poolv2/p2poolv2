@@ -63,6 +63,11 @@ pub enum OrganiseEvent {
     Header(ShareHeader),
     /// Promote candidates to confirmed after a block is validated.
     Block(ShareBlock),
+    /// Mark a block that failed pre-context validation Invalid.
+    ///
+    /// The validation worker detects these failures but does not mutate chain
+    /// state, so it reports the verdict here.
+    InvalidBlock(BlockHash),
 }
 
 /// Sender half of the organise channel.
@@ -207,6 +212,9 @@ impl OrganiseWorker {
                 OrganiseEvent::Block(share_block) => {
                     self.handle_organise_block_event(share_block).await?;
                 }
+                OrganiseEvent::InvalidBlock(blockhash) => {
+                    self.handle_invalid_block_event(blockhash).await?;
+                }
             }
         }
         info!("Organise worker stopped - channel closed");
@@ -235,38 +243,64 @@ impl OrganiseWorker {
                 // reorged the candidate onto an already-BlockValid fork since the
                 // last organise_block. Invalidated: mark_invalid just rebuilt the
                 // candidate chain from the invalid block's parent (best surviving
-                // branch). Either way, run organise_block to catch confirmed up,
-                // then drain anything that becomes processable from previous tip onward
-                let previous_tip = match self.chain_store_handle.get_tip_height() {
-                    Ok(tip) => tip,
-                    Err(error) => {
-                        error!("Error reading confirmed tip before drain: {error}");
-                        None
-                    }
-                };
-                match self.chain_store_handle.organise_block().await {
-                    Ok(Some(height)) => {
-                        self.update_pplns_window();
-                        // Drain each newly-confirmed height
-                        let from = previous_tip.map_or(height, |tip| (tip + 1).min(height));
-                        for drain_height in from..=height {
-                            self.drain_pending_blocks(drain_height).await?;
-                        }
-                    }
-                    Ok(None) => {}
-                    Err(StoreError::ChannelClosed) => {
-                        return Err(OrganiseError {
-                            message: "Store writer channel closed".to_string(),
-                        });
-                    }
-                    Err(error) => {
-                        error!("Error advancing confirmed from buffer trigger: {error}");
-                    }
-                }
+                // branch). Either way, catch the confirmed chain up.
+                self.advance_confirmed_and_drain().await?;
             }
             ProcessOutcome::Dropped | ProcessOutcome::NotAdvanced => {}
         }
         Ok(())
+    }
+
+    /// Mark a block that failed pre-context validation Invalid, then catch the
+    /// confirmed chain up.
+    ///
+    /// Without this the block keeps its `HeaderValid` status on the candidate
+    /// chain, and `contiguous_candidates_with_block_data` stops there, so
+    /// confirmation stalls at that height until some branch out-works it.
+    /// Marking it Invalid rebuilds the candidate chain from its parent onto the
+    /// best surviving branch, the same follow-up a chain-context Consensus
+    /// failure needs.
+    async fn handle_invalid_block_event(
+        &mut self,
+        blockhash: BlockHash,
+    ) -> Result<(), OrganiseError> {
+        if let Err(mark_error) = self.chain_store_handle.mark_invalid(blockhash).await {
+            error!("Failed to mark {blockhash} Invalid: {mark_error}");
+        }
+        self.advance_confirmed_and_drain().await
+    }
+
+    /// Run organise_block to advance the confirmed chain, then drain the blocks
+    /// buffered at each newly confirmed height.
+    ///
+    /// Reads the confirmed tip first so the drain covers every height the call
+    /// confirms, not just the last one.
+    async fn advance_confirmed_and_drain(&mut self) -> Result<(), OrganiseError> {
+        let previous_tip = match self.chain_store_handle.get_tip_height() {
+            Ok(tip) => tip,
+            Err(error) => {
+                error!("Error reading confirmed tip before drain: {error}");
+                None
+            }
+        };
+        match self.chain_store_handle.organise_block().await {
+            Ok(Some(height)) => {
+                self.update_pplns_window();
+                let from = previous_tip.map_or(height, |tip| (tip + 1).min(height));
+                for drain_height in from..=height {
+                    self.drain_pending_blocks(drain_height).await?;
+                }
+                Ok(())
+            }
+            Ok(None) => Ok(()),
+            Err(StoreError::ChannelClosed) => Err(OrganiseError {
+                message: "Store writer channel closed".to_string(),
+            }),
+            Err(error) => {
+                error!("Error advancing confirmed chain: {error}");
+                Ok(())
+            }
+        }
     }
 
     /// Gate a block on its parent's state, then buffer, drop, or
@@ -1028,6 +1062,62 @@ mod tests {
 
         let result = worker.run().await;
         assert!(result.is_ok());
+    }
+
+    /// An InvalidBlock event marks the named block Invalid, then runs
+    /// organise_block so the confirmed chain can advance onto the surviving
+    /// branch. The invalid block itself is never validated or promoted, and
+    /// organise_block only promotes candidates that are already BlockValid, so
+    /// nothing reaches the confirmed chain that skipped validation.
+    ///
+    /// The validation worker sends this when a pre-context check fails with all
+    /// its dependencies present.
+    #[tokio::test]
+    async fn test_organise_worker_marks_invalid_block_event() {
+        let (organise_tx, organise_rx) = create_organise_channel();
+        let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_clone()
+            .return_once(MockChainStoreHandle::new);
+        mock_chain_handle
+            .expect_mark_invalid()
+            .times(1)
+            .returning(|_| Ok(()));
+        mock_chain_handle
+            .expect_get_tip_height()
+            .returning(|| Ok(Some(10)));
+        mock_chain_handle
+            .expect_organise_block()
+            .times(1)
+            .returning(|| Ok(None));
+        // The block failed validation, so it must never be marked valid or promoted.
+        mock_chain_handle.expect_mark_block_valid().never();
+        mock_chain_handle.expect_promote_block().never();
+
+        let mut mock_validator = MockDefaultShareValidator::new();
+        mock_validator.expect_validate_with_chain_context().never();
+        let share_validator: Arc<dyn ShareValidator + Send + Sync> = Arc::new(mock_validator);
+
+        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let (notify_tx, _notify_rx) = create_test_notify_channel();
+        let worker = OrganiseWorker::new(
+            organise_rx,
+            mock_chain_handle,
+            monitoring_tx,
+            notify_tx,
+            create_test_metrics_handle(),
+            create_test_pplns_window(),
+            share_validator,
+        );
+
+        let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        organise_tx
+            .send(OrganiseEvent::InvalidBlock(share.block_hash()))
+            .await
+            .unwrap();
+        drop(organise_tx);
+
+        assert!(worker.run().await.is_ok());
     }
 
     #[tokio::test]
