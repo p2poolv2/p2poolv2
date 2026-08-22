@@ -86,6 +86,12 @@ pub async fn handle_share_block(
         return Err(format!("Invalid share header: {validation_error}").into());
     }
 
+    // Bound the block's size before the BlockReceiver buffers it.
+    if let Err(validation_error) = share_validator.validate_block_size(&share_block) {
+        warn!("Rejecting oversized share block {block_hash}: {validation_error}");
+        return Err(format!("Oversized share block: {validation_error}").into());
+    }
+
     // Send to BlockReceiver actor for dependency buffering, ASERT
     // validation, storage, and forwarding to the validation worker.
     let (result_tx, result_rx) = oneshot::channel();
@@ -161,6 +167,9 @@ mod tests {
         let mut mock_validator = MockDefaultShareValidator::default();
         mock_validator
             .expect_validate_share_header()
+            .returning(|_| Ok(()));
+        mock_validator
+            .expect_validate_block_size()
             .returning(|_| Ok(()));
 
         let (validation_tx, _validation_rx) = validation_worker::create_validation_channel();
@@ -347,6 +356,73 @@ mod tests {
         let fetcher_event = block_fetcher_rx
             .try_recv()
             .expect("Expected BlockRequestCompleted event even for invalid block");
+        match fetcher_event {
+            BlockFetcherEvent::BlockRequestCompleted(hash) => assert_eq!(hash, block_hash),
+            other => panic!("Expected BlockRequestCompleted, got: {other}"),
+        }
+    }
+
+    /// An oversized block is rejected at the DoS gate, before the BlockReceiver
+    /// can buffer it. Until this check the only size bound is the transport's
+    /// MAX_MSG_SIZE, so a single minimum-difficulty share could otherwise pin
+    /// megabytes in the pending set.
+    #[tokio::test]
+    async fn test_handle_share_block_oversized_rejected_before_buffering() {
+        let mut chain_store_handle = ChainStoreHandle::default();
+        let test_data = load_share_headers_test_data();
+        let header: ShareHeader =
+            serde_json::from_value(test_data["valid_header"].clone()).unwrap();
+        let share_block = empty_share_block_from_header(header);
+        let block_hash = share_block.block_hash();
+
+        chain_store_handle
+            .expect_share_block_exists()
+            .with(eq(block_hash))
+            .returning(|_| false);
+
+        let mut mock_validator = MockDefaultShareValidator::default();
+        mock_validator
+            .expect_validate_share_header()
+            .returning(|_| Ok(()));
+        mock_validator.expect_validate_block_size().returning(|_| {
+            Err(ValidationError::consensus(
+                "Block transactions size 5000000 exceeds limit of 204800",
+            ))
+        });
+
+        let (validation_tx, mut validation_rx) = validation_worker::create_validation_channel();
+        let (block_receiver_handle, mut block_receiver_rx) = create_block_receiver_channel();
+        let (block_fetcher_handle, mut block_fetcher_rx) = create_block_fetcher_channel();
+
+        let result = handle_share_block(
+            share_block,
+            &chain_store_handle,
+            validation_tx,
+            &block_receiver_handle,
+            &block_fetcher_handle,
+            &mock_validator,
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().to_string().contains("Oversized"),
+            "Expected oversized share block error"
+        );
+
+        assert!(
+            block_receiver_rx.try_recv().is_err(),
+            "An oversized block must never reach the BlockReceiver"
+        );
+        assert!(
+            validation_rx.try_recv().is_err(),
+            "No validation event expected for an oversized block"
+        );
+
+        // The fetcher is still cleared so it does not retry the request forever.
+        let fetcher_event = block_fetcher_rx
+            .try_recv()
+            .expect("Expected BlockRequestCompleted even for an oversized block");
         match fetcher_event {
             BlockFetcherEvent::BlockRequestCompleted(hash) => assert_eq!(hash, block_hash),
             other => panic!("Expected BlockRequestCompleted, got: {other}"),
