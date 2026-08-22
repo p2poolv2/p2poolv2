@@ -124,6 +124,19 @@ impl ChainStoreHandle {
             .check_prevouts_and_find_coinbase(outpoints, min_coinbase_root_height)
     }
 
+    /// Return true when every listed block, and every uncle it references,
+    /// either has its block body stored or sits below `prune_height`, where
+    /// bodies are never fetched. Errors when a block has no metadata or no
+    /// expected height.
+    pub fn all_block_and_uncle_data_available(
+        &self,
+        blockhashes: &[BlockHash],
+        prune_height: u32,
+    ) -> Result<bool, StoreError> {
+        self.store_handle
+            .all_block_and_uncle_data_available(blockhashes, prune_height)
+    }
+
     /// Return the first coinbase outpoint that is not yet mature relative to
     /// `reference_height`, or None. Maturity depth is
     /// `reference_height - coinbase_confirmed_height`. Callers pass the spending
@@ -832,6 +845,7 @@ mockall::mock! {
         pub fn network(&self) -> bitcoin::Network;
         pub fn get_all_prevouts(&self, transaction: &bitcoin::Transaction) -> Result<Vec<(usize, bitcoin::TxOut)>, StoreError>;
         pub fn check_prevouts_and_find_coinbase(&self, outpoints: &[bitcoin::OutPoint], min_coinbase_root_height: u32) -> Result<PrevoutCheck, StoreError>;
+        pub fn all_block_and_uncle_data_available(&self, blockhashes: &[BlockHash], prune_height: u32) -> Result<bool, StoreError>;
         pub fn find_immature_coinbase_prevout(&self, coinbase_outpoints: &[bitcoin::OutPoint], min_depth: usize, reference_height: u32) -> Result<Option<bitcoin::OutPoint>, StoreError>;
         pub fn is_any_prevout_spent(&self, outpoints: &[bitcoin::OutPoint]) -> Result<bool, StoreError>;
         pub fn are_all_txids_confirmed(&self, txids: &[bitcoin::Txid]) -> Result<bool, StoreError>;
