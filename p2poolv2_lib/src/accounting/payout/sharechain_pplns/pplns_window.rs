@@ -271,7 +271,7 @@ impl PplnsWindow {
         const INITIAL_CAPACITY: usize = 8;
         let mut candidate_headers = Vec::with_capacity(INITIAL_CAPACITY);
         let mut current_hash = start_hash;
-        let mut confirmed_index = self.find_start_index(current_hash);
+        let mut confirmed_index = None;
 
         while confirmed_index.is_none() {
             let header = chain_store_handle.get_share_header(&current_hash)?;
