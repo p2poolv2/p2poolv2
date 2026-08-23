@@ -390,9 +390,9 @@ re-attempts the blocks buffered under that height and walks contiguously upward,
 stopping as soon as a height advances nothing. The parent height is only an index
 for locating a validated parent's waiting children; a re-attempted block whose
 parent is still `Pending` cheaply re-buffers. This keeps a full sync linear rather
-than quadratic. Separately, the validation worker chases dependents by pointer
-(`schedule_dependents` via `get_children_blockhashes` / `get_nephews`), not by
-height (see "Hole-filling cascade").
+than quadratic. The BlockReceiver buffers separately and by pointer, releasing
+blocks through `drive_descendants` as each ancestor commits (see "Dependency
+handling").
 
 ### WriteBatch stale-read pattern
 
@@ -402,38 +402,80 @@ Within a single `WriteBatch`, reads from the DB return pre-batch (committed) sta
 
 ### ValidationWorker (`node/validation_worker.rs`)
 - Runs in dedicated tokio task, spawned by NodeActor
-- Receives `ValidationEvent::ValidateBlock(BlockHash)` via bounded mpsc channel (capacity 8192)
+- Receives `ValidationEvent::ValidateBlockHash(BlockHash)` (peer blocks) or
+  `ValidationEvent::ValidateShareBlock(ShareBlock)` (locally mined, already in
+  hand) via bounded mpsc channel (capacity 8192)
 - Spawns capped concurrent validation tasks (semaphore sized to available CPUs)
 - Each task:
-  1. Reads the share block from the chain store
-  2. Calls `validate_share_block()` which returns Ok early if the block
-     already has `BlockValid` status (avoids redundant work for re-scheduled blocks)
+  1. Reads the share block from the chain store, unless the event carried it
+  2. Picks the validation tier from `check_pplns_zone` (see "PPLNS zone
+     tiering"), then calls `validate_share_block()` or
+     `validate_below_pplns_depth()`. Both return Ok early if the block already
+     has `BlockValid` status
   3. On success: sends `OrganiseEvent::Block` always; sends
      `SwarmSend::BroadcastBlock` only when `is_current()` is true
      (suppresses relay of historic blocks during initial sync)
-  4. Calls `schedule_dependents()` which looks up children (via
-     `get_children_blockhashes`) and nephews (via `get_nephews`) and sends
-     `ValidateBlock` events back through the validation channel
-- The worker holds a `ValidationSender` clone so `schedule_dependents` can
-  send events. The worker is shut down by cancelling its task.
+  4. On failure, branches on `FailureKind` (see the error-handling list under
+     the Two-Event Model)
 
-### Hole-filling cascade
-When a missing block arrives and validates, `schedule_dependents` enqueues
-its children and nephews for validation. Each of those, on success, enqueues
-their own dependents. This cascades from the filled hole all the way to the
-tip without explicit forward-walk logic.
+### Dependency handling
+Dependencies are resolved *before* validation, not after it. The BlockReceiver
+holds a block in `pending` until its ancestry is available (see "BlockReceiver
+ancestry gate") and `drive_descendants` releases buffered blocks as each
+ancestor commits. Separately, the organise worker buffers blocks whose parent
+is not yet `BlockValid` in `pending_blocks`, draining them by height as
+confirmation advances.
 
-Blocks that were already validated (status `BlockValid`) but could not be
-promoted because their parent was not yet confirmed will be re-scheduled.
-`validate_share_block` returns Ok immediately for these, and `organise_block`
-gets another chance to promote them.
+There is no cascade back through the validation channel: a block that reaches
+the validation worker and fails is not re-enqueued by anything (see "Retrying a
+block that failed without a verdict").
 
-### Dependency fetching
-When a share block arrives from a peer (`handle_share_block`), its parent
-and uncle references are checked against the store. If any dependency is
-missing, a `FetchBlocks` event is sent to the block fetcher and validation
-is deferred. Once the dependency arrives and validates, `schedule_dependents`
-picks up the waiting block.
+### PPLNS zone tiering
+
+`is_in_pplns_zone(H, tip) = H > tip - MAX_PPLNS_WINDOW_SHARES` splits blocks
+into two tiers, and `check_pplns_zone` is called independently by the
+validation worker (choosing full content validation vs PoW-only) and by the
+organise worker (choosing whether `validate_with_chain_context` runs).
+
+**The tip is the candidate tip, deliberately.** Measuring against the confirmed
+tip would break initial sync: with the candidate chain at the network tip and
+the confirmed chain still near genesis, `H > 0.saturating_sub(W)` puts *every*
+block in the zone, demanding full validation of the whole chain -- which is
+what the two-window design exists to avoid, and is not even possible, since
+bodies are only fetched within `PRUNE_DEPTH` of the candidate tip. The same
+applies to a long candidate fork that may later be reorged onto the confirmed
+chain: those blocks belong to the candidate chain and must be tiered against
+it.
+
+**Blocks below the zone never get their coinbase validated, and that is
+sound.** The PPLNS window credits each share by the miner address and
+difficulty in its *header*, which PoW validation already covers. A share's
+coinbase only matters if that share won a bitcoin block, and a block more than
+one window (~14 days at one share per 10s) below the tip has long since had any
+such block settled on the bitcoin chain. This is the same trade as Bitcoin
+Core's `assumevalid`: old blocks are accepted on accumulated work rather than
+re-verified.
+
+**Because the tip moves between the two reads, a block can change tier
+mid-flight.** Exposure is `gap / 10s` per boundary block, where `gap` is the
+stage-1 to stage-2 latency. In steady state it is zero -- blocks are validated
+at `H ~ candidate_tip`, a full window above the boundary. It is systematic only
+for a node chronically ~1 window behind and syncing at roughly the network
+rate, whose frontier sits on the boundary; there the organise channel (capacity
+8192) can also stretch the gap well beyond a second.
+
+In that regime the tip only advances, so the flip is always in-zone ->
+below-zone: full content validation ran, chain context is skipped, and the
+block is marked `BlockValid`. That is exactly the treatment the design gives
+every below-zone block, and it is sound for the reason above.
+
+The reverse flip -- below-zone at stage 1, in-zone at stage 2, which needs the
+candidate tip to *shorten* across the boundary on a reorg -- is the only case
+with real consequence: the block skipped merkle root, coinbase structure and
+script/value/sigop checks, yet is marked `BlockValid`. It is rare and is not
+currently guarded against. Closing it properly means recording the tier on the
+block when it first enters validation rather than re-deriving it from a moving
+tip.
 
 ### Payout (coinbase) validation
 Chain-context validation (`validate_bitcoin_payout` in
@@ -512,7 +554,7 @@ recursive over the DAG and needs its own bounding; it is not implemented.
 ## Files
 
 - `p2poolv2_lib/src/node/emission_worker.rs`
-- `p2poolv2_lib/src/node/validation_worker.rs` (ValidationWorker, schedule_dependents)
+- `p2poolv2_lib/src/node/validation_worker.rs` (ValidationWorker)
 - `p2poolv2_lib/src/node/organise_worker.rs`
 - `p2poolv2_lib/src/node/actor.rs`
 - `p2poolv2_lib/src/node/request_response_handler/block_fetcher.rs` (BlockFetcher)
