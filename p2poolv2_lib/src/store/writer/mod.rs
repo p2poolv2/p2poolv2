@@ -298,7 +298,7 @@ impl StoreWriter {
                 let mut batch = Store::get_write_batch();
                 let result = self
                     .store
-                    .mark_invalid(&blockhash, &mut batch)
+                    .mark_invalid(&blockhash, None, &mut batch)
                     .and_then(|_| self.store.commit_batch(batch).map_err(StoreError::from));
                 let _ = reply.send(result);
             }

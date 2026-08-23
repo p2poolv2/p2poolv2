@@ -526,9 +526,13 @@ impl Store {
     /// reorgs the candidate chain: the block and its candidate descendants
     /// leave the chain and the best surviving branch is rebuilt from the
     /// block's parent (see `reorg_candidate_after_invalidation`).
+    ///
+    /// `pending_confirmed_top` is the confirmed top this batch has already
+    /// queued, or `None` when the batch leaves the confirmed chain alone.
     pub fn mark_invalid(
         &self,
         blockhash: &BlockHash,
+        pending_confirmed_top: Option<u32>,
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<(), StoreError> {
         let mut metadata = self.get_block_metadata(blockhash)?;
@@ -541,7 +545,11 @@ impl Store {
         metadata.chain = ChainMembership::None;
         self.update_block_metadata(blockhash, &metadata, batch)?;
         if was_candidate {
-            self.reorg_candidate_after_invalidation(blockhash, &metadata, batch)?;
+            let confirmed_top = match pending_confirmed_top {
+                Some(height) => height,
+                None => self.get_top_confirmed_height()?,
+            };
+            self.reorg_candidate_after_invalidation(blockhash, &metadata, confirmed_top, batch)?;
         }
         Ok(())
     }
@@ -630,7 +638,9 @@ mod tests {
         );
 
         let mut batch = Store::get_write_batch();
-        store.mark_invalid(&share.block_hash(), &mut batch).unwrap();
+        store
+            .mark_invalid(&share.block_hash(), None, &mut batch)
+            .unwrap();
         store.commit_batch(batch).unwrap();
 
         assert_eq!(
@@ -668,7 +678,9 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         let mut batch = Store::get_write_batch();
-        store.mark_invalid(&share.block_hash(), &mut batch).unwrap();
+        store
+            .mark_invalid(&share.block_hash(), None, &mut batch)
+            .unwrap();
         store.commit_batch(batch).unwrap();
 
         assert_eq!(
@@ -712,7 +724,9 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         let mut batch = Store::get_write_batch();
-        store.mark_invalid(&share.block_hash(), &mut batch).unwrap();
+        store
+            .mark_invalid(&share.block_hash(), None, &mut batch)
+            .unwrap();
         store.commit_batch(batch).unwrap();
 
         assert_eq!(
