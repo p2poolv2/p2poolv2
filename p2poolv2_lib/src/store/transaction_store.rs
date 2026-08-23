@@ -127,6 +127,9 @@ pub(crate) struct ConfirmationOverlay {
     /// Outpoints spent by blocks confirmed earlier in this batch, so a later
     /// block that double-spends one of them is rejected.
     pub spent_in_batch: HashSet<OutPoint>,
+    /// Blocks confirmed earlier in this batch, so a later block spending an
+    /// output one of them introduces is accepted.
+    pub confirmed_in_batch: HashSet<BlockHash>,
 }
 
 /// Why a prevout check rejected a block.
@@ -401,21 +404,30 @@ impl Store {
     /// `ChainMembership::Confirmed`). Returns false on the first txid that
     /// has no confirmed blockhash.
     pub(crate) fn are_all_txids_confirmed(&self, txids: &[Txid]) -> Result<bool, StoreError> {
-        self.are_all_txids_confirmed_excluding(txids, &HashSet::new())
+        self.are_all_txids_confirmed_with_overlay(txids, &HashSet::new(), &HashSet::new())
     }
 
-    /// As `are_all_txids_confirmed`, but treats any blockhash in `excluded` as
-    /// not confirmed.
+    /// As `are_all_txids_confirmed`, but adjusted by what the current batch
+    /// does to the confirmed chain: blockhashes in `removed` are treated as no
+    /// longer confirmed, and those in `added` as already confirmed.
     ///
-    /// Used at confirmation time so a source whose only confirmed block is
-    /// being reorged out in the current batch is not counted as confirmed. The
-    /// exclusion is block-level (not txid-level) because a txid can appear in
-    /// more than one block: a source still counts as confirmed if a surviving
-    /// (non-excluded) confirmed block includes it.
-    pub(crate) fn are_all_txids_confirmed_excluding(
+    /// Both directions are needed because a batch both rewinds and confirms.
+    /// Without `removed`, a source whose only confirmed block is being reorged
+    /// out would still count as confirmed. Without `added`, a source confirmed
+    /// by an earlier block of this same batch would count as unconfirmed --
+    /// `confirm_blocks` runs after the prefix walk, so those blocks still carry
+    /// their committed `Candidate` membership while the walk is in progress.
+    /// This mirrors `is_any_prevout_spent_with_overlay`, which also
+    /// consults both directions for spends.
+    ///
+    /// Both sets are block-level, not txid-level, because a txid can appear in
+    /// more than one block: a source still counts as confirmed if any
+    /// surviving confirmed block includes it.
+    pub(crate) fn are_all_txids_confirmed_with_overlay(
         &self,
         txids: &[Txid],
-        excluded: &HashSet<BlockHash>,
+        removed: &HashSet<BlockHash>,
+        added: &HashSet<BlockHash>,
     ) -> Result<bool, StoreError> {
         let per_txid_blockhashes = self.get_blockhashes_for_all_txids(txids)?;
 
@@ -428,7 +440,7 @@ impl Store {
         let confirmed_set: HashSet<BlockHash> = metadata_pairs
             .into_iter()
             .filter(|(blockhash, metadata)| {
-                metadata.chain == ChainMembership::Confirmed && !excluded.contains(blockhash)
+                metadata.chain == ChainMembership::Confirmed && !removed.contains(blockhash)
             })
             .map(|(blockhash, _)| blockhash)
             .collect();
@@ -436,7 +448,7 @@ impl Store {
         for blockhashes in &per_txid_blockhashes {
             let has_confirmed = blockhashes
                 .iter()
-                .any(|blockhash| confirmed_set.contains(blockhash));
+                .any(|blockhash| confirmed_set.contains(blockhash) || added.contains(blockhash));
             if !has_confirmed {
                 return Ok(false);
             }
@@ -1127,9 +1139,10 @@ impl Store {
         } = extract_spending_prevouts(&transactions).map_err(|duplicate| {
             StoreError::Database(format!("Confirming block {blockhash} has {duplicate}"))
         })?;
-        if !self.are_all_txids_confirmed_excluding(
+        if !self.are_all_txids_confirmed_with_overlay(
             &external_source_txids,
             &overlay.removed_blockhashes,
+            &overlay.confirmed_in_batch,
         )? {
             return Ok(false);
         }
@@ -1183,6 +1196,7 @@ impl Store {
             let (_, blockhash) = &blocks[prefix_len];
             if self.recheck_block_prevouts_with_overlay(blockhash, overlay)? {
                 self.accumulate_spent_outpoints(blockhash, &mut overlay.spent_in_batch)?;
+                overlay.confirmed_in_batch.insert(*blockhash);
                 prefix_len += 1;
             } else {
                 first_invalid = Some(*blockhash);
@@ -1965,14 +1979,18 @@ mod tests {
         // Not excluded: confirmed.
         assert!(
             store
-                .are_all_txids_confirmed_excluding(&[source_txid], &HashSet::new())
+                .are_all_txids_confirmed_with_overlay(
+                    &[source_txid],
+                    &HashSet::new(),
+                    &HashSet::new()
+                )
                 .unwrap()
         );
         // The only confirming block excluded: no longer confirmed.
         let excluded = HashSet::from([blockhash]);
         assert!(
             !store
-                .are_all_txids_confirmed_excluding(&[source_txid], &excluded)
+                .are_all_txids_confirmed_with_overlay(&[source_txid], &excluded, &HashSet::new())
                 .unwrap()
         );
     }
@@ -2013,7 +2031,7 @@ mod tests {
         let excluded = HashSet::from([reorged_out]);
         assert!(
             store
-                .are_all_txids_confirmed_excluding(&[source_txid], &excluded)
+                .are_all_txids_confirmed_with_overlay(&[source_txid], &excluded, &HashSet::new())
                 .unwrap()
         );
     }
@@ -2272,6 +2290,156 @@ mod tests {
                 .recheck_block_prevouts_with_overlay(&spender_hash, &overlay)
                 .unwrap()
         );
+    }
+
+    /// A block may spend an output introduced by a block confirmed earlier in
+    /// the same batch. `confirm_blocks` runs after the prefix walk, so the
+    /// source block still carries its committed membership while the walk is
+    /// in progress; without the `confirmed_in_batch` side of the overlay the
+    /// spender is rejected and, on the success path, marked Invalid.
+    #[test]
+    fn test_confirmable_prefix_accepts_spend_of_source_confirmed_in_same_batch() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xd000).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let funding_tx = Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint::null(),
+                script_sig: bitcoin::ScriptBuf::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::new(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(50_000),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        };
+        let funding_txid = funding_tx.compute_txid();
+        let source_block = TestShareBlockBuilder::new()
+            .nonce(0xdd01)
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .add_transaction(funding_tx)
+            .build();
+
+        let spending_tx = Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint::new(funding_txid, 0),
+                script_sig: bitcoin::ScriptBuf::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::new(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(10_000),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        };
+        let spender_block = TestShareBlockBuilder::new()
+            .nonce(0xdd02)
+            .prev_share_blockhash(source_block.block_hash().to_string())
+            .add_transaction(spending_tx)
+            .build();
+
+        // Both blocks have bodies but neither is confirmed yet: this is the
+        // state a reorg back onto a previously-confirmed branch leaves.
+        store.store_with_valid_metadata(&source_block);
+        store.store_with_valid_metadata(&spender_block);
+
+        let blocks = vec![
+            (1u32, source_block.block_hash()),
+            (2u32, spender_block.block_hash()),
+        ];
+        let mut overlay = ConfirmationOverlay::default();
+        let (prefix_len, first_invalid) = store.confirmable_prefix(&blocks, &mut overlay).unwrap();
+
+        assert_eq!(
+            prefix_len, 2,
+            "the spender's source is confirmed by this batch"
+        );
+        assert!(first_invalid.is_none());
+        assert!(
+            overlay
+                .confirmed_in_batch
+                .contains(&source_block.block_hash())
+        );
+    }
+
+    /// The confirmed-in-batch set is built as blocks are accepted, so a block
+    /// may only spend from blocks *earlier* in the batch. Presented in the
+    /// wrong order the spender is still rejected -- seeding the set from the
+    /// whole branch up front would wrongly accept it.
+    #[test]
+    fn test_confirmable_prefix_rejects_spend_of_source_later_in_batch() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xd000).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let funding_tx = Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint::null(),
+                script_sig: bitcoin::ScriptBuf::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::new(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(50_000),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        };
+        let funding_txid = funding_tx.compute_txid();
+        let source_block = TestShareBlockBuilder::new()
+            .nonce(0xde01)
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .add_transaction(funding_tx)
+            .build();
+
+        let spending_tx = Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint::new(funding_txid, 0),
+                script_sig: bitcoin::ScriptBuf::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::new(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(10_000),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        };
+        let spender_block = TestShareBlockBuilder::new()
+            .nonce(0xde02)
+            .prev_share_blockhash(source_block.block_hash().to_string())
+            .add_transaction(spending_tx)
+            .build();
+
+        store.store_with_valid_metadata(&source_block);
+        store.store_with_valid_metadata(&spender_block);
+
+        // Spender first: its source has not been accepted yet.
+        let blocks = vec![
+            (1u32, spender_block.block_hash()),
+            (2u32, source_block.block_hash()),
+        ];
+        let mut overlay = ConfirmationOverlay::default();
+        let (prefix_len, first_invalid) = store.confirmable_prefix(&blocks, &mut overlay).unwrap();
+
+        assert_eq!(prefix_len, 0);
+        assert_eq!(first_invalid, Some(spender_block.block_hash()));
     }
 
     #[test]

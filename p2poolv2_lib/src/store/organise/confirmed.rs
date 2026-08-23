@@ -2562,6 +2562,152 @@ mod tests {
         assert_eq!(fork_2_metadata.chain, ChainMembership::Candidate);
     }
 
+    /// A reorg may confirm a block together with the block holding the output
+    /// it spends. `confirm_blocks` runs after the prefix walk, so the source
+    /// still carries its committed `Candidate` membership while the walk is in
+    /// progress: without the confirmed-in-batch side of the overlay the
+    /// spender is truncated out of the prefix and marked Invalid, even though
+    /// the same batch confirms its source.
+    ///
+    /// Setup: genesis(confirmed h:0) -> share_a(confirmed h:1, light)
+    ///        fork_1(h:1, holds the funding tx), fork_2(h:2, spends it)
+    /// Action: reorg_confirmed with fork_2 as the candidate tip
+    /// After:  both fork blocks confirmed, fork_2 still BlockValid
+    #[test]
+    fn test_reorg_confirmed_accepts_spend_of_source_confirmed_in_same_reorg() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xf4000001).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // The confirmed branch this reorg replaces, deliberately light.
+        let share_a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xf4000002)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&share_a, &mut batch).unwrap();
+        let mut metadata_a = BlockMetadata {
+            expected_height: Some(1),
+            chain_work: share_a.header.get_work(),
+            status: Status::BlockValid,
+            chain: ChainMembership::None,
+        };
+        store
+            .update_block_metadata(&share_a.block_hash(), &metadata_a, &mut batch)
+            .unwrap();
+        store
+            .append_to_confirmed(&share_a.block_hash(), 1, &mut metadata_a, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // fork_1 carries the funding output; fork_2 spends it. Both were
+        // confirmed together before being reorged out, which is why fork_2
+        // passed validate_prevouts at ingest.
+        let funding_tx = bitcoin::Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint::new(bitcoin::Txid::all_zeros(), u32::MAX),
+                script_sig: bitcoin::ScriptBuf::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::new(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(7_777),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        };
+        let source_outpoint = bitcoin::OutPoint::new(funding_tx.compute_txid(), 0);
+        let fork_1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .work(4)
+            .nonce(0xf4000003)
+            .add_transaction(funding_tx)
+            .build();
+        assert!(
+            fork_1.header.get_work() > share_a.header.get_work(),
+            "test precondition: fork_1 alone must outweigh share_a, so the \
+             reorg is not abandoned for lack of work"
+        );
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&fork_1, &mut batch).unwrap();
+        let mut fork_1_metadata = BlockMetadata {
+            expected_height: Some(1),
+            chain_work: fork_1.header.get_work(),
+            status: Status::BlockValid,
+            chain: ChainMembership::None,
+        };
+        store
+            .update_block_metadata(&fork_1.block_hash(), &fork_1_metadata, &mut batch)
+            .unwrap();
+        store
+            .append_to_candidates(&fork_1.block_hash(), 1, &mut fork_1_metadata, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let spending_tx = bitcoin::Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: source_outpoint,
+                script_sig: bitcoin::ScriptBuf::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::new(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(1_000),
+                script_pubkey: bitcoin::ScriptBuf::new(),
+            }],
+        };
+        let fork_2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(fork_1.block_hash().to_string())
+            .work(4)
+            .nonce(0xf4000004)
+            .add_transaction(spending_tx)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&fork_2, &mut batch).unwrap();
+        let mut fork_2_metadata = BlockMetadata {
+            expected_height: Some(2),
+            chain_work: fork_1_metadata.chain_work + fork_2.header.get_work(),
+            status: Status::BlockValid,
+            chain: ChainMembership::None,
+        };
+        store
+            .update_block_metadata(&fork_2.block_hash(), &fork_2_metadata, &mut batch)
+            .unwrap();
+        store
+            .append_to_candidates(&fork_2.block_hash(), 2, &mut fork_2_metadata, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let top_confirmed = store.get_top_confirmed().unwrap();
+        let candidates = vec![(2, fork_2.block_hash())];
+        let mut batch = Store::get_write_batch();
+        let new_top = store
+            .reorg_confirmed(&top_confirmed, &candidates, 0, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert_eq!(new_top, Some(2), "both fork blocks must be confirmed");
+        assert_eq!(
+            store.get_confirmed_at_height(2).unwrap(),
+            fork_2.block_hash()
+        );
+        assert_eq!(
+            store
+                .get_block_metadata(&fork_2.block_hash())
+                .unwrap()
+                .status,
+            Status::BlockValid,
+            "fork_2's source is confirmed by this same batch, so it is valid"
+        );
+    }
+
     /// A fork block may re-spend an output that the reorged-out branch had
     /// spent: the rewind releases that spend, so the output is free again.
     /// Guards against rejecting a valid fork block by consulting the committed
