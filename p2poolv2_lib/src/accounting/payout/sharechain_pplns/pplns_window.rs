@@ -100,7 +100,7 @@ struct ConfirmedEntry {
 enum WindowStopReason {
     /// The share difficulty threshold was reached.
     ThresholdMet,
-    /// `max_window_shares` entries were counted from the anchor.
+    /// `max_window_shares` shares were counted, starting at the anchor.
     WindowFull,
     /// The walk consumed every entry available to it.
     OutOfEntries,
@@ -114,7 +114,7 @@ struct UncleEntry {
     difficulty: u128,
 }
 
-/// Candidate headers collected while walking backward from an anchor to a
+/// Candidate headers collected while walking backward from the anchor to a
 /// confirmed ancestor (newest-to-oldest), paired with that ancestor's index
 /// in `confirmed_entries`.
 type CandidateWalk = (Vec<(BlockHash, ShareHeader)>, usize);
@@ -193,14 +193,17 @@ impl PplnsWindow {
     /// Walks backward from start_hash through parent pointers until
     /// finding a confirmed entry in the window. Candidate entries
     /// along the walk contribute to the distribution first, then
-    /// confirmed entries from the anchor point onward.
+    /// confirmed entries from that entry point onward.
     ///
     /// When start_hash is already in the confirmed entries, no store
     /// reads are needed and the walk produces zero candidate entries.
     ///
     /// The walk stops at the difficulty threshold or after `max_window_shares`
-    /// entries counted **from the anchor**, spanning candidate entries first
-    /// and then confirmed. Both bounds are properties of the chain, so every
+    /// shares. The count starts at the anchor -- `start_hash`, the share's
+    /// declared parent -- and spans the unconfirmed shares back to the
+    /// confirmed chain before continuing into confirmed entries: candidate
+    /// shares contribute to the payout, so they consume the same window budget
+    /// as confirmed ones. Both bounds are properties of the chain, so every
     /// node derives the same distribution for the same anchor whatever its own
     /// confirmed tip -- which is the point: the producer and a validator that
     /// has since advanced must reconstruct an identical coinbase.
@@ -241,7 +244,8 @@ impl PplnsWindow {
 
         let stop_reason = match candidate_stop_reason {
             Some(reason) => reason,
-            // Continue into confirmed entries from the anchor point
+            // Budget left over from the candidate shares carries into the
+            // confirmed entries, starting at the confirmed entry point.
             None => self.accumulate_confirmed_difficulty(
                 &mut difficulty_by_key,
                 &mut accumulated_difficulty,
@@ -280,7 +284,7 @@ impl PplnsWindow {
             .is_none_or(|entry| entry.height == 0)
     }
 
-    /// Resolve start_hash to candidate entries and a confirmed anchor index.
+    /// Resolve the anchor to its candidate entries and confirmed entry point.
     ///
     /// If start_hash is in confirmed_entries, returns empty candidate
     /// entries and the confirmed index. Otherwise walks backward through
@@ -306,7 +310,10 @@ impl PplnsWindow {
     /// Walk backward from start_hash through parent pointers until
     /// finding a block whose parent is in the confirmed entries.
     /// Returns the collected headers (newest-to-oldest) and the
-    /// confirmed index of the anchor parent.
+    /// index of the confirmed entry point the walk lands on.
+    ///
+    /// The returned headers begin with `start_hash` itself, so the anchor
+    /// share is part of the window and consumes window budget like any other.
     ///
     /// The walk follows parent links regardless of validation `status`: the
     /// payout must be a pure function of the chain shape (headers), not of
@@ -383,9 +390,14 @@ impl PplnsWindow {
             .position(|entry| entry.blockhash == start_hash)
     }
 
-    /// Walk candidate entries, accumulating difficulty per address
-    /// until accumulated difficulty meets the threshold.
-    /// Returns true if the threshold was met.
+    /// Walk candidate entries -- the anchor share and the unconfirmed shares
+    /// below it -- accumulating difficulty per address.
+    ///
+    /// Consumes one share of `shares_remaining` per entry, so what is left for
+    /// the confirmed entries is the window budget minus the candidate shares.
+    /// Returns the reason the walk stopped, or `None` when the entries ran out
+    /// with budget and threshold both still unspent, which means the caller
+    /// should continue into the confirmed entries.
     fn accumulate_candidate_difficulty(
         candidate_entries: &[ConfirmedEntry],
         difficulty_by_key: &mut [u128],
@@ -424,10 +436,14 @@ impl PplnsWindow {
         None
     }
 
-    /// Walk confirmed entries starting at start_index, accumulating difficulty
-    /// per address until accumulated difficulty meets the threshold.
-    /// Returns the index of the first entry past the threshold, or
-    /// the total entry count if the threshold was never reached.
+    /// Walk confirmed entries from the confirmed entry point, accumulating
+    /// difficulty per address until the threshold is met or `shares_remaining`
+    /// -- the window budget left after the candidate shares -- runs out.
+    ///
+    /// Returns the reason the walk stopped. `OutOfEntries` means the cache
+    /// itself ran out, which is the one stop reason that is not a property of
+    /// the chain: the caller must check whether eviction has trimmed the back
+    /// before trusting the result.
     fn accumulate_confirmed_difficulty(
         &self,
         difficulty_by_key: &mut [u128],
