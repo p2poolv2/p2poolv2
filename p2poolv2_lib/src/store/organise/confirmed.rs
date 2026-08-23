@@ -253,7 +253,7 @@ impl Store {
 
         if let Some(invalid_hash) = first_invalid {
             debug!("Reorg stopped at {invalid_hash}: prevout re-check failed, marking Invalid");
-            self.mark_invalid(&invalid_hash, batch)?;
+            self.mark_invalid(&invalid_hash, new_top_height, batch)?;
         }
 
         tracing::info!("Chain reorg completed to height {new_top_height:?}");
@@ -595,7 +595,7 @@ impl Store {
 
         if let Some(invalid_hash) = first_invalid {
             debug!("Extend stopped at {invalid_hash}: prevout re-check failed, marking Invalid");
-            self.mark_invalid(&invalid_hash, batch)?;
+            self.mark_invalid(&invalid_hash, new_top_height, batch)?;
         }
 
         Ok(new_top_height)

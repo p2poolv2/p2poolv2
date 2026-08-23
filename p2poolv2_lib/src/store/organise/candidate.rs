@@ -520,6 +520,7 @@ impl Store {
         &self,
         invalid_hash: &BlockHash,
         invalid_metadata: &BlockMetadata,
+        confirmed_top: Height,
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<(), StoreError> {
         let invalid_height = invalid_metadata.expected_height.ok_or_else(|| {
@@ -527,7 +528,7 @@ impl Store {
         })?;
         self.detach_candidate_branch(invalid_hash, invalid_height, batch)?;
         let final_top = self.rebuild_candidate_from_parent(invalid_hash, invalid_height, batch)?;
-        self.set_or_clear_top_candidate_height(final_top, batch)?;
+        self.set_or_clear_top_candidate_height(final_top, confirmed_top, batch);
         Ok(())
     }
 
@@ -594,17 +595,23 @@ impl Store {
     ///
     /// `extend_candidates_with_children` only raises the top when it appends,
     /// so the no-surviving-child and single-child cases are handled here.
+    /// Record the rebuilt candidate top, or clear it when the candidate chain
+    /// no longer reaches above the confirmed chain.
+    ///
+    /// `confirmed_top` is passed in rather than read: `mark_invalid` runs after
+    /// `confirm_blocks` has queued a new confirmed top into the same batch, and
+    /// a store read here would see the pre-batch value.
     fn set_or_clear_top_candidate_height(
         &self,
         final_top: Height,
+        confirmed_top: Height,
         batch: &mut rocksdb::WriteBatch,
-    ) -> Result<(), StoreError> {
-        if final_top > self.get_top_confirmed_height()? {
+    ) {
+        if final_top > confirmed_top {
             self.set_top_candidate_height(final_top, batch);
         } else {
             self.delete_top_candidate_height(batch);
         }
-        Ok(())
     }
 
     /// Reorg when the branch point is on the candidate chain.
@@ -2170,7 +2177,9 @@ mod tests {
 
         // Invalidate c2 (mid-candidate).
         let mut batch = Store::get_write_batch();
-        store.mark_invalid(&c2.block_hash(), &mut batch).unwrap();
+        store
+            .mark_invalid(&c2.block_hash(), None, &mut batch)
+            .unwrap();
         store.commit_batch(batch).unwrap();
 
         // c2 is Invalid and off the chain; c3 left the chain too.
@@ -2214,7 +2223,9 @@ mod tests {
         assert_eq!(store.get_top_candidate_height().unwrap(), 1);
 
         let mut batch = Store::get_write_batch();
-        store.mark_invalid(&c1.block_hash(), &mut batch).unwrap();
+        store
+            .mark_invalid(&c1.block_hash(), None, &mut batch)
+            .unwrap();
         store.commit_batch(batch).unwrap();
 
         let c1_meta = store.get_block_metadata(&c1.block_hash()).unwrap();
@@ -2329,6 +2340,111 @@ mod tests {
         );
     }
 
+    /// `mark_invalid` runs after `confirm_blocks` has queued a *lower* confirmed
+    /// top into the same batch, which is what a reorg to a shorter validated
+    /// prefix does. Reading the confirmed top from the store here would see the
+    /// pre-batch value, decide the rebuilt candidate top no longer reaches
+    /// above it, and erase TOP_CANDIDATE_KEY while candidate entries exist --
+    /// leaving `get_top_candidate_height` permanently NotFound.
+    #[test]
+    fn test_mark_invalid_keeps_candidate_top_against_pending_confirmed_top() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // Candidate chain c1 -> c2 -> c3, with a surviving sibling of c2 so the
+        // rebuild produces a candidate top above the invalidated height.
+        let c1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695802)
+            .work(1)
+            .build();
+        store.push_to_candidate_chain(&c1).unwrap();
+        let c2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(c1.block_hash().to_string())
+            .nonce(0xe9695803)
+            .work(3)
+            .build();
+        store.push_to_candidate_chain(&c2).unwrap();
+        let c3 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(c2.block_hash().to_string())
+            .nonce(0xe9695804)
+            .work(1)
+            .build();
+        store.push_to_candidate_chain(&c3).unwrap();
+
+        let c2b = TestShareBlockBuilder::new()
+            .prev_share_blockhash(c1.block_hash().to_string())
+            .nonce(0xe9695805)
+            .work(2)
+            .build();
+        store.store_with_valid_metadata(&c2b);
+
+        // Committed confirmed top is deliberately high: 5, above the candidate
+        // heights, standing in for the branch a reorg is rewinding away.
+        let mut batch = Store::get_write_batch();
+        store.set_top_confirmed_height(5, &mut batch);
+        store.commit_batch(batch).unwrap();
+
+        // The batch has queued confirmed top 1, as confirm_blocks would when
+        // the validated prefix ends at c1.
+        let mut batch = Store::get_write_batch();
+        store
+            .mark_invalid(&c2.block_hash(), Some(1), &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // The rebuild put c2b at height 2, which is above the batch's confirmed
+        // top of 1, so the candidate top must survive.
+        assert_eq!(store.get_candidate_at_height(2).unwrap(), c2b.block_hash());
+        assert_eq!(
+            store.get_top_candidate_height().unwrap(),
+            2,
+            "candidate top erased against the pre-batch confirmed top"
+        );
+    }
+
+    /// When the rebuild finds no surviving child, the candidate top falls back
+    /// to the invalidated block's parent. That parent is itself a candidate
+    /// here, so candidate entries still exist and the top must be set to it,
+    /// not cleared.
+    #[test]
+    fn test_mark_invalid_sets_candidate_top_to_parent_when_no_sibling_survives() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let c1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695812)
+            .work(1)
+            .build();
+        store.push_to_candidate_chain(&c1).unwrap();
+        let c2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(c1.block_hash().to_string())
+            .nonce(0xe9695813)
+            .work(1)
+            .build();
+        store.push_to_candidate_chain(&c2).unwrap();
+
+        let mut batch = Store::get_write_batch();
+        store
+            .mark_invalid(&c2.block_hash(), None, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert_eq!(store.get_candidate_at_height(1).unwrap(), c1.block_hash());
+        assert_eq!(store.get_top_candidate_height().unwrap(), 1);
+    }
+
     /// set_or_clear_top_candidate_height sets the top above the confirmed tip
     /// and deletes it when the candidate chain is empty.
     #[test]
@@ -2342,17 +2458,13 @@ mod tests {
 
         // Confirmed tip is genesis (height 0). A top above it is set.
         let mut batch = Store::get_write_batch();
-        store
-            .set_or_clear_top_candidate_height(5, &mut batch)
-            .unwrap();
+        store.set_or_clear_top_candidate_height(5, 0, &mut batch);
         store.commit_batch(batch).unwrap();
         assert_eq!(store.get_top_candidate_height().unwrap(), 5);
 
         // A top at the confirmed tip means the candidate chain is empty.
         let mut batch = Store::get_write_batch();
-        store
-            .set_or_clear_top_candidate_height(0, &mut batch)
-            .unwrap();
+        store.set_or_clear_top_candidate_height(0, 0, &mut batch);
         store.commit_batch(batch).unwrap();
         assert!(store.get_top_candidate_height().is_err());
     }

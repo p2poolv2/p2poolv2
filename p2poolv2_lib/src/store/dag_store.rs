@@ -3028,7 +3028,7 @@ mod tests {
             .mark_block_valid(&block_valid.block_hash(), &mut batch)
             .unwrap();
         store
-            .mark_invalid(&invalid.block_hash(), &mut batch)
+            .mark_invalid(&invalid.block_hash(), None, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -3096,7 +3096,9 @@ mod tests {
 
         // Invalidating c1 takes x1 out of reach even though x1 is untouched.
         let mut batch = Store::get_write_batch();
-        store.mark_invalid(&c1.block_hash(), &mut batch).unwrap();
+        store
+            .mark_invalid(&c1.block_hash(), None, &mut batch)
+            .unwrap();
         store.commit_batch(batch).unwrap();
 
         assert_eq!(
