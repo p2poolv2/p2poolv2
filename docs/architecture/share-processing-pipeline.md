@@ -458,6 +458,50 @@ Resolving the window walks parent pointers back to a confirmed ancestor and:
   silently misdirect the reward. The producer pays the bootstrap address only
   for the explicit empty/genesis case (`PplnsWindow::is_empty`).
 
+### Uncle selection vs uncle acceptance
+
+These are deliberately different rules, and the asymmetry is intentional.
+
+**Acceptance** (`validate_uncles`, `validate_uncle_positions`) is a pure
+function of chain shape: count, no duplicates, body present, and the structural
+position rules (an uncle is below the nephew, within `MAX_UNCLES_DEPTH`, and not
+on the nephew's own ancestry). It deliberately does **not** consult mutable
+per-node state. An earlier rule -- "an uncle must not be on the confirmed
+chain" -- was removed for exactly this reason after it deadlocked nodes in the
+sim (SYNC_ISSUES, August 15th): two nodes at different confirmation heights
+disagreed about the same block, and the nephew that would have healed the split
+was the one being rejected.
+
+For the same reason, acceptance does not reject a nephew whose uncle this node
+holds as `Invalid`. `Invalid` is a consensus verdict, but *when* a node reaches
+it depends on validation progress, which differs across nodes and lags far
+behind header sync during catchup. A node that had not yet validated the uncle
+would accept the nephew while a node that had would reject it, and since
+`Invalid` is terminal, that split is permanent. The rule would also make payouts
+*less* consistent, not more: the distribution is derived from chain shape, so
+nodes agree as long as they agree on which blocks are in the chain.
+
+**Selection** (`Store::find_uncles`) is node-local policy and carries none of
+that risk, so it is stricter: candidates must be at least header-validated,
+skipping `Invalid` and `Pending`. Every node validates our produced share the
+same way regardless of what we chose, so declining to reference a block we
+judged invalid cannot diverge anything.
+
+The cost of the gap this leaves is bounded, because an uncle contributes
+**nothing to chain state**. `put_confirmed_entry` applies `add_spends_for_block`
+only for the block being confirmed, never for its uncles, and an uncle's outputs
+are unspendable anyway since `validate_prevouts` requires the source txid to be
+confirmed. Referencing an uncle only pays PPLNS weight
+(`UNCLE_SCALED_WEIGHT`, plus the nephew's `NEPHEW_SCALED_BONUS`). So the worst
+case is that a peer's nephew credits a block we consider invalid -- for work
+that was really done, since the block passed PoW at pool difficulty and was
+rejected over its contents.
+
+Closing that gap safely would need invalidation to cascade: `mark_invalid`
+would also invalidate the block's nephews via the `Uncles` index, so every node
+converges on the same verdict whenever it learns. That makes invalidation
+recursive over the DAG and needs its own bounding; it is not implemented.
+
 ## Future Additions
 
 ### Header Sync / Block Fetch Separation
