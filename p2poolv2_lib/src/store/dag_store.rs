@@ -445,6 +445,9 @@ impl Store {
     /// check that validation applies. The body check prevents selecting
     /// header-only blocks (received via header sync without a body), which
     /// would create shares that reference uncle data no node can serve.
+    ///
+    /// Selected uncles must also be at least header-validated, which skips
+    /// `Invalid` and `Pending` blocks.
     pub fn find_uncles(&self, base_hash: &BlockHash) -> Result<Vec<BlockHash>, StoreError> {
         let mut ancestors: Vec<BlockHash> = Vec::with_capacity(MAX_UNCLES_DEPTH as usize);
         let mut ancestry: HashSet<BlockHash> =
@@ -485,6 +488,9 @@ impl Store {
             .filter_map(|(_, blockhash)| {
                 self.get_block_metadata(&blockhash)
                     .ok()
+                    .filter(|metadata| {
+                        matches!(metadata.status, Status::HeaderValid | Status::BlockValid)
+                    })
                     .map(|metadata| (blockhash, metadata.chain_work))
             })
             .collect();
@@ -2974,6 +2980,72 @@ mod tests {
         assert_eq!(uncles.len(), 1);
         assert!(uncles.contains(&uncle_within.block_hash()));
         assert!(!uncles.contains(&uncle_deep.block_hash()));
+    }
+
+    /// A block this node marked `Invalid` is never selected as an uncle: it
+    /// would pay PPLNS weight to a block we judged to break the rules. This is
+    /// selection only -- `validate_uncles` still accepts a peer's nephew that
+    /// references such a block, because uncle acceptance must not depend on
+    /// per-node validation progress.
+    #[test]
+    fn test_find_uncles_excludes_invalid_and_keeps_header_valid() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let base = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(1)
+            .build();
+        store.push_to_confirmed_chain(&base).unwrap();
+
+        // Three siblings of base, off the confirmed chain: one left at
+        // HeaderValid, one marked BlockValid, one marked Invalid.
+        let header_valid = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(100)
+            .build();
+        store.store_with_valid_metadata(&header_valid);
+
+        let block_valid = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(101)
+            .build();
+        store.store_with_valid_metadata(&block_valid);
+
+        let invalid = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(102)
+            .build();
+        store.store_with_valid_metadata(&invalid);
+
+        let mut batch = Store::get_write_batch();
+        store
+            .mark_block_valid(&block_valid.block_hash(), &mut batch)
+            .unwrap();
+        store
+            .mark_invalid(&invalid.block_hash(), &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let uncles = store.find_uncles(&base.block_hash()).unwrap();
+
+        assert!(
+            !uncles.contains(&invalid.block_hash()),
+            "an Invalid block must not be paid uncle weight"
+        );
+        assert!(
+            uncles.contains(&block_valid.block_hash()),
+            "a validated sibling is still an uncle"
+        );
+        assert!(
+            uncles.contains(&header_valid.block_hash()),
+            "an uncle needs a body, not chain-context validation"
+        );
     }
 
     /// `BlockIndex` stores uncle -> nephew edges under the same key as
