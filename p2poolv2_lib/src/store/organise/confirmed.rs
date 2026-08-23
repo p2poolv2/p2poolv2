@@ -239,9 +239,6 @@ impl Store {
         let (_, prefix_tip) = confirmable.last().unwrap_or(fork_block_and_height);
         if self.get_block_metadata(prefix_tip)?.chain_work <= top_confirmed.work {
             debug!("Reorg skipped: validated fork prefix does not outweigh confirmed chain");
-            if let Some(invalid_hash) = first_invalid {
-                self.mark_invalid(&invalid_hash, batch)?;
-            }
             return Ok(None);
         }
 
@@ -2418,7 +2415,9 @@ mod tests {
     ///        fork_2(h:2, parent=fork_1) spends share_a's coinbase output,
     ///        so the full fork outweighs share_a but fork_1 alone does not
     /// Action: reorg_confirmed with fork_2 as the candidate tip
-    /// After:  no reorg, share_a stays confirmed, fork_2 is Invalid
+    /// After:  no reorg, share_a stays confirmed, and fork_2's status is
+    ///         untouched -- it only failed the re-check because the overlay
+    ///         assumed share_a was reorged out, which never happened
     #[test]
     fn test_reorg_confirmed_aborts_when_validated_prefix_lacks_work() {
         let temp_dir = tempdir().unwrap();
@@ -2555,13 +2554,12 @@ mod tests {
                 .chain,
             ChainMembership::Confirmed
         );
-        assert_eq!(
-            store
-                .get_block_metadata(&fork_2.block_hash())
-                .unwrap()
-                .status,
-            Status::Invalid
-        );
+        // fork_2 spends an output of share_a, which is still confirmed, so
+        // fork_2 is perfectly valid. Marking it Invalid here would be terminal:
+        // no later reorg could adopt that branch even once it wins on work.
+        let fork_2_metadata = store.get_block_metadata(&fork_2.block_hash()).unwrap();
+        assert_eq!(fork_2_metadata.status, Status::BlockValid);
+        assert_eq!(fork_2_metadata.chain, ChainMembership::Candidate);
     }
 
     /// A fork block may re-spend an output that the reorged-out branch had
