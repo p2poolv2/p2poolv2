@@ -91,6 +91,21 @@ struct ConfirmedEntry {
     total_weighted_difficulty: u128,
 }
 
+/// Why accumulating the window stopped.
+///
+/// The first two are properties of the chain, so every node reaches them at
+/// the same point. `OutOfEntries` is not: it means the cache ran out, and where
+/// the cache ends depends on this node's own confirmed tip.
+#[derive(Debug, PartialEq, Eq)]
+enum WindowStopReason {
+    /// The share difficulty threshold was reached.
+    ThresholdMet,
+    /// `max_window_shares` entries were counted from the anchor.
+    WindowFull,
+    /// The walk consumed every entry available to it.
+    OutOfEntries,
+}
+
 /// A cached uncle entry with only the fields needed for payout.
 struct UncleEntry {
     /// Internal key mapping the miner address in AddressKeys.
@@ -183,12 +198,25 @@ impl PplnsWindow {
     /// When start_hash is already in the confirmed entries, no store
     /// reads are needed and the walk produces zero candidate entries.
     ///
+    /// The walk stops at the difficulty threshold or after `max_window_shares`
+    /// entries counted **from the anchor**, spanning candidate entries first
+    /// and then confirmed. Both bounds are properties of the chain, so every
+    /// node derives the same distribution for the same anchor whatever its own
+    /// confirmed tip -- which is the point: the producer and a validator that
+    /// has since advanced must reconstruct an identical coinbase.
+    ///
     /// Errors when `start_hash` cannot be resolved to a confirmed ancestor
     /// (e.g. an anchor whose ancestry is not stored) or when a store read
     /// fails, so callers fail rather than silently treat an unresolved
     /// anchor or a transient read error as an empty distribution. The
     /// explicit empty/genesis case is handled by callers before this call
     /// (they check `is_empty`).
+    ///
+    /// Also errors when the walk exhausts the cache without reaching either
+    /// bound and the cache no longer reaches the chain start. The result would
+    /// then depend on where eviction has trimmed the back, which is a function
+    /// of this node's tip rather than of the chain, so a truncated distribution
+    /// is refused rather than returned.
     pub fn get_distribution_from_start_hash(
         &mut self,
         total_difficulty: u128,
@@ -201,27 +229,55 @@ impl PplnsWindow {
         let scaled_threshold = total_difficulty.saturating_mul(DIFFICULTY_SCALE);
         let mut difficulty_by_key = vec![0u128; self.address_keys.len()];
         let mut accumulated_difficulty: u128 = 0;
+        let mut shares_remaining = self.max_window_shares;
 
-        let threshold_met = Self::accumulate_candidate_difficulty(
+        let candidate_stop_reason = Self::accumulate_candidate_difficulty(
             &candidate_entries,
             &mut difficulty_by_key,
             &mut accumulated_difficulty,
             scaled_threshold,
+            &mut shares_remaining,
         );
 
-        if threshold_met {
-            return Ok(self.collect_distribution(&difficulty_by_key));
+        let stop_reason = match candidate_stop_reason {
+            Some(reason) => reason,
+            // Continue into confirmed entries from the anchor point
+            None => self.accumulate_confirmed_difficulty(
+                &mut difficulty_by_key,
+                &mut accumulated_difficulty,
+                scaled_threshold,
+                confirmed_start_index,
+                shares_remaining,
+            ),
+        };
+
+        if stop_reason == WindowStopReason::OutOfEntries && !self.reaches_chain_start() {
+            return Err(format!(
+                "PPLNS window for anchor {start_hash} is truncated by eviction: the walk ran \
+                 out of cached entries at height {}, short of both the difficulty threshold \
+                 and {} shares",
+                self.confirmed_entries
+                    .back()
+                    .map_or(0, |entry| entry.height),
+                self.max_window_shares,
+            )
+            .into());
         }
 
-        // Continue into confirmed entries from the anchor point
-        self.accumulate_confirmed_difficulty(
-            &mut difficulty_by_key,
-            &mut accumulated_difficulty,
-            scaled_threshold,
-            confirmed_start_index,
-        );
-
         Ok(self.collect_distribution(&difficulty_by_key))
+    }
+
+    /// Whether the oldest cached entry is the first block of the chain, so a
+    /// walk that consumes every cached entry has covered the whole chain and
+    /// is the same on every node.
+    ///
+    /// Once eviction has trimmed the back, the earliest cached height depends
+    /// on this node's own confirmed tip, so a walk that reaches it would give
+    /// a different answer on a node at a different tip.
+    fn reaches_chain_start(&self) -> bool {
+        self.confirmed_entries
+            .back()
+            .is_none_or(|entry| entry.height == 0)
     }
 
     /// Resolve start_hash to candidate entries and a confirmed anchor index.
@@ -335,8 +391,13 @@ impl PplnsWindow {
         difficulty_by_key: &mut [u128],
         accumulated_difficulty: &mut u128,
         scaled_threshold: u128,
-    ) -> bool {
+        shares_remaining: &mut usize,
+    ) -> Option<WindowStopReason> {
         for entry in candidate_entries {
+            if *shares_remaining == 0 {
+                return Some(WindowStopReason::WindowFull);
+            }
+            *shares_remaining -= 1;
             let mut nephew_bonus: u128 = 0;
             for uncle_entry in &entry.uncle_entries {
                 difficulty_by_key[uncle_entry.internal_key] = difficulty_by_key
@@ -357,10 +418,10 @@ impl PplnsWindow {
                 accumulated_difficulty.saturating_add(entry.total_weighted_difficulty);
 
             if *accumulated_difficulty >= scaled_threshold {
-                return true;
+                return Some(WindowStopReason::ThresholdMet);
             }
         }
-        false
+        None
     }
 
     /// Walk confirmed entries starting at start_index, accumulating difficulty
@@ -373,8 +434,16 @@ impl PplnsWindow {
         accumulated_difficulty: &mut u128,
         scaled_threshold: u128,
         start_index: usize,
-    ) -> usize {
-        for (offset, entry) in self.confirmed_entries.iter().skip(start_index).enumerate() {
+        shares_remaining: usize,
+    ) -> WindowStopReason {
+        let mut consumed = 0;
+        for entry in self
+            .confirmed_entries
+            .iter()
+            .skip(start_index)
+            .take(shares_remaining)
+        {
+            consumed += 1;
             let mut nephew_bonus: u128 = 0;
 
             for uncle_entry in &entry.uncle_entries {
@@ -396,10 +465,17 @@ impl PplnsWindow {
                 accumulated_difficulty.saturating_add(entry.total_weighted_difficulty);
 
             if *accumulated_difficulty >= scaled_threshold {
-                return start_index + offset + 1;
+                return WindowStopReason::ThresholdMet;
             }
         }
-        self.confirmed_entries.len()
+
+        // Distinguish "counted a full window" from "the cache ran out": only
+        // the latter depends on where eviction trimmed the back.
+        if consumed == shares_remaining {
+            WindowStopReason::WindowFull
+        } else {
+            WindowStopReason::OutOfEntries
+        }
     }
 
     /// Free address-key slots no longer referenced by any cached entry.
@@ -643,16 +719,24 @@ impl PplnsWindow {
 
     /// Total confirmed entries the cache loads and retains: the window cap
     /// plus a ~1% buffer (see `PPLNS_WINDOW_BUFFER_DIVISOR`) so an anchor
-    /// slightly behind the tip still has its full window available. Window
-    /// queries remain bounded by `total_difficulty`; the buffer only widens
-    /// how far below the window the cache reaches.
+    /// slightly behind the tip still has its full window available.
+    ///
+    /// The buffer is therefore the supported anchor depth: an anchor at most
+    /// `max_window_shares / PPLNS_WINDOW_BUFFER_DIVISOR` entries behind the tip
+    /// still has `max_window_shares` entries cached below it, which is what
+    /// `get_distribution_from_start_hash` needs to apply its count bound. A
+    /// deeper anchor is reported as an error rather than silently truncated.
     fn cache_capacity(&self) -> usize {
         self.max_window_shares + self.max_window_shares.div_ceil(PPLNS_WINDOW_BUFFER_DIVISOR)
     }
 
-    /// Remove confirmed entries to only maintain
-    /// MAX_PPLNS_WINDOW_SHARES in confirmed entries. If difficulty is
-    /// not reached in these many shares, we only ever maintain these many shares.
+    /// Trim the oldest confirmed entries down to `cache_capacity`.
+    ///
+    /// This bounds memory only. It must not be what bounds a window query:
+    /// the back of the deque moves as this node's tip advances, so a walk that
+    /// stopped there would give different answers on different nodes. Query
+    /// bounds live in `get_distribution_from_start_hash`, which counts from the
+    /// anchor and refuses a result that ran into an evicted back.
     fn evict_overflow(&mut self) {
         while self.confirmed_entries.len() > self.cache_capacity() {
             if let Some(entry) = self.confirmed_entries.pop_back() {
@@ -2346,6 +2430,184 @@ mod tests {
             before, after,
             "distribution at the parent anchor changed after a sibling promotion evicted a \
              window share -- an identical coinbase would fail validation"
+        );
+    }
+
+    //* When the share difficulty in the window never reaches the threshold --
+    //* the normal regime for a pool whose window does not cover
+    //* bitcoin_difficulty * multiplier -- the walk used to run to the back of
+    //* the deque, whose position depends on this node's own tip. Two nodes one
+    //* block apart then derived different payouts for the same anchor. The
+    //* count bound makes the walk stop at the same chain position on both.
+    #[test]
+    fn test_distribution_at_anchor_invariant_to_tip_when_threshold_unreachable() {
+        const MAX_SHARES: usize = 3;
+        let genesis = BlockHash::all_zeros();
+
+        let a = build_test_header(&genesis.to_string(), PUBKEY_G, 2);
+        let b = build_test_header(&a.block_hash().to_string(), PUBKEY_2G, 2);
+        let c = build_test_header(&b.block_hash().to_string(), PUBKEY_3G, 2);
+        let parent = build_test_header(&c.block_hash().to_string(), PUBKEY_4G, 2);
+        let sibling = build_test_header(&parent.block_hash().to_string(), PUBKEY_5G, 2);
+        let parent_hash = parent.block_hash();
+
+        // A threshold the window can never meet, so only the count bound and
+        // the end of the cache can stop the walk.
+        let unreachable_difficulty = u128::MAX;
+
+        let mut window = PplnsWindow::new_with_max_window_shares(TEST_NETWORK, MAX_SHARES);
+
+        // Tip = parent (height 3). Cache holds [parent, c, b, a].
+        let to_parent = vec![
+            ConfirmedHeaderResult {
+                height: 3,
+                blockhash: parent.block_hash(),
+                header: parent.clone(),
+            },
+            ConfirmedHeaderResult {
+                height: 2,
+                blockhash: c.block_hash(),
+                header: c.clone(),
+            },
+            ConfirmedHeaderResult {
+                height: 1,
+                blockhash: b.block_hash(),
+                header: b.clone(),
+            },
+            ConfirmedHeaderResult {
+                height: 0,
+                blockhash: a.block_hash(),
+                header: a.clone(),
+            },
+        ];
+        let parent_tip = parent.block_hash();
+        let mut mock1 = MockChainStoreHandle::default();
+        mock1
+            .expect_get_chain_tip()
+            .returning(move || Ok(parent_tip));
+        mock1
+            .expect_get_block_metadata()
+            .returning(|_| Ok(metadata_at_height(3)));
+        mock1
+            .expect_get_confirmed_headers_in_range()
+            .returning(move |_, _| Ok(to_parent.clone()));
+        window.update(&mock1).unwrap();
+
+        let before = window
+            .get_distribution_from_start_hash(
+                unreachable_difficulty,
+                parent_hash,
+                &MockChainStoreHandle::default(),
+            )
+            .expect("the anchor has a full window of cached entries below it");
+
+        // Tip = sibling (height 4). Cache becomes [sibling, parent, c, b]:
+        // the anchor is now one entry behind the tip and `a` has been evicted.
+        let to_sibling = vec![ConfirmedHeaderResult {
+            height: 4,
+            blockhash: sibling.block_hash(),
+            header: sibling.clone(),
+        }];
+        let sibling_tip = sibling.block_hash();
+        let parent_at_cached = parent.block_hash();
+        let mut mock2 = MockChainStoreHandle::default();
+        mock2
+            .expect_get_chain_tip()
+            .returning(move || Ok(sibling_tip));
+        mock2
+            .expect_get_block_metadata()
+            .returning(|_| Ok(metadata_at_height(4)));
+        mock2
+            .expect_get_confirmed_at_height()
+            .returning(move |_| Ok(parent_at_cached));
+        mock2
+            .expect_get_confirmed_headers_in_range()
+            .returning(move |_, _| Ok(to_sibling.clone()));
+        window.update(&mock2).unwrap();
+
+        let after = window
+            .get_distribution_from_start_hash(
+                unreachable_difficulty,
+                parent_hash,
+                &MockChainStoreHandle::default(),
+            )
+            .expect("the anchor still has a full window of cached entries below it");
+
+        assert_eq!(
+            before, after,
+            "distribution at a fixed anchor changed as the local tip advanced"
+        );
+        // Exactly MAX_SHARES entries contributed: parent, c and b, one miner
+        // each. `a` is excluded by the count bound, not by where eviction fell.
+        assert_eq!(before.len(), MAX_SHARES);
+    }
+
+    //* An anchor deeper than the retained buffer has fewer than
+    //* `max_window_shares` entries cached below it, so the walk runs out. The
+    //* result would depend on where eviction trimmed the back, so it is
+    //* refused rather than returned truncated.
+    #[test]
+    fn test_distribution_errors_when_eviction_truncates_the_window() {
+        const MAX_SHARES: usize = 3;
+        let genesis = BlockHash::all_zeros();
+
+        let a = build_test_header(&genesis.to_string(), PUBKEY_G, 2);
+        let b = build_test_header(&a.block_hash().to_string(), PUBKEY_2G, 2);
+        let c = build_test_header(&b.block_hash().to_string(), PUBKEY_3G, 2);
+        let parent = build_test_header(&c.block_hash().to_string(), PUBKEY_4G, 2);
+        let sibling = build_test_header(&parent.block_hash().to_string(), PUBKEY_5G, 2);
+
+        let mut window = PplnsWindow::new_with_max_window_shares(TEST_NETWORK, MAX_SHARES);
+
+        let all_headers = vec![
+            ConfirmedHeaderResult {
+                height: 4,
+                blockhash: sibling.block_hash(),
+                header: sibling.clone(),
+            },
+            ConfirmedHeaderResult {
+                height: 3,
+                blockhash: parent.block_hash(),
+                header: parent.clone(),
+            },
+            ConfirmedHeaderResult {
+                height: 2,
+                blockhash: c.block_hash(),
+                header: c.clone(),
+            },
+            ConfirmedHeaderResult {
+                height: 1,
+                blockhash: b.block_hash(),
+                header: b.clone(),
+            },
+            ConfirmedHeaderResult {
+                height: 0,
+                blockhash: a.block_hash(),
+                header: a.clone(),
+            },
+        ];
+        let sibling_tip = sibling.block_hash();
+        let mut mock = MockChainStoreHandle::default();
+        mock.expect_get_chain_tip()
+            .returning(move || Ok(sibling_tip));
+        mock.expect_get_block_metadata()
+            .returning(|_| Ok(metadata_at_height(4)));
+        mock.expect_get_confirmed_headers_in_range()
+            .returning(move |_, _| Ok(all_headers.clone()));
+        window.update(&mock).unwrap();
+
+        // Cache is capped at MAX_SHARES + 1, so it holds [sibling, parent, c, b]
+        // and `a` is evicted: the back no longer reaches the chain start.
+        let error = window
+            .get_distribution_from_start_hash(
+                u128::MAX,
+                c.block_hash(),
+                &MockChainStoreHandle::default(),
+            )
+            .expect_err("only two entries are cached below the anchor, short of the window");
+        assert!(
+            error.to_string().contains("truncated by eviction"),
+            "unexpected error: {error}"
         );
     }
 }
