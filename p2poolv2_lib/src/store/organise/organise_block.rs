@@ -28,13 +28,6 @@ impl Store {
     /// have block and uncle data available, then extends or reorgs
     /// the confirmed chain accordingly.
     ///
-    /// When no candidate blocks can be promoted (e.g. the candidate
-    /// chain is on a fork whose block data is missing), falls back to
-    /// confirming any block at confirmed_height + 1 that is a child
-    /// of the confirmed tip and has all block and uncle data
-    /// available. This allows locally mined blocks to advance the
-    /// confirmed chain even when the candidate chain is stuck.
-    ///
     /// Returns the new confirmed height if it changed, or None if
     /// unchanged.
     pub(crate) fn organise_block(
