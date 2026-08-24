@@ -308,7 +308,18 @@ impl OrganiseWorker {
                 }
                 Ok(())
             }
-            Ok(None) => Ok(()),
+            Ok(None) => {
+                // Confirmation did not advance, so something is wedging the
+                // promotion prefix. That block's parent is valid -- which is
+                // why it reached validation at all -- so confirmation stopped
+                // exactly at the parent, and the block sits buffered under the
+                // confirmed tip's own height. Draining here re-attempts it, and
+                // drain_pending_blocks cascades upward if it now advances.
+                if let Some(tip) = previous_tip {
+                    self.drain_pending_blocks(tip).await?;
+                }
+                Ok(())
+            }
             Err(StoreError::ChannelClosed) => Err(OrganiseError {
                 message: "Store writer channel closed".to_string(),
             }),
@@ -361,7 +372,7 @@ impl OrganiseWorker {
     /// block becomes BlockValid or is promoted, so its dependents can
     /// be drained.
     async fn validate_mark_promote(
-        &self,
+        &mut self,
         share_block: ShareBlock,
         parent_height: u32,
     ) -> Result<ProcessOutcome, OrganiseError> {
@@ -371,7 +382,8 @@ impl OrganiseWorker {
         let in_pplns_zone = match check_pplns_zone(&blockhash, &self.chain_store_handle) {
             Ok(result) => result,
             Err(error_message) => {
-                error!("Error checking for zone: {error_message}");
+                error!("Error checking for zone, will retry {blockhash}: {error_message}");
+                self.buffer_block(parent_height, share_block);
                 return Ok(ProcessOutcome::NotAdvanced);
             }
         };
@@ -421,6 +433,7 @@ impl OrganiseWorker {
                     warn!(
                         "Recoverable validation error for {blockhash} at organise: {validation_error}"
                     );
+                    self.buffer_block(parent_height, share_block);
                     return Ok(ProcessOutcome::NotAdvanced);
                 }
             }
@@ -428,7 +441,15 @@ impl OrganiseWorker {
 
         // Mark BlockValid for both promotion tiers before promoting.
         if let Err(mark_error) = self.chain_store_handle.mark_block_valid(blockhash).await {
-            error!("Failed to mark {blockhash} BlockValid: {mark_error}");
+            // A rejected transition means the block is Pending or already
+            // Invalid, which no retry can change; anything else is a store
+            // failure that may not recur.
+            if matches!(mark_error, StoreError::InvalidStatusTransition(_)) {
+                error!("Cannot mark {blockhash} BlockValid: {mark_error}");
+            } else {
+                error!("Failed to mark {blockhash} BlockValid, will retry: {mark_error}");
+                self.buffer_block(parent_height, share_block);
+            }
             return Ok(ProcessOutcome::NotAdvanced);
         }
 
@@ -456,7 +477,8 @@ impl OrganiseWorker {
                 })
             }
             Err(error) => {
-                error!("Error promoting block {blockhash}: {error}");
+                error!("Error promoting block {blockhash}, will retry: {error}");
+                self.buffer_block(parent_height, share_block);
                 Ok(ProcessOutcome::NotAdvanced)
             }
         }
@@ -1673,6 +1695,198 @@ mod tests {
 
         // promote_block was called at least twice: once for B, once for
         // drained A. The mock allows unlimited calls.
+    }
+
+    /// A transient failure after the parent gate must leave the block buffered
+    /// for a later drain. Dropping it loses a block that is already stored, so
+    /// nothing re-fetches it and its children wait on a parent that will never
+    /// be marked BlockValid.
+    /// End to end for the wedge: a block fails transiently, is re-buffered
+    /// under its parent's height, and is retried when a later event finds
+    /// confirmation stalled. Without the retry the confirmed tip cannot move
+    /// -- this block is what blocks it -- so no confirm-driven drain ever
+    /// reaches it and the node stays wedged until a peer happens to resend.
+    #[tokio::test]
+    async fn test_stalled_confirmation_retries_the_block_wedging_it() {
+        let (_organise_tx, organise_rx) = create_organise_channel();
+        let mut mock_chain_handle = MockChainStoreHandle::new();
+
+        // Parent is confirmed at height 5, so the block reaches promotion and
+        // is buffered under height 5 when that fails.
+        mock_chain_handle
+            .expect_get_block_metadata()
+            .returning(|_| {
+                Ok(BlockMetadata {
+                    expected_height: Some(5),
+                    chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
+                    status: Status::BlockValid,
+                    chain: ChainMembership::Confirmed,
+                })
+            });
+        mock_chain_handle
+            .expect_get_candidate_tip_height()
+            .returning(|| Ok(Some(6)));
+        mock_chain_handle
+            .expect_mark_block_valid()
+            .returning(|_| Ok(()));
+        // The confirmed tip stays at 5: this block is what stops it advancing.
+        mock_chain_handle
+            .expect_get_tip_height()
+            .returning(|| Ok(Some(5)));
+        mock_chain_handle
+            .expect_organise_block()
+            .returning(|| Ok(None));
+        mock_chain_handle.expect_is_current().returning(|| false);
+        mock_chain_handle
+            .expect_get_uncle_infos()
+            .returning(|_| Vec::new());
+
+        // Promotion fails once, then succeeds -- a transient store failure.
+        let promote_attempts = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let attempts = promote_attempts.clone();
+        mock_chain_handle
+            .expect_promote_block()
+            .returning(move |_| {
+                if attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    Err(StoreError::Database("transient".to_string()))
+                } else {
+                    Ok(Some(6))
+                }
+            });
+
+        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let (notify_tx, _notify_rx) = create_test_notify_channel();
+        let mut worker = OrganiseWorker::new(
+            organise_rx,
+            mock_chain_handle,
+            monitoring_tx,
+            notify_tx,
+            create_test_metrics_handle(),
+            create_test_pplns_window(),
+            stub_share_validator_with_success(),
+        );
+
+        let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let outcome = worker.process_share_block(share).await.unwrap();
+        assert!(matches!(outcome, ProcessOutcome::NotAdvanced));
+        assert_eq!(worker.pending_blocks.get(&5).map(Vec::len), Some(1));
+
+        // A later event finds confirmation stalled and retries the wedging
+        // block, which now promotes.
+        worker.advance_confirmed_and_drain().await.unwrap();
+
+        assert_eq!(
+            promote_attempts.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "the wedging block must be re-attempted"
+        );
+        assert!(
+            worker.pending_blocks.is_empty(),
+            "a block that advances must leave the buffer"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_transient_promote_failure_rebuffers_the_block() {
+        let (_organise_tx, organise_rx) = create_organise_channel();
+        let mut mock_chain_handle = MockChainStoreHandle::new();
+
+        // Parent is confirmed at height 5, so the block passes the parent gate
+        // and reaches promotion.
+        mock_chain_handle
+            .expect_get_block_metadata()
+            .returning(|_| {
+                Ok(BlockMetadata {
+                    expected_height: Some(5),
+                    chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
+                    status: Status::BlockValid,
+                    chain: ChainMembership::Confirmed,
+                })
+            });
+        mock_chain_handle
+            .expect_get_candidate_tip_height()
+            .returning(|| Ok(Some(6)));
+        mock_chain_handle
+            .expect_mark_block_valid()
+            .returning(|_| Ok(()));
+        // A store failure that says nothing about the block itself.
+        mock_chain_handle
+            .expect_promote_block()
+            .returning(|_| Err(StoreError::Database("transient".to_string())));
+
+        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let (notify_tx, _notify_rx) = create_test_notify_channel();
+        let mut worker = OrganiseWorker::new(
+            organise_rx,
+            mock_chain_handle,
+            monitoring_tx,
+            notify_tx,
+            create_test_metrics_handle(),
+            create_test_pplns_window(),
+            stub_share_validator_with_success(),
+        );
+
+        let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let blockhash = share.block_hash();
+        let outcome = worker.process_share_block(share).await.unwrap();
+
+        assert!(matches!(outcome, ProcessOutcome::NotAdvanced));
+        let buffered = worker
+            .pending_blocks
+            .get(&5)
+            .expect("block must be buffered under its parent height for retry");
+        assert_eq!(buffered.len(), 1);
+        assert_eq!(buffered[0].block_hash(), blockhash);
+    }
+
+    /// A rejected status transition means the block is Pending or already
+    /// Invalid. No retry can change that, so it must not be re-buffered --
+    /// otherwise it is re-attempted on every drain of its parent's height.
+    #[tokio::test]
+    async fn test_invalid_status_transition_does_not_rebuffer() {
+        let (_organise_tx, organise_rx) = create_organise_channel();
+        let mut mock_chain_handle = MockChainStoreHandle::new();
+
+        mock_chain_handle
+            .expect_get_block_metadata()
+            .returning(|_| {
+                Ok(BlockMetadata {
+                    expected_height: Some(5),
+                    chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
+                    status: Status::BlockValid,
+                    chain: ChainMembership::Confirmed,
+                })
+            });
+        mock_chain_handle
+            .expect_get_candidate_tip_height()
+            .returning(|| Ok(Some(6)));
+        mock_chain_handle.expect_mark_block_valid().returning(|_| {
+            Err(StoreError::InvalidStatusTransition(
+                "block is Invalid".to_string(),
+            ))
+        });
+        mock_chain_handle.expect_promote_block().never();
+
+        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let (notify_tx, _notify_rx) = create_test_notify_channel();
+        let mut worker = OrganiseWorker::new(
+            organise_rx,
+            mock_chain_handle,
+            monitoring_tx,
+            notify_tx,
+            create_test_metrics_handle(),
+            create_test_pplns_window(),
+            stub_share_validator_with_success(),
+        );
+
+        let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let outcome = worker.process_share_block(share).await.unwrap();
+
+        assert!(matches!(outcome, ProcessOutcome::NotAdvanced));
+        assert!(
+            worker.pending_blocks.is_empty(),
+            "a permanently failing block must not be queued for retry"
+        );
     }
 
     #[tokio::test]
