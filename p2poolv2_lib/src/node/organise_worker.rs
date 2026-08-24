@@ -35,7 +35,7 @@ use crate::monitoring_events::{MonitoringEvent, MonitoringEventSender};
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
-use crate::shares::share_block::{ShareBlock, ShareHeader};
+use crate::shares::share_block::ShareBlock;
 use crate::shares::validation::FailureKind;
 use crate::shares::validation::ShareValidator;
 use crate::shares::validation::check_pplns_zone;
@@ -74,9 +74,9 @@ const ORGANISE_CHANNEL_CAPACITY: usize = 512;
 const PENDING_BLOCKS_CAPACITY: usize = 2 * ORGANISE_CHANNEL_CAPACITY;
 
 /// Events for the organise worker.
+// Block dominates the traffic and InvalidBlock is rare, so allow variant.
+#[allow(clippy::large_enum_variant)]
 pub enum OrganiseEvent {
-    /// Organise a header into the candidate chain.
-    Header(ShareHeader),
     /// Promote candidates to confirmed after a block is validated.
     Block(ShareBlock),
     /// Mark a block that failed pre-context validation Invalid.
@@ -208,23 +208,6 @@ impl OrganiseWorker {
 
         while let Some(event) = self.organise_rx.recv().await {
             match event {
-                OrganiseEvent::Header(header) => {
-                    let blockhash = header.block_hash();
-                    debug!("Organising header: {blockhash:?}");
-                    match self.chain_store_handle.organise_header(header).await {
-                        Ok(Some(_height)) => {}
-                        Ok(None) => {}
-                        Err(StoreError::ChannelClosed) => {
-                            error!("Store writer channel closed during organise header");
-                            return Err(OrganiseError {
-                                message: "Store writer channel closed".to_string(),
-                            });
-                        }
-                        Err(error) => {
-                            error!("Error organising header {error}");
-                        }
-                    }
-                }
                 OrganiseEvent::Block(share_block) => {
                     self.handle_organise_block_event(share_block).await?;
                 }
@@ -814,43 +797,6 @@ mod tests {
 
         // Drop sender so recv() returns None immediately
         drop(_organise_tx);
-
-        let result = worker.run().await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_organise_worker_calls_organise_header() {
-        let (organise_tx, organise_rx) = create_organise_channel();
-        let mut mock_chain_handle = MockChainStoreHandle::new();
-        mock_chain_handle
-            .expect_clone()
-            .return_once(MockChainStoreHandle::new);
-        mock_chain_handle
-            .expect_mark_block_valid()
-            .returning(|_| Ok(()));
-        mock_chain_handle
-            .expect_organise_header()
-            .returning(|_| Ok(None));
-
-        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
-        let (notify_tx, _notify_rx) = create_test_notify_channel();
-        let worker = OrganiseWorker::new(
-            organise_rx,
-            mock_chain_handle,
-            monitoring_tx,
-            notify_tx,
-            create_test_metrics_handle(),
-            create_test_pplns_window(),
-            stub_share_validator_with_success(),
-        );
-
-        let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
-        organise_tx
-            .send(OrganiseEvent::Header(share.header))
-            .await
-            .unwrap();
-        drop(organise_tx);
 
         let result = worker.run().await;
         assert!(result.is_ok());

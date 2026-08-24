@@ -70,20 +70,20 @@ The share processing pipeline is designed to:
 |                   |       | - Receives      |
 | Two event types:  |       |   SwarmSend::   |
 |                   |       |   Inv/Broadcast |
-| Header(ShareHdr): |       | - Relays inv to |
-|   organise_header |       |   peers via     |
-|   -> candidate    |       |   peer knowledge|
-|   chain updates   |       +-----------------+
+| Block(ShareBlock):|       | - Relays inv to |
+|   organise_block  |       |   peers via     |
+|   -> confirmed    |       |   peer knowledge|
+|   promotion       |       +-----------------+
 |                   |
-| Block(ShareBlock):|
-|   organise_block  |
-|   -> confirmed    |
-|   promotion       |
+| InvalidBlock(hash)|
+|   mark_invalid,   |
+|   then catch the  |
+|   confirmed chain |
+|   up              |
 |                   |
 | Fatal errors      |
 | stop the node     |
 +--------+----------+
-         | WriteCommand::OrganiseHeader
          | WriteCommand::OrganiseBlock
          | (via StoreHandle oneshot pattern)
          v
@@ -120,12 +120,17 @@ The share processing pipeline is designed to:
 
 The organisation pipeline processes two distinct event types:
 
-### OrganiseEvent::Header(ShareHeader)
-- **Purpose**: Update the candidate chain
-- **Called by**: `Store::organise_header(header, batch)`
-- **Behavior**: Extends or reorgs the candidate chain based on the new header.
-  Only requires a `ShareHeader`, not a full `ShareBlock`.
-- **Does NOT**: Touch the confirmed chain
+### Header organisation is not an organise event
+
+Candidate chain updates do not go through the organise worker. Callers invoke
+`ChainStoreHandle::organise_header` directly and await it: `handle_share_headers`
+during header sync, and `add_share_block_and_organise_header` on the block
+paths. Both reach `WriteCommand::OrganiseHeader` on the StoreWriter thread, so
+header and block writes are already serialised there without a second queue.
+
+Routing headers through the worker would buy nothing. It would not change
+ordering, and it would not unblock anything in `pending_blocks` -- those blocks
+wait on a parent reaching `BlockValid`, which no arriving header supplies.
 
 ### Retrying a block that failed without a verdict
 
@@ -184,9 +189,8 @@ reach below it either: `min_coinbase_root_height` caps them one window back
   RocksDB, then extends or reorgs the confirmed chain if conditions are met.
 - **Does NOT**: Modify the candidate chain
 
-This separation enables future use where header sync sends Header events
-(building the candidate chain) and block fetch sends Block events (promoting
-to confirmed), operating independently.
+Both events concern the confirmed chain only. The candidate chain is maintained
+outside the worker, by the direct `organise_header` calls described above.
 
 ## Key Components
 
@@ -220,7 +224,6 @@ validation, just before confirmation.
 - Runs in dedicated tokio task, spawned by NodeActor
 - Receives `OrganiseEvent` via bounded mpsc channel (capacity 512)
 - Matches on event type:
-  - `Header(header)`: calls `ChainStoreHandle::organise_header(header)`
   - `Block(share_block)`: gated on its parent's validation state before any
     chain-context validation runs (see "Parent-gated block processing" under
     Organisation Logic)
@@ -555,13 +558,6 @@ Closing that gap safely would need invalidation to cascade: `mark_invalid`
 would also invalidate the block's nephews via the `Uncles` index, so every node
 converges on the same verdict whenever it learns. That makes invalidation
 recursive over the DAG and needs its own bounding; it is not implemented.
-
-## Future Additions
-
-### Header Sync / Block Fetch Separation
-- Header sync can send `OrganiseEvent::Header` events to build the candidate chain
-- Block fetch can send `OrganiseEvent::Block` events to promote candidates to confirmed
-- These can operate independently and concurrently
 
 ## Files
 
