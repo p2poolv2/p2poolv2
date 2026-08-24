@@ -218,7 +218,7 @@ validation, just before confirmation.
 
 ### OrganiseWorker (`node/organise_worker.rs`)
 - Runs in dedicated tokio task, spawned by NodeActor
-- Receives `OrganiseEvent` via bounded mpsc channel (capacity 8192)
+- Receives `OrganiseEvent` via bounded mpsc channel (capacity 512)
 - Matches on event type:
   - `Header(header)`: calls `ChainStoreHandle::organise_header(header)`
   - `Block(share_block)`: gated on its parent's validation state before any
@@ -267,10 +267,21 @@ validation, just before confirmation.
 |---------|------|----------|---------|
 | emissions_rx | tokio mpsc | 100 | Stratum server -> EmissionWorker |
 | validation_tx/rx | tokio mpsc | 8192 | Share handlers -> ValidationWorker |
-| organise_tx/rx | tokio mpsc | 8192 | ValidationWorker/EmissionWorker -> OrganiseWorker |
+| organise_tx/rx | tokio mpsc | 512 | ValidationWorker/EmissionWorker -> OrganiseWorker |
 | swarm_tx/rx | tokio mpsc | 100 | ValidationWorker/EmissionWorker -> NodeActor |
 | block_fetcher_tx/rx | tokio mpsc | 8192 | Share handlers -> BlockFetcher |
 | write_tx/rx | std::sync mpsc | unbounded | StoreHandle -> StoreWriter (serialized writes) |
+
+The organise channel and the organise worker's `pending_blocks` buffer both
+hold whole `ShareBlock`s, each bounded at `BLOCK_TXS_SIZE_LIMIT` (200 KB) by
+`handle_share_block`, so their capacities set the worst-case memory of the
+organise path -- 512 + 1024 entries, rather than the 8192 + 16384 they held
+before, which allowed several GB of bodies in flight. The channel is pure
+backpressure between the parallel validation tasks and the serial organise
+worker, so a deeper queue buys no throughput and only widens the zone-tiering
+window. `PENDING_BLOCKS_CAPACITY` is sized at twice the channel because a child
+can sit a full channel ahead of its parent, and overflow there drops a block
+that is already stored and will not be re-fetched.
 
 ## BlockHeight Column Family Key Schema
 
@@ -461,8 +472,9 @@ mid-flight.** Exposure is `gap / 10s` per boundary block, where `gap` is the
 stage-1 to stage-2 latency. In steady state it is zero -- blocks are validated
 at `H ~ candidate_tip`, a full window above the boundary. It is systematic only
 for a node chronically ~1 window behind and syncing at roughly the network
-rate, whose frontier sits on the boundary; there the organise channel (capacity
-8192) can also stretch the gap well beyond a second.
+rate, whose frontier sits on the boundary. The organise channel bounds that
+gap: it is deliberately shallow (512) so a queued block waits behind at most a
+few hundred others rather than thousands.
 
 In that regime the tip only advances, so the flip is always in-zone ->
 below-zone: full content validation ran, chain context is skipped, and the
