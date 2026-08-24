@@ -373,9 +373,9 @@ fn print_dag_dot(entries: &[DagEntry]) {
         let data_marker = if entry.has_block_data { "D" } else { "-" };
         let label = format!(
             "{}|h:{}|{}|{}/{}|{}",
-            identifier, entry.height, miner, entry.chain, entry.status, data_marker
+            identifier, entry.height, miner, entry.chain, entry.validation_status, data_marker
         );
-        let fill_color = if entry.status == "Invalid" {
+        let fill_color = if entry.validation_status == "Invalid" {
             "#f4a582"
         } else {
             match entry.chain.as_str() {
@@ -453,7 +453,8 @@ struct BitcoinHeaderOutput {
 struct ShareLookupOutput {
     blockhash: String,
     height: Option<u32>,
-    status: String,
+    /// Validation state only. Chain position is reported separately in `chain`.
+    validation_status: String,
     chain: String,
     parent: String,
     uncles: Vec<String>,
@@ -529,7 +530,7 @@ fn build_share_output(
     Ok(ShareLookupOutput {
         blockhash: blockhash.to_string(),
         height,
-        status: status.to_string(),
+        validation_status: status.to_string(),
         chain: chain.to_string(),
         parent: share_header.prev_share_blockhash.to_string(),
         uncles: share_header

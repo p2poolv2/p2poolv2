@@ -58,7 +58,8 @@ pub struct BitcoinHeaderOutput {
 pub struct ShareLookupOutput {
     pub blockhash: String,
     pub height: Option<u32>,
-    pub status: String,
+    /// Validation state only. Chain position is reported separately in `chain`.
+    pub validation_status: String,
     pub chain: String,
     pub parent: String,
     pub uncles: Vec<String>,
@@ -161,7 +162,7 @@ fn build_share_output(
     Ok(ShareLookupOutput {
         blockhash: blockhash.to_string(),
         height,
-        status: status.to_string(),
+        validation_status: status.to_string(),
         chain: chain.to_string(),
         parent: share_header.prev_share_blockhash.to_string(),
         uncles: share_header

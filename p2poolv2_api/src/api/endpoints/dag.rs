@@ -188,7 +188,7 @@ mod tests {
         assert_eq!(response.to_height, 0);
         assert_eq!(response.entries.len(), 1);
         assert_eq!(response.entries[0].blockhash, genesis.block_hash());
-        assert_eq!(response.entries[0].status, "HeaderValid");
+        assert_eq!(response.entries[0].validation_status, "HeaderValid");
         assert_eq!(response.entries[0].chain, "Confirmed");
         assert!(response.entries[0].has_block_data);
     }
