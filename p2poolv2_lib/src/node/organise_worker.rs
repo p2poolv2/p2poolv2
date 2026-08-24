@@ -51,11 +51,27 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
 /// Channel capacity for shares pending organisation.
-const ORGANISE_CHANNEL_CAPACITY: usize = 8192;
+///
+/// Both this and `PENDING_BLOCKS_CAPACITY` hold whole `ShareBlock`s, which
+/// `handle_share_block` bounds at `BLOCK_TXS_SIZE_LIMIT` (200 KB) each, so the
+/// capacities set the worst-case memory of the organise path. They are kept
+/// small deliberately: this channel is pure backpressure between the parallel
+/// validation tasks and the serial organise worker, so a deeper queue buys no
+/// throughput -- the organise worker is the bottleneck either way -- and only
+/// adds latency between a block's two `check_pplns_zone` reads, which is the
+/// window in which its validation tier can flip (see the PPLNS zone tiering
+/// notes in docs/architecture/share-processing-pipeline.md).
+const ORGANISE_CHANNEL_CAPACITY: usize = 512;
 
 /// Maximum number of blocks buffered while waiting for ancestor
 /// confirmation during sync.
-const PENDING_BLOCKS_CAPACITY: usize = 16384;
+///
+/// Sized against the channel rather than picked independently: a block is
+/// buffered when its parent is not yet `BlockValid`, and a child can sit at
+/// most a full channel ahead of its parent, so the buffer must be able to hold
+/// a channel's worth of out-of-order arrivals. The headroom matters because
+/// overflow drops a block that is already stored, which nothing re-fetches.
+const PENDING_BLOCKS_CAPACITY: usize = 2 * ORGANISE_CHANNEL_CAPACITY;
 
 /// Events for the organise worker.
 pub enum OrganiseEvent {
