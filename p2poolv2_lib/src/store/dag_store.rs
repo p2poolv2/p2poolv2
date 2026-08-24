@@ -786,7 +786,7 @@ impl Store {
                 entries.push(DagEntry {
                     blockhash: *blockhash,
                     height,
-                    status,
+                    validation_status: status,
                     chain,
                     parent,
                     uncles,
@@ -809,7 +809,8 @@ impl Store {
 pub struct DagEntry {
     pub blockhash: BlockHash,
     pub height: u32,
-    pub status: String,
+    /// Validation state only. Chain position is reported separately in `chain`.
+    pub validation_status: String,
     pub chain: String,
     pub parent: BlockHash,
     pub uncles: Vec<BlockHash>,
@@ -4051,7 +4052,7 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].blockhash, genesis.block_hash());
         assert_eq!(entries[0].height, 0);
-        assert_eq!(entries[0].status, "HeaderValid");
+        assert_eq!(entries[0].validation_status, "HeaderValid");
         assert_eq!(entries[0].chain, "Confirmed");
         assert!(entries[0].has_block_data);
     }
