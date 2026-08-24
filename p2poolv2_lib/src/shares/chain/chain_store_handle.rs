@@ -47,6 +47,14 @@ pub(crate) const COMMON_ANCESTOR_DEPTH: usize = 2160; // 6 shares per minute * 6
 /// current. Used to suppress block fetching during initial header sync.
 const MAX_TIP_AGE_SECS: u64 = 300;
 
+/// True when a tip stamped `tip_time` is recent enough relative to `now_secs`.
+///
+/// Split out of `is_current` so the boundary is decidable without reading a
+/// clock: `is_current` fetches the tip and the time, this decides.
+fn is_tip_current(tip_time: u32, now_secs: u64) -> bool {
+    now_secs.saturating_sub(tip_time as u64) <= MAX_TIP_AGE_SECS
+}
+
 /// Handle for chain-level store operations.
 ///
 /// Wraps `StoreHandle` to provide chain-level logic like height
@@ -327,8 +335,7 @@ impl ChainStoreHandle {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        let tip_time = tip_header.time as u64;
-        now_secs.saturating_sub(tip_time) <= MAX_TIP_AGE_SECS
+        is_tip_current(tip_header.time, now_secs)
     }
 
     /// Get the height and time of a specific share, for ASERT target
@@ -1505,22 +1512,28 @@ mod tests {
         assert!(!chain_handle.is_current());
     }
 
-    #[tokio::test]
-    async fn test_is_current_returns_true_at_boundary() {
-        let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+    /// The age rule is decided by `is_tip_current`, which `is_current` calls
+    /// after reading the tip and the clock. Driving it directly pins both
+    /// sides of the boundary and cannot race the clock -- the previous version
+    /// read `SystemTime::now()` once to build the tip and again inside
+    /// `is_current`, so a one-second tick between them flipped the result.
+    #[test]
+    fn test_is_tip_current_at_boundary() {
+        let now_secs = 1_000_000u64;
+        let max_age = super::MAX_TIP_AGE_SECS;
 
-        let now_secs = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as u32;
-        // Set the tip timestamp exactly at the MAX_TIP_AGE_SECS boundary
-        let boundary_time = now_secs.saturating_sub(super::MAX_TIP_AGE_SECS as u32);
-
-        let genesis = TestShareBlockBuilder::new().time(boundary_time).build();
-
-        chain_handle.init_or_setup_genesis(genesis).await.unwrap();
-
-        assert!(chain_handle.is_current());
+        assert!(
+            super::is_tip_current((now_secs - max_age) as u32, now_secs),
+            "a tip exactly MAX_TIP_AGE_SECS old is still current"
+        );
+        assert!(
+            !super::is_tip_current((now_secs - max_age - 1) as u32, now_secs),
+            "one second past the boundary is stale"
+        );
+        assert!(
+            super::is_tip_current(now_secs as u32, now_secs),
+            "a tip stamped now is current"
+        );
     }
 
     /// When a non-confirmed block (uncle) exists at the same height as
