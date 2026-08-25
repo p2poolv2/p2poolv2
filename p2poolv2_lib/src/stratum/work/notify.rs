@@ -173,6 +173,14 @@ fn publish_prepared_notify(
 /// PreparedNotifyParams once per template, and publishes it via the
 /// watch channel. Each connection handler receives the prepared
 /// template and builds per-miner notifies independently.
+///
+/// Returns as soon as a template cannot be prepared, which the node turns into
+/// `ShutdownReason::Error`. Continuing is not an option: the watch channel
+/// keeps handing every connected and newly connecting miner the last template
+/// that did build, so the pool would go on hashing a previousblockhash bitcoin
+/// has moved past, with nothing to age the job out and only a repeated error
+/// log to show for it. The block template fetcher shuts the node down on the
+/// same class of failure.
 pub async fn start_notify(
     mut notifier_rx: mpsc::Receiver<NotifyCmd>,
     template_tx: watch::Sender<Option<Arc<PreparedNotifyParams>>>,
@@ -210,8 +218,8 @@ pub async fn start_notify(
                     &mut notify_context,
                     &template_tx,
                 ) {
-                    error!("Failed to publish notify: {error}");
-                    continue;
+                    error!("Failed to publish notify, shutting down: {error}");
+                    return;
                 }
             }
             NotifyCmd::NewNotify => {
@@ -220,8 +228,8 @@ pub async fn start_notify(
                     if let Err(error) =
                         publish_prepared_notify(template, true, &mut notify_context, &template_tx)
                     {
-                        error!("Failed to publish new notify: {error}");
-                        continue;
+                        error!("Failed to publish new notify, shutting down: {error}");
+                        return;
                     }
                 } else {
                     debug!("NewNotify received but no template available yet");
@@ -303,6 +311,78 @@ mod tests {
         assert_eq!(
             notify.params.merkle_branches,
             vec!["fecdf8cf1147587b0b3a262b16a955849053c6dfe0239718559f6a3d3ed20523".to_string()]
+        );
+    }
+
+    /// A template that cannot be prepared ends the notifier rather than leaving
+    /// the previous one in the watch channel.
+    ///
+    /// The watch channel hands its last value to every connected miner and to
+    /// every miner that connects afterwards, so keeping a job whose
+    /// previousblockhash bitcoin has moved past would silently put the whole
+    /// pool on dead work. Returning here is what the node turns into a
+    /// shutdown.
+    #[tokio::test]
+    async fn test_start_notify_stops_when_a_template_cannot_be_prepared() {
+        let (template_tx, mut template_rx) =
+            watch::channel::<Option<Arc<PreparedNotifyParams>>>(None);
+        let (notify_tx, notify_rx) = mpsc::channel::<NotifyCmd>(10);
+
+        let mut chain_store_handle = ChainStoreHandle::default();
+        let genesis = genesis_for_tests();
+        let genesis_hash = genesis.block_hash();
+        let genesis_header = genesis.header.clone();
+        chain_store_handle
+            .expect_get_mining_base_and_uncles()
+            .returning(move || Ok((genesis_hash, std::collections::HashSet::new())));
+        chain_store_handle
+            .expect_get_share_height_and_time()
+            .returning(|_| Ok((0, genesis_for_tests().header.time)));
+
+        let pool_difficulty =
+            pool_difficulty::PoolDifficulty::new(genesis_header.bits, genesis_header.time, 0);
+        let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
+
+        // The payout anchor cannot be resolved, which is persistent: the mining
+        // base does not move while confirmation is stalled.
+        let mut mock_payout = MockPayoutDistribution::default();
+        mock_payout
+            .expect_get_output_distribution()
+            .returning(|_, _, _, _, _| Err("no payout distribution for anchor".into()));
+
+        let task_handle = tokio::spawn(async move {
+            start_notify(
+                notify_rx,
+                template_tx,
+                chain_store_handle,
+                &stratum_config,
+                Box::new(mock_payout),
+                pool_difficulty,
+            )
+            .await;
+        });
+
+        let data = include_str!(
+            "../../../../p2poolv2_tests/test_data/gbt/regtest/ckpool/one-txn/gbt.json"
+        );
+        let gbt_json: serde_json::Value = serde_json::from_str(data).expect("Invalid JSON");
+        let template: BlockTemplate =
+            serde_json::from_value(gbt_json).expect("Failed to parse BlockTemplate");
+        notify_tx
+            .send(NotifyCmd::SendToAll {
+                template: Arc::new(template),
+            })
+            .await
+            .expect("Failed to send template");
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), task_handle)
+            .await
+            .expect("notifier must stop when a template cannot be prepared")
+            .expect("notifier task panicked");
+
+        assert!(
+            template_rx.borrow_and_update().is_none(),
+            "no job may be published from a template that failed to prepare"
         );
     }
 
