@@ -32,6 +32,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   higher-work fork from ever being adopted when the same transaction appeared
   on both sides of the fork. Confirmation re-checks them with the reorg
   overlay applied, and marks the block `Invalid` there.
+- Invalidating the last candidate above the confirmed tip now leaves the
+  candidate top at the confirmed tip instead of deleting it. An absent top
+  candidate height means the candidate chain has never been written, which
+  stopped `organise_block` from promoting and let any header become the
+  candidate tip with no parent, contiguity or work check.
 - Coinbase maturity is measured from the stored `coinbase_root_height` to the
   spending block's own height, so the verdict no longer depends on which
   branch this node has confirmed. `check_prevouts_and_find_coinbase` is now

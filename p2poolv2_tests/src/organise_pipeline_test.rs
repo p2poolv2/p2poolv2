@@ -468,3 +468,80 @@ async fn test_reorg_adopts_heavier_fork_respending_an_outpoint_the_reorg_removes
         "the replaced spender leaves the confirmed chain"
     );
 }
+
+/// An invalidation that leaves nothing on the candidate chain above the
+/// confirmed tip must leave the candidate top at the confirmed tip, not clear
+/// it.
+///
+/// An absent top candidate height means "no candidate chain has ever been
+/// written", the state the store is in between genesis and the first block
+/// after it. Reaching it again mid-chain puts `should_extend_candidates` back
+/// on its bootstrap arm, where any header at any height becomes the candidate
+/// tip with no parent, contiguity or work check, and stops `organise_block`
+/// from promoting anything until some header re-creates the key.
+#[tokio::test]
+async fn test_invalidation_emptying_candidate_chain_keeps_top_at_confirmed_tip() {
+    let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+
+    let genesis = TestShareBlockBuilder::new()
+        .nonce(0xf0000001)
+        .time(FIRST_BLOCK_TIME)
+        .build();
+    chain_store_handle
+        .init_or_setup_genesis(genesis.clone())
+        .await
+        .unwrap();
+
+    // Two blocks spending the same output. The second is invalidated by the
+    // confirmation re-check, and it is the only candidate above the tip.
+    let source_outpoint = bitcoin::OutPoint::new(genesis.transactions[0].0.compute_txid(), 0);
+    let first_spender = TestShareBlockBuilder::new()
+        .prev_share_blockhash(genesis.block_hash().to_string())
+        .nonce(0xf0000002)
+        .time(FIRST_BLOCK_TIME + 1)
+        .add_transaction(spending_transaction(source_outpoint, 1_000))
+        .build();
+    let second_spender = TestShareBlockBuilder::new()
+        .prev_share_blockhash(first_spender.block_hash().to_string())
+        .nonce(0xf0000003)
+        .time(FIRST_BLOCK_TIME + 2)
+        .add_transaction(spending_transaction(source_outpoint, 900))
+        .build();
+    receive_block(&chain_store_handle, &first_spender).await;
+    receive_block(&chain_store_handle, &second_spender).await;
+    chain_store_handle.organise_block().await.unwrap();
+
+    assert_eq!(chain_store_handle.get_tip_height().unwrap(), Some(1));
+    assert_eq!(
+        chain_store_handle
+            .get_block_metadata(&second_spender.block_hash())
+            .unwrap()
+            .status,
+        Status::Invalid,
+        "the double-spending block is invalidated, emptying the candidate chain"
+    );
+    assert_eq!(
+        chain_store_handle.get_candidate_tip_height().unwrap(),
+        Some(1),
+        "the candidate top falls back to the confirmed tip, it is not cleared"
+    );
+
+    // A sibling of the confirmed block, forking off genesis with no more work,
+    // neither extends the candidate tip nor outweighs it.
+    let stale_sibling = TestShareBlockBuilder::new()
+        .prev_share_blockhash(genesis.block_hash().to_string())
+        .nonce(0xf0000004)
+        .time(FIRST_BLOCK_TIME + 3)
+        .build();
+    receive_block(&chain_store_handle, &stale_sibling).await;
+
+    assert!(
+        !chain_store_handle.is_candidate(&stale_sibling.block_hash()),
+        "a fork that neither extends nor outweighs the tip must not be taken as the candidate"
+    );
+    assert_eq!(
+        chain_store_handle.get_candidate_tip_height().unwrap(),
+        Some(1),
+        "the candidate tip is unchanged by a block that cannot extend it"
+    );
+}
