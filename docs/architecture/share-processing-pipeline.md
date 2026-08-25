@@ -359,13 +359,19 @@ The organise worker's `validate_mark_promote` marks a block `BlockValid` after
 chain-context validation and *before* it calls `organise_block`, so the block is
 already validated by the time this promotion path sees it.
 
-**Prevout re-check at confirmation**: `BlockValid` is not sufficient on its own,
-because prevout validity is relative to the confirmed chain and a block is
-validated before it is confirmed. Two cases slip past ingest validation: a reorg
-can move a spent output's source off the confirmed chain, and two blocks on one
-candidate chain can each spend the same output (neither sees the other's spend,
-since `SpendsIndex` is written only at confirmation). So `extend_confirmed` and
-`reorg_confirmed` re-check each block's prevouts as they promote it, against the
+**Prevout checks at confirmation**: `BlockValid` is not sufficient on its own.
+Two of the prevout rules -- is the spent output's source on the confirmed chain,
+and is the output already spent -- are answered relative to whichever branch this
+node has confirmed, and a reorg changes both answers. `validate_prevouts` at
+ingest therefore does not judge them at all; it enforces only what the block
+itself fixes (the output exists, its coinbase root is within the payout window,
+a coinbase output is mature at this block's height, and no output is spent twice
+within the block), so its verdicts stay true under any reorg. Deciding the other
+two at ingest would mark a fork block `Invalid` for spending an output the
+winning branch also spent -- the ordinary situation when the same transaction
+appears on both sides of a fork -- and `reorg_branch_has_invalid` would then bar
+that fork forever, however much work it accumulated. So `extend_confirmed` and
+`reorg_confirmed` check each block's prevouts as they promote it, against the
 confirmed state *the batch itself is building* -- a `WriteBatch` is opaque to
 reads, so the deltas are carried in a `ConfirmationOverlay` (blocks leaving the
 confirmed chain, the spends they release, and the spends applied so far in this
@@ -547,8 +553,8 @@ judged invalid cannot diverge anything.
 The cost of the gap this leaves is bounded, because an uncle contributes
 **nothing to chain state**. `put_confirmed_entry` applies `add_spends_for_block`
 only for the block being confirmed, never for its uncles, and an uncle's outputs
-are unspendable anyway since `validate_prevouts` requires the source txid to be
-confirmed. Referencing an uncle only pays PPLNS weight
+are unspendable anyway since `recheck_block_prevouts_with_overlay` requires the
+source txid to be confirmed before any spender of it can be confirmed. Referencing an uncle only pays PPLNS weight
 (`UNCLE_SCALED_WEIGHT`, plus the nephew's `NEPHEW_SCALED_BONUS`). So the worst
 case is that a peer's nephew credits a block we consider invalid -- for work
 that was really done, since the block passed PoW at pool difficulty and was

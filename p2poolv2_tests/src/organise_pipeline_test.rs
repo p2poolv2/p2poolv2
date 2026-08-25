@@ -26,8 +26,10 @@
 //! already-validated blocks reach the confirmation path.
 
 use bitcoin::hashes::Hash;
+use p2poolv2_lib::pool_difficulty::PoolDifficulty;
 use p2poolv2_lib::shares::chain::chain_store_handle::ChainStoreHandle;
 use p2poolv2_lib::shares::share_block::ShareBlock;
+use p2poolv2_lib::shares::validation::{DefaultShareValidator, ShareValidator};
 use p2poolv2_lib::store::block_tx_metadata::Status;
 use p2poolv2_lib::test_utils::{TestShareBlockBuilder, setup_test_chain_store_handle};
 
@@ -95,6 +97,51 @@ async fn receive_block(chain_store_handle: &ChainStoreHandle, block: &ShareBlock
 async fn receive_and_organise(chain_store_handle: &ChainStoreHandle, block: &ShareBlock) {
     receive_block(chain_store_handle, block).await;
     chain_store_handle.organise_block().await.unwrap();
+}
+
+/// A validator for the ingest-time prevout checks. Only `validate_prevouts` is
+/// exercised, which does not consult pool difficulty, so the anchor is
+/// arbitrary.
+fn ingest_validator() -> DefaultShareValidator {
+    DefaultShareValidator::new(
+        PoolDifficulty::new(
+            bitcoin::CompactTarget::from_consensus(0x1d00ffff),
+            FIRST_BLOCK_TIME,
+            0,
+        ),
+        1,
+        b"P2Poolv2".to_vec(),
+    )
+}
+
+/// Receive a block and run the real ingest-time prevout validation over it,
+/// resolving its status the way the organise worker does: a consensus failure
+/// marks the block Invalid, anything else marks it BlockValid.
+///
+/// The other receive helpers mark BlockValid unconditionally, which presumes
+/// the verdict this is here to observe.
+async fn receive_block_with_prevout_validation(
+    chain_store_handle: &ChainStoreHandle,
+    block: &ShareBlock,
+) {
+    chain_store_handle
+        .add_share_block(block.clone())
+        .await
+        .unwrap();
+    chain_store_handle
+        .organise_header(block.header.clone())
+        .await
+        .unwrap();
+    match ingest_validator().validate_prevouts(block, chain_store_handle) {
+        Ok(()) => chain_store_handle
+            .mark_block_valid(block.block_hash())
+            .await
+            .unwrap(),
+        Err(_) => chain_store_handle
+            .mark_invalid(block.block_hash())
+            .await
+            .unwrap(),
+    }
 }
 
 /// A chain of received blocks is confirmed one height at a time.
@@ -314,5 +361,110 @@ async fn test_reorg_rejects_fork_block_spending_reorged_out_source() {
             .unwrap()
             .status,
         Status::Invalid
+    );
+}
+
+/// A heavier fork whose block spends the same output the confirmed chain
+/// already spent is adopted once the fork outweighs the confirmed chain.
+///
+/// The same transaction appearing on both sides of a fork is the ordinary
+/// situation in a reorg. `SpendsIndex` records only what the *currently*
+/// confirmed chain spent, so asking "is this outpoint already spent?" at ingest
+/// answers for the branch that happened to confirm first. Recording that answer
+/// as a permanent `Invalid` would bar the fork through
+/// `reorg_branch_has_invalid` and `all_in_zone_blocks_block_valid`, no matter
+/// how much work it accumulated. The question is left to
+/// `recheck_block_prevouts_with_overlay`, which asks it while the reorg is
+/// being applied and knows the confirmed spend is being rewound.
+#[tokio::test]
+async fn test_reorg_adopts_heavier_fork_respending_an_outpoint_the_reorg_removes() {
+    let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+
+    let genesis = TestShareBlockBuilder::new()
+        .nonce(0xe0000001)
+        .time(FIRST_BLOCK_TIME)
+        .build();
+    chain_store_handle
+        .init_or_setup_genesis(genesis.clone())
+        .await
+        .unwrap();
+
+    // A confirmed block below the fork point holds the output the fork will
+    // contest. It is a spend of the genesis coinbase, so the contested output
+    // is not itself a coinbase and the spenders below are judged on their
+    // prevouts rather than on maturity.
+    let funding_tx = spending_transaction(
+        bitcoin::OutPoint::new(genesis.transactions[0].0.compute_txid(), 0),
+        40_000,
+    );
+    let source_outpoint = bitcoin::OutPoint::new(funding_tx.compute_txid(), 0);
+    let funding_block = TestShareBlockBuilder::new()
+        .prev_share_blockhash(genesis.block_hash().to_string())
+        .nonce(0xe0000002)
+        .time(FIRST_BLOCK_TIME + 1)
+        .add_transaction(funding_tx)
+        .build();
+    receive_and_organise(&chain_store_handle, &funding_block).await;
+    assert!(chain_store_handle.is_block_confirmed(&funding_block.block_hash()));
+
+    // One transaction, included on both sides of the fork, spending that output.
+    let contested_tx = spending_transaction(source_outpoint, 1_000);
+
+    let confirmed_spender = TestShareBlockBuilder::new()
+        .prev_share_blockhash(funding_block.block_hash().to_string())
+        .nonce(0xe0000003)
+        .time(FIRST_BLOCK_TIME + 2)
+        .add_transaction(contested_tx.clone())
+        .build();
+    receive_block_with_prevout_validation(&chain_store_handle, &confirmed_spender).await;
+    chain_store_handle.organise_block().await.unwrap();
+    assert!(
+        chain_store_handle.is_block_confirmed(&confirmed_spender.block_hash()),
+        "the first spender confirms, putting its spend in SpendsIndex"
+    );
+
+    // A heavier fork off the funding block carrying the same transaction,
+    // extended so the fork rises above the confirmed tip and becomes a
+    // promotion candidate.
+    let fork_spender = TestShareBlockBuilder::new()
+        .prev_share_blockhash(funding_block.block_hash().to_string())
+        .work(4)
+        .nonce(0xe0000004)
+        .time(FIRST_BLOCK_TIME + 3)
+        .add_transaction(contested_tx)
+        .build();
+    let fork_second = TestShareBlockBuilder::new()
+        .prev_share_blockhash(fork_spender.block_hash().to_string())
+        .work(4)
+        .nonce(0xe0000005)
+        .time(FIRST_BLOCK_TIME + 4)
+        .build();
+    receive_block_with_prevout_validation(&chain_store_handle, &fork_spender).await;
+    receive_block_with_prevout_validation(&chain_store_handle, &fork_second).await;
+
+    assert_ne!(
+        chain_store_handle
+            .get_block_metadata(&fork_spender.block_hash())
+            .unwrap()
+            .status,
+        Status::Invalid,
+        "ingest must not settle a question a reorg can change"
+    );
+
+    chain_store_handle.organise_block().await.unwrap();
+
+    assert_eq!(
+        chain_store_handle.get_tip_height().unwrap(),
+        Some(3),
+        "the heavier fork is adopted in full"
+    );
+    assert!(
+        chain_store_handle.is_block_confirmed(&fork_spender.block_hash())
+            && chain_store_handle.is_block_confirmed(&fork_second.block_hash()),
+        "the fork block re-spending the outpoint confirms once the reorg removes the earlier spend"
+    );
+    assert!(
+        !chain_store_handle.is_block_confirmed(&confirmed_spender.block_hash()),
+        "the replaced spender leaves the confirmed chain"
     );
 }

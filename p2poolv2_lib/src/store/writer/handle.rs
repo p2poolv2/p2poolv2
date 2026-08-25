@@ -64,16 +64,23 @@ impl StoreHandle {
         self.store.get_all_prevouts(transaction)
     }
 
-    /// Batch-read all outpoints from the Outputs CF.
-    /// A missing outpoint or one below min_coinbase_root_height comes back as
-    /// `PrevoutCheck::Rejected`; `Err` means the read itself failed.
-    pub fn check_prevouts_and_find_coinbase(
+    /// Batch-read all outpoints from the Outputs CF and check the rules that
+    /// depend only on the spending block: existence, coinbase root window, and
+    /// coinbase maturity. A violation comes back as `PrevoutCheck::Rejected`;
+    /// `Err` means the read itself failed.
+    pub fn check_prevouts(
         &self,
         outpoints: &[bitcoin::OutPoint],
+        spending_height: u32,
         min_coinbase_root_height: u32,
+        coinbase_maturity: usize,
     ) -> Result<PrevoutCheck, StoreError> {
-        self.store
-            .check_prevouts_and_find_coinbase(outpoints, min_coinbase_root_height)
+        self.store.check_prevouts(
+            outpoints,
+            spending_height,
+            min_coinbase_root_height,
+            coinbase_maturity,
+        )
     }
 
     /// Return true when every listed block, and every uncle it references,
@@ -86,30 +93,6 @@ impl StoreHandle {
     ) -> Result<bool, StoreError> {
         self.store
             .all_block_and_uncle_data_available(blockhashes, prune_height)
-    }
-
-    /// Return the first coinbase outpoint that is not yet mature, or None.
-    pub fn find_immature_coinbase_prevout(
-        &self,
-        coinbase_outpoints: &[bitcoin::OutPoint],
-        min_depth: usize,
-        tip_height: u32,
-    ) -> Result<Option<bitcoin::OutPoint>, StoreError> {
-        self.store
-            .find_immature_coinbase_prevout(coinbase_outpoints, min_depth, tip_height)
-    }
-
-    /// Batch check the SpendsIndex CF: true if any outpoint is already spent.
-    pub fn is_any_prevout_spent(
-        &self,
-        outpoints: &[bitcoin::OutPoint],
-    ) -> Result<bool, StoreError> {
-        self.store.is_any_prevout_spent(outpoints)
-    }
-
-    /// Returns true if every txid is on the confirmed sharechain.
-    pub fn are_all_txids_confirmed(&self, txids: &[bitcoin::Txid]) -> Result<bool, StoreError> {
-        self.store.are_all_txids_confirmed(txids)
     }
 
     /// Retrieve a single transaction output by txid and output index.

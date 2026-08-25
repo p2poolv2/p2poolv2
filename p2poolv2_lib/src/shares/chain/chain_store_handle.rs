@@ -119,17 +119,25 @@ impl ChainStoreHandle {
         self.store_handle.get_all_prevouts(transaction)
     }
 
-    /// Batch-read all outpoints from the Outputs CF.
-    /// A missing outpoint or one below min_coinbase_root_height comes back as
-    /// `PrevoutCheck::Rejected` so the caller can treat it as a consensus
-    /// violation; `Err` means the read itself failed.
-    pub fn check_prevouts_and_find_coinbase(
+    /// Batch-read all outpoints from the Outputs CF and check every rule that
+    /// depends only on the spending block: the output exists, its coinbase root
+    /// is within the payout window, and a coinbase output is mature relative to
+    /// `spending_height`. A violation comes back as `PrevoutCheck::Rejected` so
+    /// the caller can treat it as a consensus violation; `Err` means the read
+    /// itself failed.
+    pub fn check_prevouts(
         &self,
         outpoints: &[bitcoin::OutPoint],
+        spending_height: u32,
         min_coinbase_root_height: u32,
+        coinbase_maturity: usize,
     ) -> Result<PrevoutCheck, StoreError> {
-        self.store_handle
-            .check_prevouts_and_find_coinbase(outpoints, min_coinbase_root_height)
+        self.store_handle.check_prevouts(
+            outpoints,
+            spending_height,
+            min_coinbase_root_height,
+            coinbase_maturity,
+        )
     }
 
     /// Return true when every listed block, and every uncle it references,
@@ -143,38 +151,6 @@ impl ChainStoreHandle {
     ) -> Result<bool, StoreError> {
         self.store_handle
             .all_block_and_uncle_data_available(blockhashes, prune_height)
-    }
-
-    /// Return the first coinbase outpoint that is not yet mature relative to
-    /// `reference_height`, or None. Maturity depth is
-    /// `reference_height - coinbase_confirmed_height`. Callers pass the spending
-    /// block's own height (parent height + 1) so the check is deterministic and
-    /// reorg-invariant rather than tied to the local confirmed tip (see
-    /// `validate_prevouts`).
-    pub fn find_immature_coinbase_prevout(
-        &self,
-        coinbase_outpoints: &[bitcoin::OutPoint],
-        min_depth: usize,
-        reference_height: u32,
-    ) -> Result<Option<bitcoin::OutPoint>, StoreError> {
-        self.store_handle.find_immature_coinbase_prevout(
-            coinbase_outpoints,
-            min_depth,
-            reference_height,
-        )
-    }
-
-    /// Batch check the SpendsIndex CF: true if any outpoint is already spent.
-    pub fn is_any_prevout_spent(
-        &self,
-        outpoints: &[bitcoin::OutPoint],
-    ) -> Result<bool, StoreError> {
-        self.store_handle.is_any_prevout_spent(outpoints)
-    }
-
-    /// Returns true if every txid is on the confirmed sharechain.
-    pub fn are_all_txids_confirmed(&self, txids: &[bitcoin::Txid]) -> Result<bool, StoreError> {
-        self.store_handle.are_all_txids_confirmed(txids)
     }
 
     /// Retrieve a single transaction output by txid and output index.
@@ -856,11 +832,8 @@ mockall::mock! {
         pub fn get_blockhashes_for_height(&self, height: u32) -> Vec<BlockHash>;
         pub fn network(&self) -> bitcoin::Network;
         pub fn get_all_prevouts(&self, transaction: &bitcoin::Transaction) -> Result<Vec<(usize, bitcoin::TxOut)>, StoreError>;
-        pub fn check_prevouts_and_find_coinbase(&self, outpoints: &[bitcoin::OutPoint], min_coinbase_root_height: u32) -> Result<PrevoutCheck, StoreError>;
+        pub fn check_prevouts(&self, outpoints: &[bitcoin::OutPoint], spending_height: u32, min_coinbase_root_height: u32, coinbase_maturity: usize) -> Result<PrevoutCheck, StoreError>;
         pub fn all_block_and_uncle_data_available(&self, blockhashes: &[BlockHash], prune_height: u32) -> Result<bool, StoreError>;
-        pub fn find_immature_coinbase_prevout(&self, coinbase_outpoints: &[bitcoin::OutPoint], min_depth: usize, reference_height: u32) -> Result<Option<bitcoin::OutPoint>, StoreError>;
-        pub fn is_any_prevout_spent(&self, outpoints: &[bitcoin::OutPoint]) -> Result<bool, StoreError>;
-        pub fn are_all_txids_confirmed(&self, txids: &[bitcoin::Txid]) -> Result<bool, StoreError>;
         pub fn get_output(&self, txid: &bitcoin::Txid, vout: u32) -> Result<bitcoin::TxOut, StoreError>;
         pub fn share_block_exists(&self, blockhash: &BlockHash) -> bool;
         pub fn first_existing_share_header(&self, blockhashes: &[BlockHash]) -> Option<BlockHash>;
