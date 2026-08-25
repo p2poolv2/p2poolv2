@@ -32,6 +32,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   higher-work fork from ever being adopted when the same transaction appeared
   on both sides of the fork. Confirmation re-checks them with the reorg
   overlay applied, and marks the block `Invalid` there.
+- A template that cannot be prepared now stops the notifier, which shuts the
+  node down, instead of being logged and skipped. The watch channel hands its
+  last value to every connected and newly connecting miner, so skipping left
+  the pool hashing a previousblockhash bitcoin had moved past, with nothing to
+  age the job out.
+- An empty sharechain PPLNS window and a zero PPLNS total difficulty are both
+  errors rather than fallbacks onto the bootstrap address, so they reach the
+  notifier and shut the node down. Paying a whole coinbase to one address at
+  the moment the payout data is known to be wrong is worse than stopping.
+  Neither is a bootstrapping state: genesis is on the confirmed index, so a new
+  chain has it in the window, and the total difficulty is at least 1 on every
+  network unless `difficulty_multiplier` is configured below 1.0, which
+  truncates to zero when cast.
+- `difficulty_multiplier` is validated at config parse: it must be a finite
+  whole number of at least 1. Every consumer reads it through an `as u128`
+  cast, so a smaller value truncated to zero and a fractional one silently
+  rounded down, changing the payout window for the whole pool.
 - Invalidating the last candidate above the confirmed tip now leaves the
   candidate top at the confirmed tip instead of deleting it. An absent top
   candidate height means the candidate chain has never been written, which

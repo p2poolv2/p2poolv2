@@ -148,6 +148,23 @@ impl StratumConfig<Raw> {
             });
         }
 
+        // Every consumer reads difficulty_multiplier through an `as u128` cast,
+        // so anything below 1.0 truncates to zero -- which makes the PPLNS
+        // payout unbuildable and takes the node down at the first block
+        // template -- and a fractional value silently rounds down, changing the
+        // payout window for the whole pool. Reject both here instead.
+        if !self.difficulty_multiplier.is_finite()
+            || self.difficulty_multiplier < 1.0
+            || self.difficulty_multiplier.fract() != 0.0
+        {
+            return Err(ConfigError {
+                message: format!(
+                    "difficulty_multiplier must be a whole number of at least 1, got {}",
+                    self.difficulty_multiplier
+                ),
+            });
+        }
+
         if self.donation_address.is_some() != self.donation.is_some() {
             return Err(ConfigError {
                 message: "donation_address and donation must both be set or both be unset"
@@ -792,6 +809,38 @@ mod tests {
         let mut config_with_sig = StratumConfig::<Raw>::new_for_test_default();
         config_with_sig.pool_signature = Some("MyPool/1.0 and some more bytes....".to_string());
         assert_err!(config_with_sig.parse());
+    }
+
+    /// difficulty_multiplier is cast with `as u128` by every consumer, so a
+    /// value below 1.0 becomes zero and a fractional one silently rounds down.
+    /// Both are rejected at parse rather than surfacing as a dead pool.
+    #[test]
+    fn test_parse_fails_on_unusable_difficulty_multiplier() {
+        for multiplier in [0.0, 0.5, 1.5, -1.0, f64::NAN, f64::INFINITY] {
+            let mut config = StratumConfig::<Raw>::new_for_test_default();
+            config.difficulty_multiplier = multiplier;
+            let result = config.parse();
+            assert_err!(&result);
+            assert!(
+                result
+                    .unwrap_err()
+                    .message
+                    .contains("difficulty_multiplier must be a whole number"),
+                "expected rejection for multiplier {multiplier}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_accepts_whole_difficulty_multiplier() {
+        for multiplier in [1.0, 2.0, 1000.0] {
+            let mut config = StratumConfig::<Raw>::new_for_test_default();
+            config.difficulty_multiplier = multiplier;
+            assert!(
+                config.parse().is_ok(),
+                "expected multiplier {multiplier} to be accepted"
+            );
+        }
     }
 
     #[test]
