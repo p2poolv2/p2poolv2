@@ -63,6 +63,8 @@ impl Payout {
 
 impl PayoutDistribution for Payout {
     /// Fill payout distribution from the incrementally maintained PPLNS window.
+    ///
+    /// A zero total difficulty and an empty window are both errors.
     fn fill_distribution_from_shares(
         &mut self,
         distribution: &mut Vec<OutputPair>,
@@ -71,18 +73,17 @@ impl PayoutDistribution for Payout {
         total_difficulty: u128,
         _total_amount: bitcoin::Amount,
         remaining_total_amount: Amount,
-        bootstrap_address: Address,
+        _bootstrap_address: Address,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         if remaining_total_amount == Amount::ZERO {
             return Ok(());
         }
 
         if total_difficulty == 0 {
-            distribution.push(OutputPair {
-                address: bootstrap_address,
-                amount: remaining_total_amount,
-            });
-            return Ok(());
+            return Err(format!(
+                "PPLNS total difficulty is zero, cannot build a payout for anchor {anchor}"
+            )
+            .into());
         }
 
         // expect will stop start_notify task in main
@@ -93,11 +94,10 @@ impl PayoutDistribution for Payout {
         window.update(chain_store_handle)?;
 
         if window.is_empty() {
-            distribution.push(OutputPair {
-                address: bootstrap_address,
-                amount: remaining_total_amount,
-            });
-            return Ok(());
+            return Err(format!(
+                "PPLNS window has no confirmed entries, cannot build a payout for anchor {anchor}"
+            )
+            .into());
         }
 
         let address_difficulty_map = window.get_distribution_from_start_hash(
@@ -137,8 +137,36 @@ mod tests {
         StratumConfig::new_for_test_default().parse().unwrap()
     }
 
+    /// A zero total difficulty is an error the notifier turns into a node
+    /// shutdown. It cannot come from the chain: the only route is a
+    /// `difficulty_multiplier` below 1.0, which truncates to zero when cast.
     #[test]
-    fn test_empty_chain_uses_bootstrap() {
+    fn test_zero_total_difficulty_is_an_error() {
+        let genesis_hash = BlockHash::all_zeros();
+        let mut payout = Payout::new(bitcoin::Network::Signet);
+        let config = make_test_config();
+
+        // No store expectations: the guard fires before the window is touched.
+        let error = payout
+            .get_output_distribution(
+                &MockChainStoreHandle::default(),
+                genesis_hash,
+                0,
+                Amount::from_sat(100_000_000),
+                &config,
+            )
+            .unwrap_err();
+
+        assert!(
+            error.to_string().contains("total difficulty is zero"),
+            "unexpected error: {error}"
+        );
+    }
+
+    /// An empty window is an error the notifier turns into a node shutdown, not
+    /// a fallback onto the bootstrap address.
+    #[test]
+    fn test_empty_window_is_an_error() {
         let genesis_hash = BlockHash::all_zeros();
 
         let mut mock = MockChainStoreHandle::default();
@@ -152,18 +180,21 @@ mod tests {
                 chain: ChainMembership::Confirmed,
             })
         });
-        // Fresh chain: update() leaves the window empty, so the payout takes
-        // the explicit is_empty() bootstrap branch without resolving an anchor.
+        // A tip whose metadata carries no expected_height makes update() return
+        // early, leaving the window empty. This is not the fresh-chain path: a
+        // real new chain has genesis on the confirmed index and in the window.
 
         let mut payout = Payout::new(bitcoin::Network::Signet);
         let config = make_test_config();
         let total_amount = Amount::from_sat(100_000_000);
-        let result = payout
+        let error = payout
             .get_output_distribution(&mock, genesis_hash, 1000, total_amount, &config)
-            .unwrap();
+            .unwrap_err();
 
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].amount, total_amount);
+        assert!(
+            error.to_string().contains("no confirmed entries"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
