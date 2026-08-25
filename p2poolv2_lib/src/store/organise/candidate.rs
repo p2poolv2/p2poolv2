@@ -81,13 +81,6 @@ impl Store {
         );
     }
 
-    /// Delete top candidate height.
-    /// Used when entire candidate chain has been moved to confirmed chain.
-    pub(super) fn delete_top_candidate_height(&self, batch: &mut rocksdb::WriteBatch) {
-        let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
-        batch.delete_cf(&block_height_cf, TOP_CANDIDATE_KEY.as_bytes().as_ref());
-    }
-
     /// Get top candidate height from candidates index
     pub fn get_top_candidate_height(&self) -> Result<Height, StoreError> {
         let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
@@ -528,7 +521,7 @@ impl Store {
         })?;
         self.detach_candidate_branch(invalid_hash, invalid_height, batch)?;
         let final_top = self.rebuild_candidate_from_parent(invalid_hash, invalid_height, batch)?;
-        self.set_or_clear_top_candidate_height(final_top, confirmed_top, batch);
+        self.set_top_candidate_height_after_rebuild(final_top, confirmed_top, batch);
         Ok(())
     }
 
@@ -589,29 +582,37 @@ impl Store {
         )
     }
 
-    /// Set the candidate top height after a rebuild, or delete it when the
-    /// candidate chain is now empty (`final_top` is the confirmed tip, i.e.
-    /// nothing survived above it).
+    /// Record the rebuilt candidate top.
     ///
     /// `extend_candidates_with_children` only raises the top when it appends,
     /// so the no-surviving-child and single-child cases are handled here.
-    /// Record the rebuilt candidate top, or clear it when the candidate chain
-    /// no longer reaches above the confirmed chain.
+    ///
+    /// When nothing survives above the confirmed tip the candidate top becomes
+    /// the confirmed tip itself. That is the ordinary steady state -- every
+    /// promotion leaves the candidate top equal to the confirmed top, with the
+    /// promoted block's candidate index entry left in place -- so the next
+    /// block extends from it through the normal path.
+    ///
+    /// The key is never deleted. Its absence means "no candidate chain has ever
+    /// been written", which is only true before the first block after genesis,
+    /// and every reader treats it that way: `organise_block` returns `Ok(None)`
+    /// and stops advancing the confirmed chain, `should_extend_candidates`
+    /// takes its bootstrap arm and accepts any header at any height as the new
+    /// tip with no parent, contiguity or work check, and
+    /// `get_candidate_tip_height` returns `None`, which leaves
+    /// `check_pplns_zone` and the block receiver's prune height falling back to
+    /// zero.
     ///
     /// `confirmed_top` is passed in rather than read: `mark_invalid` runs after
     /// `confirm_blocks` has queued a new confirmed top into the same batch, and
     /// a store read here would see the pre-batch value.
-    fn set_or_clear_top_candidate_height(
+    fn set_top_candidate_height_after_rebuild(
         &self,
         final_top: Height,
         confirmed_top: Height,
         batch: &mut rocksdb::WriteBatch,
     ) {
-        if final_top > confirmed_top {
-            self.set_top_candidate_height(final_top, batch);
-        } else {
-            self.delete_top_candidate_height(batch);
-        }
+        self.set_top_candidate_height(final_top.max(confirmed_top), batch);
     }
 
     /// Reorg when the branch point is on the candidate chain.
@@ -2203,9 +2204,10 @@ mod tests {
     }
 
     /// Invalidating the only candidate above the confirmed tip, with no
-    /// surviving sibling, empties the candidate chain.
+    /// surviving sibling, leaves the candidate top at the confirmed tip rather
+    /// than clearing it.
     #[test]
-    fn test_mark_invalid_empties_candidate_chain_when_no_sibling() {
+    fn test_mark_invalid_drops_candidate_top_to_confirmed_tip_when_no_sibling() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
@@ -2231,8 +2233,11 @@ mod tests {
         let c1_meta = store.get_block_metadata(&c1.block_hash()).unwrap();
         assert_eq!(c1_meta.status, Status::Invalid);
         assert_eq!(c1_meta.chain, ChainMembership::None);
-        // No candidate remains above the confirmed tip.
-        assert!(store.get_top_candidate_height().is_err());
+        // No candidate remains above the confirmed tip, but the top candidate
+        // height still resolves: an absent key is the pre-genesis bootstrap
+        // state, in which organise_block stops promoting and
+        // should_extend_candidates accepts any header as the new tip.
+        assert_eq!(store.get_top_candidate_height().unwrap(), 0);
         assert!(store.get_candidate_at_height(1).is_err());
     }
 
@@ -2445,10 +2450,10 @@ mod tests {
         assert_eq!(store.get_top_candidate_height().unwrap(), 1);
     }
 
-    /// set_or_clear_top_candidate_height sets the top above the confirmed tip
-    /// and deletes it when the candidate chain is empty.
+    /// The rebuilt candidate top is recorded above the confirmed tip, and falls
+    /// back to the confirmed tip -- never to absent -- when no branch survives.
     #[test]
-    fn test_set_or_clear_top_candidate_height() {
+    fn test_set_top_candidate_height_after_rebuild() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
         let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
@@ -2458,15 +2463,18 @@ mod tests {
 
         // Confirmed tip is genesis (height 0). A top above it is set.
         let mut batch = Store::get_write_batch();
-        store.set_or_clear_top_candidate_height(5, 0, &mut batch);
+        store.set_top_candidate_height_after_rebuild(5, 0, &mut batch);
         store.commit_batch(batch).unwrap();
         assert_eq!(store.get_top_candidate_height().unwrap(), 5);
 
-        // A top at the confirmed tip means the candidate chain is empty.
+        // Nothing survives above the confirmed tip: the top becomes the
+        // confirmed tip. Deleting the key here would put the store back into
+        // the pre-genesis bootstrap state, where organise_block stops
+        // promoting and any header becomes the candidate tip unchecked.
         let mut batch = Store::get_write_batch();
-        store.set_or_clear_top_candidate_height(0, 0, &mut batch);
+        store.set_top_candidate_height_after_rebuild(0, 0, &mut batch);
         store.commit_batch(batch).unwrap();
-        assert!(store.get_top_candidate_height().is_err());
+        assert_eq!(store.get_top_candidate_height().unwrap(), 0);
     }
 
     #[test]
