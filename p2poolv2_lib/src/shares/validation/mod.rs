@@ -549,6 +549,17 @@ impl DefaultShareValidator {
     /// store call. Taproot verification requires the full set of spent
     /// outputs for signature hashing, so all outputs are collected
     /// upfront. Returns (input_index, TxOut) pairs in input order.
+    ///
+    /// A prevout absent from the Outputs column family is a fact about the
+    /// block's inputs, so it is a consensus failure and the block is marked
+    /// Invalid. The BlockReceiver only admits a block once its parent's body
+    /// is stored, and that holds inductively for every ancestor above the
+    /// prune floor, so every output those blocks created is already in the
+    /// Outputs CF by the time this runs: a missing one exists in no block
+    /// this node holds. This is the same verdict validate_prevouts reaches
+    /// for the same condition through PrevoutCheck::Rejected. Every other
+    /// StoreError means the read itself failed, which says nothing about the
+    /// block, so it must never invalidate it.
     fn collect_spent_outputs(
         transaction: &ShareTransaction,
         chain_store_handle: &ChainStoreHandle,
@@ -556,10 +567,13 @@ impl DefaultShareValidator {
     ) -> Result<Vec<(usize, bitcoin::TxOut)>, ValidationError> {
         chain_store_handle
             .get_all_prevouts(&transaction.0)
-            .map_err(|error| {
-                ValidationError::consensus(format!(
+            .map_err(|error| match error {
+                StoreError::NotFound(_) => ValidationError::consensus(format!(
                     "Failed to look up spent outputs for transaction {txid}: {error}"
-                ))
+                )),
+                _ => ValidationError::store_access(format!(
+                    "Failed to read spent outputs for transaction {txid}: {error}"
+                )),
             })
     }
 
@@ -2597,11 +2611,7 @@ mod tests {
 
         chain_store_handle
             .expect_get_all_prevouts()
-            .returning(|_tx| {
-                Err(crate::store::writer::StoreError::NotFound(
-                    "Output not found".to_string(),
-                ))
-            });
+            .returning(|_tx| Err(StoreError::NotFound("Output not found".to_string())));
 
         let share = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
@@ -2616,6 +2626,59 @@ mod tests {
                 .to_string()
                 .contains("Failed to look up spent outputs"),
             "Expected UTXO lookup failure, got: {error}"
+        );
+        assert_eq!(
+            error.kind(),
+            FailureKind::Consensus,
+            "A prevout absent from the Outputs CF is a fact about the block"
+        );
+    }
+
+    /// A RocksDB read failure says nothing about the block, so it must not
+    /// mark it Invalid. Consensus here would let one transient disk fault
+    /// permanently fork this node off a valid chain.
+    #[test]
+    fn test_validate_scripts_store_read_failure_is_store_access() {
+        let mut chain_store_handle = ChainStoreHandle::default();
+
+        let spending_tx = bitcoin::Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint {
+                    txid: bitcoin::Txid::all_zeros(),
+                    vout: 0,
+                },
+                script_sig: ScriptBuf::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::new(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(49_000),
+                script_pubkey: ScriptBuf::new(),
+            }],
+        };
+
+        chain_store_handle
+            .expect_get_all_prevouts()
+            .returning(|_tx| {
+                Err(StoreError::Database(
+                    "IO error: No space left on device".to_string(),
+                ))
+            });
+
+        let share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .add_transaction(spending_tx)
+            .build();
+
+        let error = validator()
+            .validate_scripts_values_and_sigops(&share, &chain_store_handle)
+            .unwrap_err();
+        assert_eq!(
+            error.kind(),
+            FailureKind::StoreAccess,
+            "A RocksDB failure must never mark the block Invalid, got: {error}"
         );
     }
 
