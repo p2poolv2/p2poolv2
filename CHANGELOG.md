@@ -7,7 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Prometheus pool metrics and Grafana dashboards for the pool, node, and
+  users, with provisioning and import-ready public variants.
+- Pool-wide block fund tracking, with effort reset only on a pool-wide
+  block find rather than on every bitcoin block.
+- `docs/architecture/metrics.md` describing metric sources and exposition.
+- Grafana dashboard setup instructions in the README.
+- A security policy file.
+
 ### Changed
+
+- **BREAKING (JSON API):** the `status` field is renamed to
+  `validation_status` on the `/share` and `/dag` endpoints and in
+  `db-query` output; read the sibling `chain` field for chain position.
+- Block metadata `Status` now tracks validation state only, with chain
+  position moved to a separate `chain` field.
+- `ValidationError` carries a failure kind (`Consensus`, `StoreAccess`,
+  `Recoverable`) so a transient store failure no longer shuts the node down.
+- PPLNS payout is anchored on `prev_share_blockhash` instead of the live tip.
+- The PPLNS window scan is bounded relative to its anchor.
+- The PPLNS window retains an extra 1% of shares.
+- Uncle selection requires at least `HeaderValid` status and excludes
+  ancestors, nephews, and blocks beyond `MAX_UNCLES_DEPTH`.
+- The mining base is loaded from confirmed tip descendants rather than the
+  confirmed tip itself.
+- The organise worker's pending block buffer capacity is reduced to bound
+  memory use.
+- The fallback confirmation path is removed.
+- The unused `OrganiseEvent::Header` variant is removed; header
+  organisation was already a direct store call.
+- CI runs the workspace test suite both with and without the `sim` feature.
+- The share blockhash is computed once per stratum submit, and the
+  extranonce only when an emission needs it.
+
+### Fixed
+
+- Reject blocks whose transactions exceed `BLOCK_TXS_SIZE_LIMIT` before
+  buffering them.
+- Buffer a block until its parent and uncle bodies are available, so
+  validation no longer fails on missing ancestor transactions.
+- Re-check prevouts when extending and when reorging the confirmed chain,
+  using an in-batch overlay so blocks in the same batch are visible.
+- Use parent height plus one when checking coinbase maturity.
+- Reorg the candidate chain onto the best surviving branch when a block is
+  invalidated, instead of stalling confirmation at its height.
+- Stop adding `Invalid` blocks to the candidate chain or confirming them.
+- Mark a block `BlockValid` only once its parent is `BlockValid`.
+- Mark prune-window blocks `BlockValid` so confirmation can pass them.
+- Set the candidate top correctly on reorg.
+- Drain descendants of every removed block on reorg, not just the tip.
+- Re-buffer and retry a block that failed with a recoverable error instead
+  of leaving the chain stalled.
+- Validate share timestamps against chain structure.
+- Remove a TOCTOU race between reading the chain tip and its height.
+- Propagate errors when building the output distribution instead of
+  falling back to a default.
+- Fix a flaky tip-currency test that depended on a one-second clock tick.
+- Store a locally mined block and organise its header atomically, matching
+  the received-share path and fixing a sync failure under the sped-up
+  nightly simulation.
+- Record a miner's share even when it misses pool difficulty, fixing
+  under-reported per-miner hashrate as pool difficulty rose.
+- Publish self-contained multi-arch release manifests, with cleanup of
+  per-arch temporary tags on both success and failure.
 
 ## [v0.13.0] - 2026-07-14
 
