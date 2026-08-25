@@ -149,6 +149,15 @@ pub enum PrevoutRejection {
         coinbase_root_height: u32,
         minimum_height: u32,
     },
+    /// A coinbase output spent before enough blocks have passed since the
+    /// block that mined it. Depth is measured from the stored
+    /// `coinbase_root_height` to the spending block's own height.
+    ImmatureCoinbase {
+        outpoint: OutPoint,
+        coinbase_root_height: u32,
+        spending_height: u32,
+        required_depth: usize,
+    },
 }
 
 impl fmt::Display for PrevoutRejection {
@@ -168,6 +177,16 @@ impl fmt::Display for PrevoutRejection {
                 "Output {}:{} has coinbase_root_height {} below minimum {}",
                 outpoint.txid, outpoint.vout, coinbase_root_height, minimum_height
             ),
+            PrevoutRejection::ImmatureCoinbase {
+                outpoint,
+                coinbase_root_height,
+                spending_height,
+                required_depth,
+            } => write!(
+                f,
+                "Coinbase output {}:{} mined at height {} is not mature at height {} (requires at least {} blocks of depth)",
+                outpoint.txid, outpoint.vout, coinbase_root_height, spending_height, required_depth
+            ),
         }
     }
 }
@@ -179,9 +198,8 @@ impl fmt::Display for PrevoutRejection {
 /// actually failed (RocksDB errors, undecodable rows).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PrevoutCheck {
-    /// Every outpoint exists and is within the window. Carries the subset of
-    /// outpoints that belong to coinbase transactions.
-    Accepted(Vec<OutPoint>),
+    /// Every outpoint exists, is within the window, and is mature.
+    Accepted,
     /// A consensus rule about the prevouts is broken.
     Rejected(PrevoutRejection),
 }
@@ -231,23 +249,34 @@ impl Store {
         Ok(prevouts)
     }
 
-    /// Batch-read all outpoints from the Outputs CF in a single multi_get.
+    /// Batch-read all outpoints from the Outputs CF in a single multi_get and
+    /// check every rule that depends only on the spending block itself.
     ///
-    /// A missing outpoint or one whose `coinbase_root_height` is below
-    /// `min_coinbase_root_height` is a fact about the block's inputs, not a
+    /// Three rejections are possible: the outpoint has no entry, its
+    /// `coinbase_root_height` is below `min_coinbase_root_height`, or it is a
+    /// coinbase output spent less than `coinbase_maturity` blocks after the
+    /// block that mined it. Each is a fact about the block's inputs, not a
     /// store failure, so it comes back as `Ok(PrevoutCheck::Rejected)` and the
     /// caller can mark the block Invalid. `Err` is reserved for reads that
     /// genuinely failed: a RocksDB error or an undecodable row.
     ///
-    /// On acceptance the returned vector is the subset of `outpoints` that
-    /// belong to coinbase transactions.
-    pub(crate) fn check_prevouts_and_find_coinbase(
+    /// Maturity is measured from `StoredTxOut::coinbase_root_height` -- the
+    /// height of the block that mined the coinbase, stamped on the output when
+    /// it was written -- to `spending_height`, the spending block's own height.
+    /// Both are properties of blocks, not of this node's confirmed chain, so
+    /// the verdict is the same on every node and survives a reorg. Whether the
+    /// prevout's source is confirmed, and whether it is already spent, are not
+    /// checked here: those answers change with a reorg, so they belong to
+    /// `recheck_block_prevouts_with_overlay` at confirmation time.
+    pub(crate) fn check_prevouts(
         &self,
         outpoints: &[OutPoint],
+        spending_height: u32,
         min_coinbase_root_height: u32,
+        coinbase_maturity: usize,
     ) -> Result<PrevoutCheck, StoreError> {
         if outpoints.is_empty() {
-            return Ok(PrevoutCheck::Accepted(Vec::new()));
+            return Ok(PrevoutCheck::Accepted);
         }
         let outputs_cf = self.db.cf_handle(&ColumnFamily::Outputs).unwrap();
         let keys: Vec<String> = outpoints
@@ -258,7 +287,6 @@ impl Store {
             .iter()
             .map(|key| (&outputs_cf, key.as_bytes()))
             .collect();
-        let mut coinbase_outpoints = Vec::new();
         for (index, result) in self.db.multi_get_cf(cf_keys).into_iter().enumerate() {
             let Some(data) = result? else {
                 return Ok(PrevoutCheck::Rejected(PrevoutRejection::MissingOutput(
@@ -277,11 +305,17 @@ impl Store {
                     },
                 ));
             }
-            if stored.is_coinbase {
-                coinbase_outpoints.push(outpoints[index]);
+            let depth = spending_height.saturating_sub(stored.coinbase_root_height) as usize;
+            if stored.is_coinbase && depth < coinbase_maturity {
+                return Ok(PrevoutCheck::Rejected(PrevoutRejection::ImmatureCoinbase {
+                    outpoint: outpoints[index],
+                    coinbase_root_height: stored.coinbase_root_height,
+                    spending_height,
+                    required_depth: coinbase_maturity,
+                }));
             }
         }
-        Ok(PrevoutCheck::Accepted(coinbase_outpoints))
+        Ok(PrevoutCheck::Accepted)
     }
 
     /// Batch check the SpendsIndex column family: returns true if any
@@ -335,68 +369,6 @@ impl Store {
             .copied()
             .collect();
         self.is_any_prevout_spent(&still_being_spent_in_batch)
-    }
-
-    /// Given coinbase outpoints (already known to be on the confirmed chain),
-    /// return the first outpoint whose confirmed block is shallower than
-    /// `min_depth`. Returns `Ok(None)` if all coinbase outpoints are mature.
-    ///
-    /// Each coinbase tx appears in exactly one confirmed block, so
-    /// txids are already unique and each has a single confirmed
-    /// height.
-    ///
-    /// Uses two batch calls: `get_blockhashes_for_all_txids` for txid-to-block
-    /// lookups, then `get_block_metadata_batch` for all referenced blockhashes.
-    pub(crate) fn find_immature_coinbase_prevout(
-        &self,
-        coinbase_outpoints: &[OutPoint],
-        min_depth: usize,
-        tip_height: u32,
-    ) -> Result<Option<OutPoint>, StoreError> {
-        if coinbase_outpoints.is_empty() {
-            return Ok(None);
-        }
-
-        let txids: Vec<Txid> = coinbase_outpoints
-            .iter()
-            .map(|outpoint| outpoint.txid)
-            .collect();
-
-        let per_txid_blockhashes = self.get_blockhashes_for_all_txids(&txids)?;
-
-        let all_blockhashes: Vec<BlockHash> = per_txid_blockhashes
-            .iter()
-            .flat_map(|blockhashes| blockhashes.iter().copied())
-            .collect();
-
-        let blockhash_to_metadata = self.get_block_metadata_batch(&all_blockhashes);
-
-        // Map blockhash -> confirmed height
-        let confirmed_block_heights: HashMap<BlockHash, u32> = blockhash_to_metadata
-            .into_iter()
-            .filter(|(_, metadata)| metadata.chain == ChainMembership::Confirmed)
-            .filter_map(|(blockhash, metadata)| {
-                metadata.expected_height.map(|height| (blockhash, height))
-            })
-            .collect();
-
-        for (index, outpoint) in coinbase_outpoints.iter().enumerate() {
-            let confirmed_height = per_txid_blockhashes[index]
-                .iter()
-                .find_map(|blockhash| confirmed_block_heights.get(blockhash).copied());
-            match confirmed_height {
-                Some(height) => {
-                    if tip_height < height || (tip_height - height) < min_depth as u32 {
-                        return Ok(Some(*outpoint));
-                    }
-                }
-                None => {
-                    return Ok(Some(*outpoint));
-                }
-            }
-        }
-
-        Ok(None)
     }
 
     /// Returns true if every provided txid is included in at least one
@@ -1493,15 +1465,15 @@ mod tests {
     }
 
     #[test]
-    fn test_check_prevouts_and_find_coinbase_returns_empty_for_empty_input() {
+    fn test_check_prevouts_accepts_empty_input() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-        let result = store.check_prevouts_and_find_coinbase(&[], 0).unwrap();
-        assert_eq!(result, PrevoutCheck::Accepted(Vec::new()));
+        let result = store.check_prevouts(&[], 0, 0, 0).unwrap();
+        assert_eq!(result, PrevoutCheck::Accepted);
     }
 
     #[test]
-    fn test_check_prevouts_and_find_coinbase_succeeds_when_all_present() {
+    fn test_check_prevouts_accepts_when_all_present() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
@@ -1532,14 +1504,12 @@ mod tests {
             bitcoin::OutPoint::new(funding_txid, 0),
             bitcoin::OutPoint::new(funding_txid, 1),
         ];
-        let result = store
-            .check_prevouts_and_find_coinbase(&outpoints, 0)
-            .unwrap();
-        assert_eq!(result, PrevoutCheck::Accepted(Vec::new()));
+        let result = store.check_prevouts(&outpoints, 1, 0, 0).unwrap();
+        assert_eq!(result, PrevoutCheck::Accepted);
     }
 
     #[test]
-    fn test_check_prevouts_and_find_coinbase_rejects_when_one_missing() {
+    fn test_check_prevouts_rejects_when_one_missing() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
@@ -1567,7 +1537,7 @@ mod tests {
             bitcoin::OutPoint::new(unknown_txid, 0),
         ];
         let result = store
-            .check_prevouts_and_find_coinbase(&outpoints, 0)
+            .check_prevouts(&outpoints, 1, 0, 0)
             .expect("a missing output is a rejection, not a store error");
         assert_eq!(
             result,
@@ -1579,7 +1549,7 @@ mod tests {
     }
 
     #[test]
-    fn test_check_prevouts_and_find_coinbase_returns_coinbase_outpoints() {
+    fn test_check_prevouts_applies_maturity_to_coinbase_outputs_only() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
@@ -1620,16 +1590,37 @@ mod tests {
             .unwrap();
         store.commit_batch(batch).unwrap();
 
-        let outpoints = vec![
-            bitcoin::OutPoint::new(coinbase_txid, 0),
-            bitcoin::OutPoint::new(regular_txid, 0),
-        ];
-        let result = store
-            .check_prevouts_and_find_coinbase(&outpoints, 0)
-            .unwrap();
+        let coinbase_outpoint = bitcoin::OutPoint::new(coinbase_txid, 0);
+        let regular_outpoint = bitcoin::OutPoint::new(regular_txid, 0);
+
+        // Both transactions were stored at height 1, so spending at height 10
+        // leaves the coinbase 9 blocks deep, far short of the 6048 required.
         assert_eq!(
-            result,
-            PrevoutCheck::Accepted(vec![bitcoin::OutPoint::new(coinbase_txid, 0)])
+            store
+                .check_prevouts(&[coinbase_outpoint], 10, 0, 6048)
+                .unwrap(),
+            PrevoutCheck::Rejected(PrevoutRejection::ImmatureCoinbase {
+                outpoint: coinbase_outpoint,
+                coinbase_root_height: 1,
+                spending_height: 10,
+                required_depth: 6048,
+            })
+        );
+
+        // The same depth on a non-coinbase output is not a maturity question.
+        assert_eq!(
+            store
+                .check_prevouts(&[regular_outpoint], 10, 0, 6048)
+                .unwrap(),
+            PrevoutCheck::Accepted
+        );
+
+        // Exactly the required depth is mature.
+        assert_eq!(
+            store
+                .check_prevouts(&[coinbase_outpoint], 6049, 0, 6048)
+                .unwrap(),
+            PrevoutCheck::Accepted
         );
     }
 
@@ -1663,9 +1654,10 @@ mod tests {
 
         let outpoints = vec![bitcoin::OutPoint::new(coinbase_txid, 0)];
 
-        // min_coinbase_root_height = 100: output at height 50 is expired
+        // min_coinbase_root_height = 100: output at height 50 is expired.
+        // Maturity is set to 0 throughout so only the root-height rule can fire.
         let result = store
-            .check_prevouts_and_find_coinbase(&outpoints, 100)
+            .check_prevouts(&outpoints, 100, 100, 0)
             .expect("an expired coinbase root is a rejection, not a store error");
         assert_eq!(
             result,
@@ -1677,12 +1669,12 @@ mod tests {
         );
 
         // min_coinbase_root_height = 50: output at height 50 is exactly at boundary
-        let result = store.check_prevouts_and_find_coinbase(&outpoints, 50);
-        assert!(matches!(result, Ok(PrevoutCheck::Accepted(_))));
+        let result = store.check_prevouts(&outpoints, 100, 50, 0);
+        assert_eq!(result.unwrap(), PrevoutCheck::Accepted);
 
         // min_coinbase_root_height = 0: no filtering
-        let result = store.check_prevouts_and_find_coinbase(&outpoints, 0);
-        assert!(matches!(result, Ok(PrevoutCheck::Accepted(_))));
+        let result = store.check_prevouts(&outpoints, 100, 0, 0);
+        assert_eq!(result.unwrap(), PrevoutCheck::Accepted);
     }
 
     #[test]
@@ -1768,7 +1760,7 @@ mod tests {
 
         // min = 100: root height 50 is expired
         let result = store
-            .check_prevouts_and_find_coinbase(&outpoints, 100)
+            .check_prevouts(&outpoints, 100, 100, 0)
             .expect("an expired coinbase root is a rejection, not a store error");
         assert_eq!(
             result,
@@ -1780,8 +1772,8 @@ mod tests {
         );
 
         // min = 50: root height 50 is at boundary, passes
-        let result = store.check_prevouts_and_find_coinbase(&outpoints, 50);
-        assert!(matches!(result, Ok(PrevoutCheck::Accepted(_))));
+        let result = store.check_prevouts(&outpoints, 100, 50, 0);
+        assert_eq!(result.unwrap(), PrevoutCheck::Accepted);
     }
 
     #[test]
@@ -3129,158 +3121,6 @@ mod tests {
         assert_eq!(result[0].len(), 2);
         assert!(result[0].contains(&blockhash1));
         assert!(result[0].contains(&blockhash2));
-    }
-
-    #[test]
-    fn test_find_immature_coinbase_prevout_returns_none_for_empty_input() {
-        let temp_dir = tempdir().unwrap();
-        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-        let result = store
-            .find_immature_coinbase_prevout(&[], 6048, 10000)
-            .unwrap();
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_find_immature_coinbase_prevout_returns_none_when_mature() {
-        let temp_dir = tempdir().unwrap();
-        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-
-        let coinbase_txid: bitcoin::Txid =
-            bitcoin::hashes::sha256d::Hash::from_byte_array([10u8; 32]).into();
-
-        let blockhash = TestShareBlockBuilder::new()
-            .nonce(0xbb000001)
-            .build()
-            .block_hash();
-
-        let mut batch = Store::get_write_batch();
-        store
-            .update_block_metadata(
-                &blockhash,
-                &BlockMetadata {
-                    expected_height: Some(1000),
-                    chain_work: Work::from_le_bytes([1u8; 32]),
-                    status: Status::BlockValid,
-                    chain: ChainMembership::Confirmed,
-                },
-                &mut batch,
-            )
-            .unwrap();
-        store
-            .add_txids_to_blocks_index(&blockhash, &Txids(vec![coinbase_txid]), &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
-
-        let outpoint = bitcoin::OutPoint::new(coinbase_txid, 0);
-        // tip_height=8000, block_height=1000, depth=7000 >= 6048
-        let result = store
-            .find_immature_coinbase_prevout(&[outpoint], 6048, 8000)
-            .unwrap();
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_find_immature_coinbase_prevout_returns_outpoint_when_immature() {
-        let temp_dir = tempdir().unwrap();
-        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-
-        let coinbase_txid: bitcoin::Txid =
-            bitcoin::hashes::sha256d::Hash::from_byte_array([11u8; 32]).into();
-
-        let blockhash = TestShareBlockBuilder::new()
-            .nonce(0xbb000002)
-            .build()
-            .block_hash();
-
-        let mut batch = Store::get_write_batch();
-        store
-            .update_block_metadata(
-                &blockhash,
-                &BlockMetadata {
-                    expected_height: Some(5000),
-                    chain_work: Work::from_le_bytes([1u8; 32]),
-                    status: Status::BlockValid,
-                    chain: ChainMembership::Confirmed,
-                },
-                &mut batch,
-            )
-            .unwrap();
-        store
-            .add_txids_to_blocks_index(&blockhash, &Txids(vec![coinbase_txid]), &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
-
-        let outpoint = bitcoin::OutPoint::new(coinbase_txid, 0);
-        // tip_height=8000, block_height=5000, depth=3000 < 6048
-        let result = store
-            .find_immature_coinbase_prevout(&[outpoint], 6048, 8000)
-            .unwrap();
-        assert_eq!(result, Some(outpoint));
-    }
-
-    #[test]
-    fn test_find_immature_coinbase_prevout_non_coinbase_unaffected() {
-        let temp_dir = tempdir().unwrap();
-        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-
-        let mature_txid: bitcoin::Txid =
-            bitcoin::hashes::sha256d::Hash::from_byte_array([12u8; 32]).into();
-        let immature_txid: bitcoin::Txid =
-            bitcoin::hashes::sha256d::Hash::from_byte_array([13u8; 32]).into();
-
-        let block_old = TestShareBlockBuilder::new()
-            .nonce(0xbb000003)
-            .build()
-            .block_hash();
-        let block_new = TestShareBlockBuilder::new()
-            .nonce(0xbb000004)
-            .build()
-            .block_hash();
-
-        let mut batch = Store::get_write_batch();
-        store
-            .update_block_metadata(
-                &block_old,
-                &BlockMetadata {
-                    expected_height: Some(100),
-                    chain_work: Work::from_le_bytes([1u8; 32]),
-                    status: Status::BlockValid,
-                    chain: ChainMembership::Confirmed,
-                },
-                &mut batch,
-            )
-            .unwrap();
-        store
-            .update_block_metadata(
-                &block_new,
-                &BlockMetadata {
-                    expected_height: Some(9000),
-                    chain_work: Work::from_le_bytes([2u8; 32]),
-                    status: Status::BlockValid,
-                    chain: ChainMembership::Confirmed,
-                },
-                &mut batch,
-            )
-            .unwrap();
-        store
-            .add_txids_to_blocks_index(&block_old, &Txids(vec![mature_txid]), &mut batch)
-            .unwrap();
-        store
-            .add_txids_to_blocks_index(&block_new, &Txids(vec![immature_txid]), &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
-
-        // Only the immature one should be returned
-        let outpoints = vec![
-            bitcoin::OutPoint::new(mature_txid, 0),
-            bitcoin::OutPoint::new(immature_txid, 0),
-        ];
-        // tip=10000: mature depth=9900 >= 6048, immature depth=1000 < 6048
-        let result = store
-            .find_immature_coinbase_prevout(&outpoints, 6048, 10000)
-            .unwrap();
-        assert_eq!(result, Some(bitcoin::OutPoint::new(immature_txid, 0)));
     }
 
     #[test]

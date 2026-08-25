@@ -114,11 +114,11 @@ readable from RocksDB.
 
 ### Validation
 
-`validate_prevouts` computes `min_coinbase_root_height = tip_height -
-PPLNS_DEPTH` and passes it to `check_prevouts_and_find_coinbase`.
-Outputs with `coinbase_root_height < min_coinbase_root_height` are
-rejected in the same batch read that checks output existence -- no
-second pass needed.
+`validate_prevouts` computes `min_coinbase_root_height = block_height -
+PPLNS_DEPTH` from the spending block's own height and passes it to
+`check_prevouts`. Outputs with `coinbase_root_height <
+min_coinbase_root_height` are rejected in the same batch read that checks
+output existence and coinbase maturity -- one pass covers all three.
 
 ### Why store-at-write, not walk-at-validation
 
@@ -136,13 +136,14 @@ O(inputs) at write time, bounded by block size (~5000 inputs max).
   which would make outputs permanently unspendable).
 - `compute_block_height_from_parent` returns `StoreError` if parent
   metadata is missing (genesis is special-cased to height 0).
-- `get_tip_height` errors in `validate_prevouts` are propagated (not
-  silently defaulted to 0, which would disable the spend rule).
+- The parent's `expected_height` is required in `validate_prevouts`; its
+  absence is propagated as `StoreAccess` rather than defaulted to 0,
+  which would disable the spend rule.
 
 Relevant code:
 - `store/transaction_store.rs` (`StoredTxOut`,
   `min_coinbase_root_height_for_inputs`,
-  `check_prevouts_and_find_coinbase`)
+  `check_prevouts`)
 - `store/share_store.rs` (`compute_block_height_from_parent`)
 - `shares/validation/mod.rs` (`validate_prevouts`)
 
@@ -191,7 +192,7 @@ from concurrent header arrivals advancing the candidate tip.
 Prune-zone blocks without SpendsIndex entries cannot cause
 double-spend acceptance:
 - Their outputs have `coinbase_root_height` below `tip - PPLNS_DEPTH`
-- `check_prevouts_and_find_coinbase` rejects spending those outputs
+- `check_prevouts` rejects spending those outputs
 - SpendsIndex is only needed for outputs that CAN be spent
 
 Relevant code:

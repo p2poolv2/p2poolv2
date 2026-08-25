@@ -26,6 +26,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   position moved to a separate `chain` field.
 - `ValidationError` carries a failure kind (`Consensus`, `StoreAccess`,
   `Recoverable`) so a transient store failure no longer shuts the node down.
+- Ingest-time prevout validation no longer judges whether a prevout's source
+  is confirmed or whether the prevout is already spent. Both answers change
+  with a reorg, so recording them as a permanent `Invalid` barred a
+  higher-work fork from ever being adopted when the same transaction appeared
+  on both sides of the fork. Confirmation re-checks them with the reorg
+  overlay applied, and marks the block `Invalid` there.
+- Coinbase maturity is measured from the stored `coinbase_root_height` to the
+  spending block's own height, so the verdict no longer depends on which
+  branch this node has confirmed. `check_prevouts_and_find_coinbase` is now
+  `check_prevouts` and enforces existence, the payout window, and maturity in
+  one batch read; `find_immature_coinbase_prevout` is removed.
 - PPLNS payout is anchored on `prev_share_blockhash` instead of the live tip.
 - The PPLNS window scan is bounded relative to its anchor.
 - The PPLNS window retains an extra 1% of shares.
