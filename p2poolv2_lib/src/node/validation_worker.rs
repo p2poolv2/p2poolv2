@@ -273,7 +273,12 @@ async fn validate_and_emit(
     debug!("Share block {block_hash} validated successfully");
 
     if let Err(send_error) = organise_tx
-        .send(OrganiseEvent::Block(share_block.clone()))
+        .send(OrganiseEvent::Block {
+            share_block: share_block.clone(),
+            // Which tier ran here, so the organise worker does not re-derive it
+            // from a candidate tip that may have shortened in between.
+            content_validated: in_pplns_zone,
+        })
         .await
     {
         error!("Failed to send validated block to organise worker: {send_error}");
@@ -370,7 +375,11 @@ mod tests {
             .unwrap();
 
         let organise_event = tokio::time::timeout(Duration::from_secs(2), organise_rx.recv()).await;
-        if let Ok(Some(OrganiseEvent::Block(received_block))) = organise_event {
+        if let Ok(Some(OrganiseEvent::Block {
+            share_block: received_block,
+            ..
+        })) = organise_event
+        {
             assert_eq!(received_block.block_hash(), block_hash);
         } else {
             panic!("Expected OrganiseEvent::Block after successful validation");
@@ -481,7 +490,11 @@ mod tests {
 
         // Organisation event should still be sent
         let organise_event = tokio::time::timeout(Duration::from_secs(2), organise_rx.recv()).await;
-        if let Ok(Some(OrganiseEvent::Block(received_block))) = organise_event {
+        if let Ok(Some(OrganiseEvent::Block {
+            share_block: received_block,
+            ..
+        })) = organise_event
+        {
             assert_eq!(received_block.block_hash(), block_hash);
         } else {
             panic!("Expected OrganiseEvent::Block even when not current");
@@ -732,7 +745,11 @@ mod tests {
             .unwrap();
 
         let organise_event = tokio::time::timeout(Duration::from_secs(2), organise_rx.recv()).await;
-        if let Ok(Some(OrganiseEvent::Block(received_block))) = organise_event {
+        if let Ok(Some(OrganiseEvent::Block {
+            share_block: received_block,
+            ..
+        })) = organise_event
+        {
             assert_eq!(received_block.block_hash(), block_hash);
         } else {
             panic!("Expected OrganiseEvent::Block for prefetched share block");
@@ -805,7 +822,11 @@ mod tests {
             .unwrap();
 
         let organise_event = tokio::time::timeout(Duration::from_secs(2), organise_rx.recv()).await;
-        if let Ok(Some(OrganiseEvent::Block(received_block))) = organise_event {
+        if let Ok(Some(OrganiseEvent::Block {
+            share_block: received_block,
+            ..
+        })) = organise_event
+        {
             assert_eq!(received_block.block_hash(), block_hash);
         } else {
             panic!("Expected OrganiseEvent::Block for prune-zone block");
