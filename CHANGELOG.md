@@ -45,6 +45,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   chain has it in the window, and the total difficulty is at least 1 on every
   network unless `difficulty_multiplier` is configured below 1.0, which
   truncates to zero when cast.
+- The validation tier is recorded on `OrganiseEvent::Block` instead of being
+  re-derived by the organise worker. Both stages read `check_pplns_zone`
+  independently and the candidate tip can shorten between them, so a block
+  tiered below the PPLNS zone at stage 1 could be marked `BlockValid` back
+  inside the zone with its merkle root, coinbase, witness commitment and
+  scripts never checked. Those checks now run before promotion when that flip
+  happens.
 - `ValidationError` gains a fourth failure kind, `Unresolvable`: a check that
   needs data this node no longer retains and that no retry can decide. The
   organise worker drops such a block without recording a verdict, rather than

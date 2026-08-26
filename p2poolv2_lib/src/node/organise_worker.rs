@@ -78,7 +78,18 @@ const PENDING_BLOCKS_CAPACITY: usize = 2 * ORGANISE_CHANNEL_CAPACITY;
 #[allow(clippy::large_enum_variant)]
 pub enum OrganiseEvent {
     /// Promote candidates to confirmed after a block is validated.
-    Block(ShareBlock),
+    Block {
+        /// The validated block.
+        share_block: ShareBlock,
+        /// Whether stage 1 ran full content validation (`validate_share_block`)
+        /// rather than the below-zone `validate_below_pplns_depth`.
+        ///
+        /// The two stages read `check_pplns_zone` independently, and the
+        /// candidate tip can shorten between them, so the organise worker
+        /// cannot re-derive which checks actually ran. See
+        /// `validate_mark_promote`.
+        content_validated: bool,
+    },
     /// Mark a block that failed pre-context validation Invalid.
     ///
     /// The validation worker detects these failures but does not mutate chain
@@ -94,6 +105,12 @@ pub type OrganiseReceiver = mpsc::Receiver<OrganiseEvent>;
 /// Create an organise channel with bounded capacity.
 pub fn create_organise_channel() -> (OrganiseSender, OrganiseReceiver) {
     mpsc::channel(ORGANISE_CHANNEL_CAPACITY)
+}
+
+/// A block waiting for its parent, with the validation tier stage 1 gave it.
+struct BufferedBlock {
+    share_block: ShareBlock,
+    content_validated: bool,
 }
 
 /// Fatal error from the organise worker.
@@ -131,7 +148,7 @@ pub struct OrganiseWorker {
     /// parent's expected height. Multiple blocks may share the same parent
     /// height during forks or rapid sync. Drained when the parent becomes
     /// BlockValid or confirmed.
-    pending_blocks: BTreeMap<u32, Vec<ShareBlock>>,
+    pending_blocks: BTreeMap<u32, Vec<BufferedBlock>>,
 }
 
 /// Validation state of a block's parent, deciding how the block is handled.
@@ -208,8 +225,12 @@ impl OrganiseWorker {
 
         while let Some(event) = self.organise_rx.recv().await {
             match event {
-                OrganiseEvent::Block(share_block) => {
-                    self.handle_organise_block_event(share_block).await?;
+                OrganiseEvent::Block {
+                    share_block,
+                    content_validated,
+                } => {
+                    self.handle_organise_block_event(share_block, content_validated)
+                        .await?;
                 }
                 OrganiseEvent::InvalidBlock(blockhash) => {
                     self.handle_invalid_block_event(blockhash).await?;
@@ -230,8 +251,12 @@ impl OrganiseWorker {
     async fn handle_organise_block_event(
         &mut self,
         share_block: ShareBlock,
+        content_validated: bool,
     ) -> Result<(), OrganiseError> {
-        match self.process_share_block(share_block).await? {
+        match self
+            .process_share_block(share_block, content_validated)
+            .await?
+        {
             ProcessOutcome::Advanced(height) => {
                 self.drain_pending_blocks(height).await?;
             }
@@ -318,6 +343,7 @@ impl OrganiseWorker {
     async fn process_share_block(
         &mut self,
         share_block: ShareBlock,
+        content_validated: bool,
     ) -> Result<ProcessOutcome, OrganiseError> {
         let blockhash = share_block.block_hash();
         match self.parent_state(&share_block.header.prev_share_blockhash) {
@@ -330,11 +356,12 @@ impl OrganiseWorker {
                 Ok(ProcessOutcome::Dropped)
             }
             ParentState::Pending(parent_height) => {
-                self.buffer_block(parent_height, share_block);
+                self.buffer_block(parent_height, share_block, content_validated);
                 Ok(ProcessOutcome::Buffered)
             }
             ParentState::Valid(parent_height) => {
-                self.validate_mark_promote(share_block, parent_height).await
+                self.validate_mark_promote(share_block, parent_height, content_validated)
+                    .await
             }
         }
     }
@@ -349,6 +376,17 @@ impl OrganiseWorker {
     /// validation worker (`validate_below_pplns_depth`), so it is marked
     /// BlockValid without re-validation.
     ///
+    /// `content_validated` says which of those two the validation worker
+    /// actually ran. Both stages read `check_pplns_zone` independently against
+    /// the candidate tip, and that tip can *shorten* -- a reorg onto a shorter
+    /// branch, or a rebuild after an invalidation -- so a block tiered below the
+    /// zone at stage 1 can be back inside it here. Re-deriving the tier would
+    /// then mark it BlockValid having never had its merkle root, coinbase,
+    /// witness commitment or scripts checked. When that flip happens the skipped
+    /// checks are run now, before anything else. The opposite flip needs no
+    /// handling: content validation already ran, and skipping chain context is
+    /// exactly the treatment every below-zone block gets.
+    ///
     /// Both tiers are marked BlockValid before promotion, so the
     /// promotion gate -- which requires BlockValid down to the prune
     /// depth -- can confirm them. Returns `Advanced(height)` when the
@@ -358,6 +396,7 @@ impl OrganiseWorker {
         &mut self,
         share_block: ShareBlock,
         parent_height: u32,
+        content_validated: bool,
     ) -> Result<ProcessOutcome, OrganiseError> {
         let blockhash = share_block.block_hash();
         debug!("Organising block: {blockhash:?}");
@@ -366,18 +405,35 @@ impl OrganiseWorker {
             Ok(result) => result,
             Err(error_message) => {
                 error!("Error checking for zone, will retry {blockhash}: {error_message}");
-                self.buffer_block(parent_height, share_block);
+                self.buffer_block(parent_height, share_block, content_validated);
                 return Ok(ProcessOutcome::NotAdvanced);
             }
         };
 
-        if in_pplns_zone
-            && let Err(validation_error) = self.share_validator.validate_with_chain_context(
+        let validation_result = if !in_pplns_zone {
+            Ok(())
+        } else if content_validated {
+            self.share_validator.validate_with_chain_context(
                 &share_block,
                 &self.chain_store_handle,
                 Arc::clone(&self.pplns_window),
             )
-        {
+        } else {
+            // The candidate tip shortened back across the boundary since stage
+            // 1 tiered this block below the zone. Run the content checks it
+            // skipped before the chain-context ones.
+            self.share_validator
+                .validate_share_block(&share_block, &self.chain_store_handle)
+                .and_then(|()| {
+                    self.share_validator.validate_with_chain_context(
+                        &share_block,
+                        &self.chain_store_handle,
+                        Arc::clone(&self.pplns_window),
+                    )
+                })
+        };
+
+        if let Err(validation_error) = validation_result {
             match validation_error.kind() {
                 FailureKind::Consensus => {
                     // The parent is validated, so all dependencies are present:
@@ -416,7 +472,7 @@ impl OrganiseWorker {
                     warn!(
                         "Recoverable validation error for {blockhash} at organise: {validation_error}"
                     );
-                    self.buffer_block(parent_height, share_block);
+                    self.buffer_block(parent_height, share_block, content_validated);
                     return Ok(ProcessOutcome::NotAdvanced);
                 }
                 FailureKind::Unresolvable => {
@@ -439,7 +495,7 @@ impl OrganiseWorker {
                 error!("Cannot mark {blockhash} BlockValid: {mark_error}");
             } else {
                 error!("Failed to mark {blockhash} BlockValid, will retry: {mark_error}");
-                self.buffer_block(parent_height, share_block);
+                self.buffer_block(parent_height, share_block, content_validated);
             }
             return Ok(ProcessOutcome::NotAdvanced);
         }
@@ -469,7 +525,7 @@ impl OrganiseWorker {
             }
             Err(error) => {
                 error!("Error promoting block {blockhash}, will retry: {error}");
-                self.buffer_block(parent_height, share_block);
+                self.buffer_block(parent_height, share_block, content_validated);
                 Ok(ProcessOutcome::NotAdvanced)
             }
         }
@@ -552,7 +608,12 @@ impl OrganiseWorker {
     ///
     /// Drops the block with an error log if the buffer is at capacity.
     /// The capacity check counts total blocks across all heights.
-    fn buffer_block(&mut self, parent_height: u32, share_block: ShareBlock) {
+    fn buffer_block(
+        &mut self,
+        parent_height: u32,
+        share_block: ShareBlock,
+        content_validated: bool,
+    ) {
         let total_blocks: usize = self.pending_blocks.values().map(|v| v.len()).sum();
         if total_blocks >= PENDING_BLOCKS_CAPACITY {
             error!(
@@ -568,7 +629,10 @@ impl OrganiseWorker {
         self.pending_blocks
             .entry(parent_height)
             .or_insert_with(|| Vec::with_capacity(2))
-            .push(share_block);
+            .push(BufferedBlock {
+                share_block,
+                content_validated,
+            });
     }
 
     /// Re-attempt buffered blocks whose parent just became valid, from
@@ -592,9 +656,10 @@ impl OrganiseWorker {
                 blocks.len()
             );
             let mut next_height = None;
-            for share_block in blocks {
-                if let ProcessOutcome::Advanced(advanced_height) =
-                    self.process_share_block(share_block).await?
+            for buffered in blocks {
+                if let ProcessOutcome::Advanced(advanced_height) = self
+                    .process_share_block(buffered.share_block, buffered.content_validated)
+                    .await?
                 {
                     next_height = Some(advanced_height);
                 }
@@ -857,7 +922,13 @@ mod tests {
         );
 
         let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
-        organise_tx.send(OrganiseEvent::Block(share)).await.unwrap();
+        organise_tx
+            .send(OrganiseEvent::Block {
+                share_block: share,
+                content_validated: true,
+            })
+            .await
+            .unwrap();
         drop(organise_tx);
 
         let result = worker.run().await;
@@ -921,7 +992,13 @@ mod tests {
         );
 
         let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
-        organise_tx.send(OrganiseEvent::Block(share)).await.unwrap();
+        organise_tx
+            .send(OrganiseEvent::Block {
+                share_block: share,
+                content_validated: true,
+            })
+            .await
+            .unwrap();
         drop(organise_tx);
 
         let result = worker.run().await;
@@ -977,7 +1054,13 @@ mod tests {
         );
 
         let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
-        organise_tx.send(OrganiseEvent::Block(share)).await.unwrap();
+        organise_tx
+            .send(OrganiseEvent::Block {
+                share_block: share,
+                content_validated: true,
+            })
+            .await
+            .unwrap();
         drop(organise_tx);
 
         let result = worker.run().await;
@@ -1049,7 +1132,13 @@ mod tests {
         );
 
         let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
-        organise_tx.send(OrganiseEvent::Block(share)).await.unwrap();
+        organise_tx
+            .send(OrganiseEvent::Block {
+                share_block: share,
+                content_validated: true,
+            })
+            .await
+            .unwrap();
         drop(organise_tx);
 
         let result = worker.run().await;
@@ -1155,7 +1244,13 @@ mod tests {
         );
 
         let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
-        organise_tx.send(OrganiseEvent::Block(share)).await.unwrap();
+        organise_tx
+            .send(OrganiseEvent::Block {
+                share_block: share,
+                content_validated: true,
+            })
+            .await
+            .unwrap();
         drop(organise_tx);
 
         let result = worker.run().await;
@@ -1205,7 +1300,12 @@ mod tests {
         );
 
         let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
-        tx.send(OrganiseEvent::Block(share)).await.unwrap();
+        tx.send(OrganiseEvent::Block {
+            share_block: share,
+            content_validated: true,
+        })
+        .await
+        .unwrap();
         drop(tx);
 
         // Worker should continue past the non-fatal error and exit cleanly
@@ -1260,7 +1360,13 @@ mod tests {
         );
 
         let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
-        organise_tx.send(OrganiseEvent::Block(share)).await.unwrap();
+        organise_tx
+            .send(OrganiseEvent::Block {
+                share_block: share,
+                content_validated: true,
+            })
+            .await
+            .unwrap();
         drop(organise_tx);
 
         let result = worker.run().await;
@@ -1320,7 +1426,13 @@ mod tests {
         );
 
         let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
-        organise_tx.send(OrganiseEvent::Block(share)).await.unwrap();
+        organise_tx
+            .send(OrganiseEvent::Block {
+                share_block: share,
+                content_validated: true,
+            })
+            .await
+            .unwrap();
         drop(organise_tx);
 
         let result = worker.run().await;
@@ -1371,7 +1483,13 @@ mod tests {
         );
 
         let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
-        organise_tx.send(OrganiseEvent::Block(share)).await.unwrap();
+        organise_tx
+            .send(OrganiseEvent::Block {
+                share_block: share,
+                content_validated: true,
+            })
+            .await
+            .unwrap();
         drop(organise_tx);
 
         let result = worker.run().await;
@@ -1425,7 +1543,13 @@ mod tests {
         );
 
         let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
-        organise_tx.send(OrganiseEvent::Block(share)).await.unwrap();
+        organise_tx
+            .send(OrganiseEvent::Block {
+                share_block: share,
+                content_validated: true,
+            })
+            .await
+            .unwrap();
         drop(organise_tx);
 
         let result = worker.run().await;
@@ -1482,7 +1606,13 @@ mod tests {
         );
 
         let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
-        organise_tx.send(OrganiseEvent::Block(share)).await.unwrap();
+        organise_tx
+            .send(OrganiseEvent::Block {
+                share_block: share,
+                content_validated: true,
+            })
+            .await
+            .unwrap();
         drop(organise_tx);
 
         let result = worker.run().await;
@@ -1546,7 +1676,13 @@ mod tests {
         let mut share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
         share.header.bitcoin_header =
             bitcoin::blockdata::constants::genesis_block(bitcoin::Network::Regtest).header;
-        organise_tx.send(OrganiseEvent::Block(share)).await.unwrap();
+        organise_tx
+            .send(OrganiseEvent::Block {
+                share_block: share,
+                content_validated: true,
+            })
+            .await
+            .unwrap();
         drop(organise_tx);
 
         let result = worker.run().await;
@@ -1632,14 +1768,20 @@ mod tests {
         // Block A: parent height 100, will be buffered
         let share_a = TestShareBlockBuilder::new().nonce(0xe9695791).build();
         organise_tx
-            .send(OrganiseEvent::Block(share_a))
+            .send(OrganiseEvent::Block {
+                share_block: share_a,
+                content_validated: true,
+            })
             .await
             .unwrap();
 
         // Block B: parent height 5, will proceed and promote
         let share_b = TestShareBlockBuilder::new().nonce(0xe9695792).build();
         organise_tx
-            .send(OrganiseEvent::Block(share_b))
+            .send(OrganiseEvent::Block {
+                share_block: share_b,
+                content_validated: true,
+            })
             .await
             .unwrap();
         drop(organise_tx);
@@ -1721,7 +1863,7 @@ mod tests {
         );
 
         let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
-        let outcome = worker.process_share_block(share).await.unwrap();
+        let outcome = worker.process_share_block(share, true).await.unwrap();
         assert!(matches!(outcome, ProcessOutcome::NotAdvanced));
         assert_eq!(worker.pending_blocks.get(&5).map(Vec::len), Some(1));
 
@@ -1782,7 +1924,7 @@ mod tests {
 
         let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
         let blockhash = share.block_hash();
-        let outcome = worker.process_share_block(share).await.unwrap();
+        let outcome = worker.process_share_block(share, true).await.unwrap();
 
         assert!(matches!(outcome, ProcessOutcome::NotAdvanced));
         let buffered = worker
@@ -1790,7 +1932,93 @@ mod tests {
             .get(&5)
             .expect("block must be buffered under its parent height for retry");
         assert_eq!(buffered.len(), 1);
-        assert_eq!(buffered[0].block_hash(), blockhash);
+        assert_eq!(buffered[0].share_block.block_hash(), blockhash);
+    }
+
+    /// Build a worker whose parent gate passes at height 5 and whose candidate
+    /// tip puts the block inside the PPLNS zone, driving `validate_mark_promote`
+    /// with the given validator.
+    fn worker_in_pplns_zone(
+        share_validator: Arc<dyn ShareValidator + Send + Sync>,
+    ) -> OrganiseWorker {
+        let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_get_block_metadata()
+            .returning(|_| {
+                Ok(BlockMetadata {
+                    expected_height: Some(5),
+                    chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
+                    status: Status::BlockValid,
+                    chain: ChainMembership::Confirmed,
+                })
+            });
+        mock_chain_handle
+            .expect_get_candidate_tip_height()
+            .returning(|| Ok(Some(6)));
+        mock_chain_handle
+            .expect_mark_block_valid()
+            .returning(|_| Ok(()));
+        mock_chain_handle
+            .expect_promote_block()
+            .returning(|_| Ok(None));
+
+        let (_organise_tx, organise_rx) = create_organise_channel();
+        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let (notify_tx, _notify_rx) = create_test_notify_channel();
+        OrganiseWorker::new(
+            organise_rx,
+            mock_chain_handle,
+            monitoring_tx,
+            notify_tx,
+            create_test_metrics_handle(),
+            create_test_pplns_window(),
+            share_validator,
+        )
+    }
+
+    /// A block the validation worker tiered below the PPLNS zone, but which is
+    /// back inside the zone by the time the organise worker sees it, has its
+    /// skipped content checks run before it can be marked BlockValid.
+    ///
+    /// The candidate tip can shorten between the two `check_pplns_zone` reads --
+    /// a reorg onto a shorter branch, or a rebuild after an invalidation -- so
+    /// re-deriving the tier here would confirm a block whose merkle root,
+    /// coinbase, witness commitment and scripts were never checked.
+    #[tokio::test]
+    async fn test_below_zone_block_back_in_zone_runs_the_skipped_content_checks() {
+        let mut mock_validator = MockDefaultShareValidator::new();
+        mock_validator
+            .expect_validate_share_block()
+            .times(1)
+            .returning(|_, _| Ok(()));
+        mock_validator
+            .expect_validate_with_chain_context()
+            .times(1)
+            .returning(|_, _, _| Ok(()));
+
+        let mut worker = worker_in_pplns_zone(Arc::new(mock_validator));
+        let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+
+        // content_validated = false: stage 1 ran validate_below_pplns_depth.
+        let outcome = worker.process_share_block(share, false).await.unwrap();
+        assert!(matches!(outcome, ProcessOutcome::Advanced(_)));
+    }
+
+    /// A block stage 1 already content-validated is not validated twice.
+    #[tokio::test]
+    async fn test_content_validated_block_skips_the_full_content_checks() {
+        let mut mock_validator = MockDefaultShareValidator::new();
+        mock_validator.expect_validate_share_block().never();
+        mock_validator
+            .expect_validate_with_chain_context()
+            .times(1)
+            .returning(|_, _, _| Ok(()));
+
+        let mut worker = worker_in_pplns_zone(Arc::new(mock_validator));
+        let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+
+        let outcome = worker.process_share_block(share, true).await.unwrap();
+        assert!(matches!(outcome, ProcessOutcome::Advanced(_)));
     }
 
     /// An unresolvable chain-context failure drops the block instead of
@@ -1847,7 +2075,7 @@ mod tests {
         );
 
         let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
-        let outcome = worker.process_share_block(share).await.unwrap();
+        let outcome = worker.process_share_block(share, true).await.unwrap();
 
         assert!(matches!(outcome, ProcessOutcome::Dropped));
         assert!(
@@ -1897,7 +2125,7 @@ mod tests {
         );
 
         let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
-        let outcome = worker.process_share_block(share).await.unwrap();
+        let outcome = worker.process_share_block(share, true).await.unwrap();
 
         assert!(matches!(outcome, ProcessOutcome::NotAdvanced));
         assert!(
@@ -1962,8 +2190,8 @@ mod tests {
         // Two distinct blocks buffered under the same parent height (5).
         let share_a = TestShareBlockBuilder::new().nonce(0xe9695791).build();
         let share_b = TestShareBlockBuilder::new().nonce(0xe9695792).build();
-        worker.buffer_block(5, share_a);
-        worker.buffer_block(5, share_b);
+        worker.buffer_block(5, share_a, true);
+        worker.buffer_block(5, share_b, true);
 
         worker.drain_pending_blocks(5).await.unwrap();
 
@@ -2082,8 +2310,20 @@ mod tests {
         );
 
         // Deliver the child before the parent (out of order).
-        organise_tx.send(OrganiseEvent::Block(c)).await.unwrap();
-        organise_tx.send(OrganiseEvent::Block(p)).await.unwrap();
+        organise_tx
+            .send(OrganiseEvent::Block {
+                share_block: c,
+                content_validated: true,
+            })
+            .await
+            .unwrap();
+        organise_tx
+            .send(OrganiseEvent::Block {
+                share_block: p,
+                content_validated: true,
+            })
+            .await
+            .unwrap();
         drop(organise_tx);
 
         worker.run().await.unwrap();
@@ -2181,9 +2421,12 @@ mod tests {
         );
 
         // C buffered under intermediate height 7 (between old tip 5 and new tip 10).
-        worker.buffer_block(7, share_c);
+        worker.buffer_block(7, share_c, true);
         // T buffers (Pending parent), triggering the organise_block + drain follow-up.
-        worker.handle_organise_block_event(share_t).await.unwrap();
+        worker
+            .handle_organise_block_event(share_t, true)
+            .await
+            .unwrap();
 
         assert!(
             !worker.pending_blocks.contains_key(&7),
@@ -2240,7 +2483,13 @@ mod tests {
         );
 
         let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
-        organise_tx.send(OrganiseEvent::Block(share)).await.unwrap();
+        organise_tx
+            .send(OrganiseEvent::Block {
+                share_block: share,
+                content_validated: true,
+            })
+            .await
+            .unwrap();
         drop(organise_tx);
 
         let result = worker.run().await;

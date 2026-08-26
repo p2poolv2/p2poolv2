@@ -490,13 +490,21 @@ below-zone: full content validation ran, chain context is skipped, and the
 block is marked `BlockValid`. That is exactly the treatment the design gives
 every below-zone block, and it is sound for the reason above.
 
-The reverse flip -- below-zone at stage 1, in-zone at stage 2, which needs the
-candidate tip to *shorten* across the boundary on a reorg -- is the only case
+The reverse flip -- below-zone at stage 1, in-zone at stage 2 -- is the case
 with real consequence: the block skipped merkle root, coinbase structure and
-script/value/sigop checks, yet is marked `BlockValid`. It is rare and is not
-currently guarded against. Closing it properly means recording the tier on the
-block when it first enters validation rather than re-deriving it from a moving
-tip.
+script/value/sigop checks, yet would be marked `BlockValid`. It needs the
+candidate tip to *shorten* across the boundary, which `write_branch_as_candidates`
+does on a reorg onto a shorter branch and `set_top_candidate_height_after_rebuild`
+does when an invalidation leaves nothing above the confirmed tip.
+
+It is closed by recording the tier rather than re-deriving it: the validation
+worker reports which tier it ran as `content_validated` on
+`OrganiseEvent::Block`, the organise worker carries that through its pending
+buffer, and `validate_mark_promote` runs the skipped content checks before the
+chain-context ones when a block arrives in the zone without them. The forward
+flip needs no handling, so the two tiers stay asymmetric: `content_validated`
+governs only whether content validation still owes a run, while the live
+`check_pplns_zone` read continues to govern whether chain context applies.
 
 ### Payout (coinbase) validation
 Chain-context validation (`validate_bitcoin_payout` in
