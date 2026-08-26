@@ -45,6 +45,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   chain has it in the window, and the total difficulty is at least 1 on every
   network unless `difficulty_multiplier` is configured below 1.0, which
   truncates to zero when cast.
+- A failed `mark_invalid` is no longer reported as an invalidation. The batch
+  is dropped uncommitted, so the block keeps its `HeaderValid` status and
+  candidate membership and confirmation still stops at its height; both the
+  chain-context path and the `InvalidBlock` event path acted as though the
+  candidate chain had been rebuilt. The block is now re-buffered for a retry
+  where it is available, the confirmed-chain follow-up is skipped where it is
+  not, and a closed store writer channel is fatal rather than logged.
 - The validation tier is recorded on `OrganiseEvent::Block` instead of being
   re-derived by the organise worker. Both stages read `check_pplns_zone`
   independently and the candidate tip can shorten between them, so a block

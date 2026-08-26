@@ -284,12 +284,25 @@ impl OrganiseWorker {
     /// Marking it Invalid rebuilds the candidate chain from its parent onto the
     /// best surviving branch, the same follow-up a chain-context Consensus
     /// failure needs.
+    ///
+    /// When the mark fails nothing was committed, so there is no rebuilt chain
+    /// to advance onto and the follow-up is skipped. Only the hash arrives here,
+    /// so the block cannot be re-buffered for a local retry: the retry is a peer
+    /// re-delivering it, which re-runs validation and reports the verdict again.
     async fn handle_invalid_block_event(
         &mut self,
         blockhash: BlockHash,
     ) -> Result<(), OrganiseError> {
         if let Err(mark_error) = self.chain_store_handle.mark_invalid(blockhash).await {
-            error!("Failed to mark {blockhash} Invalid: {mark_error}");
+            if matches!(mark_error, StoreError::ChannelClosed) {
+                return Err(OrganiseError {
+                    message: format!("Store writer channel closed marking {blockhash} Invalid"),
+                });
+            }
+            error!(
+                "Failed to mark {blockhash} Invalid, confirmation stops at its height: {mark_error}"
+            );
+            return Ok(());
         }
         self.advance_confirmed_and_drain().await
     }
@@ -444,7 +457,23 @@ impl OrganiseWorker {
                     // the next event.
                     error!("Chain-context validation failed for {blockhash}: {validation_error}");
                     if let Err(mark_error) = self.chain_store_handle.mark_invalid(blockhash).await {
-                        error!("Failed to mark {blockhash} Invalid: {mark_error}");
+                        if matches!(mark_error, StoreError::ChannelClosed) {
+                            return Err(OrganiseError {
+                                message: format!(
+                                    "Store writer channel closed marking {blockhash} Invalid"
+                                ),
+                            });
+                        }
+                        // The batch was dropped uncommitted, so the block still
+                        // has its HeaderValid status and Candidate membership,
+                        // and contiguous_candidates_with_block_data still stops
+                        // at its height. Reporting Invalidated would send the
+                        // caller to advance confirmation onto a rebuilt
+                        // candidate chain that does not exist. Re-buffer so the
+                        // verdict is re-attempted instead.
+                        error!("Failed to mark {blockhash} Invalid, will retry: {mark_error}");
+                        self.buffer_block(parent_height, share_block, content_validated);
+                        return Ok(ProcessOutcome::NotAdvanced);
                     }
                     return Ok(ProcessOutcome::Invalidated);
                 }
@@ -2019,6 +2048,131 @@ mod tests {
 
         let outcome = worker.process_share_block(share, true).await.unwrap();
         assert!(matches!(outcome, ProcessOutcome::Advanced(_)));
+    }
+
+    /// A failed mark_invalid must not be reported as an invalidation.
+    ///
+    /// The whole batch is dropped uncommitted, so the block keeps its
+    /// HeaderValid status and Candidate membership and confirmation still stops
+    /// at its height. Returning Invalidated would send the caller to advance
+    /// onto a rebuilt candidate chain that was never written, leaving the
+    /// height wedged with one error line. The block is re-buffered so the
+    /// verdict is re-attempted.
+    #[tokio::test]
+    async fn test_failed_mark_invalid_rebuffers_instead_of_reporting_invalidated() {
+        let (_organise_tx, organise_rx) = create_organise_channel();
+        let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_get_block_metadata()
+            .returning(|_| {
+                Ok(BlockMetadata {
+                    expected_height: Some(5),
+                    chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
+                    status: Status::BlockValid,
+                    chain: ChainMembership::Confirmed,
+                })
+            });
+        mock_chain_handle
+            .expect_get_candidate_tip_height()
+            .returning(|| Ok(Some(6)));
+        mock_chain_handle
+            .expect_mark_invalid()
+            .times(1)
+            .returning(|_| Err(StoreError::Database("transient".to_string())));
+        mock_chain_handle.expect_mark_block_valid().never();
+        mock_chain_handle.expect_promote_block().never();
+
+        let mut mock_validator = MockDefaultShareValidator::new();
+        mock_validator
+            .expect_validate_with_chain_context()
+            .returning(|_, _, _| Err(ValidationError::consensus("rejected for test")));
+
+        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let (notify_tx, _notify_rx) = create_test_notify_channel();
+        let mut worker = OrganiseWorker::new(
+            organise_rx,
+            mock_chain_handle,
+            monitoring_tx,
+            notify_tx,
+            create_test_metrics_handle(),
+            create_test_pplns_window(),
+            Arc::new(mock_validator),
+        );
+
+        let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let blockhash = share.block_hash();
+        let outcome = worker.process_share_block(share, true).await.unwrap();
+
+        assert!(
+            matches!(outcome, ProcessOutcome::NotAdvanced),
+            "an uncommitted invalidation must not be reported as Invalidated"
+        );
+        let buffered = worker
+            .pending_blocks
+            .get(&5)
+            .expect("the block must be re-buffered so the verdict is retried");
+        assert_eq!(buffered[0].share_block.block_hash(), blockhash);
+    }
+
+    /// A failed mark_invalid on the InvalidBlock event path skips the confirmed
+    /// chain follow-up: nothing was committed, so there is no rebuilt candidate
+    /// chain to advance onto.
+    #[tokio::test]
+    async fn test_failed_mark_invalid_event_does_not_advance_confirmed() {
+        let (_organise_tx, organise_rx) = create_organise_channel();
+        let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_mark_invalid()
+            .times(1)
+            .returning(|_| Err(StoreError::Database("transient".to_string())));
+        mock_chain_handle.expect_organise_block().never();
+
+        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let (notify_tx, _notify_rx) = create_test_notify_channel();
+        let mut worker = OrganiseWorker::new(
+            organise_rx,
+            mock_chain_handle,
+            monitoring_tx,
+            notify_tx,
+            create_test_metrics_handle(),
+            create_test_pplns_window(),
+            stub_share_validator_with_success(),
+        );
+
+        let blockhash = TestShareBlockBuilder::new()
+            .nonce(0xe9695791)
+            .build()
+            .block_hash();
+        worker.handle_invalid_block_event(blockhash).await.unwrap();
+    }
+
+    /// A closed store writer channel is fatal, not a retry.
+    #[tokio::test]
+    async fn test_mark_invalid_channel_closed_is_fatal() {
+        let (_organise_tx, organise_rx) = create_organise_channel();
+        let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_mark_invalid()
+            .returning(|_| Err(StoreError::ChannelClosed));
+        mock_chain_handle.expect_organise_block().never();
+
+        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let (notify_tx, _notify_rx) = create_test_notify_channel();
+        let mut worker = OrganiseWorker::new(
+            organise_rx,
+            mock_chain_handle,
+            monitoring_tx,
+            notify_tx,
+            create_test_metrics_handle(),
+            create_test_pplns_window(),
+            stub_share_validator_with_success(),
+        );
+
+        let blockhash = TestShareBlockBuilder::new()
+            .nonce(0xe9695791)
+            .build()
+            .block_hash();
+        assert!(worker.handle_invalid_block_event(blockhash).await.is_err());
     }
 
     /// An unresolvable chain-context failure drops the block instead of
