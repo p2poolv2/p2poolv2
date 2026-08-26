@@ -45,6 +45,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   chain has it in the window, and the total difficulty is at least 1 on every
   network unless `difficulty_multiplier` is configured below 1.0, which
   truncates to zero when cast.
+- Uncle block bodies are required only for blocks inside the PPLNS zone. The
+  BlockReceiver admits a block whose uncle sits below `prune_height`, because
+  those bodies are never fetched, but validation required them in both tiers --
+  so such a block was stored and then failed validation forever on data nothing
+  would request. Uncle acceptance is now a pure function of chain shape, with
+  body presence checked separately which runs during block validation in pplns
+  zone
 - A failed `mark_invalid` is no longer reported as an invalidation. The batch
   is dropped uncommitted, so the block keeps its `HeaderValid` status and
   candidate membership and confirmation still stops at its height; both the

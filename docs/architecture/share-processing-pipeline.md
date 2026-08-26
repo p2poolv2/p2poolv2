@@ -534,10 +534,22 @@ Resolving the window walks parent pointers back to a confirmed ancestor and:
 These are deliberately different rules, and the asymmetry is intentional.
 
 **Acceptance** (`validate_uncles`, `validate_uncle_positions`) is a pure
-function of chain shape: count, no duplicates, body present, and the structural
-position rules (an uncle is below the nephew, within `MAX_UNCLES_DEPTH`, and not
-on the nephew's own ancestry). It deliberately does **not** consult mutable
-per-node state. An earlier rule -- "an uncle must not be on the confirmed
+function of chain shape: count, no duplicates, and the structural position
+rules (an uncle is below the nephew, within `MAX_UNCLES_DEPTH`, and not on the
+nephew's own ancestry). It deliberately does **not** consult mutable per-node
+state.
+
+Whether an uncle's block body is stored is exactly that kind of state, so it is
+checked separately (`validate_uncle_bodies_present`) and only for blocks inside
+the PPLNS zone. Below the zone a block is validated on PoW alone -- its own
+transactions are never read -- so requiring its uncles' transactions would hold
+it to a stricter standard than the block itself. Tiering it is also what keeps
+this in step with the BlockReceiver's admission gate, which exempts uncles below
+`prune_height` because those bodies are never fetched: an uncle sits at most
+`MAX_UNCLES_DEPTH` below its nephew, so a nephew with an exempt uncle is a full
+window below the zone boundary and never reaches the check. Requiring the body
+in both tiers left such a block admitted, stored, and permanently
+unvalidatable. An earlier rule -- "an uncle must not be on the confirmed
 chain" -- was removed for exactly this reason after it deadlocked nodes in the
 sim (SYNC_ISSUES, August 15th): two nodes at different confirmation heights
 disagreed about the same block, and the nephew that would have healed the split
