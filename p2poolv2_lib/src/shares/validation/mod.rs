@@ -273,8 +273,10 @@ pub trait ShareValidator {
         chain_store_handle: &ChainStoreHandle,
     ) -> Result<(), ValidationError>;
 
-    /// Validate uncles: count within MAX_UNCLES, no duplicates, each exists
-    /// in store, and none are on the confirmed chain.
+    /// Validate uncles as a pure function of chain shape: count within
+    /// MAX_UNCLES, no duplicates, and the structural position rules. Whether an
+    /// uncle's block body is stored is checked separately, and only for blocks
+    /// inside the PPLNS zone.
     fn validate_uncles(
         &self,
         share: &ShareBlock,
@@ -395,6 +397,37 @@ impl DefaultShareValidator {
             pool_signature,
             time_provider,
         }
+    }
+
+    /// Require the block body of every uncle to be stored.
+    ///
+    /// Only the in-zone tier needs this. A block below the PPLNS zone is
+    /// validated on PoW alone -- its own transactions are never read -- so
+    /// demanding its uncles' transactions would hold it to a stricter standard
+    /// than the block itself.
+    ///
+    /// Tiering it is also what keeps this in step with the BlockReceiver's
+    /// admission gate, which exempts uncles below `prune_height` because their
+    /// bodies are never fetched. The two boundaries are a full window apart and
+    /// the gap covers the exemption with room to spare: an uncle sits at most
+    /// `MAX_UNCLES_DEPTH` below its nephew, so a nephew whose uncle is below
+    /// `prune_height` (`tip - 2 * MAX_PPLNS_WINDOW_SHARES`) is itself far below
+    /// the zone boundary (`tip - MAX_PPLNS_WINDOW_SHARES`) and never reaches
+    /// this check. Ungated, such a block is admitted, stored, and then fails
+    /// validation forever on a body nothing will ever fetch.
+    fn validate_uncle_bodies_present(
+        &self,
+        share: &ShareBlock,
+        chain_store_handle: &ChainStoreHandle,
+    ) -> Result<(), ValidationError> {
+        for uncle in &share.header.uncles {
+            if !chain_store_handle.share_block_exists(uncle) {
+                return Err(ValidationError::recoverable(format!(
+                    "Uncle {uncle} not found in store"
+                )));
+            };
+        }
+        Ok(())
     }
 
     /// Validate each uncle's position relative to the nephew: strictly below
@@ -1134,6 +1167,7 @@ impl ShareValidator for DefaultShareValidator {
         }
         self.validate_with_pool_difficulty(&share.header, chain_store_handle)?;
         self.validate_uncles(share, chain_store_handle)?;
+        self.validate_uncle_bodies_present(share, chain_store_handle)?;
         self.validate_block_size(share)?;
         self.validate_share_coinbase(share)?;
         self.validate_merkle_root(share)?;
@@ -1174,13 +1208,6 @@ impl ShareValidator for DefaultShareValidator {
         let unique_uncles: HashSet<&BlockHash> = share.header.uncles.iter().collect();
         if share.header.uncles.len() != unique_uncles.len() {
             return Err(ValidationError::consensus("Share has duplicate uncles"));
-        }
-        for uncle in &share.header.uncles {
-            if !chain_store_handle.share_block_exists(uncle) {
-                return Err(ValidationError::recoverable(format!(
-                    "Uncle {uncle} not found in store"
-                )));
-            };
         }
         self.validate_uncle_positions(share, chain_store_handle)?;
         Ok(())
@@ -1721,8 +1748,11 @@ mod tests {
         assert!(result.unwrap_err().to_string().contains("duplicate uncles"));
     }
 
+    /// An uncle whose block body is missing is not judged by the chain-shape
+    /// rules, which must stay a pure function of the chain rather than of what
+    /// this node happens to hold.
     #[tokio::test]
-    async fn test_validate_uncles_not_in_store() {
+    async fn test_validate_uncle_bodies_present_requires_the_body() {
         let mut chain_store_handle = ChainStoreHandle::default();
 
         chain_store_handle
@@ -1738,14 +1768,45 @@ mod tests {
             .miner_pubkey(PUBKEY_G)
             .build();
 
-        let result = validator().validate_uncles(&invalid_share, &chain_store_handle);
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("not found in store")
-        );
+        let error = validator()
+            .validate_uncle_bodies_present(&invalid_share, &chain_store_handle)
+            .unwrap_err();
+        assert_eq!(error.kind(), FailureKind::Recoverable);
+        assert!(error.to_string().contains("not found in store"));
+    }
+
+    /// Uncle acceptance does not consult whether an uncle's body is stored.
+    ///
+    /// That is node-local state, not chain shape, and it is what the below-zone
+    /// tier must not be held to: the BlockReceiver admits a block whose uncle
+    /// sits below `prune_height` because such bodies are never fetched, so
+    /// requiring one here left the block stored and permanently unvalidatable,
+    /// waiting on data nothing will ever request.
+    #[tokio::test]
+    async fn test_validate_uncles_does_not_require_uncle_bodies() {
+        let mut chain_store_handle = ChainStoreHandle::default();
+        chain_store_handle.expect_share_block_exists().never();
+
+        let uncle = TestShareBlockBuilder::new().miner_pubkey(PUBKEY_G).build();
+        let uncle_hash = uncle.block_hash();
+        // Parent (all-zeros) at height 20 -> nephew at 21; uncle at 20.
+        chain_store_handle
+            .expect_get_block_metadata_batch()
+            .returning(|hashes| {
+                hashes
+                    .iter()
+                    .map(|hash| (*hash, metadata_at_height(20)))
+                    .collect()
+            });
+
+        let share = TestShareBlockBuilder::new()
+            .uncles(vec![uncle_hash])
+            .miner_pubkey(PUBKEY_2G)
+            .build();
+
+        validator()
+            .validate_uncles(&share, &chain_store_handle)
+            .expect("chain-shape acceptance must not depend on stored bodies");
     }
 
     #[tokio::test]
