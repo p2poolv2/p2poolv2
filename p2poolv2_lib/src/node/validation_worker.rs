@@ -260,6 +260,12 @@ async fn validate_and_emit(
             FailureKind::StoreAccess => {
                 error!("Store error validating share block {block_hash}: {validation_error}");
             }
+            FailureKind::Unresolvable => {
+                // Data the check needs is gone rather than late, so a retry
+                // cannot decide it. The block keeps its HeaderValid status and
+                // no verdict is recorded: another node may well judge it valid.
+                warn!("Share block {block_hash} cannot be resolved: {validation_error}");
+            }
         }
         return;
     }

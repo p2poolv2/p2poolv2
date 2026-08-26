@@ -32,6 +32,7 @@ use bitcoin::Address;
 use bitcoin::BlockHash;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::error::Error;
+use std::fmt;
 use tracing::debug;
 
 /// Maximum number of confirmed shares in the PPLNS window.
@@ -42,8 +43,23 @@ pub const MAX_PPLNS_WINDOW_SHARES: usize = 120960;
 /// keeps the window plus `window / PPLNS_WINDOW_BUFFER_DIVISOR` extra shares
 /// (1%, rounded up) so the distribution for an anchor slightly behind the
 /// tip -- e.g. a sibling's parent after a competing sibling advanced the tip
-/// -- is not truncated by eviction. Sized to cover realistic anchor offsets
-/// (siblings, shallow forks) at negligible memory cost.
+/// -- is not truncated by eviction.
+///
+/// This buffer is what bounds how deep a fork this node can still pay out for,
+/// and so which forks it can follow at all. A payout walk starting at an anchor
+/// `n` entries below the confirmed tip has `cache_capacity() - n` entries left
+/// beneath it, so it can only span a full `MAX_PPLNS_WINDOW_SHARES` while `n`
+/// is within the buffer. Past that the walk is truncated by eviction, the
+/// distribution would depend on where this node's cache happens to end rather
+/// than on the chain, and `get_distribution_from_start_hash` refuses it --
+/// which drops the share (`FailureKind::Unresolvable`).
+///
+/// At the current 1% that is 1,210 entries, about three and a half hours at six
+/// shares per minute. Raising it widens the forks this node will follow and
+/// costs roughly 104 bytes per entry; lowering it narrows them. It is a local
+/// resource choice, not a consensus rule: nodes with different values disagree
+/// only about which deep forks they are willing to follow, and a dropped share
+/// leaves no verdict behind.
 const PPLNS_WINDOW_BUFFER_DIVISOR: usize = 100;
 
 /// Number of blocks from the chain tip that must be retained by each node.
@@ -118,6 +134,55 @@ struct UncleEntry {
 /// confirmed ancestor (newest-to-oldest), paired with that ancestor's index
 /// in `confirmed_entries`.
 type CandidateWalk = (Vec<(BlockHash, ShareHeader)>, usize);
+
+/// Why a payout distribution could not be produced.
+///
+/// The two cases need opposite responses from validation, which is the only
+/// reason they are distinguished: `Truncated` is permanent for this node and
+/// drops the share, while everything else may still resolve and leaves it for
+/// a retry.
+#[derive(Debug)]
+pub enum WindowError {
+    /// The walk ran out of cached entries before reaching either bound, and
+    /// the cache no longer reaches the chain start. The anchor sits deeper
+    /// than the retained buffer (see `PPLNS_WINDOW_BUFFER_DIVISOR`), and since
+    /// the cache's oldest entry only moves forward with the confirmed tip, no
+    /// retry can bring it back into range.
+    InsufficientEntries {
+        anchor: BlockHash,
+        oldest_cached_height: u32,
+        max_window_shares: usize,
+    },
+    /// A store read failed, or the anchor's ancestry is not stored. Either may
+    /// resolve later.
+    ReadFailure(Box<dyn Error + Send + Sync>),
+}
+
+impl fmt::Display for WindowError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            WindowError::InsufficientEntries {
+                anchor,
+                oldest_cached_height,
+                max_window_shares,
+            } => write!(
+                formatter,
+                "PPLNS window for anchor {anchor} is truncated by eviction: the walk ran out of \
+                 cached entries at height {oldest_cached_height}, short of both the difficulty \
+                 threshold and {max_window_shares} shares"
+            ),
+            WindowError::ReadFailure(error) => write!(formatter, "{error}"),
+        }
+    }
+}
+
+impl Error for WindowError {}
+
+impl From<Box<dyn Error + Send + Sync>> for WindowError {
+    fn from(error: Box<dyn Error + Send + Sync>) -> Self {
+        WindowError::ReadFailure(error)
+    }
+}
 
 /// Incremental PPLNS window cache.
 ///
@@ -225,7 +290,7 @@ impl PplnsWindow {
         total_difficulty: u128,
         start_hash: BlockHash,
         chain_store_handle: &ChainStoreHandle,
-    ) -> Result<HashMap<Address, u128>, Box<dyn Error + Send + Sync>> {
+    ) -> Result<HashMap<Address, u128>, WindowError> {
         let (candidate_entries, confirmed_start_index) =
             self.resolve_start_hash(start_hash, chain_store_handle)?;
 
@@ -234,7 +299,7 @@ impl PplnsWindow {
         let mut accumulated_difficulty: u128 = 0;
         let mut shares_remaining = self.max_window_shares;
 
-        let candidate_stop_reason = Self::accumulate_candidate_difficulty(
+        let window_stop_reason = Self::accumulate_candidate_difficulty(
             &candidate_entries,
             &mut difficulty_by_key,
             &mut accumulated_difficulty,
@@ -242,7 +307,7 @@ impl PplnsWindow {
             &mut shares_remaining,
         );
 
-        let stop_reason = match candidate_stop_reason {
+        let stop_reason = match window_stop_reason {
             Some(reason) => reason,
             // Budget left over from the candidate shares carries into the
             // confirmed entries, starting at the confirmed entry point.
@@ -256,16 +321,14 @@ impl PplnsWindow {
         };
 
         if stop_reason == WindowStopReason::OutOfEntries && !self.reaches_chain_start() {
-            return Err(format!(
-                "PPLNS window for anchor {start_hash} is truncated by eviction: the walk ran \
-                 out of cached entries at height {}, short of both the difficulty threshold \
-                 and {} shares",
-                self.confirmed_entries
+            return Err(WindowError::InsufficientEntries {
+                anchor: start_hash,
+                oldest_cached_height: self
+                    .confirmed_entries
                     .back()
                     .map_or(0, |entry| entry.height),
-                self.max_window_shares,
-            )
-            .into());
+                max_window_shares: self.max_window_shares,
+            });
         }
 
         Ok(self.collect_distribution(&difficulty_by_key))
@@ -937,7 +1000,7 @@ mockall::mock! {
             total_difficulty: u128,
             start_hash: BlockHash,
             chain_store_handle: &ChainStoreHandle,
-        ) -> Result<HashMap<Address, u128>, Box<dyn std::error::Error + Send + Sync>>;
+        ) -> Result<HashMap<Address, u128>, WindowError>;
     }
 }
 

@@ -409,15 +409,23 @@ impl OrganiseWorker {
                 }
                 FailureKind::Recoverable => {
                     // A chain-context check could not be decided because data
-                    // it needs is missing locally (an ancestor header, or a
-                    // PPLNS anchor this node's window can no longer resolve).
-                    // The block may well be valid, so leave it for retry rather
-                    // than marking it Invalid or crashing.
+                    // it needs has not arrived yet (an ancestor header, a
+                    // transient store read). The block may well be valid, so
+                    // leave it for retry rather than marking it Invalid or
+                    // crashing.
                     warn!(
                         "Recoverable validation error for {blockhash} at organise: {validation_error}"
                     );
                     self.buffer_block(parent_height, share_block);
                     return Ok(ProcessOutcome::NotAdvanced);
+                }
+                FailureKind::Unresolvable => {
+                    // What the check needs is gone rather than late -- an
+                    // anchor below the confirmed entries the PPLNS window
+                    // retains -- and the window's oldest entry only moves
+                    // forward, so no retry can decide it.
+                    warn!("Dropping {blockhash}, cannot be resolved: {validation_error}");
+                    return Ok(ProcessOutcome::Dropped);
                 }
             }
         }
@@ -1783,6 +1791,69 @@ mod tests {
             .expect("block must be buffered under its parent height for retry");
         assert_eq!(buffered.len(), 1);
         assert_eq!(buffered[0].block_hash(), blockhash);
+    }
+
+    /// An unresolvable chain-context failure drops the block instead of
+    /// buffering it, and records no verdict.
+    ///
+    /// The buffer is keyed by parent height and drains only reach heights at or
+    /// above the confirmed tip, so an entry whose parent is far below is never
+    /// revisited: it would hold its slot until the buffer starts dropping live
+    /// blocks. Marking it Invalid is not an option either -- a node retaining
+    /// more of its window may judge the same block valid, and the verdict would
+    /// bar its branch forever.
+    #[tokio::test]
+    async fn test_unresolvable_validation_error_drops_without_buffering() {
+        let (_organise_tx, organise_rx) = create_organise_channel();
+        let mut mock_chain_handle = MockChainStoreHandle::new();
+
+        mock_chain_handle
+            .expect_get_block_metadata()
+            .returning(|_| {
+                Ok(BlockMetadata {
+                    expected_height: Some(5),
+                    chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
+                    status: Status::BlockValid,
+                    chain: ChainMembership::Confirmed,
+                })
+            });
+        mock_chain_handle
+            .expect_get_candidate_tip_height()
+            .returning(|| Ok(Some(6)));
+        // Neither a verdict nor a promotion may follow a drop.
+        mock_chain_handle.expect_mark_invalid().never();
+        mock_chain_handle.expect_mark_block_valid().never();
+        mock_chain_handle.expect_promote_block().never();
+
+        let mut mock_validator = MockDefaultShareValidator::new();
+        mock_validator
+            .expect_validate_with_chain_context()
+            .returning(|_, _, _| {
+                Err(ValidationError::unresolvable(
+                    "PPLNS window for anchor is truncated by eviction",
+                ))
+            });
+
+        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let (notify_tx, _notify_rx) = create_test_notify_channel();
+        let mut worker = OrganiseWorker::new(
+            organise_rx,
+            mock_chain_handle,
+            monitoring_tx,
+            notify_tx,
+            create_test_metrics_handle(),
+            create_test_pplns_window(),
+            Arc::new(mock_validator),
+        );
+
+        let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let outcome = worker.process_share_block(share).await.unwrap();
+
+        assert!(matches!(outcome, ProcessOutcome::Dropped));
+        assert!(
+            worker.pending_blocks.is_empty(),
+            "an unresolvable block must not occupy a buffer slot it can never leave"
+        );
     }
 
     /// A rejected status transition means the block is Pending or already
