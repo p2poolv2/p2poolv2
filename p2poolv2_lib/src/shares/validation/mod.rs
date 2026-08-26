@@ -26,7 +26,9 @@ use crate::accounting::payout::payout_distribution::{
 use crate::accounting::payout::sharechain_pplns::PplnsWindow;
 #[cfg(not(test))]
 use crate::accounting::payout::sharechain_pplns::PplnsWindow;
-use crate::accounting::payout::sharechain_pplns::pplns_window::MAX_PPLNS_WINDOW_SHARES;
+use crate::accounting::payout::sharechain_pplns::pplns_window::{
+    MAX_PPLNS_WINDOW_SHARES, WindowError,
+};
 #[cfg(test)]
 #[mockall_double::double]
 use crate::pool_difficulty::PoolDifficulty;
@@ -75,11 +77,19 @@ use std::sync::{Arc, RwLock};
 ///   block Invalid. It must never be used for a verdict a peer's block can
 ///   provoke, or any peer could shut the node down.
 /// - `Recoverable`: a check could not be decided because data it needs is
-///   unavailable -- an uncle, the parent, or an ancestor header not yet synced,
-///   or a PPLNS anchor that no longer resolves against this node's window. This
-///   is neither a rule violation nor corruption: the block is left for a later
-///   retry (the block receiver buffers pre-context dependencies), so it is
-///   never marked `Invalid` and never fatal.
+///   unavailable but can still arrive -- an uncle, the parent, or an ancestor
+///   header not yet synced. This is neither a rule violation nor corruption:
+///   the block is left for a later retry (the block receiver buffers
+///   pre-context dependencies), so it is never marked `Invalid` and never
+///   fatal.
+/// - `Unresolvable`: a check could not be decided and never will be on this
+///   node, because what it needs is gone rather than late -- a PPLNS anchor
+///   below the span of confirmed entries the window retains. Retrying cannot
+///   help: the window's oldest entry only moves forward with the confirmed
+///   tip, so the condition strictly worsens. The block is dropped without a
+///   verdict. Never `Invalid`: another node retaining more, or sitting at an
+///   earlier tip, may well judge the same block valid, and a permanent verdict
+///   would bar its branch forever.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FailureKind {
     /// A consensus rule was broken with all required data present.
@@ -88,6 +98,9 @@ pub enum FailureKind {
     StoreAccess,
     /// A pre-context check is missing a dependency that can still arrive.
     Recoverable,
+    /// A check needs data this node no longer retains, so no retry can decide
+    /// it. The block is dropped without a verdict.
+    Unresolvable,
 }
 
 /// Validation error: a descriptive message plus its failure kind.
@@ -125,6 +138,16 @@ impl ValidationError {
         Self {
             message: message.into(),
             kind: FailureKind::Recoverable,
+        }
+    }
+
+    /// Create an unresolvable error: the check needs data this node no longer
+    /// retains, so no retry can decide it. The block is dropped without a
+    /// verdict, never marked Invalid and never fatal.
+    pub fn unresolvable(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            kind: FailureKind::Unresolvable,
         }
     }
 
@@ -895,10 +918,19 @@ impl DefaultShareValidator {
                 share.header.prev_share_blockhash,
                 chain_store_handle,
             )
-            .map_err(|error| {
-                ValidationError::recoverable(format!(
+            .map_err(|error| match error {
+                // The anchor is below the confirmed entries this node's window
+                // retains, and the window's oldest entry only moves forward
+                // with the confirmed tip, so no retry can bring it back into
+                // range. Drop the share without a verdict.
+                WindowError::InsufficientEntries { .. } => ValidationError::unresolvable(format!(
+                    "Cannot resolve PPLNS window from prev_share_blockhash: {error}"
+                )),
+                // A store read failed or the ancestry is not stored yet; either
+                // may resolve later.
+                WindowError::ReadFailure(_) => ValidationError::recoverable(format!(
                     "Failed to resolve PPLNS window from prev_share_blockhash: {error}"
-                ))
+                )),
             })?;
 
         let coinbase_value = share.header.coinbase_value;
@@ -3488,7 +3520,11 @@ mod tests {
             .return_const(bitcoin::Network::Signet);
         mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(|_, _, _| Err("prev_share_blockhash not found in PPLNS window".into()));
+            .returning(|_, _, _| {
+                Err(WindowError::ReadFailure(
+                    "prev_share_blockhash not found in PPLNS window".into(),
+                ))
+            });
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
         let error = validator()
@@ -3499,6 +3535,50 @@ mod tests {
                 .to_string()
                 .contains("prev_share_blockhash not found in PPLNS window"),
             "Expected PPLNS window miss error, got: {error}"
+        );
+        assert_eq!(
+            error.kind(),
+            FailureKind::Recoverable,
+            "an unread anchor may still resolve, so the block is retried"
+        );
+    }
+
+    /// An anchor the window can no longer cover is dropped, not retried: the
+    /// window's oldest entry only moves forward, so no retry can decide it.
+    #[test]
+    fn test_validate_bitcoin_payout_truncated_window_is_unresolvable() {
+        let mut share_block = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+        share_block.header.coinbase_value = 312_500_000;
+        share_block.header.bitcoin_height = 840_000;
+
+        let anchor = share_block.header.prev_share_blockhash;
+        let mut mock_window = PplnsWindow::default();
+        mock_window
+            .expect_network()
+            .return_const(bitcoin::Network::Signet);
+        mock_window
+            .expect_get_distribution_from_start_hash()
+            .returning(move |_, _, _| {
+                Err(WindowError::InsufficientEntries {
+                    anchor,
+                    oldest_cached_height: 5_000,
+                    max_window_shares: MAX_PPLNS_WINDOW_SHARES,
+                })
+            });
+
+        let error = validator()
+            .validate_bitcoin_payout(
+                &share_block,
+                &ChainStoreHandle::default(),
+                Arc::new(RwLock::new(mock_window)),
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), FailureKind::Unresolvable);
+        assert!(
+            error.to_string().contains("truncated by eviction"),
+            "unexpected error: {error}"
         );
     }
 

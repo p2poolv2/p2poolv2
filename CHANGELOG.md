@@ -45,6 +45,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   chain has it in the window, and the total difficulty is at least 1 on every
   network unless `difficulty_multiplier` is configured below 1.0, which
   truncates to zero when cast.
+- `ValidationError` gains a fourth failure kind, `Unresolvable`: a check that
+  needs data this node no longer retains and that no retry can decide. The
+  organise worker drops such a block without recording a verdict, rather than
+  buffering it. A PPLNS anchor deeper than the retained window is the first
+  case; it was `Recoverable`, which buffered the share under a parent height
+  that drains never revisit, so the entry held its slot until the buffer began
+  dropping live blocks.
 - `difficulty_multiplier` is validated at config parse: it must be a finite
   whole number of at least 1. Every consumer reads it through an `as u128`
   cast, so a smaller value truncated to zero and a fractional one silently
