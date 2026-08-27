@@ -147,6 +147,14 @@ impl Store {
         let fork_point = fork_branch.front().ok_or_else(|| {
             StoreError::NotFound("Empty branch returned from get_branch_to_chain.".into())
         })?;
+        let fork_point_height = self
+            .get_block_metadata(fork_point)?
+            .expected_height
+            .ok_or_else(|| {
+                StoreError::NotFound(
+                    "Fork point metadata missing expected_height for confirmed reorg".into(),
+                )
+            })?;
 
         // Do not reorg if any block above the prune boundary lacks body data.
         let fork_hashes: Vec<BlockHash> = fork_branch.iter().copied().collect();
@@ -173,6 +181,7 @@ impl Store {
 
         // Write new fork entries and update their metadata status to Confirmed
         let mut new_top_height = 0u32;
+        let mut new_tip_hash = *fork_point;
         for to_confirm in &fork_branch {
             let mut metadata = self.get_block_metadata(to_confirm)?;
             let height = metadata.expected_height.ok_or_else(|| {
@@ -186,10 +195,22 @@ impl Store {
             self.update_block_metadata(to_confirm, &metadata, batch)?;
 
             new_top_height = height;
+            new_tip_hash = *to_confirm;
         }
 
         self.set_top_confirmed_height(new_top_height, batch);
-        tracing::info!("Chain reorg completed to height {new_top_height}");
+
+        let depth = super::reorg_depth(top_confirmed.height, fork_point_height);
+        super::log_reorg(
+            "confirmed",
+            depth,
+            fork_point_height,
+            &top_confirmed.hash,
+            top_confirmed.height,
+            &new_tip_hash,
+            new_top_height,
+        );
+
         Ok(Some(new_top_height))
     }
 

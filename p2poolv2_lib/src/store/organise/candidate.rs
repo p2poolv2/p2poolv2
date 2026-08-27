@@ -448,6 +448,8 @@ impl Store {
     /// candidate or confirmed chain. Delegates to
     /// `reorg_candidate_from_candidate` or
     /// `reorg_candidate_from_confirmed` depending on the branch point.
+    ///
+    /// On success, logs a reorg notice (info for shallow, warn for deep).
     pub(super) fn reorg_candidate(
         &self,
         blockhash: &BlockHash,
@@ -465,11 +467,38 @@ impl Store {
             StoreError::NotFound("Empty branch returned from get_branch_to_chain.".into())
         })?;
 
-        if self.is_confirmed(branch_point) {
-            self.reorg_candidate_from_confirmed(&branch, batch)
+        let fork_point_height = self
+            .get_block_metadata(branch_point)?
+            .expected_height
+            .ok_or_else(|| {
+                StoreError::NotFound(
+                    "Branch point metadata missing expected_height for candidate reorg".into(),
+                )
+            })?;
+
+        let (new_height, new_chain) = if self.is_confirmed(branch_point) {
+            self.reorg_candidate_from_confirmed(&branch, batch)?
         } else {
-            self.reorg_candidate_from_candidate(&branch, top_candidate, batch)
+            self.reorg_candidate_from_candidate(&branch, top_candidate, batch)?
+        };
+
+        if let Some(old_tip) = top_candidate {
+            let (new_tip_height, new_tip_hash) = new_chain.last().ok_or_else(|| {
+                StoreError::NotFound("Empty new candidate chain after reorg".into())
+            })?;
+            let depth = super::reorg_depth(old_tip.height, fork_point_height);
+            super::log_reorg(
+                "candidate",
+                depth,
+                fork_point_height,
+                &old_tip.hash,
+                old_tip.height,
+                new_tip_hash,
+                *new_tip_height,
+            );
         }
+
+        Ok((new_height, new_chain))
     }
 
     /// Reorg when the branch point is on the candidate chain.
