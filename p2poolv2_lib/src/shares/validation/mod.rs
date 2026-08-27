@@ -335,6 +335,18 @@ pub trait ShareValidator {
         share_header: &ShareHeader,
     ) -> Result<(), ValidationError>;
 
+    /// Validate that the header's merkle root matches the transactions carried
+    /// with the block.
+    ///
+    /// Part of the ddos prevention gate alongside
+    /// `validate_header_minimum_difficulty` and `validate_block_size`: a block's
+    /// identity is its header hash, so without this a peer can attach arbitrary
+    /// transactions -- up to `BLOCK_TXS_SIZE_LIMIT` of them -- to a block whose
+    /// hash says nothing about them, and have the result buffered and stored.
+    /// It reads only the block's own transactions, so it can run before the
+    /// block is buffered or stored.
+    fn validate_merkle_root(&self, share: &ShareBlock) -> Result<(), ValidationError>;
+
     /// Validate that the total size of the share's transactions is within
     /// `BLOCK_TXS_SIZE_LIMIT`.
     ///
@@ -536,25 +548,6 @@ impl DefaultShareValidator {
             steps += 1;
         }
         Ok(ancestors)
-    }
-
-    /// Validate the merkle root in the header matches the computed merkle root from transactions.
-    fn validate_merkle_root(&self, share: &ShareBlock) -> Result<(), ValidationError> {
-        let computed_root: TxMerkleNode = bitcoin::merkle_tree::calculate_root(
-            share.transactions.iter().map(|tx| tx.compute_txid()),
-        )
-        .ok_or_else(|| {
-            ValidationError::consensus("Cannot compute merkle root from empty transactions")
-        })?
-        .into();
-
-        if share.header.merkle_root != computed_root {
-            return Err(ValidationError::consensus(format!(
-                "Merkle root mismatch: header has {} but transactions compute to {}",
-                share.header.merkle_root, computed_root
-            )));
-        }
-        Ok(())
     }
 
     /// Validate that the total number of transactions does not exceed TXS_COUNT_LIMIT.
@@ -1052,6 +1045,24 @@ impl ShareValidator for DefaultShareValidator {
         self.validate_header_minimum_difficulty(share_header)
     }
 
+    fn validate_merkle_root(&self, share: &ShareBlock) -> Result<(), ValidationError> {
+        let computed_root: TxMerkleNode = bitcoin::merkle_tree::calculate_root(
+            share.transactions.iter().map(|tx| tx.compute_txid()),
+        )
+        .ok_or_else(|| {
+            ValidationError::consensus("Cannot compute merkle root from empty transactions")
+        })?
+        .into();
+
+        if share.header.merkle_root != computed_root {
+            return Err(ValidationError::consensus(format!(
+                "Merkle root mismatch: header has {} but transactions compute to {}",
+                share.header.merkle_root, computed_root
+            )));
+        }
+        Ok(())
+    }
+
     fn validate_block_size(&self, share: &ShareBlock) -> Result<(), ValidationError> {
         let total_size: usize = share.transactions.iter().map(|tx| tx.total_size()).sum();
         if total_size > BLOCK_TXS_SIZE_LIMIT as usize {
@@ -1416,6 +1427,8 @@ mockall::mock! {
             &self,
             share_header: &ShareHeader,
         ) -> Result<(), ValidationError>;
+
+        fn validate_merkle_root(&self, share: &ShareBlock) -> Result<(), ValidationError>;
 
         fn validate_block_size(&self, share: &ShareBlock) -> Result<(), ValidationError>;
 

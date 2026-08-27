@@ -92,6 +92,16 @@ pub async fn handle_share_block(
         return Err(format!("Oversized share block: {validation_error}").into());
     }
 
+    // Tie the transactions to the hash the block is buffered and stored under.
+    // The block's identity is its header hash, so without this a peer can
+    // attach unrelated transactions -- including to a block we asked for by
+    // hash -- and have them buffered and stored. Runs after the size check so
+    // the work is bounded, and reads nothing but the block itself.
+    if let Err(validation_error) = share_validator.validate_merkle_root(&share_block) {
+        warn!("Rejecting share block {block_hash} with mismatched merkle root: {validation_error}");
+        return Err(format!("Share block merkle root mismatch: {validation_error}").into());
+    }
+
     // Send to BlockReceiver actor for dependency buffering, ASERT
     // validation, storage, and forwarding to the validation worker.
     let (result_tx, result_rx) = oneshot::channel();
@@ -170,6 +180,9 @@ mod tests {
             .returning(|_| Ok(()));
         mock_validator
             .expect_validate_block_size()
+            .returning(|_| Ok(()));
+        mock_validator
+            .expect_validate_merkle_root()
             .returning(|_| Ok(()));
 
         let (validation_tx, _validation_rx) = validation_worker::create_validation_channel();
@@ -364,6 +377,66 @@ mod tests {
 
     /// An oversized block is rejected at the DoS gate, before the BlockReceiver
     /// can buffer it. Until this check the only size bound is the transport's
+    /// A block whose transactions do not match its header's merkle root is
+    /// rejected before it reaches the BlockReceiver.
+    ///
+    /// A block's identity is its header hash, so without this check a peer can
+    /// attach arbitrary transactions -- including in reply to a block we asked
+    /// for by hash -- and have them buffered and stored under a hash that says
+    /// nothing about them. The merkle root is the header's commitment to the
+    /// transactions, and checking it needs nothing but the block itself.
+    #[tokio::test]
+    async fn test_handle_share_block_merkle_root_mismatch_rejected_before_buffering() {
+        let mut chain_store_handle = ChainStoreHandle::default();
+        let test_data = load_share_headers_test_data();
+        let header: ShareHeader =
+            serde_json::from_value(test_data["valid_header"].clone()).unwrap();
+        let share_block = empty_share_block_from_header(header);
+        let block_hash = share_block.block_hash();
+
+        chain_store_handle
+            .expect_share_block_exists()
+            .with(eq(block_hash))
+            .returning(|_| false);
+
+        let mut mock_validator = MockDefaultShareValidator::default();
+        mock_validator
+            .expect_validate_share_header()
+            .returning(|_| Ok(()));
+        mock_validator
+            .expect_validate_block_size()
+            .returning(|_| Ok(()));
+        mock_validator.expect_validate_merkle_root().returning(|_| {
+            Err(ValidationError::consensus(
+                "Merkle root mismatch: header has a but transactions compute to b",
+            ))
+        });
+
+        let (validation_tx, _validation_rx) = validation_worker::create_validation_channel();
+        let (block_receiver_handle, mut block_receiver_rx) = create_block_receiver_channel();
+        let (block_fetcher_handle, _block_fetcher_rx) = create_block_fetcher_channel();
+
+        let result = handle_share_block(
+            share_block,
+            &chain_store_handle,
+            validation_tx,
+            &block_receiver_handle,
+            &block_fetcher_handle,
+            &mock_validator,
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().to_string().contains("merkle root"),
+            "expected a merkle root rejection"
+        );
+        assert!(
+            block_receiver_rx.try_recv().is_err(),
+            "a block whose transactions are not the ones its hash commits to must not be buffered"
+        );
+    }
+
     /// MAX_MSG_SIZE, so a single minimum-difficulty share could otherwise pin
     /// megabytes in the pending set.
     #[tokio::test]
