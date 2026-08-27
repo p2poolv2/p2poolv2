@@ -45,6 +45,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   chain has it in the window, and the total difficulty is at least 1 on every
   network unless `difficulty_multiplier` is configured below 1.0, which
   truncates to zero when cast.
+- The DoS gate now checks the header's merkle root against the transactions
+  carried with the block. A block's identity is its header hash, so a peer
+  could attach arbitrary transactions -- up to the 200 KB size limit, and even
+  in reply to a block requested by hash -- and have them buffered and stored
+  under a hash that said nothing about them.
 - Uncle block bodies are required only for blocks inside the PPLNS zone. The
   BlockReceiver admits a block whose uncle sits below `prune_height`, because
   those bodies are never fetched, but validation required them in both tiers --
