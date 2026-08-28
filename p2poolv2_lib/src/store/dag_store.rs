@@ -48,7 +48,13 @@ pub(crate) enum BlockValidSearch {
     /// them is validated", which means confirmation is not keeping up.
     NotFound { visited: usize },
     /// The search bound was reached before the subtree was exhausted.
-    BoundReached { visited: usize },
+    ///
+    /// `best` carries the best validated block found before the bound, when
+    /// there was one.
+    BoundReached {
+        visited: usize,
+        best: Option<BlockHash>,
+    },
 }
 
 /// Maximum number of blocks included per height in getheaders responses.
@@ -545,15 +551,34 @@ impl Store {
 
         while let Some(blockhash) = queue.pop_front() {
             if visited >= MAX_MINING_BASE_SEARCH_BLOCKS {
-                return Ok(BlockValidSearch::BoundReached { visited });
+                return Ok(BlockValidSearch::BoundReached {
+                    visited,
+                    best: best.map(|(blockhash, _)| blockhash),
+                });
             }
             visited += 1;
 
             // An Invalid block is not traversed, so its whole subtree drops
             // out: none of it can ever be confirmed.
-            if let Ok(metadata) = self.get_block_metadata(&blockhash)
-                && metadata.status != Status::Invalid
-            {
+            //
+            // A block whose metadata cannot be read is skipped the same way,
+            // which also drops its subtree. That is not propagated: this search
+            // is best-effort with a documented fallback to the confirmed tip,
+            // and `children_blockhashes` already treats read errors as no
+            // children, whereas an error here would travel through
+            // `get_mining_base` into the notify build and stop the node. It is
+            // logged so the pruning is not silent.
+            let metadata = match self.get_block_metadata(&blockhash) {
+                Ok(metadata) => metadata,
+                Err(StoreError::NotFound(_)) => continue,
+                Err(error) => {
+                    warn!(
+                        "Skipping {blockhash} and its subtree in the mining base search: {error}"
+                    );
+                    continue;
+                }
+            };
+            if metadata.status != Status::Invalid {
                 let outranks_best = match best {
                     Some((best_hash, best_work)) => {
                         metadata.chain_work > best_work
@@ -3126,6 +3151,60 @@ mod tests {
                 .unwrap(),
             BlockValidSearch::NotFound { visited: 1 }
         ));
+    }
+
+    /// Hitting the search bound does not throw away a validated block already
+    /// found.
+    ///
+    /// The bound caps the work the search does. Discarding `best` when it fires
+    /// sends miners back to the confirmed tip in exactly the situation the
+    /// search exists for: a subtree above the tip large enough to exhaust the
+    /// budget, which a peer can produce cheaply at minimum pool difficulty.
+    #[test]
+    fn test_find_best_block_valid_descendant_keeps_best_when_bound_is_reached() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // More children than the search will visit, every one of them
+        // validated, so whichever the walk reaches first sets `best` well
+        // before the bound fires.
+        let children = MAX_MINING_BASE_SEARCH_BLOCKS + 1;
+        let mut batch = Store::get_write_batch();
+        for nonce in 1..=children {
+            let child = TestShareBlockBuilder::new()
+                .prev_share_blockhash(genesis.block_hash().to_string())
+                .nonce(nonce as u32)
+                .build();
+            store.store_with_valid_metadata(&child);
+            store
+                .mark_block_valid(&child.block_hash(), &mut batch)
+                .unwrap();
+        }
+        store.commit_batch(batch).unwrap();
+
+        match store
+            .find_best_block_valid_descendant(&genesis.block_hash())
+            .unwrap()
+        {
+            BlockValidSearch::BoundReached { visited, best } => {
+                assert_eq!(visited, MAX_MINING_BASE_SEARCH_BLOCKS);
+                assert!(
+                    best.is_some(),
+                    "a validated block found before the bound must survive it"
+                );
+            }
+            BlockValidSearch::Found(_) => {
+                panic!("Expected the bound to be reached, not an exhaustive search")
+            }
+            BlockValidSearch::NotFound { visited } => {
+                panic!("Expected the bound to be reached, got NotFound after {visited} blocks")
+            }
+        }
     }
 
     /// A validated block not on the candidate chain is still a mining base: this
