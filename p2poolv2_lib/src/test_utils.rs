@@ -276,7 +276,7 @@ pub fn setup_header_chain_validation_mocks(chain_store_handle: &mut MockChainSto
     chain_store_handle
         .expect_get_block_metadata_batch()
         .returning(|hashes| {
-            hashes
+            Ok(hashes
                 .iter()
                 .map(|hash| {
                     (
@@ -289,7 +289,7 @@ pub fn setup_header_chain_validation_mocks(chain_store_handle: &mut MockChainSto
                         },
                     )
                 })
-                .collect()
+                .collect())
         });
 }
 

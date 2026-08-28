@@ -230,7 +230,7 @@ impl Store {
         }
 
         let (all_blockhashes, missing) =
-            self.scan_heights_for_missing_blocks(scan_start, candidate_height);
+            self.scan_heights_for_missing_blocks(scan_start, candidate_height)?;
 
         let missing_uncles = self.collect_missing_uncle_blocks(&all_blockhashes);
         debug!(
@@ -288,7 +288,7 @@ impl Store {
         &self,
         scan_start: u32,
         candidate_height: u32,
-    ) -> (Vec<BlockHash>, Vec<BlockHash>) {
+    ) -> Result<(Vec<BlockHash>, Vec<BlockHash>), StoreError> {
         let height_entries = self.get_blockhashes_for_height_range(scan_start, candidate_height);
 
         let total_blocks: usize = height_entries.iter().map(|(_, hashes)| hashes.len()).sum();
@@ -297,7 +297,7 @@ impl Store {
             all_blockhashes.extend(blockhashes);
         }
 
-        let metadata_results = self.get_block_metadata_batch(&all_blockhashes);
+        let metadata_results = self.get_block_metadata_batch(&all_blockhashes)?;
         let already_valid: HashSet<BlockHash> = metadata_results
             .into_iter()
             .filter(|(_, metadata)| {
@@ -314,7 +314,7 @@ impl Store {
             .collect();
         let missing = self.missing_share_blocks(&candidates_to_check);
 
-        (all_blockhashes, missing)
+        Ok((all_blockhashes, missing))
     }
 
     /// Collect uncle blocks whose bodies are missing, recursively

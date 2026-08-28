@@ -408,7 +408,7 @@ impl Store {
             .flat_map(|blockhashes| blockhashes.iter().copied())
             .collect();
 
-        let metadata_pairs = self.get_block_metadata_batch(&all_blockhashes);
+        let metadata_pairs = self.get_block_metadata_batch(&all_blockhashes)?;
         let confirmed_set: HashSet<BlockHash> = metadata_pairs
             .into_iter()
             .filter(|(blockhash, metadata)| {
