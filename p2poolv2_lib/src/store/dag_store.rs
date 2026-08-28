@@ -802,12 +802,7 @@ impl Store {
             for blockhash in &blockhashes {
                 let (status, chain) = self
                     .get_block_metadata(blockhash)
-                    .map(|metadata| {
-                        (
-                            format!("{:?}", metadata.status),
-                            format!("{:?}", metadata.chain),
-                        )
-                    })
+                    .map(|metadata| (metadata.status.to_string(), metadata.chain.to_string()))
                     .unwrap_or_else(|_| ("Unknown".to_string(), "Unknown".to_string()));
 
                 let (parent, uncles, miner_address) = match self.get_share_header(blockhash) {

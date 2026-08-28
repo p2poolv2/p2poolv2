@@ -22,7 +22,6 @@ use axum::{
 };
 use bitcoin::BlockHash;
 use p2poolv2_lib::shares::chain::chain_store_handle::ChainStoreHandle;
-use p2poolv2_lib::store::block_tx_metadata::{ChainMembership, Status};
 use p2poolv2_lib::store::dag_store::MAX_UNCLES_DEPTH;
 use p2poolv2_lib::store::writer::StoreError;
 use p2poolv2_lib::utils::time_provider::format_timestamp;
@@ -73,25 +72,6 @@ pub struct ShareLookupOutput {
     pub transactions: Option<Vec<String>>,
 }
 
-/// Format a Status enum value (validation state) as a human-readable string.
-fn format_status(status: &Status) -> &'static str {
-    match status {
-        Status::Pending => "Pending",
-        Status::HeaderValid => "HeaderValid",
-        Status::Invalid => "Invalid",
-        Status::BlockValid => "BlockValid",
-    }
-}
-
-/// Format a ChainMembership enum value (chain position) as a human-readable string.
-fn format_chain(chain: &ChainMembership) -> &'static str {
-    match chain {
-        ChainMembership::None => "None",
-        ChainMembership::Candidate => "Candidate",
-        ChainMembership::Confirmed => "Confirmed",
-    }
-}
-
 /// Build the JSON output for a single share identified by its blockhash.
 fn build_share_output(
     chain_store_handle: &ChainStoreHandle,
@@ -120,11 +100,11 @@ fn build_share_output(
         .and_then(|metadata| metadata.expected_height);
     let status = metadata
         .as_ref()
-        .map(|metadata| format_status(&metadata.status))
+        .map(|metadata| metadata.status.as_str())
         .unwrap_or("Unknown");
     let chain = metadata
         .as_ref()
-        .map(|metadata| format_chain(&metadata.chain))
+        .map(|metadata| metadata.chain.as_str())
         .unwrap_or("Unknown");
 
     let bitcoin_header = &share_header.bitcoin_header;
@@ -270,7 +250,6 @@ mod tests {
     use p2poolv2_lib::accounting::stats::metrics;
     use p2poolv2_lib::monitoring_events::create_monitoring_event_channel;
     use p2poolv2_lib::node::actor::NodeHandle;
-    use p2poolv2_lib::store::block_tx_metadata::{ChainMembership, Status};
     use p2poolv2_lib::stratum::work::tracker::start_tracker_actor;
     use p2poolv2_lib::test_utils::{genesis_for_tests, setup_test_chain_store_handle};
 
@@ -297,21 +276,6 @@ mod tests {
             auth_token: None,
         });
         (state, temp_dir)
-    }
-
-    #[test]
-    fn test_format_status_all_variants() {
-        assert_eq!(format_status(&Status::Pending), "Pending");
-        assert_eq!(format_status(&Status::HeaderValid), "HeaderValid");
-        assert_eq!(format_status(&Status::Invalid), "Invalid");
-        assert_eq!(format_status(&Status::BlockValid), "BlockValid");
-    }
-
-    #[test]
-    fn test_format_chain_all_variants() {
-        assert_eq!(format_chain(&ChainMembership::None), "None");
-        assert_eq!(format_chain(&ChainMembership::Candidate), "Candidate");
-        assert_eq!(format_chain(&ChainMembership::Confirmed), "Confirmed");
     }
 
     #[tokio::test]

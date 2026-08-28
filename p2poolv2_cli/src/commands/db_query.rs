@@ -21,7 +21,6 @@
 
 use bitcoin::BlockHash;
 use p2poolv2_lib::store::Store;
-use p2poolv2_lib::store::block_tx_metadata::{ChainMembership, Status};
 use p2poolv2_lib::store::dag_store::{DagEntry, MAX_UNCLES_DEPTH};
 use p2poolv2_lib::store::writer::StoreError;
 use p2poolv2_lib::utils::time_provider::format_timestamp;
@@ -421,23 +420,6 @@ fn print_dag_dot(entries: &[DagEntry]) {
 
 // --- Helper types and functions for share lookup ---
 
-fn format_status(status: &Status) -> &'static str {
-    match status {
-        Status::Pending => "Pending",
-        Status::HeaderValid => "HeaderValid",
-        Status::Invalid => "Invalid",
-        Status::BlockValid => "BlockValid",
-    }
-}
-
-fn format_chain(chain: &ChainMembership) -> &'static str {
-    match chain {
-        ChainMembership::None => "None",
-        ChainMembership::Candidate => "Candidate",
-        ChainMembership::Confirmed => "Confirmed",
-    }
-}
-
 #[derive(Serialize)]
 struct BitcoinHeaderOutput {
     block_hash: String,
@@ -488,11 +470,11 @@ fn build_share_output(
         .and_then(|metadata| metadata.expected_height);
     let status = metadata
         .as_ref()
-        .map(|metadata| format_status(&metadata.status))
+        .map(|metadata| metadata.status.as_str())
         .unwrap_or("Unknown");
     let chain = metadata
         .as_ref()
-        .map(|metadata| format_chain(&metadata.chain))
+        .map(|metadata| metadata.chain.as_str())
         .unwrap_or("Unknown");
 
     let bitcoin_header = &share_header.bitcoin_header;
@@ -831,22 +813,5 @@ mod tests {
         let (store, _temp_dir) = setup_store_with_genesis().await;
         let result = dag(&store, Some(0), 1, true);
         assert!(result.is_ok());
-    }
-
-    // --- format_status tests ---
-
-    #[test]
-    fn test_format_status_all_variants() {
-        assert_eq!(format_status(&Status::Pending), "Pending");
-        assert_eq!(format_status(&Status::HeaderValid), "HeaderValid");
-        assert_eq!(format_status(&Status::Invalid), "Invalid");
-        assert_eq!(format_status(&Status::BlockValid), "BlockValid");
-    }
-
-    #[test]
-    fn test_format_chain_all_variants() {
-        assert_eq!(format_chain(&ChainMembership::None), "None");
-        assert_eq!(format_chain(&ChainMembership::Candidate), "Candidate");
-        assert_eq!(format_chain(&ChainMembership::Confirmed), "Confirmed");
     }
 }
