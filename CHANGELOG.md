@@ -45,6 +45,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   chain has it in the window, and the total difficulty is at least 1 on every
   network unless `difficulty_multiplier` is configured below 1.0, which
   truncates to zero when cast.
+- The organise worker's pending buffer no longer holds one entry per delivery
+  of the same block. A stored `HeaderValid` block is re-validated and
+  re-emitted every time a peer sends it, so replaying one observed share filled
+  the buffer and started dropping live blocks -- which are already stored with
+  their bodies, so nothing re-requests them and confirmation stops at their
+  height.
 - The DoS gate now checks the header's merkle root against the transactions
   carried with the block. A block's identity is its header hash, so a peer
   could attach arbitrary transactions -- up to the 200 KB size limit, and even

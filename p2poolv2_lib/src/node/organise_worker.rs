@@ -109,6 +109,9 @@ pub fn create_organise_channel() -> (OrganiseSender, OrganiseReceiver) {
 
 /// A block waiting for its parent, with the validation tier stage 1 gave it.
 struct BufferedBlock {
+    /// Carried rather than recomputed: `buffer_block` compares it against every
+    /// entry already at the height
+    block_hash: BlockHash,
     share_block: ShareBlock,
     content_validated: bool,
 }
@@ -635,6 +638,10 @@ impl OrganiseWorker {
 
     /// Insert a block into the pending buffer, keyed by its parent height.
     ///
+    /// A block already buffered at that height is not added again.
+    ///
+    /// The check runs before the capacity check so a duplicate cannot trip it.
+    ///
     /// Drops the block with an error log if the buffer is at capacity.
     /// The capacity check counts total blocks across all heights.
     fn buffer_block(
@@ -643,22 +650,29 @@ impl OrganiseWorker {
         share_block: ShareBlock,
         content_validated: bool,
     ) {
+        let block_hash = share_block.block_hash();
+        if let Some(buffered) = self.pending_blocks.get(&parent_height)
+            && buffered.iter().any(|entry| entry.block_hash == block_hash)
+        {
+            debug!("Block {block_hash} is already buffered at parent height {parent_height}");
+            return;
+        }
+
         let total_blocks: usize = self.pending_blocks.values().map(|v| v.len()).sum();
         if total_blocks >= PENDING_BLOCKS_CAPACITY {
             error!(
-                "Pending block buffer full ({PENDING_BLOCKS_CAPACITY}), dropping block {}",
-                share_block.block_hash()
+                "Pending block buffer full ({PENDING_BLOCKS_CAPACITY}), dropping block {block_hash}"
             );
             return;
         }
         debug!(
-            "Buffering block {} at parent height {parent_height} (confirmed tip not yet reached)",
-            share_block.block_hash()
+            "Buffering block {block_hash} at parent height {parent_height} (confirmed tip not yet reached)"
         );
         self.pending_blocks
             .entry(parent_height)
             .or_insert_with(|| Vec::with_capacity(2))
             .push(BufferedBlock {
+                block_hash,
                 share_block,
                 content_validated,
             });
@@ -1909,6 +1923,67 @@ mod tests {
             worker.pending_blocks.is_empty(),
             "a block that advances must leave the buffer"
         );
+    }
+
+    /// One block delivered repeatedly takes one buffer slot, not one per
+    /// delivery.
+    ///
+    /// `handle_share_block` re-queues an already-stored block for validation
+    /// each time a peer sends it, and `validate_share_block` only
+    /// short-circuits on `BlockValid`, so a `HeaderValid` block is re-validated
+    /// and re-emitted every time. Undeduped, replaying one observed share fills
+    /// the buffer and `buffer_block` starts dropping live blocks -- which are
+    /// already stored with their bodies, so no missing-data scan re-requests
+    /// them and confirmation stops at their height.
+    #[tokio::test]
+    async fn test_repeated_delivery_takes_one_buffer_slot() {
+        const DELIVERIES: usize = 16;
+
+        let (_organise_tx, organise_rx) = create_organise_channel();
+        let mut mock_chain_handle = MockChainStoreHandle::new();
+        // Parent is stored but only HeaderValid, so the block is buffered.
+        mock_chain_handle
+            .expect_get_block_metadata()
+            .returning(|_| {
+                Ok(BlockMetadata {
+                    expected_height: Some(5),
+                    chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
+                    status: Status::HeaderValid,
+                    chain: ChainMembership::Candidate,
+                })
+            });
+
+        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let (notify_tx, _notify_rx) = create_test_notify_channel();
+        let mut worker = OrganiseWorker::new(
+            organise_rx,
+            mock_chain_handle,
+            monitoring_tx,
+            notify_tx,
+            create_test_metrics_handle(),
+            create_test_pplns_window(),
+            stub_share_validator_with_success(),
+        );
+
+        let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        for _ in 0..DELIVERIES {
+            let outcome = worker
+                .process_share_block(share.clone(), true)
+                .await
+                .unwrap();
+            assert!(matches!(outcome, ProcessOutcome::Buffered));
+        }
+
+        let buffered = worker
+            .pending_blocks
+            .get(&5)
+            .expect("the block must be buffered under its parent height");
+        assert_eq!(
+            buffered.len(),
+            1,
+            "every delivery of the same block must share one slot"
+        );
+        assert_eq!(buffered[0].block_hash, share.block_hash());
     }
 
     #[tokio::test]
