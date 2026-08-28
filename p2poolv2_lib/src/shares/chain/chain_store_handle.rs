@@ -536,7 +536,21 @@ impl ChainStoreHandle {
                 );
                 Ok(top_confirmed.hash)
             }
-            BlockValidSearch::BoundReached { visited } => {
+            // The bound caps the work the search does; it does not discard an
+            // answer already found. Falling back to the confirmed tip here
+            // would strand miners on it in exactly the case the search exists
+            // for -- a large unvalidatable subtree above the tip.
+            BlockValidSearch::BoundReached {
+                visited,
+                best: Some(blockhash),
+            } => {
+                warn!("Mining on {blockhash}: search truncated after {visited} blocks");
+                Ok(blockhash)
+            }
+            BlockValidSearch::BoundReached {
+                visited,
+                best: None,
+            } => {
                 warn!(
                     "Mining on confirmed tip {}: gave up searching for a validated block after {visited} blocks",
                     top_confirmed.hash

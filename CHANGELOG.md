@@ -45,6 +45,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   chain has it in the window, and the total difficulty is at least 1 on every
   network unless `difficulty_multiplier` is configured below 1.0, which
   truncates to zero when cast.
+- The mining base search keeps a validated block it has already found when it
+  hits its search bound, instead of discarding it and falling back to the
+  confirmed tip. Discarding it defeated the search in the case it exists for: a
+  subtree above the confirmed tip large enough to exhaust the budget, which a
+  peer can produce cheaply at minimum pool difficulty.
 - The organise worker's pending buffer no longer holds one entry per delivery
   of the same block. A stored `HeaderValid` block is re-validated and
   re-emitted every time a peer sends it, so replaying one observed share filled
