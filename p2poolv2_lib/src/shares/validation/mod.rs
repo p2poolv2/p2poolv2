@@ -2147,6 +2147,57 @@ mod tests {
         assert!(result.is_ok(), "Expected Ok, got: {:?}", result.err());
     }
 
+    /// TODO: The admission gate cannot distinguish a share header from one that
+    /// differs only in `prev_share_blockhash`, though the two are distinct
+    /// blocks to everything downstream.
+    ///
+    /// `validate_header_minimum_difficulty` reads the uncle count, the declared
+    /// bits, and `bitcoin_header.block_hash()` -- the proof of work is over the
+    /// bitcoin header alone. A block's identity is `ShareHeader::block_hash()`,
+    /// which covers the whole share header. The sharechain fields are bound to
+    /// the bitcoin header only through the `ShareCommitment` in the coinbase,
+    /// and verifying that binding means rebuilding the coinbase from the PPLNS
+    /// payout -- a store read under the window lock, far too expensive to run
+    /// on unauthenticated input.
+    ///
+    /// So one observed bitcoin header can be replayed into unlimited distinct
+    /// blocks at no proof-of-work cost, and this gate admits every one. Nothing
+    /// downstream currently bounds that -- see "August 22nd -- Pending block
+    /// buffer is an unbounded remote DoS" in SYNC_ISSUES.md, and the companion
+    /// test `test_replayed_header_under_distinct_parents_fills_pending`. This
+    /// test pins the gate's half of the mechanism.
+    #[test]
+    fn test_minimum_difficulty_gate_is_blind_to_sharechain_fields() {
+        let test_data = load_share_headers_test_data();
+        let original: ShareHeader =
+            serde_json::from_value(test_data["valid_header"].clone()).unwrap();
+
+        let mut replayed = original.clone();
+        replayed.prev_share_blockhash = BlockHash::from_byte_array([0x7a; 32]);
+
+        assert_ne!(
+            original.block_hash(),
+            replayed.block_hash(),
+            "the replay is a distinct block to every dedupe in the pipeline"
+        );
+        assert_eq!(
+            original.bitcoin_header.block_hash(),
+            replayed.bitcoin_header.block_hash(),
+            "yet it carries the same proof of work"
+        );
+
+        let validator = validator();
+        assert_eq!(
+            validator
+                .validate_header_minimum_difficulty(&original)
+                .map_err(|error| error.to_string()),
+            validator
+                .validate_header_minimum_difficulty(&replayed)
+                .map_err(|error| error.to_string()),
+            "the gate reads no field the replay changed, so it returns the same verdict"
+        );
+    }
+
     #[test]
     fn test_validate_share_header_valid() {
         let mut chain_store_handle = ChainStoreHandle::default();
