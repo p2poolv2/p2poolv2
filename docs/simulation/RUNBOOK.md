@@ -192,7 +192,7 @@ uncle rate ≈ latency/10s (e.g. 750 ms → ~7%), but a 45s read is only ~4 bloc
 too noisy to trust. For a real number in ~5 min add `IDEAL_BLOCK_TIME=1` (10× more
 blocks, latency auto-scales), e.g.
 `IDEAL_BLOCK_TIME=1 LATENCY_MS=1500 SHARES_PER_BLOCK=20 ./load-tests/sim/run-swarm.sh 20`
-→ ~12% (≈50 min-equivalent). Knob in §9.
+→ ~12% (≈50 min-equivalent). Knob in §10.
 
 Under the hood it greps the `sim-uncle:` log lines:
 
@@ -258,7 +258,84 @@ Stop everything:
 
 ---
 
-## 8. Where things live
+## 8. Test F — a node fails and catches up (Phase 4)
+
+Failures are injected into an already-running swarm by `failures.sh`, which
+`SIGKILL`s nodes, restarts them against the *same* config and store, and then
+polls each one's log until its confirmed tip reaches where the rest of the
+swarm has got to.
+
+Start a swarm and, in a second terminal, kill a node and watch it come back:
+
+```sh
+./load-tests/sim/run-swarm.sh 6
+FAILURE_WARMUP=20 FAILURE_FAST_DOWN=10 ./load-tests/sim/failures.sh restart-fast
+```
+
+Expect the target to report `alive NO` in `observe.sh` during the downtime,
+then `alive yes` with a climbing tip, and a summary ending:
+
+```
+node 3: rejoined=yes catchup_secs=5 gap_heights=14 target_height=32
+rejoined: 1/1
+unrecovered nodes: 0
+```
+
+The interesting one is the long downtime, which is the default:
+
+```sh
+./load-tests/sim/failures.sh restart-delayed     # 330s down
+```
+
+330s crosses the 300s `MAX_TIP_AGE_SECS` threshold, so the node rejoins *not*
+current. Inv gossip is deliberately ignored in that state, so the catch-up has
+to come from the header-sync path. In the restarted node's log, after the
+`=== failure injection: restarting node <i> ===` marker, expect a fresh
+`Local peer id:`, then the handshake driving a header sync rather than
+inv-driven block fetches:
+
+```
+Received Handshake from peer ...: peer_height=187, ..., local_height=30
+Local chain behind peer ... (30 < 187), sending getheaders
+Sending GetHeaders to peer ...: GetShareHeaders([...15-hash locator...], 0000...)
+Received 160 ShareHeaders
+```
+
+The `partition` scenario kills `DIAL_FANOUT` consecutive nodes at once, cutting
+the `dial_peers` chain. Whether that is a real partition is an open question at
+runtime — Kademlia dials peers that were never in `dial_peers` — so the summary
+counts outbound connections crossing the cut and reports what actually happened:
+
+```sh
+./load-tests/sim/failures.sh partition
+# cross-side links at +15s: lower_to_upper=0 upper_to_lower=0   <- a real partition
+```
+
+The whole thing runs end to end, with the usual pass/fail verdict, via:
+
+```sh
+./load-tests/sim/nightly.sh restart-delayed
+```
+
+**Gotchas specific to failure injection**
+
+1. **Node 0 is never a target.** `metrics.sh` derives the share rate and uncle
+   rate from `node-0.log` alone, so killing it corrupts the run's own metrics.
+2. **Restarts append to the node log** (`>>`, not `>`). Truncating would throw
+   away the promotion history every log-based metric is computed from.
+3. **A restarted node has a new PeerId.** The libp2p keypair is generated per
+   process start and never persisted, so a rejoin looks like a new node to its
+   peers. The Kademlia routing table is in-memory too, so it starts empty.
+4. **Mid-run tip readings come from logs or the API, never the store.** RocksDB
+   holds an exclusive lock while a node runs, which is why `nightly.sh` only
+   does its store-based convergence check after `stop-swarm.sh`.
+5. **`pids.txt` is positional** (line `i+1` is node `i`). `failures.sh` rewrites
+   the line on restart, which is what keeps `observe.sh` and the nightly's
+   alive check honest.
+
+---
+
+## 9. Where things live
 
 | Thing              | Path                                                      |
 |--------------------|-----------------------------------------------------------|
@@ -267,7 +344,8 @@ Stop everything:
 | Per-node config    | `/tmp/p2pool-sim/node-<i>.toml`                           |
 | Per-node log       | `/tmp/p2pool-sim/node-<i>.log`                            |
 | Per-node store     | `/tmp/p2pool-sim/store-<i>.db`                            |
-| PIDs               | `/tmp/p2pool-sim/pids.txt`                                |
+| PIDs               | `/tmp/p2pool-sim/pids.txt` (line `i+1` is node `i`)        |
+| Failure summary    | `/tmp/p2pool-sim/failure-results.txt`                     |
 | Node APIs          | `http://127.0.0.1:760<i>` (node i)                        |
 | regtest bitcoind   | datadir `/tmp/p2pool-regtest`, RPC `:19443`, ZMQ `:28332` |
 
@@ -290,7 +368,7 @@ curl -s :7600/chain_info | jq            # tip/candidate heights (prefer logs fo
 
 ---
 
-## 9. Env knobs for `run-swarm.sh`
+## 10. Env knobs for `run-swarm.sh`
 
 `run-swarm.sh [N]` (default N=20). Override with env vars:
 
@@ -309,7 +387,7 @@ curl -s :7600/chain_info | jq            # tip/candidate heights (prefer logs fo
 
 ---
 
-## 10. Gotchas
+## 11. Gotchas
 
 1. **Swarms must run release.** A debug build hits a `debug_assert_eq!` inside
    `libp2p-request-response` under connection churn and nodes abort (you'd see
