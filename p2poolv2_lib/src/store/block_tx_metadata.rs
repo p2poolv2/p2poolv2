@@ -17,6 +17,7 @@
 use bitcoin::Work;
 use bitcoin::consensus::{Decodable, Encodable};
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TxMetadata {
@@ -84,6 +85,29 @@ pub enum Status {
     BlockValid = 3,
 }
 
+impl Status {
+    /// Human-readable name, shared by the API, the CLI and DAG queries so the
+    /// three renderings cannot drift as variants change.
+    ///
+    /// A `&'static str` rather than only `Display` because the callers put it
+    /// straight into a serde output struct, where `to_string()` would allocate
+    /// per share.
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Status::Pending => "Pending",
+            Status::HeaderValid => "HeaderValid",
+            Status::Invalid => "Invalid",
+            Status::BlockValid => "BlockValid",
+        }
+    }
+}
+
+impl fmt::Display for Status {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 impl Encodable for Status {
     #[inline]
     fn consensus_encode<W: bitcoin::io::Write + ?Sized>(
@@ -128,6 +152,24 @@ pub enum ChainMembership {
     Candidate = 1,
     /// On the confirmed chain.
     Confirmed = 2,
+}
+
+impl ChainMembership {
+    /// Human-readable name. See [`Status::as_str`] for why this is a
+    /// `&'static str` rather than only a `Display` impl.
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            ChainMembership::None => "None",
+            ChainMembership::Candidate => "Candidate",
+            ChainMembership::Confirmed => "Confirmed",
+        }
+    }
+}
+
+impl fmt::Display for ChainMembership {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
 }
 
 impl Encodable for ChainMembership {
@@ -231,6 +273,25 @@ impl Decodable for BlockMetadata {
 mod tests {
     use super::*;
     use bitcoin::consensus::{self, encode};
+
+    /// The names the API, the CLI and DAG queries all render. Pinned here, next
+    /// to the variants, rather than repeated in each caller.
+    #[test]
+    fn test_status_names() {
+        assert_eq!(Status::Pending.as_str(), "Pending");
+        assert_eq!(Status::HeaderValid.as_str(), "HeaderValid");
+        assert_eq!(Status::Invalid.as_str(), "Invalid");
+        assert_eq!(Status::BlockValid.as_str(), "BlockValid");
+        assert_eq!(Status::BlockValid.to_string(), "BlockValid");
+    }
+
+    #[test]
+    fn test_chain_membership_names() {
+        assert_eq!(ChainMembership::None.as_str(), "None");
+        assert_eq!(ChainMembership::Candidate.as_str(), "Candidate");
+        assert_eq!(ChainMembership::Confirmed.as_str(), "Confirmed");
+        assert_eq!(ChainMembership::Confirmed.to_string(), "Confirmed");
+    }
 
     #[test]
     fn test_block_metadata_roundtrip_preserves_chain() {
