@@ -2,43 +2,65 @@
 #
 # Nightly simulation runner: end-to-end automated sim with pass/fail verdict.
 #
-# Starts regtest bitcoind if needed, launches a swarm via run-swarm.sh, waits
-# for convergence, collects metrics via metrics.sh, evaluates pass/fail
-# thresholds, cleans up, and exits 0 (pass) or 1 (fail).
+# Starts regtest bitcoind if needed, launches a swarm via run-swarm.sh, injects
+# a failure scenario via failures.sh, waits for convergence, collects metrics
+# via metrics.sh, evaluates pass/fail thresholds, cleans up, and exits 0 (pass)
+# or 1 (fail).
 #
 # Usage:
-#   load-tests/sim/nightly.sh
+#   load-tests/sim/nightly.sh [scenario]
+#
+# The scenario selects which failure mode to inject; `clean` injects none. The
+# nightly workflow runs this script once per scenario, so each failure mode
+# gets its own swarm, its own verdict and its own artifacts.
 #
 # Env overrides (nightly-specific):
+#   SCENARIO                   failure scenario to inject    (default clean)
+#                              clean | restart-fast | restart-delayed |
+#                              partition | all
 #   NODE_COUNT                 number of sim nodes           (default 20)
-#   CONVERGENCE_WAIT_SECONDS   seconds to let swarm run      (default 60)
+#   CONVERGENCE_WAIT_SECONDS   seconds to settle after the
+#                              scenario, before the checks   (default 60)
 #   UNCLE_RATE_THRESHOLD       max uncle rate % to pass      (default 25)
 #   BITCOIND_DATADIR           regtest data directory        (default /tmp/bitcoind-p2poolv2)
 #   BITCOIND_BIN               path to bitcoind binary       (auto-detected)
 #   BITCOIN_CLI_BIN            path to bitcoin-cli binary    (auto-detected)
 #
 # All run-swarm.sh env vars (RUN_DIR, RPC_URL, RPC_USER, RPC_PASS, ZMQ,
-# SHARES_PER_BLOCK, LATENCY_MS, IDEAL_BLOCK_TIME, etc.) are passed through as-is.
+# SHARES_PER_BLOCK, LATENCY_MS, IDEAL_BLOCK_TIME, etc.) and all failures.sh
+# env vars (FAILURE_SEED, FAILURE_WARMUP, FAILURE_SLOW_DOWN, etc.) are passed
+# through as-is.
 set -euo pipefail
 
 show_help() {
   cat <<'HELP'
 nightly.sh -- automated sim runner with pass/fail verdict
 
-Starts regtest bitcoind if needed, launches a swarm, waits for convergence,
-collects metrics, evaluates thresholds, and exits 0 (pass) or 1 (fail).
+Starts regtest bitcoind if needed, launches a swarm, injects a failure
+scenario, waits for convergence, collects metrics, evaluates thresholds, and
+exits 0 (pass) or 1 (fail).
 
 Usage:
-  load-tests/sim/nightly.sh [--help]
+  load-tests/sim/nightly.sh [scenario] [--help]
+
+Scenarios (see load-tests/sim/failures.sh --help for the details):
+  clean             no failures injected (the default)
+  restart-fast      a node fails and comes back immediately
+  restart-delayed   a node fails and comes back after a long delay
+  partition         several nodes fail at once, cutting the dial chain
+  all               the three failure scenarios in sequence
 
 Examples:
-  ./load-tests/sim/nightly.sh                              # 20 nodes, 60s, default settings
+  ./load-tests/sim/nightly.sh                              # 20 nodes, 60s, no failures
+  ./load-tests/sim/nightly.sh restart-delayed              # long-downtime catch-up
   NODE_COUNT=5 CONVERGENCE_WAIT_SECONDS=30 ./load-tests/sim/nightly.sh
   IDEAL_BLOCK_TIME=1 SHARES_PER_BLOCK=100 ./load-tests/sim/nightly.sh  # time-compressed, frequent blocks
 
 Env vars (nightly-specific):
+  SCENARIO                   failure scenario to inject    (default clean)
   NODE_COUNT                 number of sim nodes           (default 20)
-  CONVERGENCE_WAIT_SECONDS   seconds to let swarm run      (default 60)
+  CONVERGENCE_WAIT_SECONDS   seconds to settle after the
+                             scenario, before the checks   (default 60)
   UNCLE_RATE_THRESHOLD       max uncle rate % to pass      (default 25)
   BITCOIND_DATADIR           regtest data directory        (default /tmp/bitcoind-p2poolv2)
   BITCOIND_BIN               path to bitcoind binary       (auto-detected)
@@ -56,6 +78,7 @@ Env vars (passed through to run-swarm.sh):
 
 Related scripts:
   load-tests/sim/run-swarm.sh N    launch swarm for manual exploration
+  load-tests/sim/failures.sh S     inject scenario S into a running swarm
   load-tests/sim/stop-swarm.sh     stop a running swarm
   load-tests/sim/metrics.sh        show log-based metrics summary
   load-tests/sim/plot-metrics.sh   generate metrics PNG from last run
@@ -70,6 +93,7 @@ fi
 # ---------------------------------------------------------------------------
 # Defaults
 # ---------------------------------------------------------------------------
+SCENARIO="${1:-${SCENARIO:-clean}}"
 NODE_COUNT="${NODE_COUNT:-20}"
 CONVERGENCE_WAIT_SECONDS="${CONVERGENCE_WAIT_SECONDS:-60}"
 UNCLE_RATE_THRESHOLD="${UNCLE_RATE_THRESHOLD:-25}"
@@ -88,6 +112,17 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 STARTED_BITCOIND=0
 SWARM_RUNNING=0
 METRICS_OUTPUT=""
+FAILURE_OUTPUT=""
+
+# Validate the scenario here as well as in failures.sh, so a typo fails now
+# rather than after bitcoind and the swarm have been brought up.
+case "$SCENARIO" in
+  clean|restart-fast|restart-delayed|partition|all) ;;
+  *)
+    echo "ERROR: unknown scenario '$SCENARIO' (expected clean, restart-fast, restart-delayed, partition or all)" >&2
+    exit 2
+    ;;
+esac
 
 # ---------------------------------------------------------------------------
 # Utility functions
@@ -203,6 +238,17 @@ run_swarm() {
   SWARM_RUNNING=1
 }
 
+# Run the failure scenario. Its progress streams straight through so a long
+# scenario is visible in the CI log while it runs; the summary is read back
+# from the results file afterwards.
+inject_failures() {
+  log_message "Injecting failure scenario '$SCENARIO'..."
+  "$SCRIPT_DIR/failures.sh" "$SCENARIO" || true
+  FAILURE_OUTPUT=$(cat "$RUN_DIR/failure-results.txt" 2>/dev/null) || FAILURE_OUTPUT=""
+}
+
+# Settle window between the last injected failure healing and the checks, so
+# the swarm has time to converge on one chain again.
 wait_for_convergence() {
   log_message "Waiting ${CONVERGENCE_WAIT_SECONDS}s for convergence..."
   sleep "$CONVERGENCE_WAIT_SECONDS"
@@ -433,6 +479,21 @@ check_no_rejections() {
   [ "$ASERT_MISMATCH_COUNT" -eq 0 ] && [ "$MERKLE_PAYOUT_COUNT" -eq 0 ]
 }
 
+# Every node killed by the scenario must have come back and caught up to the
+# rest of the swarm within its timeout. Trivially passes for `clean`.
+check_failure_recovery() {
+  UNRECOVERED_COUNT=$(echo "$FAILURE_OUTPUT" \
+    | grep -oE "unrecovered nodes: [0-9]+" \
+    | grep -oE "[0-9]+" || echo "-1")
+  # Empty when failures.sh died before writing its summary; the -1 count above
+  # already fails the run, these just keep the results table readable.
+  FAILURE_TARGETS=$(echo "$FAILURE_OUTPUT" | sed -nE 's/^targets:[[:space:]]*(.*)$/\1/p')
+  FAILURE_TARGETS="${FAILURE_TARGETS:-unknown}"
+  FAILURE_REJOINED=$(echo "$FAILURE_OUTPUT" | sed -nE 's/^rejoined: (.*)$/\1/p')
+  FAILURE_REJOINED="${FAILURE_REJOINED:-unknown}"
+  [ "$UNRECOVERED_COUNT" -eq 0 ]
+}
+
 check_uncle_rate() {
   UNCLE_RATE=$(echo "$METRICS_OUTPUT" \
     | grep -oE "uncle rate \(node 0\): [0-9.]+" \
@@ -486,7 +547,13 @@ evaluate_results() {
     failed=1
   fi
 
-  echo "=== NIGHTLY SIM RESULTS ==="
+  local recovery_result="PASS"
+  if ! check_failure_recovery; then
+    recovery_result="FAIL"
+    failed=1
+  fi
+
+  echo "=== NIGHTLY SIM RESULTS (scenario: $SCENARIO) ==="
   printf "  nodes alive:        %-4s  (%s/%s)\n" \
     "$alive_result" "$ALIVE_COUNT" "$ALIVE_TOTAL"
   printf "  chain converged:    %-4s  (distinct hashes: %s, within 2 of tip: %s)\n" \
@@ -501,6 +568,8 @@ evaluate_results() {
     "$uncle_result" "$UNCLE_RATE" "$UNCLE_RATE_THRESHOLD"
   printf "  verify_chain:       %-4s  (%s/%s passed)\n" \
     "$verify_result" "$((VERIFY_CHAIN_TOTAL - VERIFY_CHAIN_FAILURES))" "$VERIFY_CHAIN_TOTAL"
+  printf "  failure recovery:   %-4s  (targets: %s, rejoined %s, unrecovered %s)\n" \
+    "$recovery_result" "$FAILURE_TARGETS" "$FAILURE_REJOINED" "$UNRECOVERED_COUNT"
 
   if [ "$failed" -eq 0 ]; then
     echo "RESULT: PASS"
@@ -524,6 +593,7 @@ ensure_bitcoind_running
 ensure_wallet_and_coins
 
 run_swarm
+inject_failures
 wait_for_convergence
 check_all_nodes_alive || true
 collect_metrics

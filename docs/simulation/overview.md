@@ -119,6 +119,7 @@ load-tests/sim/metrics.sh          # authoritative LOG-based summary: convergenc
                                    # difficulty, emission∝hashrate, uncles, block-finds
 load-tests/sim/plot-metrics.sh     # PNG time-series (share rate, difficulty, uncle rate,
                                    # block-finds, hashrate bars) → RUN_DIR/metrics.png
+load-tests/sim/failures.sh S       # inject failure scenario S into the running swarm
 load-tests/sim/stop-swarm.sh       # stop all (incl. orphans matching this RUN_DIR)
 ```
 
@@ -134,4 +135,37 @@ more blocks/min for faster data, auto-scales `LATENCY_MS`), `DIST_SEED`, `DISTIN
 shows as `distinct tips: 1` (a snapshot may straddle the latest 1–2 heights while
 the frontier propagates). Run release; always `stop-swarm.sh` before relaunching
 (orphans hold ports — `run-swarm.sh` now also clears its RUN_DIR's leftovers).
+
+### Failure scenarios (Phase 4)
+
+`failures.sh` injects one named failure mode into a running swarm, kills nodes
+with `SIGKILL`, brings them back against the *same* config and store, and
+verifies each one rejoins and catches up to the rest of the swarm. `nightly.sh`
+takes the same scenario name (`nightly.sh restart-delayed`, or `SCENARIO=...`),
+and the nightly workflow runs it once per scenario so a failing night names the
+failure mode that caused it.
+
+| Scenario | What it exercises |
+|---|---|
+| `clean` | nothing; the baseline run |
+| `restart-fast` | a node fails and comes back immediately |
+| `restart-delayed` | a node fails and comes back after `FAILURE_SLOW_DOWN` (default 330s). That crosses the 300s `MAX_TIP_AGE_SECS` threshold, so the node rejoins *not* current: inv gossip is ignored and it must bulk-sync via `getheaders` and block fetch |
+| `partition` | `DIAL_FANOUT` consecutive nodes fail at once, cutting the dial chain, then all come back |
+| `all` | the three failure scenarios in sequence (local use) |
+
+Tunables: `FAILURE_SEED` (target selection; targets are printed so a failing
+run is reproducible), `FAILURE_WARMUP`, `FAILURE_FAST_DOWN`,
+`FAILURE_SLOW_DOWN`, `FAILURE_PARTITION_DOWN`, `FAILURE_CATCHUP_TIMEOUT`.
+
+Two things to know about `partition`. First, it is a *topology* cut: it removes
+the nodes that bridge the `dial_peers` chain, but Kademlia discovers and dials
+peers that were never in `dial_peers`, so the two sides may well stay connected.
+The summary records which happened, by counting outbound connections that cross
+the cut (`cross-side links at +15s: lower_to_upper=0 upper_to_lower=0` means it
+really was a partition). Second, a restarted node comes back with a **new
+PeerId** — the libp2p keypair is generated per process start, not persisted — so
+rejoining looks to its peers like a new node arriving.
+
+Node 0 is never a target: `metrics.sh` derives the share rate and uncle rate
+from `node-0.log` alone, so killing it would corrupt the run's own metrics.
 

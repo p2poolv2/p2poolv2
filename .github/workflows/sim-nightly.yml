@@ -5,23 +5,72 @@ on:
     - cron: '0 3 * * *'   # every day at 03:00 UTC
   workflow_dispatch:
     inputs:
+      scenario:
+        description: 'Failure scenario to run'
+        required: false
+        type: choice
+        default: every
+        options:
+          - every
+          - clean
+          - restart-fast
+          - restart-delayed
+          - partition
       node_count:
         description: 'Number of sim nodes'
         required: false
         default: '10'
       duration_seconds:
-        description: 'Swarm run duration in seconds'
+        description: 'Settle time after the scenario, in seconds'
         required: false
-        default: '300'
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  sim:
-    name: Sim Swarm (10 nodes, 5 min)
+  # One swarm per failure scenario, so a failing run names the failure mode
+  # that caused it. The matrix is built here rather than inline because a
+  # manual dispatch can narrow it to a single scenario, and the matrix context
+  # is not available to a job-level `if`.
+  select-scenarios:
+    name: Select scenarios
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.select.outputs.matrix }}
+    steps:
+      - name: Build scenario matrix
+        id: select
+        env:
+          SELECTED: ${{ github.event.inputs.scenario || 'every' }}
+        run: |
+          set -euo pipefail
+          # convergence_wait is the settle time AFTER the scenario heals;
+          # restart-delayed needs the longest timeout because its node stays
+          # down 330s to cross the 300s tip-age threshold.
+          all='[
+            {"scenario":"clean",           "convergence_wait":"300","timeout":25},
+            {"scenario":"restart-fast",    "convergence_wait":"180","timeout":25},
+            {"scenario":"restart-delayed", "convergence_wait":"180","timeout":40},
+            {"scenario":"partition",       "convergence_wait":"180","timeout":30}
+          ]'
+          if [ "$SELECTED" = "every" ]; then
+            matrix=$(echo "$all" | jq -c .)
+          else
+            matrix=$(echo "$all" | jq -c --arg s "$SELECTED" '[.[] | select(.scenario == $s)]')
+          fi
+          echo "Selected scenarios: $matrix"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  sim:
+    name: Sim Swarm (${{ matrix.scenario }})
+    needs: select-scenarios
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false   # one failing scenario must not cancel the others
+      matrix:
+        include: ${{ fromJSON(needs.select-scenarios.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
 
@@ -44,10 +93,14 @@ jobs:
 
       - name: Run sim integration test
         env:
+          SCENARIO: ${{ matrix.scenario }}
           NODE_COUNT: ${{ github.event.inputs.node_count || '10' }}
-          CONVERGENCE_WAIT_SECONDS: ${{ github.event.inputs.duration_seconds || '300' }}
+          CONVERGENCE_WAIT_SECONDS: ${{ github.event.inputs.duration_seconds || matrix.convergence_wait }}
           IDEAL_BLOCK_TIME: '5'
           SHARES_PER_BLOCK: '1000'
+          # UNCLE_RATE_THRESHOLD stays at its 25% default. Killing nodes creates
+          # forks, so this is the knob to raise if a failure scenario turns out
+          # to be flaky -- raise it here rather than weakening the check itself.
         run: |
           set -o pipefail
           mkdir -p /tmp/p2pool-sim
@@ -57,6 +110,6 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: sim-logs
+          name: sim-logs-${{ matrix.scenario }}
           path: /tmp/p2pool-sim/
           retention-days: 7
