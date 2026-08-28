@@ -24,7 +24,7 @@ use bitcoin::hashes::Hash;
 use bitcoin::{BlockHash, CompactTarget, Work};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet, VecDeque};
-use tracing::debug;
+use tracing::{debug, warn};
 
 /// Max depth to look for uncles when building new share blocks
 pub const MAX_UNCLES_DEPTH: u8 = 3;
@@ -208,7 +208,7 @@ impl Store {
         stop_blockhash: &BlockHash,
         limit: usize,
     ) -> Result<Vec<BlockHash>, StoreError> {
-        let start_blockhash = self.first_known_for_locator(locator);
+        let start_blockhash = self.first_known_for_locator(locator)?;
         // If no blockhash found, return vector with genesis block
         let start_blockhash = match start_blockhash {
             Some(hash) => hash,
@@ -232,18 +232,23 @@ impl Store {
     /// blocks at each height regardless of status, so matching any
     /// valid block is correct. The locator is ordered newest-first, so
     /// the first match gives the highest known height.
-    fn first_known_for_locator(&self, locator: &[BlockHash]) -> Option<BlockHash> {
-        let metadata_results: HashMap<BlockHash, BlockMetadata> =
-            self.get_block_metadata_batch(locator).into_iter().collect();
+    fn first_known_for_locator(
+        &self,
+        locator: &[BlockHash],
+    ) -> Result<Option<BlockHash>, StoreError> {
+        let metadata_results: HashMap<BlockHash, BlockMetadata> = self
+            .get_block_metadata_batch(locator)?
+            .into_iter()
+            .collect();
         for blockhash in locator {
             if let Some(metadata) = metadata_results.get(blockhash)
                 && metadata.status != Status::Pending
                 && metadata.status != Status::Invalid
             {
-                return Some(*blockhash);
+                return Ok(Some(*blockhash));
             }
         }
-        None
+        Ok(None)
     }
 
     /// Get headers to satisfy the locator query.
@@ -605,7 +610,15 @@ impl Store {
         }
 
         let headers = self.get_share_headers(uncle_hashes).unwrap_or_default();
-        let metadata_pairs = self.get_block_metadata_batch(uncle_hashes);
+        // Uncle info only decorates a monitoring event, so a store failure
+        // costs display detail rather than correctness -- the same trade the
+        // header read above already makes. Logged so it is not silent.
+        let metadata_pairs = self
+            .get_block_metadata_batch(uncle_hashes)
+            .unwrap_or_else(|error| {
+                warn!("Could not read uncle metadata for monitoring: {error}");
+                Vec::new()
+            });
         let metadata_map: HashMap<BlockHash, _> = metadata_pairs
             .into_iter()
             .filter_map(|(hash, metadata)| Some((hash, metadata.expected_height?)))
@@ -4013,26 +4026,26 @@ mod tests {
             share_b.block_hash(),
             genesis.block_hash(),
         ];
-        let result = store.first_known_for_locator(&locator);
+        let result = store.first_known_for_locator(&locator).unwrap();
         assert_eq!(result, Some(uncle.block_hash()));
 
         // Locator with only unknown entries returns None
         let locator = vec![unknown_hash];
-        let result = store.first_known_for_locator(&locator);
+        let result = store.first_known_for_locator(&locator).unwrap();
         assert_eq!(result, None);
 
         // Empty locator returns None
-        let result = store.first_known_for_locator(&[]);
+        let result = store.first_known_for_locator(&[]).unwrap();
         assert_eq!(result, None);
 
         // Locator with HeaderValid entry matches it
         let locator = vec![uncle.block_hash(), genesis.block_hash()];
-        let result = store.first_known_for_locator(&locator);
+        let result = store.first_known_for_locator(&locator).unwrap();
         assert_eq!(result, Some(uncle.block_hash()));
 
         // Locator with only confirmed entries returns the first one
         let locator = vec![share_a.block_hash(), genesis.block_hash()];
-        let result = store.first_known_for_locator(&locator);
+        let result = store.first_known_for_locator(&locator).unwrap();
         assert_eq!(result, Some(share_a.block_hash()));
     }
 

@@ -293,7 +293,7 @@ impl Store {
 
         for (_height, raw_hashes) in height_entries {
             let mut hashes_at_height: Vec<BlockHash> = self
-                .get_block_metadata_batch(&raw_hashes)
+                .get_block_metadata_batch(&raw_hashes)?
                 .into_iter()
                 .filter(|(_, metadata)| {
                     metadata.status != Status::Pending && metadata.status != Status::Invalid

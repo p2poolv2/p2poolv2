@@ -471,6 +471,11 @@ impl DefaultShareValidator {
         hashes.extend_from_slice(&share.header.uncles);
         let metadata_by_hash: HashMap<BlockHash, BlockMetadata> = chain_store_handle
             .get_block_metadata_batch(&hashes)
+            .map_err(|error| {
+                ValidationError::store_access(format!(
+                    "Failed to read metadata for uncle position check: {error}"
+                ))
+            })?
             .into_iter()
             .collect();
 
@@ -1699,10 +1704,10 @@ mod tests {
         chain_store_handle
             .expect_get_block_metadata_batch()
             .returning(|hashes| {
-                hashes
+                Ok(hashes
                     .iter()
                     .map(|h| (*h, metadata_at_height(20)))
-                    .collect()
+                    .collect())
             });
 
         let valid_share = TestShareBlockBuilder::new()
@@ -1806,10 +1811,10 @@ mod tests {
         chain_store_handle
             .expect_get_block_metadata_batch()
             .returning(|hashes| {
-                hashes
+                Ok(hashes
                     .iter()
                     .map(|hash| (*hash, metadata_at_height(20)))
-                    .collect()
+                    .collect())
             });
 
         let share = TestShareBlockBuilder::new()
@@ -1843,13 +1848,13 @@ mod tests {
         chain_store_handle
             .expect_get_block_metadata_batch()
             .returning(move |hashes| {
-                hashes
+                Ok(hashes
                     .iter()
                     .map(|hash| {
                         let height = if *hash == uncle_hash { 19 } else { 20 };
                         (*hash, metadata_at_height(height))
                     })
-                    .collect()
+                    .collect())
             });
         // Ancestry walk: parent -> uncle (grandparent) -> genesis sentinel.
         let parent_header = parent.header.clone();
@@ -1893,7 +1898,7 @@ mod tests {
         // The batch returns nothing, so the parent's metadata is missing.
         chain_store_handle
             .expect_get_block_metadata_batch()
-            .returning(|_| Vec::new());
+            .returning(|_| Ok(Vec::new()));
 
         let share = TestShareBlockBuilder::new()
             .uncles(vec![uncle.block_hash()])
@@ -1923,10 +1928,10 @@ mod tests {
         chain_store_handle
             .expect_get_block_metadata_batch()
             .returning(|hashes| {
-                hashes
+                Ok(hashes
                     .iter()
                     .map(|h| (*h, metadata_at_height(20)))
-                    .collect()
+                    .collect())
             });
 
         let share = TestShareBlockBuilder::new()
@@ -1956,13 +1961,13 @@ mod tests {
         chain_store_handle
             .expect_get_block_metadata_batch()
             .returning(move |hashes| {
-                hashes
+                Ok(hashes
                     .iter()
                     .map(|hash| {
                         let height = if *hash == uncle_hash { 17 } else { 20 };
                         (*hash, metadata_at_height(height))
                     })
-                    .collect()
+                    .collect())
             });
 
         let invalid_share = TestShareBlockBuilder::new()
@@ -1995,13 +2000,13 @@ mod tests {
         chain_store_handle
             .expect_get_block_metadata_batch()
             .returning(move |hashes| {
-                hashes
+                Ok(hashes
                     .iter()
                     .map(|hash| {
                         let height = if *hash == uncle_hash { 21 } else { 20 };
                         (*hash, metadata_at_height(height))
                     })
-                    .collect()
+                    .collect())
             });
 
         let invalid_share = TestShareBlockBuilder::new()
@@ -2034,13 +2039,13 @@ mod tests {
         chain_store_handle
             .expect_get_block_metadata_batch()
             .returning(move |hashes| {
-                hashes
+                Ok(hashes
                     .iter()
                     .map(|hash| {
                         let height = if *hash == uncle_hash { 18 } else { 20 };
                         (*hash, metadata_at_height(height))
                     })
-                    .collect()
+                    .collect())
             });
 
         let valid_share = TestShareBlockBuilder::new()

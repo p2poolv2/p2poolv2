@@ -24,7 +24,7 @@ use bitcoin::{
     BlockHash,
     consensus::{self, encode},
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use tracing::debug;
 
 use super::{Chain, Height, TopResult, height_to_key_with_suffix};
@@ -99,12 +99,24 @@ impl Store {
     /// is not `BlockValid`. Used by `reorg_confirmed` so a deep reorg cannot
     /// confirm an unvalidated fork block that the gated `candidates` list did
     /// not cover.
+    ///
+    /// Iterates the blockhashes asked for rather than the pairs
+    /// `get_block_metadata_batch` returns, and errors on any it did not.
     pub(super) fn all_in_zone_blocks_block_valid(
         &self,
         blockhashes: &[BlockHash],
         prune_height: u32,
     ) -> Result<bool, StoreError> {
-        for (blockhash, metadata) in self.get_block_metadata_batch(blockhashes) {
+        let metadata_by_hash: HashMap<BlockHash, BlockMetadata> = self
+            .get_block_metadata_batch(blockhashes)?
+            .into_iter()
+            .collect();
+        for blockhash in blockhashes {
+            let metadata = metadata_by_hash.get(blockhash).ok_or_else(|| {
+                StoreError::NotFound(format!(
+                    "Block {blockhash} has no metadata in the reorg validation gate"
+                ))
+            })?;
             if metadata.chain == ChainMembership::Confirmed {
                 continue;
             }

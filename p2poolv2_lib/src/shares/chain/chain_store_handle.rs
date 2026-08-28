@@ -617,10 +617,13 @@ impl ChainStoreHandle {
     }
 
     /// Batch fetch metadata for multiple blockhashes in a single multi_get.
+    ///
+    /// Blockhashes with no metadata row are omitted; a failed read or an
+    /// undecodable row is an `Err`. See `Store::get_block_metadata_batch`.
     pub fn get_block_metadata_batch(
         &self,
         blockhashes: &[BlockHash],
-    ) -> Vec<(BlockHash, BlockMetadata)> {
+    ) -> Result<Vec<(BlockHash, BlockMetadata)>, StoreError> {
         self.store_handle
             .store()
             .get_block_metadata_batch(blockhashes)
@@ -825,7 +828,7 @@ mockall::mock! {
     pub ChainStoreHandle {
         pub fn is_candidate(&self, blockhash: &BlockHash) -> bool;
         pub fn get_block_metadata(&self, hash: &BlockHash) -> Result<BlockMetadata, StoreError>;
-        pub fn get_block_metadata_batch(&self, blockhashes: &[BlockHash]) -> Vec<(BlockHash, BlockMetadata)>;
+        pub fn get_block_metadata_batch(&self, blockhashes: &[BlockHash]) -> Result<Vec<(BlockHash, BlockMetadata)>, StoreError>;
         pub fn get_uncle_infos(&self, uncle_hashes: &[BlockHash]) -> Vec<UncleInfo>;
         pub fn has_status(&self, hash: &BlockHash, status: Status) -> bool;
         pub fn is_block_confirmed(&self, hash: &BlockHash) -> bool;

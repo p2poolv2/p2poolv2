@@ -450,17 +450,24 @@ impl Store {
         }
     }
 
-    /// Batch fetch block metadata for multiple blockhashes using multi_get_cf.
-    ///
-    /// Returns (BlockHash, BlockMetadata) pairs, silently skipping any
-    /// blockhashes whose metadata is not found or fails to deserialize.
-    /// Batch-fetch block metadata for the given blockhashes.
+    /// Batch-fetch block metadata for the given blockhashes using multi_get_cf.
     ///
     /// Deduplicates the input so each blockhash is looked up at most once.
+    ///
+    /// A blockhash with no metadata row is omitted from the result rather than
+    /// reported: for most callers that is the answer they are asking for -- an
+    /// unknown parent during header sync, a block that is not yet valid, an
+    /// uncle with no height. Callers for which an unknown block is a fault must
+    /// compare the result against what they asked for; see
+    /// `all_in_zone_blocks_block_valid`.
+    ///
+    /// A read that fails, or a row that will not deserialize, is a different
+    /// thing entirely and comes back as `Err`. Folding those in with absence
+    /// let a disk fault or a corrupt row read as a fact about the chain.
     pub fn get_block_metadata_batch(
         &self,
         blockhashes: &[BlockHash],
-    ) -> Vec<(BlockHash, BlockMetadata)> {
+    ) -> Result<Vec<(BlockHash, BlockMetadata)>, StoreError> {
         let mut seen = HashSet::with_capacity(blockhashes.len());
         let unique_blockhashes: Vec<BlockHash> = blockhashes
             .iter()
@@ -476,13 +483,17 @@ impl Store {
         let results = self.db.multi_get_cf(keys);
         let mut metadata_results = Vec::with_capacity(unique_blockhashes.len());
         for (blockhash, result) in unique_blockhashes.iter().zip(results) {
-            if let Ok(Some(data)) = result
-                && let Ok(metadata) = encode::deserialize::<BlockMetadata>(&data)
-            {
-                metadata_results.push((*blockhash, metadata));
-            }
+            let Some(data) = result? else {
+                continue;
+            };
+            let metadata = encode::deserialize::<BlockMetadata>(&data).map_err(|error| {
+                StoreError::Serialization(format!(
+                    "Failed to deserialize metadata for {blockhash}: {error}"
+                ))
+            })?;
+            metadata_results.push((*blockhash, metadata));
         }
-        metadata_results
+        Ok(metadata_results)
     }
 
     /// Check which blockhashes from the provided list are missing from the store.
@@ -1156,7 +1167,7 @@ mod tests {
             .unwrap();
         store.commit_batch(batch).unwrap();
 
-        let results = store.get_block_metadata_batch(&[hash_a, hash_b]);
+        let results = store.get_block_metadata_batch(&[hash_a, hash_b]).unwrap();
         assert_eq!(results.len(), 2);
         assert_eq!(results[0], (hash_a, metadata_a));
         assert_eq!(results[1], (hash_b, metadata_b));
@@ -1184,7 +1195,9 @@ mod tests {
             .unwrap();
         store.commit_batch(batch).unwrap();
 
-        let results = store.get_block_metadata_batch(&[missing_hash, stored_hash]);
+        let results = store
+            .get_block_metadata_batch(&[missing_hash, stored_hash])
+            .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0], (stored_hash, metadata));
     }
@@ -1194,7 +1207,7 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
-        let results = store.get_block_metadata_batch(&[]);
+        let results = store.get_block_metadata_batch(&[]).unwrap();
         assert!(results.is_empty());
     }
 

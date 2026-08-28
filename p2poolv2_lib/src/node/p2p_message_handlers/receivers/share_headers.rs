@@ -468,7 +468,9 @@ fn find_chain_anchors(
         .into_iter()
         .collect();
 
-    let metadata_results = chain_store_handle.get_block_metadata_batch(&external_parents);
+    let metadata_results = chain_store_handle
+        .get_block_metadata_batch(&external_parents)
+        .map_err(|error| HeaderSyncError::Other(Box::new(error)))?;
 
     if metadata_results.len() != external_parents.len() {
         let found: HashSet<BlockHash> = metadata_results.iter().map(|(hash, _)| *hash).collect();
@@ -649,7 +651,7 @@ mod tests {
         chain_store_handle
             .expect_get_block_metadata_batch()
             .returning(|hashes| {
-                hashes
+                Ok(hashes
                     .iter()
                     .map(|hash| {
                         (
@@ -662,7 +664,7 @@ mod tests {
                             },
                         )
                     })
-                    .collect()
+                    .collect())
             });
     }
 
@@ -992,7 +994,7 @@ mod tests {
             .returning(|_| Err(StoreError::NotFound("not found".into())));
         chain_store_handle
             .expect_get_block_metadata_batch()
-            .returning(|_| Vec::new());
+            .returning(|_| Ok(Vec::new()));
         let mut mock_validator = MockDefaultShareValidator::default();
         setup_minimum_difficulty_mock(&mut mock_validator);
 
@@ -1045,7 +1047,7 @@ mod tests {
         chain_store_handle
             .expect_get_block_metadata_batch()
             .returning(move |hashes| {
-                hashes
+                Ok(hashes
                     .iter()
                     .filter(|hash| **hash == anchor_hash)
                     .map(|hash| {
@@ -1059,7 +1061,7 @@ mod tests {
                             },
                         )
                     })
-                    .collect()
+                    .collect())
             });
         let template_header = build_valid_test_header();
         chain_store_handle
@@ -1358,7 +1360,7 @@ mod tests {
         chain_store_handle
             .expect_get_block_metadata_batch()
             .returning(move |hashes| {
-                hashes
+                Ok(hashes
                     .iter()
                     .filter(|hash| **hash == anchor_a_hash || **hash == anchor_b_hash)
                     .map(|hash| {
@@ -1372,7 +1374,7 @@ mod tests {
                             },
                         )
                     })
-                    .collect()
+                    .collect())
             });
         let mut mock_validator = MockDefaultShareValidator::default();
         setup_minimum_difficulty_mock(&mut mock_validator);
@@ -1452,7 +1454,7 @@ mod tests {
         // External parent not found in store
         chain_store_handle
             .expect_get_block_metadata_batch()
-            .returning(|_| Vec::new());
+            .returning(|_| Ok(Vec::new()));
         // get_tip_height for computing retry depth
         chain_store_handle
             .expect_get_tip_height()
@@ -1551,7 +1553,7 @@ mod tests {
         chain_store_handle
             .expect_get_block_metadata_batch()
             .returning(move |hashes| {
-                hashes
+                Ok(hashes
                     .iter()
                     .filter(|hash| **hash == known_anchor_hash)
                     .map(|hash| {
@@ -1565,7 +1567,7 @@ mod tests {
                             },
                         )
                     })
-                    .collect()
+                    .collect())
             });
         let mut mock_validator = MockDefaultShareValidator::default();
         setup_minimum_difficulty_mock(&mut mock_validator);

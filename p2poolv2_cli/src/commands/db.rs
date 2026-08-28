@@ -68,7 +68,7 @@ fn cleanup_dense_heights(store: &Store) -> Result<(), Box<dyn Error>> {
             continue;
         }
 
-        let metadata_results = store.get_block_metadata_batch(&blockhashes);
+        let metadata_results = store.get_block_metadata_batch(&blockhashes)?;
 
         // Only off-chain HeaderValid blocks are eligible for invalidation.
         // Blocks on the candidate or confirmed chain, and BlockValid blocks,
@@ -215,7 +215,7 @@ mod tests {
         cleanup_dense_heights(store).unwrap();
 
         // Uncle and confirmed should survive, 25 spam blocks invalidated
-        let metadata_results = store.get_block_metadata_batch(&blocks_before);
+        let metadata_results = store.get_block_metadata_batch(&blocks_before).unwrap();
         let valid_count = metadata_results
             .iter()
             .filter(|(_, metadata)| metadata.status != Status::Invalid)
