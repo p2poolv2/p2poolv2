@@ -882,6 +882,77 @@ mod tests {
         );
     }
 
+    /// TODO: Pins the unbounded-buffer vulnerability
+    ///
+    /// This asserts today's behaviour, which is the *vulnerable* behaviour: one
+    /// bitcoin header replayed under many different parent hashes takes a
+    /// pending slot each, and none of them can ever be released. It exists so
+    /// the mechanism is executable rather than only described, and so that
+    /// fixing the issue trips a test rather than passing silently.
+    ///
+    /// The admission gate (`validate_header_minimum_difficulty`) reads only the
+    /// bitcoin header, its declared bits and the uncle count, while a block's
+    /// identity is `ShareHeader::block_hash()` over the whole share header. So
+    /// `prev_share_blockhash` is a free mutation axis: every value is a distinct
+    /// block, at no proof-of-work cost, naming a parent that will never arrive,
+    /// so `remove_from_pending` is never reached for any of them.
+    #[tokio::test]
+    async fn test_replayed_header_under_distinct_parents_fills_pending() {
+        const REPLAYS: u8 = 32;
+
+        let mut mock_store = ChainStoreHandle::default();
+        mock_store
+            .expect_get_candidate_tip_height()
+            .returning(|| Ok(Some(0)));
+        mock_store
+            .expect_all_block_and_uncle_data_available()
+            .returning(|_, _| Err(StoreError::NotFound("no metadata".to_string())));
+        mock_store
+            .expect_get_block_metadata()
+            .returning(|_| Err(StoreError::NotFound("not found".to_string())));
+
+        let (_, event_rx) = create_block_receiver_channel();
+        let (block_fetcher_handle, _block_fetcher_rx) =
+            block_fetcher::create_block_fetcher_channel();
+        let (validation_tx, _validation_rx) = validation_worker::create_validation_channel();
+        let mut receiver = BlockReceiver::new(
+            event_rx,
+            Arc::new(MockDefaultShareValidator::default()),
+            mock_store,
+            block_fetcher_handle,
+            validation_tx,
+        );
+
+        // Every block carries the same bitcoin header and the same declared
+        // bits; only the parent hash differs. Starts at 1: an all-zeros parent
+        // is the genesis sentinel, which add_to_pending does not index.
+        let mut hashes = std::collections::HashSet::new();
+        for replay in 1..=REPLAYS {
+            let block = TestShareBlockBuilder::new()
+                .prev_share_blockhash(BlockHash::from_byte_array([replay; 32]).to_string())
+                .nonce(0xe9695791)
+                .build();
+            hashes.insert(block.block_hash());
+            receiver.process_share_block(block).await.unwrap();
+        }
+
+        assert_eq!(
+            hashes.len(),
+            REPLAYS as usize,
+            "each parent hash yields a distinct block hash, so dedupe never fires"
+        );
+        assert_eq!(
+            receiver.pending_count(),
+            REPLAYS as usize,
+            "every replay occupies its own pending slot"
+        );
+        assert_eq!(
+            receiver.descendants.len(),
+            REPLAYS as usize,
+            "and its own descendants entry"
+        );
+    }
+
     #[tokio::test]
     async fn test_process_share_block_already_block_valid_is_noop() {
         let mut mock_store = ChainStoreHandle::default();
