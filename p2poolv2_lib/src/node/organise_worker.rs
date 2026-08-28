@@ -35,7 +35,7 @@ use crate::monitoring_events::{MonitoringEvent, MonitoringEventSender};
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
-use crate::shares::share_block::ShareBlock;
+use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::shares::validation::FailureKind;
 use crate::shares::validation::ShareValidator;
 use crate::shares::validation::check_pplns_zone;
@@ -325,7 +325,7 @@ impl OrganiseWorker {
         };
         match self.chain_store_handle.organise_block().await {
             Ok(Some(height)) => {
-                self.update_pplns_window();
+                self.confirmed_advanced(previous_tip, height).await;
                 let from = previous_tip.map_or(height, |tip| (tip + 1).min(height));
                 for drain_height in from..=height {
                     self.drain_pending_blocks(drain_height).await?;
@@ -532,13 +532,16 @@ impl OrganiseWorker {
             return Ok(ProcessOutcome::NotAdvanced);
         }
 
+        // Read before promoting: promote_block returns the new confirmed tip,
+        // and the follow-up needs the range it advanced over, not just its end.
+        let previous_tip = self.chain_store_handle.get_tip_height().ok().flatten();
         match self
             .chain_store_handle
             .promote_block(share_block.header.clone())
             .await
         {
-            Ok(Some(height)) => {
-                self.post_promote(&share_block, height).await;
+            Ok(Some(new_tip)) => {
+                self.confirmed_advanced(previous_tip, new_tip).await;
                 // Drain dependents from this block's own height, not the
                 // confirmed height, so a promotion cascade doesn't skip them.
                 Ok(ProcessOutcome::Advanced(parent_height + 1))
@@ -590,50 +593,90 @@ impl OrganiseWorker {
         }
     }
 
-    /// Run post-promotion actions: update PPLNS, record confirmed work for
-    /// the effort metric, optionally send new notify, and emit a monitoring
-    /// event.
-    async fn post_promote(&self, share_block: &ShareBlock, height: u32) {
+    /// Follow-up for a promotion that advanced the confirmed chain from
+    /// `previous_tip` to `new_tip`.
+    ///
+    /// Shared by both paths that confirm blocks -- `validate_mark_promote` via
+    /// `promote_block`, and `advance_confirmed_and_drain` via `organise_block`
+    /// -- so the two cannot drift.
+    ///
+    /// Split across two granularities, which is what an earlier per-share
+    /// version conflated. The PPLNS window tracks the confirmed tip, which
+    /// moves once per promotion, and updating it takes the write lock every
+    /// stratum job build contends for; doing it per block would take that lock
+    /// once per confirmed block to accomplish what one call does. It also has
+    /// to run before dependents are drained, since `validate_bitcoin_payout`
+    /// reads the shared window without updating it. The share feed and the
+    /// effort numerator are per block: one promotion can confirm a whole
+    /// prefix, and every block in it did real work.
+    async fn confirmed_advanced(&self, previous_tip: Option<u32>, new_tip: u32) {
         self.update_pplns_window();
+
+        let from = previous_tip.map_or(new_tip, |tip| (tip + 1).min(new_tip));
+        for height in from..=new_tip {
+            self.record_confirmed_block(height).await;
+        }
+
+        match self.chain_store_handle.get_candidate_tip_height() {
+            Ok(Some(candidate_tip_height)) if new_tip >= candidate_tip_height => {
+                self.send_new_notify(new_tip, candidate_tip_height).await;
+            }
+            Ok(Some(_)) => {}
+            _ => debug!("No candidate tip found"),
+        }
+    }
+
+    /// Record one newly confirmed block: its work for the effort metric, a
+    /// bitcoin block find if it is one, and a Share event for subscribers.
+    ///
+    /// Reads are current: the writer commits the confirmation batch before
+    /// replying to `organise_block`, and the organise worker is the only thing
+    /// driving it, so nothing moves the confirmed tip in between.
+    ///
+    /// A height inside a range just confirmed must resolve. If it does not,
+    /// that is a store inconsistency rather than a fact about the chain, and a
+    /// monitoring follow-up must not stop confirmation, so it is logged and
+    /// skipped.
+    async fn record_confirmed_block(&self, height: u32) {
+        let header = match self
+            .chain_store_handle
+            .get_confirmed_at_height(height)
+            .and_then(|blockhash| self.chain_store_handle.get_share_header(&blockhash))
+        {
+            Ok(header) => header,
+            Err(error) => {
+                warn!("No confirmed block to record at height {height}: {error}");
+                return;
+            }
+        };
 
         // Feed the block effort accumulator with this confirmed share's pool
         // difficulty. Uncles are excluded so the effort numerator tracks the
         // same confirmed-chain work as the hashrate (derived from chain work).
         //
-        // Skip while syncing: during sync post_promote replays the whole
-        // backlog, and work_since_last_block never resets (no real bitcoin
-        // block is found during replay), so it would balloon to the entire
-        // chain's work and report an absurd effort. Only real-time confirmed
-        // shares count toward effort.
+        // Skip while syncing: the confirmed chain replays the whole backlog,
+        // and work_since_last_block never resets (no real bitcoin block is
+        // found during replay), so it would balloon to the entire chain's work
+        // and report an absurd effort. Only real-time confirmed shares count.
         if self.chain_store_handle.is_current() {
-            let share_difficulty =
-                bitcoin::Target::from_compact(share_block.header.bits).difficulty_float();
+            let share_difficulty = bitcoin::Target::from_compact(header.bits).difficulty_float();
             let _ = self.metrics.record_confirmed_share(share_difficulty).await;
 
             // If this confirmed share is itself a bitcoin block, record the
             // find pool-wide (any node's miners) and reset the effort
             // accumulator toward the next block.
-            if share_block.is_bitcoin_block() {
-                let bitcoin_header = &share_block.header.bitcoin_header;
+            if header.meets_bitcoin_difficulty() {
                 let _ = self
                     .metrics
                     .record_block_found(
-                        bitcoin_header.block_hash().to_string(),
-                        share_block.header.bitcoin_height,
+                        header.bitcoin_header.block_hash().to_string(),
+                        header.bitcoin_height,
                     )
                     .await;
             }
         }
 
-        match self.chain_store_handle.get_candidate_tip_height() {
-            Ok(Some(candidate_tip_height)) if height >= candidate_tip_height => {
-                self.send_new_notify(height, candidate_tip_height).await;
-            }
-            Ok(Some(_)) => {}
-            _ => debug!("No candidate tip found"),
-        }
-
-        self.emit_share_monitoring_event(share_block, height);
+        self.emit_share_monitoring_event(&header, height);
     }
 
     /// Insert a block into the pending buffer, keyed by its parent height.
@@ -745,18 +788,16 @@ impl OrganiseWorker {
     ///
     /// Looks up uncle details from the store so that subscribers receive
     /// full uncle information in a single event.
-    fn emit_share_monitoring_event(&self, share_block: &ShareBlock, height: u32) {
-        let uncle_infos = self
-            .chain_store_handle
-            .get_uncle_infos(&share_block.header.uncles);
+    fn emit_share_monitoring_event(&self, header: &ShareHeader, height: u32) {
+        let uncle_infos = self.chain_store_handle.get_uncle_infos(&header.uncles);
 
         let share_info = ShareInfo {
-            blockhash: share_block.block_hash(),
-            prev_blockhash: share_block.header.prev_share_blockhash,
+            blockhash: header.block_hash(),
+            prev_blockhash: header.prev_share_blockhash,
             height,
-            miner_address: share_block.header.miner_bitcoin_address.to_string(),
-            timestamp: share_block.header.time,
-            bits: share_block.header.bits,
+            miner_address: header.miner_bitcoin_address.to_string(),
+            timestamp: header.time,
+            bits: header.bits,
             uncles: uncle_infos,
         };
         let event = MonitoringEvent::Share(share_info);
@@ -778,6 +819,7 @@ mod tests {
     use crate::store::block_tx_metadata::{BlockMetadata, ChainMembership};
     use crate::stratum::work::notify::{NotifyCmd, NotifyReceiver};
     use crate::test_utils::TestShareBlockBuilder;
+    use std::collections::HashMap;
 
     /// Create a notify channel for tests, returning the sender and receiver.
     fn create_test_notify_channel() -> (NotifySender, NotifyReceiver) {
@@ -812,6 +854,15 @@ mod tests {
         metadata_result: Result<BlockMetadata, StoreError>,
     ) -> OrganiseWorker {
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        // The confirmed-block follow-up reads each newly confirmed block
+        // back; this test is not about the share feed, so let it find
+        // nothing and skip.
+        mock_chain_handle
+            .expect_get_confirmed_at_height()
+            .returning(|_| Err(StoreError::NotFound("not under test".to_string())));
+        mock_chain_handle
+            .expect_get_tip_height()
+            .returning(|| Ok(None));
         mock_chain_handle
             .expect_get_block_metadata()
             .returning(move |_| metadata_result.clone());
@@ -893,6 +944,15 @@ mod tests {
     async fn test_organise_worker_stops_on_channel_close() {
         let (_organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        // The confirmed-block follow-up reads each newly confirmed block
+        // back; this test is not about the share feed, so let it find
+        // nothing and skip.
+        mock_chain_handle
+            .expect_get_confirmed_at_height()
+            .returning(|_| Err(StoreError::NotFound("not under test".to_string())));
+        mock_chain_handle
+            .expect_get_tip_height()
+            .returning(|| Ok(None));
         mock_chain_handle
             .expect_clone()
             .return_once(MockChainStoreHandle::new);
@@ -922,6 +982,12 @@ mod tests {
     async fn test_organise_worker_calls_organise_block() {
         let (organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        // The confirmed-block follow-up reads each newly confirmed block
+        // back; this test is not about the share feed, so let it find
+        // nothing and skip.
+        mock_chain_handle
+            .expect_get_confirmed_at_height()
+            .returning(|_| Err(StoreError::NotFound("not under test".to_string())));
         mock_chain_handle
             .expect_clone()
             .return_once(MockChainStoreHandle::new);
@@ -986,6 +1052,15 @@ mod tests {
     async fn test_organise_worker_marks_prune_window_block_block_valid() {
         let (organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        // The confirmed-block follow-up reads each newly confirmed block
+        // back; this test is not about the share feed, so let it find
+        // nothing and skip.
+        mock_chain_handle
+            .expect_get_confirmed_at_height()
+            .returning(|_| Err(StoreError::NotFound("not under test".to_string())));
+        mock_chain_handle
+            .expect_get_tip_height()
+            .returning(|| Ok(None));
         mock_chain_handle
             .expect_clone()
             .return_once(MockChainStoreHandle::new);
@@ -1055,6 +1130,12 @@ mod tests {
     async fn test_block_not_marked_valid_when_parent_unvalidated() {
         let (organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        // The confirmed-block follow-up reads each newly confirmed block
+        // back; this test is not about the share feed, so let it find
+        // nothing and skip.
+        mock_chain_handle
+            .expect_get_confirmed_at_height()
+            .returning(|_| Err(StoreError::NotFound("not under test".to_string())));
         mock_chain_handle
             .expect_clone()
             .return_once(MockChainStoreHandle::new);
@@ -1119,6 +1200,11 @@ mod tests {
     async fn test_organise_worker_advances_confirmed_after_consensus_invalidation() {
         let (organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        // The confirmed-block follow-up reads the block back; this test is
+        // not about the share feed, so let it find nothing and skip.
+        mock_chain_handle
+            .expect_get_confirmed_at_height()
+            .returning(|_| Err(StoreError::NotFound("not under test".to_string())));
         mock_chain_handle
             .expect_clone()
             .return_once(MockChainStoreHandle::new);
@@ -1200,6 +1286,12 @@ mod tests {
     async fn test_organise_worker_marks_invalid_block_event() {
         let (organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        // The confirmed-block follow-up reads each newly confirmed block
+        // back; this test is not about the share feed, so let it find
+        // nothing and skip.
+        mock_chain_handle
+            .expect_get_confirmed_at_height()
+            .returning(|_| Err(StoreError::NotFound("not under test".to_string())));
         mock_chain_handle
             .expect_clone()
             .return_once(MockChainStoreHandle::new);
@@ -1248,6 +1340,12 @@ mod tests {
     async fn test_organise_worker_fatal_on_channel_closed() {
         let (organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        // The confirmed-block follow-up reads each newly confirmed block
+        // back; this test is not about the share feed, so let it find
+        // nothing and skip.
+        mock_chain_handle
+            .expect_get_confirmed_at_height()
+            .returning(|_| Err(StoreError::NotFound("not under test".to_string())));
         mock_chain_handle
             .expect_clone()
             .return_once(MockChainStoreHandle::new);
@@ -1304,6 +1402,12 @@ mod tests {
     async fn test_organise_worker_continues_on_non_fatal_error() {
         let (tx, rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        // The confirmed-block follow-up reads each newly confirmed block
+        // back; this test is not about the share feed, so let it find
+        // nothing and skip.
+        mock_chain_handle
+            .expect_get_confirmed_at_height()
+            .returning(|_| Err(StoreError::NotFound("not under test".to_string())));
         mock_chain_handle
             .expect_clone()
             .return_once(MockChainStoreHandle::new);
@@ -1360,6 +1464,12 @@ mod tests {
     async fn test_organise_worker_sends_new_notify_when_confirmed_catches_up() {
         let (organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        // The confirmed-block follow-up reads each newly confirmed block
+        // back; this test is not about the share feed, so let it find
+        // nothing and skip.
+        mock_chain_handle
+            .expect_get_confirmed_at_height()
+            .returning(|_| Err(StoreError::NotFound("not under test".to_string())));
         mock_chain_handle
             .expect_clone()
             .return_once(MockChainStoreHandle::new);
@@ -1425,6 +1535,12 @@ mod tests {
     async fn test_organise_worker_no_new_notify_when_confirmed_below_candidate() {
         let (organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        // The confirmed-block follow-up reads each newly confirmed block
+        // back; this test is not about the share feed, so let it find
+        // nothing and skip.
+        mock_chain_handle
+            .expect_get_confirmed_at_height()
+            .returning(|_| Err(StoreError::NotFound("not under test".to_string())));
         mock_chain_handle
             .expect_clone()
             .return_once(MockChainStoreHandle::new);
@@ -1489,6 +1605,12 @@ mod tests {
     async fn test_organise_worker_buffers_block_when_parent_above_confirmed_tip() {
         let (organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        // The confirmed-block follow-up reads each newly confirmed block
+        // back; this test is not about the share feed, so let it find
+        // nothing and skip.
+        mock_chain_handle
+            .expect_get_confirmed_at_height()
+            .returning(|_| Err(StoreError::NotFound("not under test".to_string())));
         mock_chain_handle
             .expect_clone()
             .return_once(MockChainStoreHandle::new);
@@ -1543,6 +1665,11 @@ mod tests {
     async fn test_organise_worker_does_not_buffer_when_parent_at_confirmed_tip() {
         let (organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        // The confirmed-block follow-up reads the block back; this test is
+        // not about the share feed, so let it find nothing and skip.
+        mock_chain_handle
+            .expect_get_confirmed_at_height()
+            .returning(|_| Err(StoreError::NotFound("not under test".to_string())));
         mock_chain_handle
             .expect_clone()
             .return_once(MockChainStoreHandle::new);
@@ -1599,10 +1726,122 @@ mod tests {
         assert!(result.is_ok());
     }
 
+    /// A promotion that confirms several blocks at once reports every one of
+    /// them, each at its own height.
+    ///
+    /// `promote_block` returns the new confirmed *tip*, not the height of the
+    /// block that triggered it. Reporting once, for the triggering share, at
+    /// that tip height published the wrong height for it and left the rest of
+    /// the confirmed prefix out of the share feed and the effort numerator
+    /// entirely. A prefix confirms at once whenever confirmation was stalled --
+    /// blocks validated while a lower one still lacked its body -- and then
+    /// catches up.
     #[tokio::test]
-    async fn test_post_promote_skips_effort_while_syncing() {
+    async fn test_confirming_a_prefix_reports_every_block_at_its_own_height() {
+        let (_organise_tx, organise_rx) = create_organise_channel();
+        let mut mock_chain_handle = MockChainStoreHandle::new();
+
+        // Blocks 5, 6 and 7 all confirm in the promotion triggered by block 5.
+        let confirmed: Vec<ShareBlock> = (5..=7u32)
+            .map(|height| {
+                TestShareBlockBuilder::new()
+                    .nonce(0xe9690000 + height)
+                    .build()
+            })
+            .collect();
+        let by_height: HashMap<u32, ShareBlock> =
+            (5..=7u32).zip(confirmed.iter().cloned()).collect();
+        let by_hash: HashMap<BlockHash, ShareBlock> = confirmed
+            .iter()
+            .map(|share| (share.block_hash(), share.clone()))
+            .collect();
+
+        mock_chain_handle
+            .expect_get_block_metadata()
+            .returning(|_| {
+                Ok(BlockMetadata {
+                    expected_height: Some(4),
+                    chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
+                    status: Status::BlockValid,
+                    chain: ChainMembership::Confirmed,
+                })
+            });
+        mock_chain_handle
+            .expect_get_candidate_tip_height()
+            .returning(|| Ok(Some(7)));
+        // Confirmed tip is 4 before the promotion and 7 after it.
+        mock_chain_handle
+            .expect_get_tip_height()
+            .returning(|| Ok(Some(4)));
+        mock_chain_handle
+            .expect_mark_block_valid()
+            .returning(|_| Ok(()));
+        mock_chain_handle
+            .expect_promote_block()
+            .returning(|_| Ok(Some(7)));
+        mock_chain_handle
+            .expect_get_confirmed_at_height()
+            .returning(move |height| Ok(by_height[&height].block_hash()));
+        mock_chain_handle
+            .expect_get_share_header()
+            .returning(move |hash| Ok(by_hash[hash].header.clone()));
+        mock_chain_handle.expect_is_current().returning(|| true);
+        mock_chain_handle
+            .expect_get_uncle_infos()
+            .returning(|_| Vec::new());
+
+        let (monitoring_tx, mut monitoring_rx) = create_monitoring_event_channel();
+        let (notify_tx, _notify_rx) = create_test_notify_channel();
+        let mut worker = OrganiseWorker::new(
+            organise_rx,
+            mock_chain_handle,
+            monitoring_tx,
+            notify_tx,
+            create_test_metrics_handle(),
+            create_test_pplns_window(),
+            stub_share_validator_with_success(),
+        );
+
+        worker
+            .process_share_block(confirmed[0].clone(), true)
+            .await
+            .unwrap();
+
+        let mut reported = Vec::new();
+        while let Ok(MonitoringEvent::Share(share_info)) = monitoring_rx.try_recv() {
+            reported.push((share_info.blockhash, share_info.height));
+        }
+
+        let expected: Vec<(BlockHash, u32)> = (5..=7u32)
+            .map(|height| (by_height_hash(&confirmed, height), height))
+            .collect();
+        assert_eq!(
+            reported, expected,
+            "every block the promotion confirmed must be reported at its own height"
+        );
+    }
+
+    /// The block confirmed at `height` in the fixture above.
+    fn by_height_hash(confirmed: &[ShareBlock], height: u32) -> BlockHash {
+        confirmed[(height - 5) as usize].block_hash()
+    }
+
+    #[tokio::test]
+    async fn test_confirmed_block_skips_effort_while_syncing() {
         let (organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+
+        // This test is about the follow-up, so the newly confirmed block has
+        // to be readable back.
+        let share_hash = share.block_hash();
+        let share_header = share.header.clone();
+        mock_chain_handle
+            .expect_get_confirmed_at_height()
+            .returning(move |_| Ok(share_hash));
+        mock_chain_handle
+            .expect_get_share_header()
+            .returning(move |_| Ok(share_header.clone()));
         mock_chain_handle
             .expect_clone()
             .return_once(MockChainStoreHandle::new);
@@ -1648,7 +1887,6 @@ mod tests {
             stub_share_validator_with_success(),
         );
 
-        let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
         organise_tx
             .send(OrganiseEvent::Block {
                 share_block: share,
@@ -1668,9 +1906,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_post_promote_records_pool_block_find() {
+    async fn test_confirmed_block_records_pool_block_find() {
         let (organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        let mut share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        share.header.bitcoin_header =
+            bitcoin::blockdata::constants::genesis_block(bitcoin::Network::Regtest).header;
+
+        // This test is about the follow-up, so the newly confirmed block has
+        // to be readable back.
+        let share_hash = share.block_hash();
+        let share_header = share.header.clone();
+        mock_chain_handle
+            .expect_get_confirmed_at_height()
+            .returning(move |_| Ok(share_hash));
+        mock_chain_handle
+            .expect_get_share_header()
+            .returning(move |_| Ok(share_header.clone()));
         mock_chain_handle
             .expect_clone()
             .return_once(MockChainStoreHandle::new);
@@ -1716,9 +1968,6 @@ mod tests {
 
         // Make the confirmed share a real bitcoin block: the regtest genesis
         // header meets its own target, so is_bitcoin_block() is true.
-        let mut share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
-        share.header.bitcoin_header =
-            bitcoin::blockdata::constants::genesis_block(bitcoin::Network::Regtest).header;
         organise_tx
             .send(OrganiseEvent::Block {
                 share_block: share,
@@ -1743,6 +1992,11 @@ mod tests {
     async fn test_organise_worker_drains_buffered_block_after_promotion() {
         let (organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        // The confirmed-block follow-up reads the block back; this test is
+        // not about the share feed, so let it find nothing and skip.
+        mock_chain_handle
+            .expect_get_confirmed_at_height()
+            .returning(|_| Err(StoreError::NotFound("not under test".to_string())));
         mock_chain_handle
             .expect_clone()
             .return_once(MockChainStoreHandle::new);
@@ -1849,6 +2103,12 @@ mod tests {
     async fn test_stalled_confirmation_retries_the_block_wedging_it() {
         let (_organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        // The confirmed-block follow-up reads each newly confirmed block
+        // back; this test is not about the share feed, so let it find
+        // nothing and skip.
+        mock_chain_handle
+            .expect_get_confirmed_at_height()
+            .returning(|_| Err(StoreError::NotFound("not under test".to_string())));
 
         // Parent is confirmed at height 5, so the block reaches promotion and
         // is buffered under height 5 when that fails.
@@ -1941,6 +2201,15 @@ mod tests {
 
         let (_organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        // The confirmed-block follow-up reads each newly confirmed block
+        // back; this test is not about the share feed, so let it find
+        // nothing and skip.
+        mock_chain_handle
+            .expect_get_confirmed_at_height()
+            .returning(|_| Err(StoreError::NotFound("not under test".to_string())));
+        mock_chain_handle
+            .expect_get_tip_height()
+            .returning(|| Ok(None));
         // Parent is stored but only HeaderValid, so the block is buffered.
         mock_chain_handle
             .expect_get_block_metadata()
@@ -1990,6 +2259,15 @@ mod tests {
     async fn test_transient_promote_failure_rebuffers_the_block() {
         let (_organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        // The confirmed-block follow-up reads each newly confirmed block
+        // back; this test is not about the share feed, so let it find
+        // nothing and skip.
+        mock_chain_handle
+            .expect_get_confirmed_at_height()
+            .returning(|_| Err(StoreError::NotFound("not under test".to_string())));
+        mock_chain_handle
+            .expect_get_tip_height()
+            .returning(|| Ok(None));
 
         // Parent is confirmed at height 5, so the block passes the parent gate
         // and reaches promotion.
@@ -2046,6 +2324,14 @@ mod tests {
         share_validator: Arc<dyn ShareValidator + Send + Sync>,
     ) -> OrganiseWorker {
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_get_tip_height()
+            .returning(|| Ok(None));
+        // The confirmed-block follow-up reads the block back; this test is
+        // not about the share feed, so let it find nothing and skip.
+        mock_chain_handle
+            .expect_get_confirmed_at_height()
+            .returning(|_| Err(StoreError::NotFound("not under test".to_string())));
         mock_chain_handle
             .expect_get_block_metadata()
             .returning(|_| {
@@ -2137,6 +2423,15 @@ mod tests {
     async fn test_failed_mark_invalid_rebuffers_instead_of_reporting_invalidated() {
         let (_organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        // The confirmed-block follow-up reads each newly confirmed block
+        // back; this test is not about the share feed, so let it find
+        // nothing and skip.
+        mock_chain_handle
+            .expect_get_confirmed_at_height()
+            .returning(|_| Err(StoreError::NotFound("not under test".to_string())));
+        mock_chain_handle
+            .expect_get_tip_height()
+            .returning(|| Ok(None));
         mock_chain_handle
             .expect_get_block_metadata()
             .returning(|_| {
@@ -2196,6 +2491,15 @@ mod tests {
     async fn test_failed_mark_invalid_event_does_not_advance_confirmed() {
         let (_organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        // The confirmed-block follow-up reads each newly confirmed block
+        // back; this test is not about the share feed, so let it find
+        // nothing and skip.
+        mock_chain_handle
+            .expect_get_confirmed_at_height()
+            .returning(|_| Err(StoreError::NotFound("not under test".to_string())));
+        mock_chain_handle
+            .expect_get_tip_height()
+            .returning(|| Ok(None));
         mock_chain_handle
             .expect_mark_invalid()
             .times(1)
@@ -2226,6 +2530,15 @@ mod tests {
     async fn test_mark_invalid_channel_closed_is_fatal() {
         let (_organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        // The confirmed-block follow-up reads each newly confirmed block
+        // back; this test is not about the share feed, so let it find
+        // nothing and skip.
+        mock_chain_handle
+            .expect_get_confirmed_at_height()
+            .returning(|_| Err(StoreError::NotFound("not under test".to_string())));
+        mock_chain_handle
+            .expect_get_tip_height()
+            .returning(|| Ok(None));
         mock_chain_handle
             .expect_mark_invalid()
             .returning(|_| Err(StoreError::ChannelClosed));
@@ -2263,6 +2576,15 @@ mod tests {
     async fn test_unresolvable_validation_error_drops_without_buffering() {
         let (_organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        // The confirmed-block follow-up reads each newly confirmed block
+        // back; this test is not about the share feed, so let it find
+        // nothing and skip.
+        mock_chain_handle
+            .expect_get_confirmed_at_height()
+            .returning(|_| Err(StoreError::NotFound("not under test".to_string())));
+        mock_chain_handle
+            .expect_get_tip_height()
+            .returning(|| Ok(None));
 
         mock_chain_handle
             .expect_get_block_metadata()
@@ -2320,6 +2642,15 @@ mod tests {
     async fn test_invalid_status_transition_does_not_rebuffer() {
         let (_organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        // The confirmed-block follow-up reads each newly confirmed block
+        // back; this test is not about the share feed, so let it find
+        // nothing and skip.
+        mock_chain_handle
+            .expect_get_confirmed_at_height()
+            .returning(|_| Err(StoreError::NotFound("not under test".to_string())));
+        mock_chain_handle
+            .expect_get_tip_height()
+            .returning(|| Ok(None));
 
         mock_chain_handle
             .expect_get_block_metadata()
@@ -2370,6 +2701,14 @@ mod tests {
         // height, not a single block.
         let (_organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_get_tip_height()
+            .returning(|| Ok(None));
+        // The confirmed-block follow-up reads the block back; this test is
+        // not about the share feed, so let it find nothing and skip.
+        mock_chain_handle
+            .expect_get_confirmed_at_height()
+            .returning(|_| Err(StoreError::NotFound("not under test".to_string())));
 
         // Parent is confirmed (Valid); the blocks sit below the PPLNS zone, so
         // no chain-context validation runs. They are still marked BlockValid
@@ -2433,7 +2772,7 @@ mod tests {
         );
     }
 
-    /// Fail-first regression for the out-of-order stranding (#2). Validation
+    /// Fail-first regression for the out-of-order stranding. Validation
     /// runs one tokio task per block, so a child's OrganiseEvent can be handled
     /// before its parent's. The child must still become BlockValid once the
     /// parent does -- otherwise the contiguous promotion prefix wedges at the
@@ -2451,6 +2790,12 @@ mod tests {
 
         let (organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        // The confirmed-block follow-up reads each newly confirmed block
+        // back; this test is not about the share feed, so let it find
+        // nothing and skip.
+        mock_chain_handle
+            .expect_get_confirmed_at_height()
+            .returning(|_| Err(StoreError::NotFound("not under test".to_string())));
         mock_chain_handle
             .expect_clone()
             .return_once(MockChainStoreHandle::new);
@@ -2578,6 +2923,11 @@ mod tests {
     async fn test_buffered_follow_up_drains_intermediate_confirmed_heights() {
         let (_organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        // The confirmed-block follow-up reads the block back; this test is
+        // not about the share feed, so let it find nothing and skip.
+        mock_chain_handle
+            .expect_get_confirmed_at_height()
+            .returning(|_| Err(StoreError::NotFound("not under test".to_string())));
 
         // Distinct parent hashes so the metadata mock can give T a Pending parent
         // (T buffers, triggering the follow-up) and C a Valid parent (C promotes).
@@ -2671,6 +3021,15 @@ mod tests {
     async fn test_organise_worker_fatal_on_store_access_validation_error() {
         let (organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        // The confirmed-block follow-up reads each newly confirmed block
+        // back; this test is not about the share feed, so let it find
+        // nothing and skip.
+        mock_chain_handle
+            .expect_get_confirmed_at_height()
+            .returning(|_| Err(StoreError::NotFound("not under test".to_string())));
+        mock_chain_handle
+            .expect_get_tip_height()
+            .returning(|| Ok(None));
         mock_chain_handle
             .expect_clone()
             .return_once(MockChainStoreHandle::new);

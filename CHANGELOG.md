@@ -45,6 +45,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   chain has it in the window, and the total difficulty is at least 1 on every
   network unless `difficulty_multiplier` is configured below 1.0, which
   truncates to zero when cast.
+- Every block a promotion confirms is now reported at its own height, instead
+  of only the block that triggered the promotion being reported at the new
+  confirmed tip's height. A promotion confirms a whole prefix whenever
+  confirmation was stalled and then catches up, and the rest of that prefix was
+  missing from the share feed and from the pool effort numerator entirely.
 - The mining base search keeps a validated block it has already found when it
   hits its search bound, instead of discarding it and falling back to the
   confirmed tip. Discarding it defeated the search in the case it exists for: a

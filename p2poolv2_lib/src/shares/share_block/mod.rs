@@ -197,6 +197,16 @@ impl ShareHeader {
             .expect("engines don't error");
         BlockHash::from_engine(engine)
     }
+
+    /// True when this share's bitcoin header meets the bitcoin network target,
+    /// i.e. the share found a bitcoin block.
+    ///
+    /// On the header rather than the block because the confirmed-block
+    /// follow-up in the organise worker works from headers: the transactions
+    /// say nothing about whether the PoW cleared the network target.
+    pub fn meets_bitcoin_difficulty(&self) -> bool {
+        Target::from_compact(self.bitcoin_header.bits).is_met_by(self.bitcoin_header.block_hash())
+    }
 }
 
 impl Encodable for ShareHeader {
@@ -333,8 +343,7 @@ impl ShareBlock {
     /// itself so it holds pool-wide (every node sees the share on the chain),
     /// not just for blocks found by locally connected miners.
     pub fn is_bitcoin_block(&self) -> bool {
-        let header = &self.header.bitcoin_header;
-        Target::from_compact(header.bits).is_met_by(header.block_hash())
+        self.header.meets_bitcoin_difficulty()
     }
 
     /// Compute and return the block hash for this share block
