@@ -367,12 +367,33 @@ check_all_nodes_alive() {
   [ "$ALIVE_COUNT" -eq "$ALIVE_TOTAL" ] && [ "$ALIVE_TOTAL" -gt 0 ]
 }
 
+# Run a p2poolv2_cli query against a store and echo its JSON on stdout.
+#
+# On a non-zero exit the CLI's stderr is surfaced on OUR stderr (so it reaches
+# the console log without polluting the value the caller captures) rather than
+# being discarded. A silently empty result here is indistinguishable from an
+# empty chain, which is what made a failed nightly undiagnosable from its
+# artifact: a locked store, a missing binary and a corrupt chain all looked the
+# same.
+query_store() {
+  local store="$1"
+  shift
+  local stderr_file output status=0
+  stderr_file="$(mktemp)"
+  output=$("$CLI_BIN" --db-path "$store" "$@" 2>"$stderr_file") || status=$?
+  if [ "$status" -ne 0 ]; then
+    log_message "  p2poolv2_cli $* failed on $store (exit $status):" >&2
+    head -5 "$stderr_file" | sed 's/^/    /' >&2
+  fi
+  rm -f "$stderr_file"
+  printf '%s' "$output"
+}
+
 # Confirmed tip height of a store, or empty on error. Uses `shares --num 1`
 # (not `info`, which reads chain-tip metadata that can fail to decode on some
 # stores).
 store_tip_height() {
-  local store="$1"
-  "$CLI_BIN" --db-path "$store" shares --num 1 2>/dev/null \
+  query_store "$1" shares --num 1 \
     | python3 -c "
 import sys, json
 try:
@@ -380,14 +401,14 @@ try:
     print(shares[0]['height'] if shares else '')
 except Exception:
     print('')
-" || true
+"
 }
 
 # Confirmed block hash at a specific height in a store, or empty if the store
 # has no confirmed block at that height (or on error).
 store_hash_at_height() {
   local store="$1" height="$2"
-  "$CLI_BIN" --db-path "$store" shares --to "$height" --num 1 2>/dev/null \
+  query_store "$store" shares --to "$height" --num 1 \
     | python3 -c "
 import sys, json
 want = int(sys.argv[1])
@@ -396,7 +417,7 @@ try:
     print(shares[0]['blockhash'] if shares and shares[0].get('height') == want else '')
 except Exception:
     print('')
-" "$height" || true
+" "$height"
 }
 
 # Convergence is checked against the actual store state, not the logs. Reorgs
@@ -420,6 +441,7 @@ check_chain_converged() {
   done
 
   if [ "${#tips[@]}" -eq 0 ]; then
+    log_message "  no confirmed tip readable from any store in $RUN_DIR (see the p2poolv2_cli errors above)" >&2
     DISTINCT_HASHES=-1
     WITHIN2="0/$NODE_COUNT"
     return 1

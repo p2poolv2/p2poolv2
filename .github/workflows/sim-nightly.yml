@@ -103,13 +103,17 @@ jobs:
           # to be flaky -- raise it here rather than weakening the check itself.
         run: |
           set -o pipefail
-          mkdir -p /tmp/p2pool-sim
-          ./load-tests/sim/nightly.sh 2>&1 | tee /tmp/p2pool-sim/nightly-output.log
+          # Keep this log OUTSIDE the run dir: run-swarm.sh starts by doing
+          # `rm -rf "$RUN_DIR"`, which unlinks the file tee is still writing to,
+          # so a log written there never reaches the artifact.
+          ./load-tests/sim/nightly.sh 2>&1 | tee /tmp/nightly-output.log
 
       - name: Upload logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: sim-logs-${{ matrix.scenario }}
-          path: /tmp/p2pool-sim/
+          path: |
+            /tmp/p2pool-sim/
+            /tmp/nightly-output.log
           retention-days: 7

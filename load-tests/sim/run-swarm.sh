@@ -118,6 +118,10 @@ if [ -n "$existing" ]; then
   sleep 1
 fi
 
+# NOTE: this wipes the whole run dir, including any file a caller is already
+# writing there. Do not point a `tee` (or any other open handle) inside RUN_DIR
+# before calling this script -- the file gets unlinked and its contents are
+# lost even though the writer keeps succeeding.
 rm -rf "$RUN_DIR"
 mkdir -p "$RUN_DIR"
 PIDS_FILE="$RUN_DIR/pids.txt"
