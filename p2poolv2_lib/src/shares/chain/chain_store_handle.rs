@@ -565,19 +565,26 @@ impl ChainStoreHandle {
     /// Uncles come from `find_uncles`, excluding the mining base and its
     /// ancestry down to the confirmed chain, so a block we build on (or one
     /// of its ancestors) is never also listed as an uncle.
+    ///
+    /// Connectivity to the confirmed chain is not checked, because it holds by
+    /// construction: `find_best_block_valid_descendant` seeds its walk from
+    /// `children_blockhashes(confirmed_tip)`, only enqueues children of blocks
+    /// it has visited, and filters every edge through `is_child_of`, so
+    /// anything it returns retraces to the confirmed tip through parent
+    /// pointers -- and each fallback returns the confirmed tip itself. A store
+    /// inconsistent enough to break that surfaces one step later regardless:
+    /// `get_distribution_from_start_hash` follows the same parent pointers to
+    /// build the payout and errors on a missing header.
     pub fn get_mining_base_and_uncles(
         &self,
     ) -> Result<(BlockHash, HashSet<BlockHash>), StoreError> {
         let mining_base = self.get_mining_base()?;
-        let store = self.store_handle.store();
-        store
-            .get_branch_to_chain(&mining_base, |hash| store.is_confirmed(hash))?
-            .ok_or_else(|| {
-                StoreError::NotFound(format!(
-                    "Mining base {mining_base} does not connect to the confirmed chain"
-                ))
-            })?;
-        let uncles: HashSet<BlockHash> = store.find_uncles(&mining_base)?.into_iter().collect();
+        let uncles: HashSet<BlockHash> = self
+            .store_handle
+            .store()
+            .find_uncles(&mining_base)?
+            .into_iter()
+            .collect();
         Ok((mining_base, uncles))
     }
 
