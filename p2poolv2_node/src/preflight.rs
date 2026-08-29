@@ -50,22 +50,18 @@ impl std::error::Error for PreflightError {
     }
 }
 
-fn check_synced(
-    bitcoind: &BitcoindRpcClient,
-) -> impl std::future::Future<Output = Result<(), PreflightError>> + '_ {
-    async move {
-        let is_in_ibd = bitcoind
-            .getblockchaininfo()
-            .await
-            .map_err(|e| PreflightError::Rpc(e.into()))?
-            .initial_block_download;
+async fn check_synced(bitcoind: &BitcoindRpcClient) -> Result<(), PreflightError> {
+    let is_in_ibd = bitcoind
+        .getblockchaininfo()
+        .await
+        .map_err(|e| PreflightError::Rpc(e.into()))?
+        .initial_block_download;
 
-        if is_in_ibd {
-            return Err(PreflightError::NotSynced);
-        }
-
-        Ok(())
+    if is_in_ibd {
+        return Err(PreflightError::NotSynced);
     }
+
+    Ok(())
 }
 
 /// Waits for the Bitcoin node to finish initial block download, checking
