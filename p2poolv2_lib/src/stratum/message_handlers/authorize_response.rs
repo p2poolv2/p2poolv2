@@ -208,6 +208,7 @@ mod tests {
             metrics: metrics_handle,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
+            miner_address: None,
         };
 
         // Execute
@@ -297,6 +298,7 @@ mod tests {
             metrics: metrics_handle,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
+            miner_address: None,
         };
 
         // Execute
@@ -427,6 +429,7 @@ mod tests {
             metrics: metrics_handle,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
+            miner_address: None,
         };
 
         // Execute
@@ -522,6 +525,7 @@ mod tests {
             metrics: metrics_handle,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
+            miner_address: None,
         };
 
         let messages = handle_authorize(request, &mut session, ctx).await.unwrap();
@@ -578,6 +582,7 @@ mod tests {
             metrics: metrics_handle,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
+            miner_address: None,
         };
 
         let messages = handle_authorize(request, &mut session, ctx).await.unwrap();
@@ -636,6 +641,7 @@ mod tests {
             metrics: metrics_handle,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
+            miner_address: None,
         };
 
         // Execute
@@ -698,6 +704,7 @@ mod tests {
             metrics: metrics_handle,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
+            miner_address: None,
         };
 
         let result = handle_authorize(request, &mut session, ctx).await;
@@ -766,6 +773,7 @@ mod p2p_miner_address_tests {
             metrics: metrics_handle,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
+            miner_address: None,
         };
 
         handle_authorize(request, &mut session, ctx).await.unwrap();
@@ -811,6 +819,7 @@ mod p2p_miner_address_tests {
             metrics: metrics_handle,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
+            miner_address: None,
         };
 
         handle_authorize(request, &mut session, ctx).await.unwrap();
@@ -851,6 +860,7 @@ mod p2p_miner_address_tests {
             metrics: metrics_handle,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
+            miner_address: None,
         };
 
         handle_authorize(request, &mut session, ctx).await.unwrap();
@@ -899,6 +909,7 @@ mod p2p_miner_address_tests {
             metrics: metrics_handle,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
+            miner_address: None,
         };
 
         let messages = handle_authorize(request, &mut session, ctx).await.unwrap();
@@ -951,6 +962,7 @@ mod p2p_miner_address_tests {
             metrics: metrics_handle,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
+            miner_address: None,
         };
 
         handle_authorize(request, &mut session, ctx).await.unwrap();
