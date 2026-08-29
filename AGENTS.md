@@ -94,6 +94,11 @@ Most modules are discoverable by name; these are the non-obvious ones:
 - Test helpers belong in `test_utils` module only if they are generic
   and reusable. No helpers local to a test module -- they inevitably
   diverge and hide setup differences between tests.
+- **No loops over collections in tests.** Do not iterate a table of
+  cases inside a test. Write each case as its own `#[test]` with a name
+  that says what it covers, or as explicit sequential assertions.
+  Looping adds indirection to read, hides which case failed, and lets
+  one case's setup silently drift from the others.
 - `TestShareBlockBuilder` for constructing test shares; well-known
   pubkeys `PUBKEY_G` through `PUBKEY_5G` in test_utils.
 - Feature `test-utils` gates shared test infrastructure.
