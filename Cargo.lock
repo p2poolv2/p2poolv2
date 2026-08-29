@@ -3213,6 +3213,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b15813163c1d831bf4a13c3610c05c0d03b39feb07f7e09fa234dac9b15aaf39"
 
 [[package]]
+name = "p2poolv2_address"
+version = "0.13.0"
+dependencies = [
+ "bitcoin",
+ "hex",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.12",
+]
+
+[[package]]
 name = "p2poolv2_api"
 version = "0.13.0"
 dependencies = [
@@ -3296,6 +3307,7 @@ dependencies = [
  "libp2p",
  "mockall",
  "mockall_double",
+ "p2poolv2_address",
  "p2poolv2_config",
  "rand 0.8.5",
  "rlimit",

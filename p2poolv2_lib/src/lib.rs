@@ -15,7 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 pub mod accounting;
-pub mod address;
+pub use p2poolv2_address as address;
 pub mod auth;
 pub mod command;
 pub use p2poolv2_config as config;
