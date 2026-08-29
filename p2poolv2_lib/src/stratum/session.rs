@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::address::Address as P2PoolAddress;
 use crate::utils::time_provider::SystemTimeProvider;
 use crate::{
     stratum::difficulty_adjuster::DifficultyAdjusterTrait, utils::time_provider::TimeProvider,
@@ -45,6 +46,10 @@ pub struct Session<D: DifficultyAdjusterTrait> {
     pub btcaddress: Option<String>,
     /// Parsed and network-checked bitcoin Address, set once at authorization time
     pub parsed_address: Option<Address>,
+    /// Share chain address from the `p2p=` password option, owning this miner's
+    /// share coinbase outputs. Set once at authorization time. Distinct from
+    /// `parsed_address`, which is the bitcoin payout address on the other chain.
+    pub miner_address: Option<P2PoolAddress>,
     /// Worker name for the mining device
     pub workername: Option<String>,
     /// Optional password of the miner, supplied by the miner, we just store it in session
@@ -89,6 +94,7 @@ impl<D: DifficultyAdjusterTrait> Session<D> {
             workername: None,
             btcaddress: None,
             parsed_address: None,
+            miner_address: None,
             password: None,
             user_id: None,
             worker_id: None,
