@@ -271,21 +271,6 @@ stop_swarm() {
 }
 
 verify_all_chains() {
-  local profile="${PROFILE:-release}"
-  local verify_bin
-  if [ "$profile" = "release" ]; then
-    verify_bin="$REPO_ROOT/target/release/verify_chain"
-  else
-    verify_bin="$REPO_ROOT/target/debug/verify_chain"
-  fi
-
-  if [ ! -x "$verify_bin" ]; then
-    log_message "Building verify_chain ($profile)..."
-    local profile_flag=""
-    [ "$profile" = "release" ] && profile_flag="--release"
-    ( cd "$REPO_ROOT" && cargo build -p p2poolv2_node --bin verify_chain --features debug-tools $profile_flag )
-  fi
-
   VERIFY_CHAIN_FAILURES=0
   VERIFY_CHAIN_TOTAL=0
   log_message "Running verify_chain on all ${NODE_COUNT} node stores..."
@@ -297,7 +282,7 @@ verify_all_chains() {
       VERIFY_CHAIN_FAILURES=$((VERIFY_CHAIN_FAILURES + 1))
       continue
     fi
-    if "$verify_bin" "$store" > "$RUN_DIR/verify-$i.log" 2>&1; then
+    if "$VERIFY_BIN" "$store" > "$RUN_DIR/verify-$i.log" 2>&1; then
       log_message "  node $i: PASS"
     else
       log_message "  node $i: FAIL (see $RUN_DIR/verify-$i.log)"
@@ -306,22 +291,32 @@ verify_all_chains() {
   done
 }
 
-# Locate (or build) the p2poolv2_cli binary, used for the store-based
-# convergence check. Sets CLI_BIN.
-ensure_cli_built() {
+# Build the two binaries the post-swarm checks run against: verify_chain for
+# structural integrity and p2poolv2_cli for the store-based convergence check.
+# Sets VERIFY_BIN and CLI_BIN.
+build_analysis_binaries() {
   local profile="${PROFILE:-release}"
+  local profile_flag=""
+  local target_dir="$REPO_ROOT/target/debug"
   if [ "$profile" = "release" ]; then
-    CLI_BIN="$REPO_ROOT/target/release/p2poolv2_cli"
-  else
-    CLI_BIN="$REPO_ROOT/target/debug/p2poolv2_cli"
+    profile_flag="--release"
+    target_dir="$REPO_ROOT/target/release"
   fi
+  VERIFY_BIN="$target_dir/verify_chain"
+  CLI_BIN="$target_dir/p2poolv2_cli"
 
-  if [ ! -x "$CLI_BIN" ]; then
-    log_message "Building p2poolv2_cli ($profile)..."
-    local profile_flag=""
-    [ "$profile" = "release" ] && profile_flag="--release"
-    ( cd "$REPO_ROOT" && cargo build -p p2poolv2_cli $profile_flag )
-  fi
+  log_message "Building verify_chain and p2poolv2_cli ($profile)..."
+  ( cd "$REPO_ROOT" && cargo build -p p2poolv2_node \
+      --bin verify_chain --bin p2poolv2_cli \
+      --features debug-tools $profile_flag )
+
+  local binary
+  for binary in "$VERIFY_BIN" "$CLI_BIN"; do
+    if [ ! -x "$binary" ]; then
+      echo "ERROR: cargo build succeeded but $binary is missing" >&2
+      exit 1
+    fi
+  done
 }
 
 stop_bitcoind_if_started() {
@@ -608,6 +603,7 @@ evaluate_results() {
 
 find_bitcoind_binary
 find_bitcoin_cli_binary
+build_analysis_binaries
 
 trap cleanup EXIT
 
@@ -621,6 +617,5 @@ check_all_nodes_alive || true
 collect_metrics
 stop_swarm
 verify_all_chains
-ensure_cli_built
 
 evaluate_results
