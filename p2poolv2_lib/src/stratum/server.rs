@@ -15,6 +15,7 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 use crate::accounting::stats::metrics;
+use crate::address::Address as P2PoolAddress;
 pub use crate::config::PoolMode;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
@@ -58,6 +59,8 @@ pub struct StratumServer {
     pub max_connections: Option<u32>,
     pub wait_for_chain_sync: bool,
     pub mode: PoolMode,
+    /// Pool wide share chain address from `[stratum] miner_address`, if set.
+    pub miner_address: Option<P2PoolAddress>,
     shutdown_rx: oneshot::Receiver<()>,
     connections_handle: ClientConnectionsHandle,
     emissions_tx: EmissionSender,
@@ -84,6 +87,7 @@ pub struct StratumServerBuilder {
     zmqpubhashblock: Option<String>,
     chain_store_handle: Option<ChainStoreHandle>,
     mode: Option<PoolMode>,
+    miner_address: Option<P2PoolAddress>,
 }
 
 impl StratumServerBuilder {
@@ -172,6 +176,11 @@ impl StratumServerBuilder {
         self
     }
 
+    pub fn miner_address(mut self, miner_address: Option<P2PoolAddress>) -> Self {
+        self.miner_address = miner_address;
+        self
+    }
+
     pub async fn build(self) -> Result<StratumServer, Box<dyn std::error::Error + Send + Sync>> {
         Ok(StratumServer {
             hostname: self.hostname.ok_or("hostname is required")?,
@@ -197,6 +206,7 @@ impl StratumServerBuilder {
             max_connections: self.max_connections.unwrap_or(None),
             wait_for_chain_sync: self.wait_for_chain_sync.unwrap_or(true),
             mode: self.mode.unwrap_or_default(),
+            miner_address: self.miner_address,
             chain_store_handle: self
                 .chain_store_handle
                 .ok_or("chain store handle is required")?,
@@ -317,6 +327,7 @@ impl StratumServer {
                                         metrics: metrics.clone(),
                                         chain_store_handle: self.chain_store_handle.clone(),
                                         mode: self.mode,
+                                        miner_address: self.miner_address,
                                     };
                                     accept_connection(
                                         stream,
@@ -432,6 +443,14 @@ pub(crate) struct StratumContext {
     pub metrics: metrics::MetricsHandle,
     pub chain_store_handle: ChainStoreHandle,
     pub mode: PoolMode,
+    /// Pool wide share chain address from `[stratum] miner_address`, when the
+    /// operator configured one. Every share is then owned by it, and a miner
+    /// sending a different `p2p=` is rejected at authorize.
+    ///
+    /// Plumbed here ahead of the authorize side that resolves it against the
+    /// miner's `p2p=` value, which is why nothing reads it yet.
+    #[allow(dead_code)]
+    pub miner_address: Option<P2PoolAddress>,
 }
 
 /// Handles a single connection to the Stratum server.  This function
@@ -794,6 +813,7 @@ mod stratum_server_tests {
             network: bitcoin::network::Network::Regtest,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
+            miner_address: None,
         };
 
         // Run the handler
@@ -915,6 +935,7 @@ mod stratum_server_tests {
             network: bitcoin::network::Network::Regtest,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
+            miner_address: None,
         };
 
         // Run the handler
@@ -997,6 +1018,7 @@ mod stratum_server_tests {
             network: bitcoin::network::Network::Regtest,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
+            miner_address: None,
         };
 
         // Run the handler
@@ -1077,6 +1099,7 @@ mod stratum_server_tests {
             metrics: metrics_handle,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
+            miner_address: None,
         };
 
         // Run the handler
@@ -1176,6 +1199,7 @@ mod stratum_server_tests {
             metrics: metrics_handle,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
+            miner_address: None,
         };
 
         // Spawn the handler in a separate task
@@ -1295,6 +1319,7 @@ mod stratum_server_tests {
             metrics: metrics_handle,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
+            miner_address: None,
         };
 
         // Spawn the handler in a separate task
@@ -1404,6 +1429,7 @@ mod stratum_server_tests {
                 network: bitcoin::network::Network::Regtest,
                 chain_store_handle,
                 mode: PoolMode::P2poolv2,
+                miner_address: None,
             };
 
             // wait for subscribe/authorize messages
@@ -1485,6 +1511,7 @@ mod stratum_server_tests {
                 network: bitcoin::network::Network::Signet,
                 chain_store_handle,
                 mode: PoolMode::P2poolv2,
+                miner_address: None,
             };
 
             let subscribe_message =
@@ -1622,6 +1649,7 @@ mod stratum_server_tests {
             network: bitcoin::network::Network::Testnet,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
+            miner_address: None,
         };
 
         // Pre-load a template before starting handle_connection
@@ -1749,6 +1777,7 @@ mod stratum_server_tests {
             network: bitcoin::network::Network::Testnet,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
+            miner_address: None,
         };
 
         // Start with no template - will send one after authorization
@@ -1886,6 +1915,7 @@ mod stratum_server_tests {
             network: bitcoin::network::Network::Regtest,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
+            miner_address: None,
         };
 
         let (template_tx, template_rx) = watch::channel(None);

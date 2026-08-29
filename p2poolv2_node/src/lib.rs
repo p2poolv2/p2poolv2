@@ -310,6 +310,7 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
     let notify_tx_for_node = notify_tx.clone();
     let exit_sender_stratum = exit_sender.clone();
     let exit_receiver_stratum = exit_sender.subscribe();
+    let configured_miner_address = stratum_config.miner_address();
 
     tokio::spawn(async move {
         let mut stratum_server = StratumServerBuilder::default()
@@ -331,6 +332,7 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
             .wait_for_chain_sync(stratum_config.wait_for_chain_sync)
             .chain_store_handle(chain_store_handle_for_stratum)
             .mode(stratum_config.mode)
+            .miner_address(configured_miner_address)
             .build()
             .await
             .unwrap();

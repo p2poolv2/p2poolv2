@@ -3283,6 +3283,7 @@ dependencies = [
  "bitcoin",
  "bitcoindrpc",
  "config",
+ "p2poolv2_address",
  "serde",
  "temp-env",
  "tokio-test",

@@ -17,6 +17,7 @@
 use bitcoin::address::NetworkChecked;
 use bitcoin::{Address, Network};
 use bitcoindrpc::BitcoinRpcConfig;
+use p2poolv2_address::Address as ShareAddress;
 use serde::Deserialize;
 use std::marker::PhantomData;
 use std::str::FromStr;
@@ -45,6 +46,21 @@ pub fn parse_address(address: &str, network: Network) -> Result<Address, ConfigE
         .require_network(network)
         .map_err(|_| ConfigError {
             message: format!("Address does not match network: {network}"),
+        })
+}
+
+/// Parse and validate a share chain address string for a given network.
+///
+/// Kept separate from [`parse_address`] because the two live on different
+/// chains: this one owns share coinbase outputs, that one receives bitcoin.
+pub fn parse_share_address(address: &str, network: Network) -> Result<ShareAddress, ConfigError> {
+    ShareAddress::from_str(address)
+        .map_err(|error| ConfigError {
+            message: format!("Invalid share chain address: {error}"),
+        })?
+        .require_network(network)
+        .map_err(|error| ConfigError {
+            message: format!("Invalid share chain address: {error}"),
         })
 }
 
@@ -104,6 +120,11 @@ pub struct StratumConfig<State = Raw> {
     pub fee_address: Option<String>,
     /// The fee basis points
     pub fee: Option<u16>,
+    /// Share chain address owning every share this pool mines (string in Raw
+    /// state). When set, miners need not send `p2p=` in the stratum password,
+    /// and one that disagrees with this address is rejected at authorize.
+    /// P2Poolv2 mode only; Hydrapool builds no share commitment.
+    pub miner_address: Option<String>,
     /// The network can be "main", "testnet4" or "signet
     #[serde(deserialize_with = "deserialize_network")]
     pub network: bitcoin::Network,
@@ -133,6 +154,8 @@ pub struct StratumConfig<State = Raw> {
     pub donation_address_parsed: Option<Address<NetworkChecked>>,
     #[serde(skip)]
     pub fee_address_parsed: Option<Address<NetworkChecked>>,
+    #[serde(skip)]
+    pub miner_address_parsed: Option<ShareAddress>,
 
     #[serde(skip)]
     #[serde(default)]
@@ -178,7 +201,24 @@ impl StratumConfig<Raw> {
             });
         }
 
+        // Hydrapool never builds a share commitment, so a share chain address
+        // could not be used there. Fail at startup rather than let an operator
+        // believe their shares are being assigned to it.
+        if self.miner_address.is_some() && self.mode == PoolMode::Hydrapool {
+            return Err(ConfigError {
+                message:
+                    "miner_address cannot be set when mode is hydrapool, which has no share chain"
+                        .to_string(),
+            });
+        }
+
         let bootstrap_address_parsed = parse_address(&self.bootstrap_address, self.network)?;
+
+        let miner_address_parsed = self
+            .miner_address
+            .as_ref()
+            .map(|address| parse_share_address(address, self.network))
+            .transpose()?;
 
         let donation_address_parsed = self
             .donation_address
@@ -205,6 +245,7 @@ impl StratumConfig<Raw> {
             donation: self.donation,
             fee_address: self.fee_address,
             fee: self.fee,
+            miner_address: self.miner_address,
             network: self.network,
             version_mask: self.version_mask,
             difficulty_multiplier: self.difficulty_multiplier,
@@ -216,6 +257,7 @@ impl StratumConfig<Raw> {
             bootstrap_address_parsed: Some(bootstrap_address_parsed),
             donation_address_parsed,
             fee_address_parsed,
+            miner_address_parsed,
             _state: PhantomData,
         })
     }
@@ -238,6 +280,14 @@ impl StratumConfig<Parsed> {
     pub fn fee_address(&self) -> Option<&Address<NetworkChecked>> {
         self.fee_address_parsed.as_ref()
     }
+
+    /// Get the pool wide share chain address, if the operator configured one.
+    ///
+    /// When present every share this pool mines is owned by this address, and a
+    /// miner supplying a different one in `p2p=` is rejected at authorize.
+    pub fn miner_address(&self) -> Option<ShareAddress> {
+        self.miner_address_parsed
+    }
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -258,6 +308,7 @@ impl StratumConfig<Raw> {
             donation: None,
             fee_address: None,
             fee: None,
+            miner_address: None,
             network: bitcoin::Network::Signet,
             version_mask: 0x1fffe000,
             difficulty_multiplier: 1.0,
@@ -269,6 +320,7 @@ impl StratumConfig<Raw> {
             bootstrap_address_parsed: None,
             donation_address_parsed: None,
             fee_address_parsed: None,
+            miner_address_parsed: None,
             _state: PhantomData,
         }
     }
@@ -943,5 +995,112 @@ mod tests {
         config.mode = PoolMode::Hydrapool;
         let parsed = config.parse().unwrap();
         assert_eq!(parsed.mode, PoolMode::Hydrapool);
+    }
+}
+
+#[cfg(test)]
+mod miner_address_tests {
+    use super::*;
+
+    /// BIP086 output key of the genesis NUMS pubkey, encoded for each network.
+    /// The test helper config uses Signet.
+    const SIGNET_ADDRESS: &str =
+        "sp2pool1pvmde7zkgeg9qqcpsy7e6g3w6dm3d7mqwqnudcmuedk6wt8gwgkls4zffd6";
+    const TESTNET4_ADDRESS: &str =
+        "tp2pool1pvmde7zkgeg9qqcpsy7e6g3w6dm3d7mqwqnudcmuedk6wt8gwgkls3qc3th";
+
+    #[test]
+    fn absent_miner_address_parses_to_none() {
+        let config = StratumConfig::<Raw>::new_for_test_default();
+        let parsed = config.parse().unwrap();
+        assert!(parsed.miner_address().is_none());
+    }
+
+    #[test]
+    fn valid_miner_address_is_parsed_and_exposed() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.miner_address = Some(SIGNET_ADDRESS.to_string());
+
+        let parsed = config.parse().unwrap();
+
+        assert_eq!(
+            parsed.miner_address().map(|address| address.to_string()),
+            Some(SIGNET_ADDRESS.to_string())
+        );
+        assert_eq!(parsed.miner_address().unwrap().network(), Network::Signet);
+    }
+
+    /// A share address for another network must be rejected at config parse,
+    /// so the node fails at startup rather than assigning every share on the
+    /// pool to an address the operator cannot use.
+    #[test]
+    fn miner_address_for_another_network_is_rejected() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.miner_address = Some(TESTNET4_ADDRESS.to_string());
+
+        let error = config.parse().unwrap_err();
+
+        assert!(
+            error.message.contains("share chain address"),
+            "unexpected message: {}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn malformed_miner_address_is_rejected() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.miner_address = Some("not-a-share-address".to_string());
+
+        let error = config.parse().unwrap_err();
+
+        assert!(
+            error.message.contains("share chain address"),
+            "unexpected message: {}",
+            error.message
+        );
+    }
+
+    /// A bitcoin address here is the mistake the whole address type exists to
+    /// prevent, so it must fail loudly at startup.
+    #[test]
+    fn bitcoin_address_as_miner_address_is_rejected() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.miner_address = Some("tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string());
+
+        assert!(config.parse().is_err());
+    }
+
+    /// Hydrapool builds no share commitment, so the field could never be used.
+    #[test]
+    fn miner_address_with_hydrapool_mode_is_rejected() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.miner_address = Some(SIGNET_ADDRESS.to_string());
+        config.mode = PoolMode::Hydrapool;
+
+        let error = config.parse().unwrap_err();
+
+        assert!(
+            error.message.contains("hydrapool"),
+            "unexpected message: {}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn hydrapool_without_a_miner_address_still_parses() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.mode = PoolMode::Hydrapool;
+
+        assert!(config.parse().is_ok());
+    }
+
+    #[test]
+    fn miner_address_with_p2poolv2_mode_is_accepted() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.miner_address = Some(SIGNET_ADDRESS.to_string());
+        config.mode = PoolMode::P2poolv2;
+
+        assert!(config.parse().is_ok());
     }
 }
