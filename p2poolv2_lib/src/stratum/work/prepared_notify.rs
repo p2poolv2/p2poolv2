@@ -20,6 +20,7 @@ use super::error::WorkError;
 use super::gbt::build_merkle_branches_for_template;
 use super::tracker::JobTracker;
 use crate::accounting::OutputPair;
+use crate::address::Address as P2PoolAddress;
 use crate::shares::share_commitment::{ShareCommitment, encode_optional_address};
 use crate::shares::witness_commitment::WitnessCommitment;
 use crate::stratum::util::{reverse_four_byte_chunks, to_be_hex};
@@ -396,7 +397,8 @@ fn get_commitment_hex(
     commitment_prefix: &[u8],
     time: u32,
     commitment_suffix: &[u8],
-    miner_address: Option<&Address>,
+    miner_bitcoin_address: Option<&Address>,
+    miner_address: Option<&P2PoolAddress>,
 ) -> Result<String, WorkError> {
     let capacity = commitment_prefix.len() + 4 + commitment_suffix.len() + 64;
     let mut commitment_binary = Vec::with_capacity(capacity);
@@ -407,12 +409,22 @@ fn get_commitment_hex(
         })?;
     commitment_binary.extend_from_slice(commitment_suffix);
 
-    if let Some(address) = miner_address {
+    //* Order matters: ShareCommitment::hash appends the bitcoin script_pubkey
+    //* then the share chain one, and this builds the same bytes incrementally.
+    if let Some(address) = miner_bitcoin_address {
         address
             .script_pubkey()
             .consensus_encode(&mut commitment_binary)
             .map_err(|error| WorkError {
                 message: format!("Failed to encode miner address script_pubkey: {error}"),
+            })?;
+    }
+    if let Some(address) = miner_address {
+        address
+            .script_pubkey()
+            .consensus_encode(&mut commitment_binary)
+            .map_err(|error| WorkError {
+                message: format!("Failed to encode share address script_pubkey: {error}"),
             })?;
     }
 
@@ -443,11 +455,13 @@ fn build_per_miner_coinbase2(
 ///
 /// Computes the miner-specific commitment hash, assembles per-miner coinbase2,
 /// overwrites placeholders in the pre-built JSON, and inserts the job into the tracker.
-/// When miner_address is None (solo mode), a commitment hash is still
-/// computed from the prefix alone.
+/// When either address is None (solo or Hydrapool mode), a commitment hash is
+/// still computed from whatever is available, but no `ShareCommitment` is built:
+/// a share needs both a bitcoin payout identity and a share chain owner.
 pub(crate) fn build_notify_from_prepared(
     prepared: &PreparedNotifyParams,
-    miner_address: Option<&Address>,
+    miner_bitcoin_address: Option<&Address>,
+    miner_address: Option<&P2PoolAddress>,
     tracker_handle: &JobTracker,
 ) -> Result<String, WorkError> {
     let fresh_time = SystemTimeProvider.seconds_since_epoch() as u32;
@@ -455,6 +469,7 @@ pub(crate) fn build_notify_from_prepared(
         &prepared.commitment_prefix,
         fresh_time,
         &prepared.commitment_suffix,
+        miner_bitcoin_address,
         miner_address,
     )?;
     let nsecs = get_timestamp_bytes(&SystemTimeProvider);
@@ -478,19 +493,24 @@ pub(crate) fn build_notify_from_prepared(
         &coinbase2,
     );
 
-    // Build ShareCommitment only when a miner address is available
-    let share_commitment = miner_address.map(|address| ShareCommitment {
-        prev_share_blockhash: prepared.prev_share_blockhash,
-        uncles: prepared.uncles.clone(),
-        miner_bitcoin_address: address.clone(),
-        bits: prepared.bits,
-        time: fresh_time,
-        donation_address: prepared.donation_address.clone(),
-        donation: prepared.donation,
-        fee_address: prepared.fee_address.clone(),
-        fee: prepared.fee,
-        coinbase_value: prepared.template.coinbasevalue,
-    });
+    // Build ShareCommitment only when both addresses are available: the share
+    // chain coinbase needs an owner and the bitcoin coinbase needs a payee.
+    let share_commitment =
+        miner_bitcoin_address
+            .zip(miner_address)
+            .map(|(bitcoin_address, share_address)| ShareCommitment {
+                prev_share_blockhash: prepared.prev_share_blockhash,
+                uncles: prepared.uncles.clone(),
+                miner_bitcoin_address: bitcoin_address.clone(),
+                miner_address: *share_address,
+                bits: prepared.bits,
+                time: fresh_time,
+                donation_address: prepared.donation_address.clone(),
+                donation: prepared.donation,
+                fee_address: prepared.fee_address.clone(),
+                fee: prepared.fee,
+                coinbase_value: prepared.template.coinbasevalue,
+            });
 
     // Insert job into tracker
     tracker_handle.insert_job(
@@ -511,6 +531,7 @@ mod tests {
     use super::*;
     use crate::stratum::work::block_template::BlockTemplate;
     use crate::stratum::work::tracker::{JobId, start_tracker_actor};
+    use crate::test_utils::make_test_share_address;
     use bitcoin::{CompressedPublicKey, Network};
 
     fn test_template() -> BlockTemplate {
@@ -576,8 +597,13 @@ mod tests {
             .build()
             .expect("build should succeed");
 
-        let notify_json = build_notify_from_prepared(&prepared, Some(&address), &tracker_handle)
-            .expect("build_notify_from_prepared should succeed");
+        let notify_json = build_notify_from_prepared(
+            &prepared,
+            Some(&address),
+            Some(&make_test_share_address(1, bitcoin::Network::Signet)),
+            &tracker_handle,
+        )
+        .expect("build_notify_from_prepared should succeed");
 
         // Verify the result is valid JSON
         let parsed: serde_json::Value =
@@ -620,8 +646,13 @@ mod tests {
             .build()
             .expect("build should succeed");
 
-        let notify_json = build_notify_from_prepared(&prepared, Some(&address), &tracker_handle)
-            .expect("build_notify_from_prepared should succeed");
+        let notify_json = build_notify_from_prepared(
+            &prepared,
+            Some(&address),
+            Some(&make_test_share_address(1, bitcoin::Network::Signet)),
+            &tracker_handle,
+        )
+        .expect("build_notify_from_prepared should succeed");
 
         // Parse job_id from JSON to look up the tracker entry
         let parsed: serde_json::Value = serde_json::from_str(&notify_json).unwrap();
@@ -636,6 +667,7 @@ mod tests {
             prev_share_blockhash: BlockHash::all_zeros(),
             uncles: Vec::new(),
             miner_bitcoin_address: address,
+            miner_address: make_test_share_address(1, bitcoin::Network::Signet),
             bits,
             time: commitment.time,
             donation_address: None,
@@ -648,11 +680,9 @@ mod tests {
         assert_eq!(commitment.hash(), direct_commitment.hash());
     }
 
-    #[tokio::test]
-    async fn test_different_addresses_produce_different_hashes() {
+    #[test]
+    fn test_different_addresses_produce_different_hashes() {
         let template = Arc::new(test_template());
-        let tracker_handle = start_tracker_actor();
-
         let prepared = test_notify_params_builder(template, false)
             .build()
             .expect("build should succeed");
@@ -663,14 +693,73 @@ mod tests {
                 .parse()
                 .unwrap();
         let address2 = Address::p2wpkh(&other_pubkey, Network::Signet);
+        let share_address = make_test_share_address(1, Network::Signet);
 
-        let notify1 =
-            build_notify_from_prepared(&prepared, Some(&address1), &tracker_handle).unwrap();
-        let notify2 =
-            build_notify_from_prepared(&prepared, Some(&address2), &tracker_handle).unwrap();
+        let time = 1_700_000_000;
+        let hash1 = get_commitment_hex(
+            &prepared.commitment_prefix,
+            time,
+            &prepared.commitment_suffix,
+            Some(&address1),
+            Some(&share_address),
+        )
+        .unwrap();
+        let hash2 = get_commitment_hex(
+            &prepared.commitment_prefix,
+            time,
+            &prepared.commitment_suffix,
+            Some(&address2),
+            Some(&share_address),
+        )
+        .unwrap();
 
-        // Different addresses must produce different notify JSON (different coinbase2 content)
-        assert_ne!(notify1, notify2);
+        assert_ne!(
+            hash1, hash2,
+            "the bitcoin address must reach the commitment hash"
+        );
+    }
+
+    /// Mirror of `test_different_addresses_produce_different_hashes`: hold the
+    /// bitcoin address fixed and vary the share address instead.
+    ///
+    /// Both assert on the commitment hash rather than the notify JSON, because
+    /// the JSON carries a fresh job id and timestamp per call and so always
+    /// differs -- which would make either test pass even if the address were
+    /// ignored entirely.
+    #[test]
+    fn test_different_share_addresses_produce_different_hashes() {
+        let template = Arc::new(test_template());
+        let prepared = test_notify_params_builder(template, false)
+            .build()
+            .expect("build should succeed");
+
+        let bitcoin_address = test_address();
+        let share_address1 = make_test_share_address(1, Network::Signet);
+        let share_address2 = make_test_share_address(2, Network::Signet);
+        assert_ne!(share_address1, share_address2);
+
+        let time = 1_700_000_000;
+        let hash1 = get_commitment_hex(
+            &prepared.commitment_prefix,
+            time,
+            &prepared.commitment_suffix,
+            Some(&bitcoin_address),
+            Some(&share_address1),
+        )
+        .unwrap();
+        let hash2 = get_commitment_hex(
+            &prepared.commitment_prefix,
+            time,
+            &prepared.commitment_suffix,
+            Some(&bitcoin_address),
+            Some(&share_address2),
+        )
+        .unwrap();
+
+        assert_ne!(
+            hash1, hash2,
+            "the share address must reach the commitment hash"
+        );
     }
 
     #[test]
@@ -715,7 +804,7 @@ mod tests {
             .build()
             .expect("build should succeed");
 
-        let notify_json = build_notify_from_prepared(&prepared, None, &tracker_handle)
+        let notify_json = build_notify_from_prepared(&prepared, None, None, &tracker_handle)
             .expect("build_notify_from_prepared with None address should succeed");
 
         // Verify the result is valid JSON

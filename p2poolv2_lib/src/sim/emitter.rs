@@ -27,6 +27,7 @@
 //!
 //! Only compiled under the `sim` feature. See docs/simulation/load-test-plan.md.
 
+use crate::address::Address as P2PoolAddress;
 use crate::config::SimConfig;
 use crate::sim::blockfind::submit_sim_block;
 use crate::sim::share::{SimShareParams, build_sim_emission};
@@ -51,6 +52,7 @@ pub struct SimEmitter {
     emissions_tx: EmissionSender,
     template_rx: watch::Receiver<Option<Arc<PreparedNotifyParams>>>,
     miner_address: Address,
+    share_address: P2PoolAddress,
     config: SimConfig,
     /// RPC client used to submit a real regtest block on a statistical block-find.
     bitcoindrpc: BitcoindRpcClient,
@@ -65,6 +67,7 @@ impl SimEmitter {
         emissions_tx: EmissionSender,
         template_rx: watch::Receiver<Option<Arc<PreparedNotifyParams>>>,
         miner_address: Address,
+        share_address: P2PoolAddress,
         config: SimConfig,
         bitcoindrpc: BitcoindRpcClient,
     ) -> Self {
@@ -72,6 +75,7 @@ impl SimEmitter {
             emissions_tx,
             template_rx,
             miner_address,
+            share_address,
             config,
             bitcoindrpc,
             tracker: start_tracker_actor(),
@@ -139,6 +143,7 @@ impl SimEmitter {
             let params = SimShareParams {
                 prepared: &prepared,
                 miner_address: &self.miner_address,
+                share_address: &self.share_address,
                 tracker: &self.tracker,
                 user_id: 0,
                 difficulty: difficulty.max(1.0) as u64,

@@ -47,13 +47,14 @@ use std::str::FromStr;
 // Imports only needed for internal tests
 #[cfg(any(test, feature = "test-utils"))]
 use crate::accounting::OutputPair;
+#[cfg(any(test, feature = "test-utils"))]
+use crate::address::Address as P2PoolAddress;
 #[cfg(test)]
 use crate::pool_difficulty::MockPoolDifficulty;
 #[cfg(test)]
 use crate::shares::chain::chain_store_handle::MockChainStoreHandle;
 #[cfg(test)]
 use crate::shares::coinbaseaux_flags::CoinbaseAuxFlags;
-#[cfg(any(test, feature = "test-utils"))]
 use crate::shares::share_commitment::ShareCommitment;
 #[cfg(test)]
 use crate::shares::witness_commitment::WitnessCommitment;
@@ -77,6 +78,7 @@ use crate::stratum::work::gbt::build_merkle_branches_for_template;
 use bitcoin::TxMerkleNode;
 #[cfg(any(test, feature = "test-utils"))]
 use bitcoin::script::PushBytesBuf;
+use bitcoin::secp256k1::Secp256k1;
 #[cfg(test)]
 use rand::{Rng, thread_rng};
 
@@ -104,6 +106,26 @@ pub fn make_test_address(index: usize) -> Address {
     };
     let pubkey: bitcoin::CompressedPublicKey = pubkey_hex.parse().unwrap();
     Address::p2wpkh(&pubkey, bitcoin::Network::Regtest)
+}
+
+/// Share chain address for a well known test pubkey, via the BIP086 tweak.
+///
+/// The value differs from `make_test_address` for the same index because the
+/// taproot output key is not just the pubkey hash, so tests cannot accidentally
+/// pass one where the other belongs.
+#[cfg(any(test, feature = "test-utils"))]
+pub fn make_test_share_address(index: usize, network: bitcoin::Network) -> P2PoolAddress {
+    let pubkey_hex = match index {
+        1 => PUBKEY_G,
+        2 => PUBKEY_2G,
+        3 => PUBKEY_3G,
+        4 => PUBKEY_4G,
+        5 => PUBKEY_5G,
+        _ => panic!("index must be 1-5"),
+    };
+    let pubkey: bitcoin::CompressedPublicKey = pubkey_hex.parse().unwrap();
+    let secp = Secp256k1::verification_only();
+    P2PoolAddress::from_internal_key(pubkey.0.x_only_public_key().0, None, network, &secp).unwrap()
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -306,6 +328,7 @@ pub fn create_test_commitment() -> ShareCommitment {
         .unwrap(),
         uncles: vec![],
         miner_bitcoin_address: btcaddress,
+        miner_address: make_test_share_address(1, bitcoin::Network::Signet),
         // Use signet-easy target so test bitcoin headers can meet pool difficulty.
         // In production, calculate_target_clamped ensures pool target is never
         // harder than bitcoin difficulty.
@@ -405,6 +428,7 @@ pub fn build_block_from_work_components(path: &str, nsecs: u64) -> ShareBlock {
         prev_share_blockhash: BlockHash::all_zeros(),
         uncles: vec![],
         miner_bitcoin_address: miner_bitcoin_address.clone(),
+        miner_address: make_test_share_address(1, bitcoin::Network::Signet),
         bits: CompactTarget::from_consensus(0x1b4188f5),
         time: 1700000000u32,
         donation_address: None,
@@ -459,6 +483,7 @@ pub fn build_block_from_work_components(path: &str, nsecs: u64) -> ShareBlock {
         prev_share_blockhash: BlockHash::all_zeros(),
         uncles: vec![],
         miner_bitcoin_address,
+        miner_address: make_test_share_address(1, bitcoin::Network::Signet),
         merkle_root: share_merkle_root,
         bitcoin_header,
         time: 1700000000u32,
@@ -668,6 +693,7 @@ fn test_share_block(
                 prev_share_blockhash: prev_blockhash,
                 uncles: uncles.clone(),
                 miner_bitcoin_address: btcaddress.clone(),
+                miner_address: make_test_share_address(1, bitcoin::Network::Signet),
                 bits: share_bits,
                 time: share_time,
                 donation_address: None,
@@ -719,6 +745,7 @@ fn test_share_block(
         prev_share_blockhash: prev_blockhash,
         uncles,
         miner_bitcoin_address: btcaddress.clone(),
+        miner_address: make_test_share_address(1, bitcoin::Network::Signet),
         merkle_root: share_merkle_root,
         bitcoin_header,
         time: share_time,
@@ -803,6 +830,7 @@ impl TestShareHeaderBuilder {
             prev_share_blockhash: self.prev_share_blockhash.unwrap_or(BlockHash::all_zeros()),
             uncles: self.uncles,
             miner_bitcoin_address: self.btcaddress.unwrap_or(default_address),
+            miner_address: make_test_share_address(1, bitcoin::Network::Signet),
             merkle_root: share_merkle_root,
             bitcoin_header: Header {
                 version: bitcoin::block::Version::TWO,

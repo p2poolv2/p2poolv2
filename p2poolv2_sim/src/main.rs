@@ -103,16 +103,46 @@ async fn main() -> ExitCode {
             .and_then(|a| a.require_network(sim_network).map_err(|e| e.to_string()))
         {
             Ok(miner_address) => {
-                match bitcoindrpc::BitcoindRpcClient::new(
-                    &node_config.bitcoinrpc.url,
-                    &node_config.bitcoinrpc.username,
-                    &node_config.bitcoinrpc.password,
+                let share_address = match sim_cfg
+                    .share_address
+                    .as_ref()
+                    .map(|address| {
+                        address
+                            .parse::<p2poolv2_lib::address::Address>()
+                            .map_err(|error| error.to_string())
+                            .and_then(|parsed| {
+                                parsed
+                                    .require_network(sim_network)
+                                    .map_err(|e| e.to_string())
+                            })
+                    })
+                    .transpose()
+                {
+                    Ok(Some(address)) => Some(address),
+                    Ok(None) => node_config
+                        .stratum
+                        .miner_address
+                        .as_ref()
+                        .and_then(|address| address.parse::<p2poolv2_lib::address::Address>().ok()),
+                    Err(error) => {
+                        error!("Invalid sim share_address, not starting sim emitter: {error}");
+                        None
+                    }
+                };
+                match (
+                    share_address,
+                    bitcoindrpc::BitcoindRpcClient::new(
+                        &node_config.bitcoinrpc.url,
+                        &node_config.bitcoinrpc.username,
+                        &node_config.bitcoinrpc.password,
+                    ),
                 ) {
-                    Ok(sim_rpc) => {
+                    (Some(share_address), Ok(sim_rpc)) => {
                         let emitter = SimEmitter::new(
                             handles.emissions_tx.clone(),
                             handles.template_rx.clone(),
                             miner_address,
+                            share_address,
                             sim_cfg,
                             sim_rpc,
                         );
@@ -127,7 +157,10 @@ async fn main() -> ExitCode {
                         });
                         info!("Sim emitter spawned");
                     }
-                    Err(e) => error!("Failed to build sim bitcoind rpc client: {e}"),
+                    (None, _) => error!(
+                        "Sim emitter needs a share chain address: set [sim] share_address or [stratum] miner_address"
+                    ),
+                    (_, Err(e)) => error!("Failed to build sim bitcoind rpc client: {e}"),
                 }
             }
             Err(e) => error!("Invalid sim miner_address, not starting sim emitter: {e}"),

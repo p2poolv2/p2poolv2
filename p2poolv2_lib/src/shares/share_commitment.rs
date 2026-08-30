@@ -17,6 +17,7 @@
 use super::address_serde;
 use super::option_address_serde;
 use super::share_block::ShareHeader;
+use crate::address::Address as P2PoolAddress;
 use bitcoin::consensus::Encodable;
 use bitcoin::hashes::Hash;
 use bitcoin::io::Write;
@@ -46,6 +47,9 @@ pub struct ShareCommitment {
     /// Bitcoin address identifying the miner mining the share
     #[serde(serialize_with = "address_serde::serialize")]
     pub miner_bitcoin_address: Address,
+    /// Share chain address owning the share coinbase output. Distinct from
+    /// `miner_bitcoin_address`, which receives the bitcoin payout.
+    pub miner_address: P2PoolAddress,
     /// Share chain difficult as compact target
     pub bits: CompactTarget,
     /// Timestamp for the share, as set by the miner
@@ -67,8 +71,13 @@ pub struct ShareCommitment {
 impl ShareCommitment {
     /// Make a SHA256 hash for commitment using consensus encoding.
     ///
-    /// Encodes all shared fields via consensus_encode, then appends
-    /// the miner address script_pubkey and hashes the result.
+    /// Encodes all shared fields via consensus_encode, then appends both
+    /// miner script_pubkeys and hashes the result.
+    ///
+    /// Both are appended, in a fixed order, so the commitment binds the bitcoin
+    /// payout identity and the share chain owner independently: changing either
+    /// one alone must change the hash. `prepared_notify::get_commitment_hex`
+    /// builds the same bytes incrementally and must append them in this order.
     pub fn hash(&self) -> hashes::sha256::Hash {
         let mut serialized = Vec::new();
         self.consensus_encode(&mut serialized)
@@ -77,6 +86,10 @@ impl ShareCommitment {
             .script_pubkey()
             .consensus_encode(&mut serialized)
             .expect("encoding address script_pubkey should never fail");
+        self.miner_address
+            .script_pubkey()
+            .consensus_encode(&mut serialized)
+            .expect("encoding share address script_pubkey should never fail");
         bitcoin::hashes::sha256::Hash::hash(&serialized)
     }
 
@@ -89,6 +102,7 @@ impl ShareCommitment {
             prev_share_blockhash: header.prev_share_blockhash,
             uncles: header.uncles.clone(),
             miner_bitcoin_address: header.miner_bitcoin_address.clone(),
+            miner_address: header.miner_address,
             bits: header.bits,
             time: header.time,
             donation_address: header.donation_address.clone(),
@@ -152,6 +166,7 @@ mod tests {
     use crate::shares::witness_commitment::WitnessCommitment;
     use crate::stratum::work::block_template::BlockTemplate;
     use crate::test_utils::create_test_commitment;
+    use crate::test_utils::make_test_share_address;
     use crate::test_utils::test_coinbase_transaction;
     use bitcoin::hashes::Hash;
     use bitcoin::{CompressedPublicKey, Network, TxMerkleNode};
@@ -210,6 +225,24 @@ mod tests {
         let hash2 = commitment2.hash();
 
         assert_ne!(hash1, hash2);
+    }
+
+    /// The commitment binds both script_pubkeys, so changing only the share
+    /// chain owner must change the hash. Without this, two miners sharing a
+    /// bitcoin payout address would commit identically and their shares could
+    /// not be told apart on the share chain.
+    #[test]
+    fn test_hash_uniqueness_different_share_address() {
+        let commitment1 = create_test_commitment();
+        let mut commitment2 = create_test_commitment();
+
+        assert_eq!(
+            commitment1.miner_bitcoin_address, commitment2.miner_bitcoin_address,
+            "only the share address may differ for this test to mean anything"
+        );
+        commitment2.miner_address = make_test_share_address(2, Network::Signet);
+
+        assert_ne!(commitment1.hash(), commitment2.hash());
     }
 
     #[test]
