@@ -489,6 +489,11 @@ pub struct SimConfig {
     pub enabled: bool,
     /// This node's payout identity (bitcoin address); should be distinct per node.
     pub miner_address: String,
+    /// This node's share chain identity. Cannot be derived from `miner_address`
+    /// -- different chain, different key -- so it is supplied separately.
+    /// Falls back to `[stratum] miner_address` when omitted.
+    #[serde(default)]
+    pub share_address: Option<String>,
     /// Modeled hashrate Hᵢ in hashes/sec; sets the emission rate.
     pub hashrate: f64,
     /// Expected number of shares per bitcoin block (global; same on all nodes).

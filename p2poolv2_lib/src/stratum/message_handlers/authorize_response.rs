@@ -14,11 +14,13 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::address::{Address as P2PoolAddress, AddressError};
+use crate::config::PoolMode;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::stratum::{
     difficulty_adjuster::DifficultyAdjusterTrait,
     error::{Error, StratumErrorCode},
-    messages::{Message, Response, SetDifficultyNotification, SimpleRequest},
+    messages::{Id, Message, Response, SetDifficultyNotification, SimpleRequest},
     parse_password::parse_password,
     server::StratumContext,
     session::Session,
@@ -41,6 +43,70 @@ async fn register_user<D: DifficultyAdjusterTrait>(
     session.user_id = Some(user_id);
 
     Ok(())
+}
+
+/// Resolve which share chain address owns this miner's shares.
+///
+/// The node's configured address wins: when set, it owns every share on the
+/// pool and a miner naming a different owner from the node is a conflict.
+/// Two rules drive the table -- never derive an address, and never silently
+/// substitute one for another, because a miner who set a miner address must
+/// be told rather than have shares assigned elsewhere.
+///
+/// Hydrapool builds no share commitment, so no address is needed there.
+fn resolve_share_address(
+    configured: Option<P2PoolAddress>,
+    supplied: Option<&Result<P2PoolAddress, AddressError>>,
+    network: bitcoin::Network,
+    mode: PoolMode,
+) -> Result<Option<P2PoolAddress>, String> {
+    if mode == PoolMode::Hydrapool {
+        return Ok(None);
+    }
+
+    match (configured, supplied) {
+        (Some(configured), Some(Ok(supplied))) if *supplied != configured => Err(format!(
+            "Share address {supplied} conflicts with the pool's configured {configured}. Remove p2p= from the password, or set it to the node address."
+        )),
+        (Some(configured), Some(Err(error))) => Err(format!(
+            "Could not read the p2p= share address ({error}). Remove it to use the node's address {configured}, or correct it. Note p2p=<address> is 71 characters and some miner firmware truncates the password field."
+        )),
+        (Some(configured), _) => Ok(Some(configured)),
+        (None, Some(Ok(supplied))) => supplied
+            .require_network(network)
+            .map(Some)
+            .map_err(|error| format!("Share address is not usable on this pool: {error}")),
+        (None, Some(Err(error))) => Err(format!(
+            "Could not read the p2p= share address ({error}). Note p2p=<address> is 71 characters and some miner firmware truncates the password field."
+        )),
+        (None, None) => Err(
+            "This pool needs a share chain address. Set the stratum password to p2p=<address>, which you can generate with `p2poolv2_cli address encode`."
+                .to_string(),
+        ),
+    }
+}
+
+/// Send an authorization error, disconnecting on a repeat offence.
+///
+/// Returning `Err` here instead would close the socket without writing anything
+/// (see the message loop in `stratum::server`), leaving the miner with an
+/// unexplained disconnect and nothing to diagnose. So the first attempt gets a
+/// message and the second, still wrong, drops the connection.
+fn reject_authorize<'a, D: DifficultyAdjusterTrait>(
+    session: &mut Session<D>,
+    id: Option<Id>,
+    reason: String,
+) -> Result<Vec<Message<'a>>, Error> {
+    if session.auth_failed_once {
+        return Err(Error::AuthorizationFailure(format!(
+            "Second miner address failure. Disconnecting. {reason}"
+        )));
+    }
+    session.auth_failed_once = true;
+    debug!("Rejecting authorize: {reason}");
+    Ok(vec![Message::Response(
+        Response::new_error(id, StratumErrorCode::UnauthorizedWorker).with_message(reason),
+    )])
 }
 
 /// Handle the "mining.authorize" message
@@ -118,17 +184,15 @@ pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
     // borrow of the session.
     let parsed_password = session.password.as_deref().map(parse_password);
 
-    session.miner_address = match parsed_password
+    let supplied_address = parsed_password
         .as_ref()
-        .and_then(|parsed| parsed.miner_address.as_ref())
-    {
-        Some(Ok(address)) => Some(*address),
-        Some(Err(error)) => {
-            debug!("Ignoring unparseable p2p= share chain address: {error}");
-            None
-        }
-        None => None,
-    };
+        .and_then(|parsed| parsed.miner_address.as_ref());
+
+    session.miner_address =
+        match resolve_share_address(ctx.miner_address, supplied_address, ctx.network, ctx.mode) {
+            Ok(address) => address,
+            Err(reason) => return reject_authorize(session, message.id, reason),
+        };
 
     let start_difficulty = match parsed_password.and_then(|parsed| parsed.difficulty) {
         Some(requested_difficulty) => {
@@ -163,10 +227,10 @@ mod tests {
     use super::*;
     use crate::accounting::stats::metrics;
     use crate::stratum::difficulty_adjuster::DifficultyAdjuster;
-    use crate::stratum::messages::Id;
     use crate::stratum::server::PoolMode;
     use crate::stratum::server::StratumContext;
     use crate::stratum::work::tracker::start_tracker_actor;
+    use crate::test_utils::make_test_share_address;
     use crate::test_utils::setup_test_chain_store_handle;
     use bitcoindrpc::BitcoindRpcClient;
     use bitcoindrpc::test_utils::setup_mock_bitcoin_rpc;
@@ -208,7 +272,7 @@ mod tests {
             metrics: metrics_handle,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
-            miner_address: None,
+            miner_address: Some(make_test_share_address(1, bitcoin::Network::Testnet4)),
         };
 
         // Execute
@@ -298,7 +362,7 @@ mod tests {
             metrics: metrics_handle,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
-            miner_address: None,
+            miner_address: Some(make_test_share_address(1, bitcoin::Network::Testnet4)),
         };
 
         // Execute
@@ -429,7 +493,7 @@ mod tests {
             metrics: metrics_handle,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
-            miner_address: None,
+            miner_address: Some(make_test_share_address(1, bitcoin::Network::Testnet4)),
         };
 
         // Execute
@@ -525,7 +589,7 @@ mod tests {
             metrics: metrics_handle,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
-            miner_address: None,
+            miner_address: Some(make_test_share_address(1, bitcoin::Network::Testnet4)),
         };
 
         let messages = handle_authorize(request, &mut session, ctx).await.unwrap();
@@ -582,7 +646,7 @@ mod tests {
             metrics: metrics_handle,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
-            miner_address: None,
+            miner_address: Some(make_test_share_address(1, bitcoin::Network::Testnet4)),
         };
 
         let messages = handle_authorize(request, &mut session, ctx).await.unwrap();
@@ -641,7 +705,7 @@ mod tests {
             metrics: metrics_handle,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
-            miner_address: None,
+            miner_address: Some(make_test_share_address(1, bitcoin::Network::Testnet4)),
         };
 
         // Execute
@@ -704,7 +768,7 @@ mod tests {
             metrics: metrics_handle,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
-            miner_address: None,
+            miner_address: Some(make_test_share_address(1, bitcoin::Network::Testnet4)),
         };
 
         let result = handle_authorize(request, &mut session, ctx).await;
@@ -870,12 +934,11 @@ mod p2p_miner_address_tests {
         assert!(session.parsed_address.is_some());
     }
 
-    /// Step 2 only records the address; a malformed one is logged and dropped
-    /// and authorize still succeeds. This will later turn into a rejection, so
-    /// this test must be updated deliberately at that point rather than
-    /// silently starting to fail.
+    /// A malformed p2p= address is a rejection, not a silent drop: the miner
+    /// named an owner we cannot honour, and assigning their shares elsewhere
+    /// would be worse than refusing the connection.
     #[tokio::test]
-    async fn authorize_with_a_malformed_share_address_still_succeeds_for_now() {
+    async fn authorize_with_a_malformed_share_address_is_rejected() {
         let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
         let request = SimpleRequest::new_authorize(
             12345,
@@ -915,11 +978,21 @@ mod p2p_miner_address_tests {
         let messages = handle_authorize(request, &mut session, ctx).await.unwrap();
 
         assert!(session.miner_address.is_none());
-        assert_eq!(session.btcaddress, Some(BITCOIN_ADDRESS.to_string()));
-        assert!(session.parsed_address.is_some());
+        assert!(
+            session.auth_failed_once,
+            "a rejected address must arm the two-strikes disconnect"
+        );
 
         if let Message::Response(response) = &messages[0] {
-            assert!(response.error.is_none());
+            let message_text = format!("{:?}", response.error);
+            assert!(
+                response.error.is_some(),
+                "a malformed share address must be reported to the miner"
+            );
+            assert!(
+                message_text.contains("p2p="),
+                "the error must name the option the miner has to fix: {message_text}"
+            );
         } else {
             panic!("Expected a Response message");
         }
@@ -974,5 +1047,161 @@ mod p2p_miner_address_tests {
         assert_eq!(session.btcaddress, Some(BITCOIN_ADDRESS.to_string()));
         assert!(session.parsed_address.is_some());
         assert_eq!(session.difficulty_adjuster.get_current_difficulty(), 500);
+    }
+}
+
+/// Direct coverage of the share address resolution table.
+///
+/// These drive the pure function rather than `handle_authorize`, so every arm
+/// is reachable without a StratumContext, a store and a mock rpc server.
+#[cfg(test)]
+mod resolve_share_address_tests {
+    use super::*;
+    use crate::test_utils::make_test_share_address;
+    use bitcoin::Network;
+
+    fn configured() -> P2PoolAddress {
+        make_test_share_address(1, Network::Signet)
+    }
+
+    fn different() -> P2PoolAddress {
+        make_test_share_address(2, Network::Signet)
+    }
+
+    fn unparseable() -> Result<P2PoolAddress, AddressError> {
+        Err("not-a-share-address".parse::<P2PoolAddress>().unwrap_err())
+    }
+
+    #[test]
+    fn hydrapool_needs_no_address_at_all() {
+        let resolved =
+            resolve_share_address(None, None, Network::Signet, PoolMode::Hydrapool).unwrap();
+        assert!(resolved.is_none());
+    }
+
+    /// Hydrapool builds no share commitment, so a supplied address is not an
+    /// error there, it is simply unused.
+    #[test]
+    fn hydrapool_ignores_a_supplied_address() {
+        let supplied = Ok(configured());
+        let resolved =
+            resolve_share_address(None, Some(&supplied), Network::Signet, PoolMode::Hydrapool)
+                .unwrap();
+        assert!(resolved.is_none());
+    }
+
+    #[test]
+    fn hydrapool_ignores_a_conflict_that_would_fail_in_p2poolv2() {
+        let supplied = Ok(different());
+        let resolved = resolve_share_address(
+            Some(configured()),
+            Some(&supplied),
+            Network::Signet,
+            PoolMode::Hydrapool,
+        )
+        .unwrap();
+        assert!(resolved.is_none());
+    }
+
+    #[test]
+    fn configured_address_is_used_when_the_password_has_none() {
+        let resolved = resolve_share_address(
+            Some(configured()),
+            None,
+            Network::Signet,
+            PoolMode::P2poolv2,
+        )
+        .unwrap();
+        assert_eq!(resolved, Some(configured()));
+    }
+
+    #[test]
+    fn supplied_address_matching_the_configured_one_is_accepted() {
+        let supplied = Ok(configured());
+        let resolved = resolve_share_address(
+            Some(configured()),
+            Some(&supplied),
+            Network::Signet,
+            PoolMode::P2poolv2,
+        )
+        .unwrap();
+        assert_eq!(resolved, Some(configured()));
+    }
+
+    /// The error has to name both addresses: the fix could belong to either the
+    /// miner or the operator, and neither can act on "mismatch" alone.
+    #[test]
+    fn supplied_address_conflicting_with_the_configured_one_is_rejected() {
+        let supplied = Ok(different());
+        let reason = resolve_share_address(
+            Some(configured()),
+            Some(&supplied),
+            Network::Signet,
+            PoolMode::P2poolv2,
+        )
+        .unwrap_err();
+
+        assert!(reason.contains(&configured().to_string()), "{reason}");
+        assert!(reason.contains(&different().to_string()), "{reason}");
+    }
+
+    /// Unparseable while the pool has one configured is a conflict, not a
+    /// fallback: the miner named an owner we cannot check against the pool's,
+    /// and silently using the pool address would assign their shares elsewhere.
+    #[test]
+    fn unparseable_supplied_address_is_rejected_even_with_a_configured_one() {
+        let supplied = unparseable();
+        let reason = resolve_share_address(
+            Some(configured()),
+            Some(&supplied),
+            Network::Signet,
+            PoolMode::P2poolv2,
+        )
+        .unwrap_err();
+
+        assert!(reason.contains("p2p="), "{reason}");
+        assert!(reason.contains(&configured().to_string()), "{reason}");
+    }
+
+    #[test]
+    fn supplied_address_is_used_when_the_node_configured_none() {
+        let supplied = Ok(configured());
+        let resolved =
+            resolve_share_address(None, Some(&supplied), Network::Signet, PoolMode::P2poolv2)
+                .unwrap();
+        assert_eq!(resolved, Some(configured()));
+    }
+
+    /// A miner-supplied address is network checked here, unlike a configured
+    /// one which config parse already validated.
+    #[test]
+    fn supplied_address_for_another_network_is_rejected() {
+        let supplied = Ok(make_test_share_address(1, Network::Testnet4));
+        let reason =
+            resolve_share_address(None, Some(&supplied), Network::Signet, PoolMode::P2poolv2)
+                .unwrap_err();
+
+        assert!(reason.contains("not usable on this pool"), "{reason}");
+    }
+
+    #[test]
+    fn unparseable_supplied_address_without_a_configured_one_is_rejected() {
+        let supplied = unparseable();
+        let reason =
+            resolve_share_address(None, Some(&supplied), Network::Signet, PoolMode::P2poolv2)
+                .unwrap_err();
+
+        assert!(reason.contains("p2p="), "{reason}");
+    }
+
+    /// The message has to tell a miner what to do, not merely that something is
+    /// missing, since this is the first thing a new miner hits.
+    #[test]
+    fn no_address_from_either_source_is_rejected() {
+        let reason =
+            resolve_share_address(None, None, Network::Signet, PoolMode::P2poolv2).unwrap_err();
+
+        assert!(reason.contains("p2p="), "{reason}");
+        assert!(reason.contains("address encode"), "{reason}");
     }
 }

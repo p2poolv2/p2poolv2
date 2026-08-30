@@ -26,6 +26,7 @@
 //! reconstructs. See `docs/simulation/load-test-plan.md`.
 
 use crate::accounting::payout::simple_pplns::SimplePplnsShare;
+use crate::address::Address as P2PoolAddress;
 use crate::shares::extranonce::Extranonce;
 use crate::stratum::emission::Emission;
 use crate::stratum::work::difficulty::validate::build_coinbase_from_components;
@@ -60,8 +61,10 @@ impl std::error::Error for SimShareError {}
 pub struct SimShareParams<'a> {
     /// Prepared notify parameters for the current template + share-chain tip.
     pub prepared: &'a PreparedNotifyParams,
-    /// This node's payout identity.
+    /// This node's payout identity on the bitcoin chain.
     pub miner_address: &'a Address,
+    /// This node's share chain identity, owning the share coinbase output.
+    pub share_address: &'a P2PoolAddress,
     /// Job tracker the per-miner job is inserted into.
     pub tracker: &'a JobTracker,
     /// PPLNS user id (accounting only).
@@ -90,8 +93,13 @@ pub struct SimShareParams<'a> {
 /// normal pipeline — `handle_stratum_share` → store → broadcast — takes over).
 pub fn build_sim_emission(params: SimShareParams<'_>) -> Result<BuiltShare, SimShareError> {
     // Insert a per-miner job: commitment, per-miner coinbase2, nsecs, branches.
-    build_notify_from_prepared(params.prepared, Some(params.miner_address), params.tracker)
-        .map_err(|e| SimShareError(format!("build notify: {e}")))?;
+    build_notify_from_prepared(
+        params.prepared,
+        Some(params.miner_address),
+        Some(params.share_address),
+        params.tracker,
+    )
+    .map_err(|e| SimShareError(format!("build notify: {e}")))?;
 
     let job_id = params.tracker.get_latest_job_id();
     let job = params
@@ -164,6 +172,7 @@ mod tests {
     use crate::stratum::work::coinbase::build_bitcoin_coinbase_transaction;
     use crate::stratum::work::prepared_notify::PreparedNotifyParamsBuilder;
     use crate::stratum::work::tracker::start_tracker_actor;
+    use crate::test_utils::make_test_share_address;
     use bitcoin::script::PushBytesBuf;
     use bitcoin::transaction::Version;
     use bitcoin::{Amount, CompactTarget, CompressedPublicKey, Network};
@@ -217,6 +226,7 @@ mod tests {
         let emission = build_sim_emission(SimShareParams {
             prepared: &prepared,
             miner_address: &address,
+            share_address: &make_test_share_address(1, bitcoin::Network::Regtest),
             tracker: &tracker,
             user_id: 1,
             difficulty: 1,
@@ -280,6 +290,7 @@ mod tests {
         let emission = build_sim_emission(SimShareParams {
             prepared: &prepared,
             miner_address: &address,
+            share_address: &make_test_share_address(1, bitcoin::Network::Regtest),
             tracker: &tracker,
             user_id: 7,
             difficulty: 5,

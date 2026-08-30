@@ -506,13 +506,20 @@ where
             // Clone inside a block to ensure the watch Ref guard is dropped before await
             let prepared_template = { template_rx.borrow_and_update().clone() };
             if let Some(prepared) = prepared_template {
-                let commitment_address = if is_hydrapool {
-                    None
+                let (commitment_address, share_address) = if is_hydrapool {
+                    (None, None)
                 } else {
-                    session.parsed_address.as_ref()
+                    (
+                        session.parsed_address.as_ref(),
+                        session.miner_address.as_ref(),
+                    )
                 };
-                match build_notify_from_prepared(&prepared, commitment_address, &ctx.tracker_handle)
-                {
+                match build_notify_from_prepared(
+                    &prepared,
+                    commitment_address,
+                    share_address,
+                    &ctx.tracker_handle,
+                ) {
                     Ok(notify_json) => {
                         debug!("Sending first notify after authorize");
                         if let Err(e) = writer
@@ -555,12 +562,12 @@ where
                 if session.username.is_none() {
                     // Not yet authorized, skip building notify
                 } else if let Some(prepared) = prepared_template {
-                    let commitment_address = if is_hydrapool {
-                        None
+                    let (commitment_address, share_address) = if is_hydrapool {
+                        (None, None)
                     } else {
-                        session.parsed_address.as_ref()
+                        (session.parsed_address.as_ref(), session.miner_address.as_ref())
                     };
-                    match build_notify_from_prepared(&prepared, commitment_address, &ctx.tracker_handle) {
+                    match build_notify_from_prepared(&prepared, commitment_address, share_address, &ctx.tracker_handle) {
                         Ok(notify_json) => {
                             debug!("Send notify in reponse to new template");
                             if let Err(e) = writer.write_all(format!("{notify_json}\n").as_bytes()).await {
@@ -692,6 +699,7 @@ mod stratum_server_tests {
     use crate::stratum::messages::SimpleRequest;
     use crate::stratum::server;
     use crate::stratum::work::tracker::start_tracker_actor;
+    use crate::test_utils::make_test_share_address;
     use crate::test_utils::{TestShareBlockBuilder, setup_test_chain_store_handle};
     use crate::utils::time_provider::TestTimeProvider;
     use bitcoindrpc::test_utils::setup_mock_bitcoin_rpc;
@@ -813,7 +821,7 @@ mod stratum_server_tests {
             network: bitcoin::network::Network::Regtest,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
-            miner_address: None,
+            miner_address: Some(make_test_share_address(1, bitcoin::Network::Testnet4)),
         };
 
         // Run the handler
@@ -935,7 +943,7 @@ mod stratum_server_tests {
             network: bitcoin::network::Network::Regtest,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
-            miner_address: None,
+            miner_address: Some(make_test_share_address(1, bitcoin::Network::Testnet4)),
         };
 
         // Run the handler
@@ -1018,7 +1026,7 @@ mod stratum_server_tests {
             network: bitcoin::network::Network::Regtest,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
-            miner_address: None,
+            miner_address: Some(make_test_share_address(1, bitcoin::Network::Testnet4)),
         };
 
         // Run the handler
@@ -1099,7 +1107,7 @@ mod stratum_server_tests {
             metrics: metrics_handle,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
-            miner_address: None,
+            miner_address: Some(make_test_share_address(1, bitcoin::Network::Testnet4)),
         };
 
         // Run the handler
@@ -1199,7 +1207,7 @@ mod stratum_server_tests {
             metrics: metrics_handle,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
-            miner_address: None,
+            miner_address: Some(make_test_share_address(1, bitcoin::Network::Testnet4)),
         };
 
         // Spawn the handler in a separate task
@@ -1319,7 +1327,7 @@ mod stratum_server_tests {
             metrics: metrics_handle,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
-            miner_address: None,
+            miner_address: Some(make_test_share_address(1, bitcoin::Network::Testnet4)),
         };
 
         // Spawn the handler in a separate task
@@ -1429,7 +1437,7 @@ mod stratum_server_tests {
                 network: bitcoin::network::Network::Regtest,
                 chain_store_handle,
                 mode: PoolMode::P2poolv2,
-                miner_address: None,
+                miner_address: Some(make_test_share_address(1, bitcoin::Network::Testnet4)),
             };
 
             // wait for subscribe/authorize messages
@@ -1511,7 +1519,7 @@ mod stratum_server_tests {
                 network: bitcoin::network::Network::Signet,
                 chain_store_handle,
                 mode: PoolMode::P2poolv2,
-                miner_address: None,
+                miner_address: Some(make_test_share_address(1, bitcoin::Network::Testnet4)),
             };
 
             let subscribe_message =
@@ -1649,7 +1657,7 @@ mod stratum_server_tests {
             network: bitcoin::network::Network::Testnet,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
-            miner_address: None,
+            miner_address: Some(make_test_share_address(1, bitcoin::Network::Testnet4)),
         };
 
         // Pre-load a template before starting handle_connection
@@ -1777,7 +1785,7 @@ mod stratum_server_tests {
             network: bitcoin::network::Network::Testnet,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
-            miner_address: None,
+            miner_address: Some(make_test_share_address(1, bitcoin::Network::Testnet4)),
         };
 
         // Start with no template - will send one after authorization
@@ -1915,7 +1923,7 @@ mod stratum_server_tests {
             network: bitcoin::network::Network::Regtest,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
-            miner_address: None,
+            miner_address: Some(make_test_share_address(1, bitcoin::Network::Testnet4)),
         };
 
         let (template_tx, template_rx) = watch::channel(None);

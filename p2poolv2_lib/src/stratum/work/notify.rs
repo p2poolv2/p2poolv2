@@ -251,6 +251,7 @@ mod tests {
     };
     use crate::stratum::work::tracker::{JobId, start_tracker_actor};
     use crate::test_utils::genesis_for_tests;
+    use crate::test_utils::make_test_share_address;
     use bitcoin::CompressedPublicKey;
     use bitcoin::{Address, Amount, Network, ScriptBuf, TxOut};
     use std::collections::HashMap;
@@ -293,8 +294,13 @@ mod tests {
             .unwrap()
             .assume_checked();
         let tracker_handle = start_tracker_actor();
-        let notify_json = build_notify_from_prepared(&prepared, Some(&address), &tracker_handle)
-            .expect("Failed to build notify");
+        let notify_json = build_notify_from_prepared(
+            &prepared,
+            Some(&address),
+            Some(&make_test_share_address(1, bitcoin::Network::Signet)),
+            &tracker_handle,
+        )
+        .expect("Failed to build notify");
 
         let notify: Notify = serde_json::from_str(&notify_json).expect("Invalid notify JSON");
 
@@ -471,6 +477,7 @@ mod tests {
         let result = build_notify_from_prepared(
             prepared.as_ref().unwrap(),
             Some(&miner_address),
+            Some(&make_test_share_address(1, bitcoin::Network::Signet)),
             &tracker_handle,
         );
         assert!(result.is_ok(), "build_notify_from_prepared should succeed");
@@ -537,8 +544,13 @@ mod tests {
         let prepared = prepared.unwrap();
 
         // Build per-miner notify from prepared
-        let notify_str = build_notify_from_prepared(&prepared, Some(&btcaddress), &tracker_handle)
-            .expect("build_notify_from_prepared should succeed");
+        let notify_str = build_notify_from_prepared(
+            &prepared,
+            Some(&btcaddress),
+            Some(&make_test_share_address(1, bitcoin::Network::Signet)),
+            &tracker_handle,
+        )
+        .expect("build_notify_from_prepared should succeed");
 
         // Verify notify string is valid JSON
         let notify: Notify = serde_json::from_str(&notify_str).expect("Invalid notify JSON");
@@ -628,8 +640,13 @@ mod tests {
 
         let address = original_output_pairs[0].address.clone();
         let tracker_handle = start_tracker_actor();
-        let notify_json = build_notify_from_prepared(&prepared, Some(&address), &tracker_handle)
-            .expect("Failed to build notify");
+        let notify_json = build_notify_from_prepared(
+            &prepared,
+            Some(&address),
+            Some(&make_test_share_address(1, bitcoin::Network::Signet)),
+            &tracker_handle,
+        )
+        .expect("Failed to build notify");
 
         let notify: Notify = serde_json::from_str(&notify_json).expect("Invalid notify JSON");
         let coinbase2_hex = &notify.params.coinbase2;
