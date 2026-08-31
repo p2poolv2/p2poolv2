@@ -14,11 +14,12 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+use crate::address::Address as P2PoolAddress;
 use crate::shares::share_block::ShareTransaction;
 use crate::shares::witness_commitment::{WITNESS_COMMITMENT_LENGTH, WitnessCommitment};
 use bitcoin::consensus::Encodable;
 use bitcoin::hashes::{Hash, HashEngine, sha256d};
-use bitcoin::{Address, Transaction, TxOut, WitnessMerkleNode, Wtxid, merkle_tree};
+use bitcoin::{Transaction, TxMerkleNode, TxOut, WitnessMerkleNode, Wtxid, merkle_tree};
 
 const SHARE_VALUE: u64 = 1; // 100_000_000 satoshi == 1 BTC == 1 share
 /// BIP141 witness commitment header: OP_RETURN, push 36, magic "aa21a9ed".
@@ -27,7 +28,7 @@ const BIP141_COMMITMENT_HEADER: [u8; 6] = [0x6a, 0x24, 0xaa, 0x21, 0xa9, 0xed];
 /// witness stack item of the coinbase input.
 const WITNESS_RESERVED_VALUE: [u8; 32] = [0u8; 32];
 
-/// Create a coinbase transaction for the given bitcoin address.
+/// Create a coinbase transaction for the given share chain address.
 ///
 /// Builds a coinbase that pays the miner one share unit and embeds a
 /// BIP141 witness commitment covering the provided share transactions.
@@ -38,10 +39,10 @@ const WITNESS_RESERVED_VALUE: [u8; 32] = [0u8; 32];
 /// Also places the 32-byte witness reserved value on the coinbase input's
 /// witness stack so validators can recompute the commitment.
 pub fn build_sharechain_coinbase_transaction(
-    btcaddress: &Address,
+    miner_address: &P2PoolAddress,
     other_share_transactions: &[ShareTransaction],
 ) -> Transaction {
-    let script_pubkey = btcaddress.script_pubkey();
+    let script_pubkey = miner_address.script_pubkey();
 
     let payout_output = TxOut {
         value: bitcoin::Amount::from_int_btc(SHARE_VALUE),
@@ -66,6 +67,28 @@ pub fn build_sharechain_coinbase_transaction(
         input: vec![tx_in],
         output: vec![payout_output, witness_commitment_output],
     }
+}
+
+/// Merkle root over a share's transactions, for the given share chain owner.
+///
+/// The share commitment is fixed at notify time, before the miner hashes, so
+/// the root has to be computable then. Kept here beside the coinbase builder so
+/// the notify path and the share assembly path cannot drift apart.
+pub fn compute_share_merkle_root(
+    miner_address: &P2PoolAddress,
+    other_share_transactions: &[ShareTransaction],
+) -> TxMerkleNode {
+    let coinbase = build_sharechain_coinbase_transaction(miner_address, other_share_transactions);
+    let txids = std::iter::once(coinbase.compute_txid())
+        .chain(
+            other_share_transactions
+                .iter()
+                .map(|transaction| transaction.compute_txid()),
+        )
+        .map(|txid| txid.to_raw_hash());
+    merkle_tree::calculate_root(txids)
+        .map(TxMerkleNode::from_raw_hash)
+        .expect("a share always has at least a coinbase")
 }
 
 /// Build the BIP141 witness commitment output for a share coinbase.
@@ -119,14 +142,12 @@ pub(crate) fn compute_commitment_hash(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitcoin::{CompressedPublicKey, Network};
+    use crate::test_utils::make_test_share_address;
+    use bitcoin::Network;
 
     #[test]
     fn test_create_share_block_coinbase_transaction() {
-        let pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
-            .parse::<CompressedPublicKey>()
-            .unwrap();
-        let address = Address::p2wpkh(&pubkey, Network::Regtest);
+        let address = make_test_share_address(1, Network::Regtest);
 
         let transaction = build_sharechain_coinbase_transaction(&address, &[]);
 
@@ -159,10 +180,7 @@ mod tests {
 
     #[test]
     fn test_create_share_block_coinbase_transaction_with_share_transactions() {
-        let pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
-            .parse::<CompressedPublicKey>()
-            .unwrap();
-        let address = Address::p2wpkh(&pubkey, Network::Regtest);
+        let address = make_test_share_address(1, Network::Regtest);
 
         // Build two non-coinbase share transactions with distinct witnesses,
         // so each produces a different wtxid and contributes to the witness
@@ -256,5 +274,143 @@ mod tests {
         let witness_stack: Vec<_> = transaction.input[0].witness.iter().collect();
         assert_eq!(witness_stack.len(), 1);
         assert_eq!(witness_stack[0], &WITNESS_RESERVED_VALUE);
+    }
+}
+
+#[cfg(test)]
+mod share_merkle_root_tests {
+    use super::*;
+    use crate::test_utils::make_test_share_address;
+    use bitcoin::Network;
+
+    /// A non-coinbase share transaction spending a distinct outpoint, so it has
+    /// its own txid and moves the merkle root.
+    fn share_transaction(previous_txid_byte: u8, value_sats: u64) -> ShareTransaction {
+        ShareTransaction(bitcoin::Transaction {
+            version: bitcoin::transaction::Version::TWO,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint {
+                    txid: bitcoin::Txid::from_raw_hash(
+                        <bitcoin::hashes::sha256d::Hash as Hash>::from_byte_array(
+                            [previous_txid_byte; 32],
+                        ),
+                    ),
+                    vout: 0,
+                },
+                script_sig: bitcoin::ScriptBuf::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::new(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(value_sats),
+                script_pubkey: make_test_share_address(2, Network::Regtest).script_pubkey(),
+            }],
+        })
+    }
+
+    /// With only the coinbase there is a single leaf, and BIP98 makes the root
+    /// of a one-leaf tree the leaf itself.
+    #[test]
+    fn coinbase_only_root_is_the_coinbase_txid() {
+        let address = make_test_share_address(1, Network::Regtest);
+        let coinbase = build_sharechain_coinbase_transaction(&address, &[]);
+
+        let root = compute_share_merkle_root(&address, &[]);
+
+        assert_eq!(root.to_raw_hash(), coinbase.compute_txid().to_raw_hash());
+    }
+
+    #[test]
+    fn root_is_deterministic_for_the_same_inputs() {
+        let address = make_test_share_address(1, Network::Regtest);
+        let transactions = vec![share_transaction(0x11, 1_000)];
+
+        assert_eq!(
+            compute_share_merkle_root(&address, &transactions),
+            compute_share_merkle_root(&address, &transactions)
+        );
+    }
+
+    /// The commitment binds the root instead of the share address, so the root
+    /// is what distinguishes one owner's share from another's. If this ever
+    /// held, two miners would produce interchangeable commitments and either
+    /// could claim the other's share.
+    #[test]
+    fn different_share_addresses_give_different_roots() {
+        let first = make_test_share_address(1, Network::Regtest);
+        let second = make_test_share_address(2, Network::Regtest);
+        assert_ne!(first, second);
+
+        assert_ne!(
+            compute_share_merkle_root(&first, &[]),
+            compute_share_merkle_root(&second, &[])
+        );
+    }
+
+    #[test]
+    fn adding_a_share_transaction_changes_the_root() {
+        let address = make_test_share_address(1, Network::Regtest);
+
+        let coinbase_only = compute_share_merkle_root(&address, &[]);
+        let with_transaction =
+            compute_share_merkle_root(&address, &[share_transaction(0x11, 1_000)]);
+
+        assert_ne!(coinbase_only, with_transaction);
+    }
+
+    #[test]
+    fn transaction_order_changes_the_root() {
+        let address = make_test_share_address(1, Network::Regtest);
+        let first = share_transaction(0x11, 1_000);
+        let second = share_transaction(0x22, 2_000);
+
+        let forward = compute_share_merkle_root(&address, &[first.clone(), second.clone()]);
+        let reversed = compute_share_merkle_root(&address, &[second, first]);
+
+        assert_ne!(forward, reversed);
+    }
+
+    /// The commitment is built at notify time from the address alone, while the
+    /// share is assembled later from the actual transaction list. Those two
+    /// have to reach the same root or every share is rejected as committing to
+    /// something other than what it contains.
+    #[test]
+    fn root_matches_the_root_of_the_assembled_transaction_list() {
+        let address = make_test_share_address(1, Network::Regtest);
+        let others = vec![
+            share_transaction(0x11, 1_000),
+            share_transaction(0x22, 2_000),
+        ];
+
+        let from_address = compute_share_merkle_root(&address, &others);
+
+        // Assemble the block body the way the share path does: coinbase first,
+        // then the other transactions in order.
+        let coinbase = build_sharechain_coinbase_transaction(&address, &others);
+        let mut assembled = Vec::with_capacity(1 + others.len());
+        assembled.push(ShareTransaction(coinbase));
+        assembled.extend(others);
+        let from_assembled: TxMerkleNode =
+            merkle_tree::calculate_root(assembled.iter().map(|tx| tx.compute_txid().to_raw_hash()))
+                .map(TxMerkleNode::from_raw_hash)
+                .unwrap();
+
+        assert_eq!(from_address, from_assembled);
+    }
+
+    /// The coinbase commits to the other transactions through its BIP141
+    /// witness commitment output, so its own txid moves when they change. This
+    /// is why the root cannot be computed from the coinbase alone and then
+    /// have transactions appended.
+    #[test]
+    fn coinbase_txid_depends_on_the_other_transactions() {
+        let address = make_test_share_address(1, Network::Regtest);
+
+        let alone = build_sharechain_coinbase_transaction(&address, &[]);
+        let with_transaction =
+            build_sharechain_coinbase_transaction(&address, &[share_transaction(0x11, 1_000)]);
+
+        assert_ne!(alone.compute_txid(), with_transaction.compute_txid());
     }
 }

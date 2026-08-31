@@ -839,7 +839,7 @@ impl DefaultShareValidator {
             )));
         }
 
-        let expected_script = share.header.miner_bitcoin_address.script_pubkey();
+        let expected_script = share.header.miner_address.script_pubkey();
         if output.script_pubkey != expected_script {
             return Err(ValidationError::consensus(
                 "Share coinbase output does not pay to the miner address in header",

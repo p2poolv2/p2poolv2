@@ -24,6 +24,7 @@ use crate::shares::share_block::{ShareBlock, ShareHeader, ShareTransaction};
 use crate::shares::transactions::coinbase::build_sharechain_coinbase_transaction;
 use crate::shares::witness_commitment::WitnessCommitment;
 use crate::stratum::emission::Emission;
+use bitcoin::TxMerkleNode;
 use bitcoin::merkle_tree;
 use std::error::Error;
 use tracing::debug;
@@ -54,7 +55,7 @@ pub async fn handle_stratum_share(
         // commitment covers their wtxids.
         let other_share_transactions: Vec<ShareTransaction> = Vec::new();
         let share_coinbase = build_sharechain_coinbase_transaction(
-            &share_commitment.miner_bitcoin_address,
+            &share_commitment.miner_address,
             &other_share_transactions,
         );
 
@@ -62,18 +63,29 @@ pub async fn handle_stratum_share(
         share_transactions.push(ShareTransaction(share_coinbase));
         share_transactions.extend(other_share_transactions);
 
+        // The header takes its merkle root from the commitment, which was
+        // fixed at notify time. Recompute it from the transactions we actually
+        // assembled and compare: a divergence means our own notify and share
+        // assembly disagree, which would produce a share every peer rejects. This
+        // is a defensive check
         let txids = share_transactions
             .iter()
             .map(|tx| tx.compute_txid().to_raw_hash());
-        let merkle_root = match merkle_tree::calculate_root(txids) {
-            Some(merkle_root) => merkle_root,
+        let merkle_root: TxMerkleNode = match merkle_tree::calculate_root(txids) {
+            Some(merkle_root) => merkle_root.into(),
             None => return Err("No coinbase found".into()),
         };
+        if merkle_root != share_commitment.merkle_root {
+            return Err(format!(
+                "Share merkle root {merkle_root} does not match the committed {}",
+                share_commitment.merkle_root
+            )
+            .into());
+        }
 
         let share_header = ShareHeader::from_commitment_and_header(
             share_commitment,
             header,
-            merkle_root.into(),
             blocktemplate
                 .coinbaseaux
                 .get("flags")

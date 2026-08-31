@@ -167,7 +167,6 @@ impl ShareHeader {
     pub(crate) fn from_commitment_and_header(
         commitment: ShareCommitment,
         bitcoin_header: Header,
-        share_chain_merkle_root: TxMerkleNode,
         coinbaseaux_flags: Option<CoinbaseAuxFlags>,
         witness_commitment: Option<WitnessCommitment>,
         height: u64,
@@ -179,7 +178,7 @@ impl ShareHeader {
             uncles: commitment.uncles,
             miner_bitcoin_address: commitment.miner_bitcoin_address,
             miner_address: commitment.miner_address,
-            merkle_root: share_chain_merkle_root,
+            merkle_root: commitment.merkle_root,
             bitcoin_header,
             bits: commitment.bits,
             time: commitment.time,
@@ -404,7 +403,7 @@ impl ShareBlock {
             &secp,
         )?;
         let coinbase =
-            transactions::coinbase::build_sharechain_coinbase_transaction(&btcaddress, &[]);
+            transactions::coinbase::build_sharechain_coinbase_transaction(&miner_address, &[]);
         let coinbase_value = coinbase
             .output
             .iter()
@@ -609,9 +608,11 @@ mod tests {
         append_proportional_distribution, include_address_and_cut,
     };
     use crate::shares::share_commitment::ShareCommitment;
+    use crate::shares::transactions::coinbase::compute_share_merkle_root;
     use crate::stratum::work::coinbase::build_bitcoin_coinbase_transaction;
     use crate::stratum::work::gbt::compute_merkle_root_from_branches;
-    use crate::test_utils::{self, TestShareBlockBuilder};
+    use crate::test_utils::TestShareBlockBuilder;
+    use crate::test_utils::make_test_share_address;
     use bitcoin::consensus::{deserialize, serialize};
     use bitcoin::script::PushBytesBuf;
     use bitcoin::transaction::Version;
@@ -642,8 +643,8 @@ mod tests {
         let expected_pubkey = "02ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d"
             .parse::<CompressedPublicKey>()
             .unwrap();
-        let expected_address = Address::p2wpkh(&expected_pubkey, bitcoin::Network::Signet);
-        assert_eq!(share.header.miner_bitcoin_address, expected_address);
+        let expected_bitcoin_address = Address::p2wpkh(&expected_pubkey, bitcoin::Network::Signet);
+        assert_eq!(share.header.miner_bitcoin_address, expected_bitcoin_address);
         assert_eq!(share.transactions.len(), 1);
         assert!(share.transactions[0].is_coinbase());
         // payout output + BIP141 witness commitment output
@@ -653,7 +654,17 @@ mod tests {
         let output = &share.transactions[0].output[0];
         assert_eq!(output.value.to_sat(), 100_000_000);
 
-        assert_eq!(output.script_pubkey, expected_address.script_pubkey());
+        // The share coinbase pays the share chain owner; the bitcoin address
+        // is the payout identity on bitcoin and is not this output.
+        assert_eq!(
+            output.script_pubkey,
+            share.header.miner_address.script_pubkey()
+        );
+        assert_ne!(
+            output.script_pubkey,
+            expected_bitcoin_address.script_pubkey(),
+            "the two chains must not share an output script"
+        );
         assert_eq!(
             share.header.bitcoin_header.block_hash().to_string(),
             "00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6"
@@ -674,10 +685,10 @@ mod tests {
         let output = &share_block.transactions[0].output[0];
         assert_eq!(output.value.to_sat(), 100_000_000);
 
-        // Verify the output script matches the builder's default address
+        // Verify the output script matches the builder's share chain address
         assert_eq!(
             output.script_pubkey,
-            share_block.header.miner_bitcoin_address.script_pubkey()
+            share_block.header.miner_address.script_pubkey()
         );
     }
 
@@ -720,8 +731,10 @@ mod tests {
             .unwrap();
         let btcaddress = Address::p2wpkh(&pubkey, bitcoin::Network::Signet);
 
+        let share_address = make_test_share_address(1, bitcoin::Network::Signet);
         let commitment = ShareCommitment {
-            miner_address: test_utils::make_test_share_address(1, bitcoin::Network::Signet),
+            miner_address: share_address,
+            merkle_root: compute_share_merkle_root(&share_address, &[]),
             prev_share_blockhash: BlockHash::from_str(
                 "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4",
             )
@@ -741,7 +754,6 @@ mod tests {
         let header = ShareHeader::from_commitment_and_header(
             commitment,
             bitcoin_header,
-            bitcoin_header.merkle_root,
             None,
             None,
             1,
@@ -752,7 +764,7 @@ mod tests {
         assert_eq!(header.prev_share_blockhash, cloned.prev_share_blockhash);
         assert_eq!(header.uncles, cloned.uncles);
         assert_eq!(header.miner_bitcoin_address, cloned.miner_bitcoin_address);
-        assert_eq!(header.merkle_root, bitcoin_header.merkle_root);
+        assert_eq!(header.merkle_root, cloned.merkle_root);
         assert_eq!(header.bitcoin_header, bitcoin_header);
         assert_eq!(header.bits, cloned.bits);
         assert_eq!(header.time, cloned.time);
