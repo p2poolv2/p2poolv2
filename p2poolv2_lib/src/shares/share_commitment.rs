@@ -21,7 +21,7 @@ use crate::address::Address as P2PoolAddress;
 use bitcoin::consensus::Encodable;
 use bitcoin::hashes::Hash;
 use bitcoin::io::Write;
-use bitcoin::{Address, BlockHash, CompactTarget, hashes};
+use bitcoin::{Address, BlockHash, CompactTarget, TxMerkleNode, hashes};
 use serde::Serialize;
 
 /// Share commitment created by miner and embedded in the bitcoin
@@ -49,7 +49,14 @@ pub struct ShareCommitment {
     pub miner_bitcoin_address: Address,
     /// Share chain address owning the share coinbase output. Distinct from
     /// `miner_bitcoin_address`, which receives the bitcoin payout.
+    ///
+    /// Not hashed directly: the share coinbase pays it, and `merkle_root`
+    /// commits to that coinbase.
     pub miner_address: P2PoolAddress,
+    /// Merkle root over this share's transactions, including the share
+    /// coinbase. Committing it is what ties the whole share transaction set to
+    /// the bitcoin proof of work.
+    pub merkle_root: TxMerkleNode,
     /// Share chain difficult as compact target
     pub bits: CompactTarget,
     /// Timestamp for the share, as set by the miner
@@ -68,29 +75,150 @@ pub struct ShareCommitment {
     pub coinbase_value: u64,
 }
 
-impl ShareCommitment {
-    /// Make a SHA256 hash for commitment using consensus encoding.
-    ///
-    /// Encodes all shared fields via consensus_encode, then appends both
-    /// miner script_pubkeys and hashes the result.
-    ///
-    /// Both are appended, in a fixed order, so the commitment binds the bitcoin
-    /// payout identity and the share chain owner independently: changing either
-    /// one alone must change the hash. `prepared_notify::get_commitment_hex`
-    /// builds the same bytes incrementally and must append them in this order.
-    pub fn hash(&self) -> hashes::sha256::Hash {
-        let mut serialized = Vec::new();
-        self.consensus_encode(&mut serialized)
-            .expect("encoding commitment should never fail");
-        self.miner_bitcoin_address
+/// Bytes the timestamp contributes to the commitment encoding.
+const COMMITMENT_TIME_SIZE: usize = size_of::<u32>();
+
+/// Upper bound on a consensus-encoded `script_pubkey`.
+///
+/// The longest script a `bitcoin::Address` can produce is a witness program
+/// with the maximum payload, which encodes as:
+///
+/// ```text
+///  1  CompactSize length prefix (these scripts are well under 253 bytes)
+///  1  witness version opcode, OP_0 or OP_PUSHNUM_1 through OP_PUSHNUM_16
+///  1  OP_PUSHBYTES_n for the program that follows
+/// 40  witness program payload, which BIP141 caps at 40 bytes
+/// ```
+const MAX_ENCODED_SCRIPT_PUBKEY_SIZE: usize = 1 + 1 + 1 + 40;
+
+/// A `TxMerkleNode` is a 32 byte hash and encodes as exactly that.
+const MERKLE_ROOT_SIZE: usize = 32;
+
+/// Bytes appended after the suffix, per miner. Only a capacity hint, so an
+/// over-estimate costs nothing and an under-estimate costs one realloc.
+const COMMITMENT_TAIL_SIZE: usize = MAX_ENCODED_SCRIPT_PUBKEY_SIZE + MERKLE_ROOT_SIZE;
+
+/// Serialize the commitment fields before time:
+/// prev_share_blockhash + uncles + bits.
+///
+/// Shared across miners for a template: none of these vary per miner, and
+/// `uncles` in particular is a length-prefixed vector nobody wants to re-encode
+/// thousands of times per template.
+pub(crate) fn build_commitment_prefix(
+    prev_share_blockhash: BlockHash,
+    uncles: &[BlockHash],
+    bits: CompactTarget,
+) -> Vec<u8> {
+    let mut prefix = Vec::with_capacity(64);
+    prev_share_blockhash
+        .consensus_encode(&mut prefix)
+        .expect("encoding prev_share_blockhash should never fail");
+    uncles
+        .to_vec()
+        .consensus_encode(&mut prefix)
+        .expect("encoding uncles should never fail");
+    bits.consensus_encode(&mut prefix)
+        .expect("encoding bits should never fail");
+    prefix
+}
+
+/// Serialize the commitment fields after time:
+/// donation_address + donation + fee_address + fee.
+///
+/// Shared across miners for a template. Worth pre-building: the addresses
+/// encode as their bech32 *strings*, so each one costs a checksum computation
+/// and an allocation that would otherwise repeat for every connected miner.
+pub(crate) fn build_commitment_suffix(
+    donation_address: &Option<Address>,
+    donation: Option<u16>,
+    fee_address: &Option<Address>,
+    fee: Option<u16>,
+) -> Vec<u8> {
+    let mut suffix = Vec::with_capacity(128);
+    encode_optional_address(donation_address, &mut suffix)
+        .expect("encoding donation address should never fail");
+    donation
+        .unwrap_or(0)
+        .consensus_encode(&mut suffix)
+        .expect("encoding donation should never fail");
+    encode_optional_address(fee_address, &mut suffix)
+        .expect("encoding fee address should never fail");
+    fee.unwrap_or(0)
+        .consensus_encode(&mut suffix)
+        .expect("encoding fee should never fail");
+    suffix
+}
+
+/// The single definition of the commitment byte layout.
+///
+/// Both callers go through here so the order can only be defined once:
+/// [`ShareCommitment::hash`] serializes its own fields and calls it, while the
+/// notify path pre-builds `prefix` and `suffix` once per template and calls it
+/// per miner. Duplicating the order across those two paths is how a miner ends
+/// up committing to a digest no peer will reconstruct.
+pub(crate) fn commitment_digest(
+    prefix: &[u8],
+    time: u32,
+    suffix: &[u8],
+    miner_bitcoin_address: Option<&Address>,
+    merkle_root: Option<TxMerkleNode>,
+) -> hashes::sha256::Hash {
+    let mut serialized = Vec::with_capacity(
+        prefix.len() + COMMITMENT_TIME_SIZE + suffix.len() + COMMITMENT_TAIL_SIZE,
+    );
+    serialized.extend_from_slice(prefix);
+    time.consensus_encode(&mut serialized)
+        .expect("encoding time should never fail");
+    serialized.extend_from_slice(suffix);
+
+    if let Some(address) = miner_bitcoin_address {
+        address
             .script_pubkey()
             .consensus_encode(&mut serialized)
             .expect("encoding address script_pubkey should never fail");
-        self.miner_address
-            .script_pubkey()
-            .consensus_encode(&mut serialized)
-            .expect("encoding share address script_pubkey should never fail");
-        bitcoin::hashes::sha256::Hash::hash(&serialized)
+    }
+    if let Some(root) = merkle_root {
+        root.consensus_encode(&mut serialized)
+            .expect("encoding merkle root should never fail");
+    }
+
+    hashes::sha256::Hash::hash(&serialized)
+}
+
+impl ShareCommitment {
+    /// Make a SHA256 hash for commitment using consensus encoding.
+    ///
+    /// Hash of this commitment, as embedded in the bitcoin coinbase scriptSig.
+    ///
+    /// Serializes its own fields and delegates the byte layout to
+    /// [`commitment_digest`], which the notify path also uses with a
+    /// pre-built prefix and suffix. This is the slower of the two callers: it
+    /// re-encodes the shared fields every time, including the bech32 strings of
+    /// the donation and fee addresses. That is fine here, because this path
+    /// runs once per received share during validation rather than once per
+    /// connected miner per template.
+    ///
+    /// `miner_address` is deliberately absent from the digest. The share
+    /// coinbase pays it and `merkle_root` commits to that coinbase, so binding
+    /// the address as well would be redundant. Committing the root instead
+    /// covers every share transaction, not just the coinbase: without it an
+    /// attacker could take a share with valid proof of work, swap its
+    /// transactions, recompute the root, and republish.
+    pub fn hash(&self) -> hashes::sha256::Hash {
+        let prefix = build_commitment_prefix(self.prev_share_blockhash, &self.uncles, self.bits);
+        let suffix = build_commitment_suffix(
+            &self.donation_address,
+            self.donation,
+            &self.fee_address,
+            self.fee,
+        );
+        commitment_digest(
+            &prefix,
+            self.time,
+            &suffix,
+            Some(&self.miner_bitcoin_address),
+            Some(self.merkle_root),
+        )
     }
 
     /// Reconstruct a ShareCommitment from a ShareHeader.
@@ -103,6 +231,7 @@ impl ShareCommitment {
             uncles: header.uncles.clone(),
             miner_bitcoin_address: header.miner_bitcoin_address.clone(),
             miner_address: header.miner_address,
+            merkle_root: header.merkle_root,
             bits: header.bits,
             time: header.time,
             donation_address: header.donation_address.clone(),
@@ -163,6 +292,7 @@ mod tests {
     use super::*;
     use crate::shares::coinbaseaux_flags::CoinbaseAuxFlags;
     use crate::shares::extranonce::Extranonce;
+    use crate::shares::transactions::coinbase::compute_share_merkle_root;
     use crate::shares::witness_commitment::WitnessCommitment;
     use crate::stratum::work::block_template::BlockTemplate;
     use crate::test_utils::create_test_commitment;
@@ -227,10 +357,9 @@ mod tests {
         assert_ne!(hash1, hash2);
     }
 
-    /// The commitment binds both script_pubkeys, so changing only the share
-    /// chain owner must change the hash. Without this, two miners sharing a
-    /// bitcoin payout address would commit identically and their shares could
-    /// not be told apart on the share chain.
+    /// Changing the share chain owner changes the share coinbase, hence the
+    /// merkle root, hence the commitment hash. The address is not hashed
+    /// directly; this is what makes that indirection sufficient.
     #[test]
     fn test_hash_uniqueness_different_share_address() {
         let commitment1 = create_test_commitment();
@@ -240,7 +369,24 @@ mod tests {
             commitment1.miner_bitcoin_address, commitment2.miner_bitcoin_address,
             "only the share address may differ for this test to mean anything"
         );
-        commitment2.miner_address = make_test_share_address(2, Network::Signet);
+        let other_address = make_test_share_address(2, Network::Signet);
+        commitment2.miner_address = other_address;
+        commitment2.merkle_root = compute_share_merkle_root(&other_address, &[]);
+
+        assert_ne!(commitment1.hash(), commitment2.hash());
+    }
+
+    /// The root is what ties the whole share transaction set to the proof of
+    /// work, so it must reach the hash on its own. Without this an attacker
+    /// could swap a share's transactions, recompute the root, and republish
+    /// under someone else's proof of work.
+    #[test]
+    fn test_hash_uniqueness_different_merkle_root() {
+        let commitment1 = create_test_commitment();
+        let mut commitment2 = create_test_commitment();
+
+        commitment2.merkle_root =
+            compute_share_merkle_root(&make_test_share_address(3, Network::Signet), &[]);
 
         assert_ne!(commitment1.hash(), commitment2.hash());
     }
@@ -314,12 +460,6 @@ mod tests {
     fn header_from_commitment(commitment: ShareCommitment) -> ShareHeader {
         let coinbase = test_coinbase_transaction(1);
 
-        let share_merkle_root: TxMerkleNode = bitcoin::merkle_tree::calculate_root(
-            [coinbase.clone()].iter().map(|tx| tx.compute_txid()),
-        )
-        .unwrap()
-        .into();
-
         let json_content =
             include_str!("../../../p2poolv2_tests/test_data/validation/stratum/a/template.json");
         let template: BlockTemplate =
@@ -350,7 +490,6 @@ mod tests {
         ShareHeader::from_commitment_and_header(
             commitment,
             bitcoin_header,
-            share_merkle_root,
             template
                 .coinbaseaux
                 .get("flags")
