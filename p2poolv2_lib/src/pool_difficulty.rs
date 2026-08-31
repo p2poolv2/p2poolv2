@@ -748,7 +748,8 @@ mod tests {
         for index in 1..headers.len() {
             let parent_time = headers[index - 1].time;
             let parent_height = (index - 1) as u32;
-            let calculated_bits = pool_difficulty.calculate_target(parent_time, parent_height);
+            let calculated_bits =
+                pool_difficulty.calculate_target_clamped(parent_time, parent_height);
 
             assert_eq!(
                 calculated_bits.to_consensus(),

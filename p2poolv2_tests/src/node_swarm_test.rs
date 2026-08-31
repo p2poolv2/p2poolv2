@@ -210,16 +210,7 @@ fn load_share_sync_blocks() -> Vec<ShareBlock> {
 /// Node 1 is seeded with 5 real share headers (from store.db fixture) before
 /// nodes 2 and 3 start. Nodes 2 and 3 dial into node 1 and should sync all
 /// shares via the header-sync and block-fetch protocol.
-///
-/// IGNORED for the same reason as
-/// `share_block::tests::test_fixture_coinbase_reconstruction_matches_bitcoin_merkle_root`:
-/// the fixture blocks were mined against a coinbase built under the old
-/// single-address commitment, so `validate_bitcoin_payout` now rebuilds a
-/// different coinbase and rejects them, and the receiving nodes never sync.
-/// The headers carry real proof of work and cannot be re-derived, so the
-/// fixture has to be regenerated from a node with a miner attached.
 #[test_log::test(tokio::test)]
-#[ignore = "fixture predates the two-address commitment; needs regeneration from a live node"]
 async fn test_three_nodes_share_sync() {
     let fixture_blocks = load_share_sync_blocks();
     let share_count = (fixture_blocks.len() - 1) as u32;
