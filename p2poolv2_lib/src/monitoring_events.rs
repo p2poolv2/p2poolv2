@@ -94,7 +94,9 @@ mod tests {
             blockhash: BlockHash::all_zeros(),
             prev_blockhash: BlockHash::all_zeros(),
             height: 100,
-            miner_address: "02aa".to_string(),
+            miner_bitcoin_address: "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q".to_string(),
+            miner_address: "sp2pool1pmfr3p9j00pfxjh0zmgp99y8zftmd3s5pmedqhyptwy6lm87hf5ss5najrp"
+                .to_string(),
             timestamp: 1700000000,
             bits: CompactTarget::from_consensus(0x1d00ffff),
             uncles: vec![],
@@ -103,7 +105,12 @@ mod tests {
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("\"topic\":\"Share\""));
         assert!(json.contains("\"height\":100"));
-        assert!(json.contains("\"miner_address\":\"02aa\""));
+        assert!(
+            json.contains(
+                "\"miner_bitcoin_address\":\"tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q\""
+            )
+        );
+        assert!(json.contains("\"miner_address\":\"sp2pool1pmfr3p9j00pfxjh0zmgp99y8zftmd3s5pmedqhyptwy6lm87hf5ss5najrp\""));
     }
 
     #[test]
@@ -134,7 +141,9 @@ mod tests {
             blockhash: BlockHash::all_zeros(),
             prev_blockhash: BlockHash::all_zeros(),
             height: 42,
-            miner_address: "02aabbccdd".to_string(),
+            miner_bitcoin_address: "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q".to_string(),
+            miner_address: "sp2pool1pmfr3p9j00pfxjh0zmgp99y8zftmd3s5pmedqhyptwy6lm87hf5ss5najrp"
+                .to_string(),
             timestamp: 1_700_000_000,
             bits: CompactTarget::from_consensus(0x1b4188f5),
             uncles: vec![],
@@ -143,7 +152,12 @@ mod tests {
         let event = MonitoringEvent::Share(share);
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("\"height\":42"));
-        assert!(json.contains("\"miner_address\":\"02aabbccdd\""));
+        assert!(
+            json.contains(
+                "\"miner_bitcoin_address\":\"tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q\""
+            )
+        );
+        assert!(json.contains("\"miner_address\":\"sp2pool1pmfr3p9j00pfxjh0zmgp99y8zftmd3s5pmedqhyptwy6lm87hf5ss5najrp\""));
         assert!(json.contains("\"timestamp\":1700000000"));
     }
 
@@ -152,7 +166,9 @@ mod tests {
         let uncle = UncleInfo {
             blockhash: BlockHash::all_zeros(),
             prev_blockhash: BlockHash::all_zeros(),
-            miner_address: "02uncle".to_string(),
+            miner_bitcoin_address: "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string(),
+            miner_address: "sp2pool1pet7ep3czdu9k4wvdlz2fp5p8x2yp7t6ttyqg2c6cmh0lgeuu9laswyta9v"
+                .to_string(),
             timestamp: 1_700_000_010,
             height: Some(41),
         };
@@ -161,7 +177,9 @@ mod tests {
             blockhash: BlockHash::all_zeros(),
             prev_blockhash: BlockHash::all_zeros(),
             height: 42,
-            miner_address: "02parent".to_string(),
+            miner_bitcoin_address: "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q".to_string(),
+            miner_address: "sp2pool1pmfr3p9j00pfxjh0zmgp99y8zftmd3s5pmedqhyptwy6lm87hf5ss5najrp"
+                .to_string(),
             timestamp: 1_700_000_020,
             bits: CompactTarget::from_consensus(0x1b4188f5),
             uncles: vec![uncle],
@@ -170,7 +188,11 @@ mod tests {
         let event = MonitoringEvent::Share(share);
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("\"uncles\""));
-        assert!(json.contains("\"02uncle\""));
+        assert!(
+            json.contains(
+                "\"sp2pool1pet7ep3czdu9k4wvdlz2fp5p8x2yp7t6ttyqg2c6cmh0lgeuu9laswyta9v\""
+            )
+        );
         assert!(json.contains("\"height\":42"));
     }
 

@@ -291,10 +291,14 @@ fn print_shares_dot(shares: &[ShareInfo], graph_name: &str) {
     for share in shares {
         let hash = share.blockhash.to_string();
         let id = short(&hash, 5);
-        let miner = short(&share.miner_address, 5);
+        let bitcoin_miner = short(&share.miner_bitcoin_address, 10);
+        let miner = short(&share.miner_address, 10);
         let diff = format_difficulty(share.bits);
         let ts = format_ts_hms(share.timestamp);
-        let label = format!("{id}|h:{height}|{miner}|{diff}|{ts}", height = share.height);
+        let label = format!(
+            "{id}|h:{height}|{bitcoin_miner}|{miner}|{diff}|{ts}",
+            height = share.height
+        );
         println!("    \"{hash}\" [label=\"{label}\", fillcolor=\"#a8d5ba\"];");
     }
 
@@ -303,13 +307,14 @@ fn print_shares_dot(shares: &[ShareInfo], graph_name: &str) {
         for uncle in &share.uncles {
             let hash = uncle.blockhash.to_string();
             let id = short(&hash, 5);
-            let miner = short(&uncle.miner_address, 5);
+            let bitcoin_miner = short(&uncle.miner_bitcoin_address, 10);
+            let miner = short(&uncle.miner_address, 10);
             let ts = format_ts_hms(uncle.timestamp);
             let height_str = uncle
                 .height
                 .map(|h| format!("h:{h}"))
                 .unwrap_or_else(|| "h:?".to_string());
-            let label = format!("{id}|{height_str}|{miner}|{ts}");
+            let label = format!("{id}|{height_str}|{bitcoin_miner}|{miner}|{ts}");
             println!("    \"{hash}\" [label=\"{label}\", fillcolor=\"#f4a582\"];");
         }
     }
@@ -368,11 +373,18 @@ fn print_dag_dot(entries: &[DagEntry]) {
     for entry in entries {
         let hash = entry.blockhash.to_string();
         let identifier = short(&hash, 8);
-        let miner = short(&entry.miner_address, 8);
+        let bitcoin_miner = short(&entry.miner_bitcoin_address, 10);
+        let miner = short(&entry.miner_address, 10);
         let data_marker = if entry.has_block_data { "D" } else { "-" };
         let label = format!(
-            "{}|h:{}|{}|{}/{}|{}",
-            identifier, entry.height, miner, entry.chain, entry.validation_status, data_marker
+            "{}|h:{}|{}|{}|{}/{}|{}",
+            identifier,
+            entry.height,
+            bitcoin_miner,
+            miner,
+            entry.chain,
+            entry.validation_status,
+            data_marker
         );
         let fill_color = if entry.validation_status == "Invalid" {
             "#f4a582"
@@ -440,6 +452,7 @@ struct ShareLookupOutput {
     chain: String,
     parent: String,
     uncles: Vec<String>,
+    miner_bitcoin_address: String,
     miner_address: String,
     merkle_root: String,
     bits: String,
@@ -520,7 +533,8 @@ fn build_share_output(
             .iter()
             .map(|uncle| uncle.to_string())
             .collect(),
-        miner_address: share_header.miner_bitcoin_address.to_string(),
+        miner_bitcoin_address: share_header.miner_bitcoin_address.to_string(),
+        miner_address: share_header.miner_address.to_string(),
         merkle_root: share_header.merkle_root.to_string(),
         bits: format!("{:#x}", share_header.bits.to_consensus()),
         time: format_timestamp(share_header.time as u64),
@@ -769,7 +783,9 @@ mod tests {
             )
             .unwrap(),
             height: 1,
-            miner_address: "bc1qmineraddress".to_string(),
+            miner_bitcoin_address: "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q".to_string(),
+            miner_address: "sp2pool1pmfr3p9j00pfxjh0zmgp99y8zftmd3s5pmedqhyptwy6lm87hf5ss5najrp"
+                .to_string(),
             timestamp: 1700000000,
             bits: CompactTarget::from_consensus(0x1d00ffff),
             uncles: vec![p2poolv2_lib::store::dag_store::UncleInfo {
@@ -781,7 +797,10 @@ mod tests {
                     "0000000000000000000000000000000000000000000000000000000000001234",
                 )
                 .unwrap(),
-                miner_address: "bc1quncleaddr".to_string(),
+                miner_bitcoin_address: "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string(),
+                miner_address:
+                    "sp2pool1pet7ep3czdu9k4wvdlz2fp5p8x2yp7t6ttyqg2c6cmh0lgeuu9laswyta9v"
+                        .to_string(),
                 timestamp: 1699999990,
                 height: Some(1),
             }],

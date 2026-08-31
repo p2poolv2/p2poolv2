@@ -210,7 +210,9 @@ mod tests {
             blockhash: bitcoin::BlockHash::all_zeros(),
             prev_blockhash: bitcoin::BlockHash::all_zeros(),
             height: 1,
-            miner_address: "02aa".to_string(),
+            miner_bitcoin_address: "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q".to_string(),
+            miner_address: "sp2pool1pmfr3p9j00pfxjh0zmgp99y8zftmd3s5pmedqhyptwy6lm87hf5ss5najrp"
+                .to_string(),
             timestamp: 0,
             bits: bitcoin::CompactTarget::from_consensus(0x1d00ffff),
             uncles: vec![],
@@ -289,7 +291,9 @@ mod tests {
             blockhash: bitcoin::BlockHash::all_zeros(),
             prev_blockhash: bitcoin::BlockHash::all_zeros(),
             height: 42,
-            miner_address: "02aa".to_string(),
+            miner_bitcoin_address: "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q".to_string(),
+            miner_address: "sp2pool1pmfr3p9j00pfxjh0zmgp99y8zftmd3s5pmedqhyptwy6lm87hf5ss5najrp"
+                .to_string(),
             timestamp: 1000,
             bits: bitcoin::CompactTarget::from_consensus(0x1d00ffff),
             uncles: vec![],
@@ -304,7 +308,14 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed["topic"], "Share");
         assert_eq!(parsed["data"]["height"], 42);
-        assert_eq!(parsed["data"]["miner_address"], "02aa");
+        assert_eq!(
+            parsed["data"]["miner_bitcoin_address"],
+            "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q"
+        );
+        assert_eq!(
+            parsed["data"]["miner_address"],
+            "sp2pool1pmfr3p9j00pfxjh0zmgp99y8zftmd3s5pmedqhyptwy6lm87hf5ss5najrp"
+        );
     }
 
     #[tokio::test]
@@ -323,7 +334,9 @@ mod tests {
             blockhash: bitcoin::BlockHash::all_zeros(),
             prev_blockhash: bitcoin::BlockHash::all_zeros(),
             height: 1,
-            miner_address: "02bb".to_string(),
+            miner_bitcoin_address: "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string(),
+            miner_address: "sp2pool1pet7ep3czdu9k4wvdlz2fp5p8x2yp7t6ttyqg2c6cmh0lgeuu9laswyta9v"
+                .to_string(),
             timestamp: 0,
             bits: bitcoin::CompactTarget::from_consensus(0x1d00ffff),
             uncles: vec![],
