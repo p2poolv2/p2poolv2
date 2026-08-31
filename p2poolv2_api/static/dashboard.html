@@ -219,7 +219,8 @@
                     <tr>
                       <th>Height</th>
                       <th>Blockhash</th>
-                      <th>Miner</th>
+                      <th>Bitcoin Address</th>
+                      <th>Share Chain Address</th>
                       <th>Difficulty</th>
                       <th>Time</th>
                       <th>Uncles</th>
@@ -243,7 +244,12 @@
                         </td>
                         <td>
                           <code
-                            x-text="formatHash(row.share.miner_address)"
+                            x-text="formatAddress(row.share.miner_bitcoin_address)"
+                          ></code>
+                        </td>
+                        <td>
+                          <code
+                            x-text="formatAddress(row.share.miner_address)"
                           ></code>
                         </td>
                         <td
@@ -334,7 +340,16 @@
                 </td>
               </tr>
               <tr>
-                <th scope="row">Miner</th>
+                <th scope="row">Bitcoin Address</th>
+                <td>
+                  <code
+                    style="word-break: break-all"
+                    x-text="selectedShare ? selectedShare.miner_bitcoin_address : ''"
+                  ></code>
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">Share Chain Address</th>
                 <td>
                   <code
                     style="word-break: break-all"
@@ -393,7 +408,16 @@
                       </td>
                     </tr>
                     <tr>
-                      <th scope="row">Miner</th>
+                      <th scope="row">Bitcoin Address</th>
+                      <td>
+                        <code
+                          style="word-break: break-all"
+                          x-text="uncle.miner_bitcoin_address || 'N/A'"
+                        ></code>
+                      </td>
+                    </tr>
+                    <tr>
+                      <th scope="row">Share Chain Address</th>
                       <td>
                         <code
                           style="word-break: break-all"
@@ -462,7 +486,16 @@
                 </td>
               </tr>
               <tr>
-                <th scope="row">Miner</th>
+                <th scope="row">Bitcoin Address</th>
+                <td>
+                  <code
+                    style="word-break: break-all"
+                    x-text="selectedUncle ? (selectedUncle.miner_bitcoin_address || 'N/A') : ''"
+                  ></code>
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">Share Chain Address</th>
                 <td>
                   <code
                     style="word-break: break-all"
