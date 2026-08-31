@@ -80,7 +80,7 @@ fn resolve_share_address(
             "Could not read the p2p= share address ({error}). Note p2p=<address> is 71 characters and some miner firmware truncates the password field."
         )),
         (None, None) => Err(
-            "This pool needs a share chain address. Set the stratum password to p2p=<address>, which you can generate with `p2poolv2_cli address encode`."
+            "This pool needs a share chain address. Set the stratum password to p2p=<address>. See docs/architecture/address-format.md for how to get one from your wallet."
                 .to_string(),
         ),
     }
@@ -1397,6 +1397,6 @@ mod resolve_share_address_tests {
             resolve_share_address(None, None, Network::Signet, PoolMode::P2poolv2).unwrap_err();
 
         assert!(reason.contains("p2p="), "{reason}");
-        assert!(reason.contains("address encode"), "{reason}");
+        assert!(reason.contains("address-format.md"), "{reason}");
     }
 }

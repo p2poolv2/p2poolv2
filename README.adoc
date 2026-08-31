@@ -89,8 +89,61 @@ p2poolv2_cli --help
 
 . Edit the `config.toml` as required.
 .. At the very least you need to provide the bitcoind rpc details under the `[bitcoinrpc]` section.
+.. Replace `[stratum] miner_address` with your own share chain address. The
+sample ships an unspendable placeholder, so shares mined against it are lost.
 . Run P2Poolv2 `p2poolv2 config.toml`
 . Point your miners to `<yourhost>:<your stratum port in config.toml>`
+. Decide where the share chain address comes from. Every share needs an owner
+on the share chain, and that owner is a different address, on a different
+chain, from the bitcoin address that receives the payout.
++
+--
+The stratum *username* stays the bitcoin payout address, exactly as before.
+
+The share address comes from one of two places:
+
+* *The node's address.* Set `[stratum] miner_address` in `config.toml` and no
+miner needs to change anything -- every share the pool mines is owned by that
+address, while bitcoin PPLNS payouts still go per miner from the username. Use
+this if your miner firmware caps the password field, or if you intend to
+accumulate the tradable shares yourself.
+* *Per miner.* Set the stratum password to `p2p=<address>`, combinable with the
+existing difficulty hints as a comma-separated list, for example
+`p2p=sp2pool1...,d=1000`. A miner that sends a *different* address from the
+node's configured one is rejected rather than silently overridden.
+
+If neither is set, authorize is rejected with `This pool needs a share chain
+address. Set the stratum password to p2p=<address>...`.
+
+Hydrapool mode (`mode = "hydrapool"`) builds no share chain and needs none of
+this; setting `miner_address` there fails at startup.
+--
+
+==== Getting a share chain address
+
+Take the key from a wallet that will custody and back it up. The recommended
+source is a Bitcoin Core wallet:
+
+[,shell]
+----
+bitcoin-cli -signet getnewaddress "p2pool share owner" bech32m
+bitcoin-cli -signet getaddressinfo <that address>
+----
+
+Use the `witness_program` field, which is the 32 byte taproot output key.
+Encoding those bytes as bech32m under the `sp2pool` prefix (`p2pool` for
+mainnet, `tp2pool` for testnet4, `rp2pool` for regtest) gives the share
+address for that wallet key. Check `"ismine": true` and `"solvable": true` in
+the same output, or you are assigning shares to a key you cannot sign with.
+
+P2Poolv2 does not generate private keys and ships no tool to do so, by design.
+It also does not yet ship the bech32m encoder for the step above; until it
+does, setting `[stratum] miner_address` once on the node is the simplest route
+for a pool.
+
+NOTE: A taproot address is not a share chain address. `tb1p...` and
+`sp2pool1p...` encode the same 32 bytes, but the prefix is covered by the
+checksum, so neither parser accepts the other's form.
 
 === Enable Dashboard
 

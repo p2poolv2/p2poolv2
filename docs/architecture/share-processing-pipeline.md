@@ -220,6 +220,25 @@ blocks, they are enqueued for validation (see EmissionWorker), and the organise
 worker's `validate_mark_promote` marks them `BlockValid` after chain-context
 validation, just before confirmation.
 
+#### Two addresses, two chains
+
+A `ShareHeader` carries `miner_bitcoin_address` (a `bitcoin::Address`,
+receiving the PPLNS payout from a found block's coinbase) and `miner_address`
+(a `p2poolv2_address::Address`, owning the share coinbase output). They are
+never derived from one another, and every stage below treats them separately:
+
+- `build_sharechain_coinbase_transaction` pays `miner_address`, so the share
+  coinbase and therefore `merkle_root` depend on it.
+- `validate_share_coinbase` rejects a share whose coinbase output 0 does not
+  pay the header's `miner_address`.
+- The PPLNS window, `append_proportional_distribution` and
+  `validate_bitcoin_payout` use `miner_bitcoin_address` only.
+
+`ShareCommitment::hash()` binds `merkle_root` rather than `miner_address`
+directly. The share coinbase pays the address and the root commits to that
+coinbase, so binding the root covers the whole transaction set rather than
+just the coinbase payee. See `docs/architecture/address-format.md`.
+
 ### OrganiseWorker (`node/organise_worker.rs`)
 - Runs in dedicated tokio task, spawned by NodeActor
 - Receives `OrganiseEvent` via bounded mpsc channel (capacity 512)
@@ -468,8 +487,8 @@ chain: those blocks belong to the candidate chain and must be tiered against
 it.
 
 **Blocks below the zone never get their coinbase validated, and that is
-sound.** The PPLNS window credits each share by the miner address and
-difficulty in its *header*, which PoW validation already covers. A share's
+sound.** The PPLNS window credits each share by the miner *bitcoin* address
+and difficulty in its *header*, which PoW validation already covers. A share's
 coinbase only matters if that share won a bitcoin block, and a block more than
 one window (~14 days at one share per 10s) below the tip has long since had any
 such block settled on the bitcoin chain. This is the same trade as Bitcoin
