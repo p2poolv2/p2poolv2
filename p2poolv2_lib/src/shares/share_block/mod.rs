@@ -804,10 +804,7 @@ mod tests {
         }
     }
 
-    /// IGNORED until the share_sync fixture is regenerated against a node
-    /// running the two-address commitment.
     #[test]
-    #[ignore = "fixture predates the two-address commitment; needs regeneration from a live node"]
     fn test_fixture_coinbase_reconstruction_matches_bitcoin_merkle_root() {
         let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../p2poolv2_tests/test_data/share_sync/share_blocks.json");
