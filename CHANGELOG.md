@@ -9,16 +9,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Share chain addresses: a new `p2poolv2_address` crate encoding a taproot
+  output key as bech32m under a P2Poolv2 human readable part (`p2pool`,
+  `tp2pool`, `sp2pool`, `rp2pool`). Witness version 1 only; testnet3 is
+  unsupported.
+- `ShareHeader.miner_address`, the share chain address owning a share's
+  coinbase output, alongside the existing `miner_bitcoin_address` that
+  receives the bitcoin payout. The two are never derived from one another.
+- `p2p=<address>` in the stratum password, naming the share chain address for
+  a miner's shares. Combines with the existing `d=` and `th=` hints.
+- Optional `[stratum] miner_address`. When set it owns every share the pool
+  mines, so miners need no password change; a miner sending a different
+  address is rejected.
 - Prometheus pool metrics and Grafana dashboards for the pool, node, and
   users, with provisioning and import-ready public variants.
 - Pool-wide block fund tracking, with effort reset only on a pool-wide
   block find rather than on every bitcoin block.
-- `docs/architecture/metrics.md` describing metric sources and exposition.
 - Grafana dashboard setup instructions in the README.
 - A security policy file.
 
 ### Changed
 
+- **BREAKING (consensus):** share chain restart on all networks. `ShareHeader`
+  gained `miner_address` and the share coinbase now pays it, so every share
+  block hash changes, genesis included. The commitment hash embedded in the
+  bitcoin coinbase scriptSig changes with it.
+- **BREAKING (stratum):** in p2poolv2 mode, authorize is rejected unless a
+  share chain address is available, either from `[stratum] miner_address` or
+  from `p2p=<address>` in the miner's password. Hydrapool mode is unaffected,
+  and rejects `miner_address` at startup.
+- **BREAKING (JSON API):** `miner_address` on the `/share`, `/shares`,
+  `/candidates` and `/dag` endpoints, in `db-query` output and in WebSocket
+  `Share` events now carries the share chain address. The bitcoin payout
+  address moved to a new `miner_bitcoin_address` field. The key kept its name
+  and changed meaning, so consumers must be updated rather than warned by a
+  missing field.
+- The dashboard shows both addresses, truncated client side.
+- The `share_sync` test fixture is regenerated from a live signet node, with
+  bitcoin headers carrying real proof of work mined under the two-address
+  commitment.
 - **BREAKING (JSON API):** the `status` field is renamed to
   `validation_status` on the `/share` and `/dag` endpoints and in
   `db-query` output; read the sibling `chain` field for chain position.

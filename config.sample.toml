@@ -28,6 +28,16 @@ port = 3333
 start_difficulty = 10000
 minimum_difficulty = 100
 solo_address = "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk"
+# Pool operating mode: "p2poolv2" (share chain) or "hydrapool"
+# (standalone PPLNS, no share chain). Default p2poolv2.
+# mode = "p2poolv2"
+# Share chain address owning every share this node mines. In p2poolv2
+# mode a share needs an owner, so a miner that does not send
+# p2p=<address> in its stratum password gets this address instead.
+# Leave it unset only if every one of your miners sends p2p=; otherwise
+# they are rejected at authorize.
+# Not valid with mode = "hydrapool", which has no share chain.
+miner_address = "sp2pool1pvmde7zkgeg9qqcpsy7e6g3w6dm3d7mqwqnudcmuedk6wt8gwgkls4zffd6"
 # The bitcoin address to use for first jobs when there are no shares
 bootstrap_address = "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk"
 # Any donation amount for developers to be sent to donation address. Default no donation.
