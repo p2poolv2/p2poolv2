@@ -799,6 +799,7 @@ mod p2p_miner_address_tests {
     use crate::stratum::server::PoolMode;
     use crate::stratum::server::StratumContext;
     use crate::stratum::work::tracker::start_tracker_actor;
+    use crate::test_utils::make_test_share_address;
     use crate::test_utils::setup_test_chain_store_handle;
     use bitcoindrpc::BitcoindRpcClient;
     use bitcoindrpc::test_utils::setup_mock_bitcoin_rpc;
@@ -1086,6 +1087,161 @@ mod p2p_miner_address_tests {
         assert_eq!(session.btcaddress, Some(BITCOIN_ADDRESS.to_string()));
         assert!(session.parsed_address.is_some());
         assert_eq!(session.difficulty_adjuster.get_current_difficulty(), 500);
+    }
+
+    /// The conflict rule end to end: a miner naming a different owner than the
+    /// node's configured one must be told, through `handle_authorize` rather
+    /// than only in the resolver. Nothing else proves the rejection survives
+    /// the wiring and reaches the client.
+    #[tokio::test]
+    async fn authorize_with_a_conflicting_share_address_is_rejected() {
+        let configured = make_test_share_address(2, bitcoin::Network::Testnet4);
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        let request = SimpleRequest::new_authorize(
+            12345,
+            BITCOIN_ADDRESS.to_string(),
+            Some(format!("p2p={SHARE_ADDRESS}")),
+        );
+        let (emissions_tx, _emissions_rx) = mpsc::channel(10);
+        let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let tracker_handle = start_tracker_actor();
+
+        let ctx = StratumContext {
+            tracker_handle,
+            bitcoindrpc_client: BitcoindRpcClient::new(
+                &bitcoinrpc_config.url,
+                &bitcoinrpc_config.username,
+                &bitcoinrpc_config.password,
+            )
+            .unwrap(),
+            start_difficulty: 1000,
+            minimum_difficulty: 1,
+            maximum_difficulty: None,
+            ignore_difficulty: false,
+            validate_addresses: true,
+            emissions_tx,
+            network: bitcoin::network::Network::Testnet4,
+            metrics: metrics_handle.clone(),
+            chain_store_handle,
+            mode: PoolMode::P2poolv2,
+            miner_address: Some(configured),
+        };
+
+        let messages = handle_authorize(request, &mut session, ctx).await.unwrap();
+
+        // The miner is not adopted in any form: no session state, no stored
+        // user, no metrics entry for an address the node refused.
+        assert!(session.miner_address.is_none());
+        assert!(session.username.is_none());
+        assert!(session.btcaddress.is_none());
+        assert!(session.user_id.is_none());
+        assert!(metrics_handle.get_metrics().await.users.is_empty());
+        assert!(
+            session.auth_failed_once,
+            "a rejected address must arm the two-strikes disconnect"
+        );
+
+        // Naming both addresses matters: the fix could belong to the miner or
+        // the operator, and neither can act on "mismatch" alone.
+        let Message::Response(response) = &messages[0] else {
+            panic!("Expected a Response message");
+        };
+        let message_text = format!("{:?}", response.error);
+        assert!(response.error.is_some(), "{message_text}");
+        assert!(message_text.contains(SHARE_ADDRESS), "{message_text}");
+        assert!(
+            message_text.contains(&configured.to_string()),
+            "{message_text}"
+        );
+    }
+
+    /// The second half of "disconnect the client with a clear error": the first
+    /// attempt is answered, a repeat is dropped. Reachable only because
+    /// rejection leaves `session.username` unset, so a retry gets past the
+    /// already-authorized guard and reaches the two-strikes branch.
+    #[tokio::test]
+    async fn a_repeated_conflicting_share_address_disconnects() {
+        let configured = make_test_share_address(2, bitcoin::Network::Testnet4);
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        let (emissions_tx, _emissions_rx) = mpsc::channel(10);
+        let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let tracker_handle = start_tracker_actor();
+
+        let ctx = StratumContext {
+            tracker_handle,
+            bitcoindrpc_client: BitcoindRpcClient::new(
+                &bitcoinrpc_config.url,
+                &bitcoinrpc_config.username,
+                &bitcoinrpc_config.password,
+            )
+            .unwrap(),
+            start_difficulty: 1000,
+            minimum_difficulty: 1,
+            maximum_difficulty: None,
+            ignore_difficulty: false,
+            validate_addresses: true,
+            emissions_tx,
+            network: bitcoin::network::Network::Testnet4,
+            metrics: metrics_handle,
+            chain_store_handle,
+            mode: PoolMode::P2poolv2,
+            miner_address: Some(configured),
+        };
+
+        let first = handle_authorize(
+            SimpleRequest::new_authorize(
+                1,
+                BITCOIN_ADDRESS.to_string(),
+                Some(format!("p2p={SHARE_ADDRESS}")),
+            ),
+            &mut session,
+            ctx.clone(),
+        )
+        .await
+        .expect("the first attempt must be answered, not cut");
+
+        // The first attempt has to be a *rejection*. Without this the second
+        // Err below would also be produced by a first attempt that succeeded
+        // and left the session authorized, which is a different code path.
+        let Message::Response(response) = &first[0] else {
+            panic!("Expected a Response message");
+        };
+        assert!(
+            response.error.is_some(),
+            "the first conflicting attempt must be rejected"
+        );
+
+        let second = handle_authorize(
+            SimpleRequest::new_authorize(
+                2,
+                BITCOIN_ADDRESS.to_string(),
+                Some(format!("p2p={SHARE_ADDRESS}")),
+            ),
+            &mut session,
+            ctx,
+        )
+        .await;
+
+        let Err(Error::AuthorizationFailure(reason)) = second else {
+            panic!("a repeat offence must disconnect, got {second:?}");
+        };
+        // Naming the offending address is what distinguishes this from the
+        // already-authorized guard, which carries no address at all.
+        assert!(
+            reason.contains(SHARE_ADDRESS),
+            "must disconnect for the share address, not the already-authorized \
+             guard, got {reason:?}"
+        );
     }
 }
 
