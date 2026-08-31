@@ -285,6 +285,16 @@ function dashboard() {
             return hash.substring(0, 10);
         },
 
+        // Addresses are truncated head and tail rather than head only. A
+        // p2pool address spends its first 8 characters on the "sp2pool1"
+        // human readable part, so a leading slice alone would render every
+        // miner on a network identically.
+        formatAddress(address) {
+            if (!address) return "N/A";
+            if (address.length <= 20) return address;
+            return address.substring(0, 10) + "..." + address.slice(-6);
+        },
+
         formatTimestamp(timestamp) {
             if (!timestamp) return "N/A";
             return new Date(timestamp * 1000).toLocaleString();
