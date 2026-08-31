@@ -156,11 +156,33 @@ pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
             }
         };
 
+    // Parse once; the password carries both the difficulty hint and the share
+    // chain address. Resolve the address before authorizing the session so an
+    // invalid address leaves the miner able to correct and retry.
+    let password = message
+        .params
+        .get(1)
+        .and_then(|parameter| parameter.clone());
+    let parsed_password = password.as_deref().map(parse_password);
+
+    let supplied_address = parsed_password
+        .as_ref()
+        .and_then(|parsed| parsed.miner_address.as_ref());
+
+    let miner_address =
+        match resolve_share_address(ctx.miner_address, supplied_address, ctx.network, ctx.mode) {
+            Ok(address) => address,
+            Err(reason) => return reject_authorize(session, message.id, reason),
+        };
+
     session.username = Some(username.clone());
     session.btcaddress = Some(parsed_username.address_str.to_string());
     session.parsed_address = parsed_username.parsed_address;
-    session.workername = parsed_username.worker_name.map(|s| s.to_string());
-    session.password = message.params.get(1).and_then(|p| p.clone());
+    session.workername = parsed_username
+        .worker_name
+        .map(|worker_name| worker_name.to_string());
+    session.password = password;
+    session.miner_address = miner_address;
 
     // Register user in the store
     register_user(session, parsed_username.address_str, ctx.chain_store_handle).await?;
@@ -174,25 +196,10 @@ pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
         .await
     {
         Ok(_) => {}
-        Err(e) => {
-            tracing::error!("Failed to send increment worker count message: {}", e);
+        Err(error) => {
+            tracing::error!("Failed to send increment worker count message: {}", error);
         }
     };
-
-    // Parse once; the password carries both the difficulty hint and the share
-    // chain address. ParsedPassword owns its values, so this does not hold a
-    // borrow of the session.
-    let parsed_password = session.password.as_deref().map(parse_password);
-
-    let supplied_address = parsed_password
-        .as_ref()
-        .and_then(|parsed| parsed.miner_address.as_ref());
-
-    session.miner_address =
-        match resolve_share_address(ctx.miner_address, supplied_address, ctx.network, ctx.mode) {
-            Ok(address) => address,
-            Err(reason) => return reject_authorize(session, message.id, reason),
-        };
 
     let start_difficulty = match parsed_password.and_then(|parsed| parsed.difficulty) {
         Some(requested_difficulty) => {
@@ -852,7 +859,7 @@ mod p2p_miner_address_tests {
     }
 
     #[tokio::test]
-    async fn authorize_without_a_p2p_option_leaves_the_share_address_unset() {
+    async fn authorize_without_a_p2p_option_uses_the_configured_share_address() {
         let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
         let request =
             SimpleRequest::new_authorize(12345, BITCOIN_ADDRESS.to_string(), Some("x".to_string()));
@@ -883,18 +890,21 @@ mod p2p_miner_address_tests {
             metrics: metrics_handle,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
-            miner_address: None,
+            miner_address: Some(SHARE_ADDRESS.parse().unwrap()),
         };
 
         handle_authorize(request, &mut session, ctx).await.unwrap();
 
-        assert!(session.miner_address.is_none());
+        assert_eq!(
+            session.miner_address.map(|address| address.to_string()),
+            Some(SHARE_ADDRESS.to_string())
+        );
         assert_eq!(session.btcaddress, Some(BITCOIN_ADDRESS.to_string()));
         assert!(session.parsed_address.is_some());
     }
 
     #[tokio::test]
-    async fn authorize_with_no_password_at_all_leaves_the_share_address_unset() {
+    async fn hydrapool_authorize_with_no_password_leaves_the_share_address_unset() {
         let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
         let request = SimpleRequest::new_authorize(12345, BITCOIN_ADDRESS.to_string(), None);
         let (emissions_tx, _emissions_rx) = mpsc::channel(10);
@@ -923,7 +933,7 @@ mod p2p_miner_address_tests {
             network: bitcoin::network::Network::Testnet4,
             metrics: metrics_handle,
             chain_store_handle,
-            mode: PoolMode::P2poolv2,
+            mode: PoolMode::Hydrapool,
             miner_address: None,
         };
 
@@ -969,19 +979,29 @@ mod p2p_miner_address_tests {
             validate_addresses: true,
             emissions_tx,
             network: bitcoin::network::Network::Testnet4,
-            metrics: metrics_handle,
+            metrics: metrics_handle.clone(),
             chain_store_handle,
             mode: PoolMode::P2poolv2,
             miner_address: None,
         };
 
-        let messages = handle_authorize(request, &mut session, ctx).await.unwrap();
+        let messages = handle_authorize(request, &mut session, ctx.clone())
+            .await
+            .unwrap();
 
         assert!(session.miner_address.is_none());
+        assert!(session.username.is_none());
+        assert!(session.btcaddress.is_none());
+        assert!(session.parsed_address.is_none());
+        assert!(session.workername.is_none());
+        assert!(session.password.is_none());
+        assert!(session.user_id.is_none());
+        assert!(!session.needs_first_notify);
         assert!(
             session.auth_failed_once,
             "a rejected address must arm the two-strikes disconnect"
         );
+        assert!(metrics_handle.get_metrics().await.users.is_empty());
 
         if let Message::Response(response) = &messages[0] {
             let message_text = format!("{:?}", response.error);
@@ -996,6 +1016,25 @@ mod p2p_miner_address_tests {
         } else {
             panic!("Expected a Response message");
         }
+
+        let retry_request = SimpleRequest::new_authorize(
+            12346,
+            BITCOIN_ADDRESS.to_string(),
+            Some(format!("p2p={SHARE_ADDRESS}")),
+        );
+        let retry_messages = handle_authorize(retry_request, &mut session, ctx)
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            retry_messages.as_slice(),
+            [Message::Response(response), Message::SetDifficulty(_)] if response.error.is_none()
+        ));
+        assert!(session.user_id.is_some());
+        assert_eq!(
+            session.miner_address.map(|address| address.to_string()),
+            Some(SHARE_ADDRESS.to_string())
+        );
     }
 
     /// A miner supplying both options must get both. This is the regression
