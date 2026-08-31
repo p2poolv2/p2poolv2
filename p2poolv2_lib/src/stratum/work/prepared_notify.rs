@@ -429,7 +429,7 @@ pub(crate) fn build_notify_from_prepared(
             fee: prepared.fee,
             coinbase_value: prepared.template.coinbasevalue,
         }),
-        _ => None, // Never reached
+        _ => None,
     };
 
     // The hash the miner embeds in its bitcoin coinbase must be the hash of the
