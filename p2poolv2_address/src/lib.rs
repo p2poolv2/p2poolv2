@@ -48,15 +48,30 @@
 //!   shares that need HTLCs, and every downstream tool would carry both paths.
 //! * Ark is taproot only.
 //!
-//! Wider support can be soft forked in later: the witness version travels in
-//! the encoding, so accepting a new one is a format extension rather than a
-//! redesign. It is a consensus change because `miner_address` is committed in
-//! `ShareHeader`.
+//! That restriction lives in [`Address::from_witness_program`], not in the
+//! consensus encoding. A `ShareHeader` stores the [`WitnessProgram`] whole,
+//! version included, so accepting a further version later is a change to this
+//! boundary rather than to the wire format, and a node that predates the
+//! change can still decode the header before rejecting it. It is a consensus
+//! change because `miner_address` is committed in `ShareHeader`.
+//!
+//! What a `ShareHeader` deliberately does *not* store is the network. The
+//! network selects an HRP and nothing else; the chain already knows which one
+//! it is from its own configuration, and a peer sending a share from another
+//! chain fails on the parent hash and the difficulty long before its address
+//! matters. Encoding it would let the same output key be spelled four ways,
+//! and since `ShareHeader::block_hash` covers every field, each spelling would
+//! be a distinct block carrying the same proof of work.
 //!
 //! The encoded key is the taproot *output* key, matching BIP086 and matching
 //! what lands in the `scriptPubKey`. Whether that key commits a script tree is
 //! not visible in the address and is not restricted; [`Address::from_internal_key`]
 //! applies the BIP086 key path only tweak, which is what the tooling produces.
+//! Nothing here decompresses the program to a curve point. A miner may name
+//! any P2TR output, exactly as bitcoin lets anyone pay to one; a program that
+//! is not a point is unspendable at the miner's own cost, and checking it
+//! would put an elliptic curve operation on a path that only ever needs the
+//! raw bytes.
 //!
 //! Because only witness version 1 is accepted, the data part is exactly what
 //! BIP350 prescribes for a segwit v1 address. **The HRP is the only thing
@@ -72,20 +87,24 @@
 //! This module never generates, stores or handles a private key. The node only
 //! needs the address to build a share coinbase output.
 
-use bitcoin::bech32::primitives::decode::{CheckedHrpstring, CheckedHrpstringError, PaddingError};
-use bitcoin::bech32::{Bech32m, ByteIterExt, Fe32, Fe32IterExt, Hrp};
-use bitcoin::key::{Parity, TapTweak, TweakedPublicKey, UntweakedPublicKey, XOnlyPublicKey};
+use bitcoin::bech32::primitives::decode::{PaddingError, SegwitHrpstringError};
+use bitcoin::bech32::{Hrp, segwit};
+use bitcoin::key::{TweakedPublicKey, UntweakedPublicKey, XOnlyPublicKey};
 use bitcoin::secp256k1::{Secp256k1, Verification};
 use bitcoin::taproot::TapNodeHash;
-use bitcoin::{Network, ScriptBuf};
-use std::fmt::{self, Write};
+use bitcoin::{Network, ScriptBuf, WitnessProgram, WitnessVersion, witness_program};
+use std::fmt;
 use std::str::FromStr;
 
 /// Byte length of the taproot output key carried by a share chain address.
 const OUTPUT_KEY_LENGTH: usize = 32;
 
-/// The only witness version share chain addresses encode. Fe32::P is 1.
-const WITNESS_VERSION_1: Fe32 = Fe32::P;
+/// The only witness version a share chain address encodes today.
+///
+/// A `ShareHeader` stores the whole [`WitnessProgram`], version included, so
+/// accepting a further version later is a policy change at this boundary
+/// rather than a change to the consensus encoding.
+const SUPPORTED_WITNESS_VERSION: WitnessVersion = WitnessVersion::V1;
 
 /// Human readable part for each supported network.
 const HRP_MAINNET: &str = "p2pool";
@@ -104,9 +123,11 @@ pub enum AddressError {
     /// The prefix before the bech32 separator is not one of the known HRPs.
     #[error("Unknown share chain address prefix '{0}'")]
     UnknownPrefix(String),
-    /// The string is not valid bech32m, including a bech32 checksummed string.
+    /// The string is not a valid segwit address under the checksum BIP350
+    /// pairs with its witness version: bech32 for version 0, bech32m above.
+    /// Also covers a string over the 90 character segwit limit.
     #[error("Invalid bech32m share chain address: {0}")]
-    Encoding(#[from] CheckedHrpstringError),
+    Encoding(SegwitHrpstringError),
     /// The trailing bits of the witness program are not valid padding.
     #[error("Invalid padding in share chain address: {0}")]
     Padding(#[from] PaddingError),
@@ -130,9 +151,10 @@ pub enum AddressError {
         "Invalid taproot output key length {0} in share chain address, expected {OUTPUT_KEY_LENGTH}"
     )]
     InvalidOutputKeyLength(usize),
-    /// The 32 bytes are not a valid x-only point, so the output is unspendable.
-    #[error("Share chain address does not encode a valid taproot output key: {0}")]
-    InvalidOutputKey(#[from] bitcoin::secp256k1::Error),
+    /// The witness program is outside the 2 to 40 byte range BIP141 allows, or
+    /// is a version 0 program of a length BIP141 forbids.
+    #[error("Invalid witness program in share chain address: {0}")]
+    WitnessProgram(#[from] witness_program::Error),
     /// The address belongs to a different network than the caller requires.
     #[error("Share chain address is for {address_network} but {required_network} is required")]
     NetworkMismatch {
@@ -176,9 +198,12 @@ fn network_for_hrp(hrp: Hrp) -> Result<Network, AddressError> {
 
 /// A share chain address: the owner of a share coinbase output.
 ///
-/// Holds the taproot output key already validated as a curve point, so
-/// [`Address::script_pubkey`] cannot fail and parsing pays the point
-/// decompression once rather than on every use.
+/// Holds the [`WitnessProgram`] the address encodes, which is the whole of
+/// what the address says: a witness version and a 2 to 40 byte program, both
+/// bounded by construction. The network is carried alongside it and is a
+/// property of *this* type only -- it never reaches a `ShareHeader`, which
+/// stores the witness program alone. Two addresses that differ only in their
+/// network describe the same output and must not be two different owners.
 ///
 /// There is deliberately no constructor that takes a bitcoin address:
 /// a bitcoin payout address is a receive only identity or watch only
@@ -186,10 +211,37 @@ fn network_for_hrp(hrp: Hrp) -> Result<Network, AddressError> {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Address {
     network: Network,
-    output_key: XOnlyPublicKey,
+    witness_program: WitnessProgram,
 }
 
 impl Address {
+    /// Build a share chain address from a witness program.
+    ///
+    /// Rejects any version this boundary does not accept yet, and any version
+    /// 1 program that is not the 32 bytes P2TR requires. The consensus
+    /// encoding carries the version, so widening here later needs no format
+    /// change.
+    pub fn from_witness_program(
+        witness_program: WitnessProgram,
+        network: Network,
+    ) -> Result<Self, AddressError> {
+        hrp_for(network)?;
+        if witness_program.version() != SUPPORTED_WITNESS_VERSION {
+            return Err(AddressError::UnsupportedWitnessVersion(
+                witness_program.version().to_num(),
+            ));
+        }
+        if !witness_program.is_p2tr() {
+            return Err(AddressError::InvalidOutputKeyLength(
+                witness_program.program().len(),
+            ));
+        }
+        Ok(Self {
+            network,
+            witness_program,
+        })
+    }
+
     /// Build a share chain address from a taproot output key.
     ///
     /// The key must already be tweaked. Use [`Address::from_internal_key`] to
@@ -198,11 +250,10 @@ impl Address {
         output_key: XOnlyPublicKey,
         network: Network,
     ) -> Result<Self, AddressError> {
-        hrp_for(network)?;
-        Ok(Self {
+        Self::from_witness_program(
+            WitnessProgram::p2tr_tweaked(TweakedPublicKey::dangerous_assume_tweaked(output_key)),
             network,
-            output_key,
-        })
+        )
     }
 
     /// Build a share chain address from an untweaked internal key.
@@ -222,24 +273,31 @@ impl Address {
         network: Network,
         secp: &Secp256k1<C>,
     ) -> Result<Self, AddressError> {
-        let (output_key, _parity): (TweakedPublicKey, Parity) =
-            internal_key.tap_tweak(secp, merkle_root);
-        Self::from_output_key(output_key.to_x_only_public_key(), network)
+        Self::from_witness_program(
+            WitnessProgram::p2tr(secp, internal_key, merkle_root),
+            network,
+        )
     }
 
     /// The network this address encodes.
+    ///
+    /// A presentation detail: it selects the human readable part and nothing
+    /// else. It is not part of any consensus encoding.
     pub fn network(&self) -> Network {
         self.network
     }
 
-    /// The 32 byte taproot output key.
-    pub fn output_key(&self) -> XOnlyPublicKey {
-        self.output_key
+    /// The witness program this address encodes.
+    ///
+    /// This is the part a `ShareHeader` stores, and the whole of what
+    /// identifies the owner of a share coinbase output.
+    pub fn witness_program(&self) -> WitnessProgram {
+        self.witness_program
     }
 
     /// The script this address pays to in a share coinbase output.
     pub fn script_pubkey(&self) -> ScriptBuf {
-        ScriptBuf::new_p2tr_tweaked(TweakedPublicKey::dangerous_assume_tweaked(self.output_key))
+        ScriptBuf::new_witness_program(&self.witness_program)
     }
 
     /// Return the address if it is for `network`, otherwise error.
@@ -258,18 +316,17 @@ impl Address {
 impl fmt::Display for Address {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let hrp = hrp_for(self.network).map_err(|_| fmt::Error)?;
-        let key_bytes = self.output_key.serialize();
-        let characters = key_bytes
-            .iter()
-            .copied()
-            .bytes_to_fes()
-            .with_checksum::<Bech32m>(&hrp)
-            .with_witness_version(WITNESS_VERSION_1)
-            .chars();
-        for character in characters {
-            formatter.write_char(character)?;
-        }
-        Ok(())
+        //* The "unchecked" encoder skips the version and length checks that
+        //* `segwit::encode` repeats. Every constructor goes through
+        //* `from_witness_program`, so an `Address` that exists has already
+        //* passed both. The encoder pairs the checksum with the version the
+        //* same way the decoder does, so this round trips through `from_str`.
+        segwit::encode_lower_to_fmt_unchecked(
+            formatter,
+            hrp,
+            self.witness_program.version().to_fe(),
+            self.witness_program.program().as_bytes(),
+        )
     }
 }
 
@@ -277,46 +334,33 @@ impl FromStr for Address {
     type Err = AddressError;
 
     fn from_str(address: &str) -> Result<Self, Self::Err> {
-        //* Requiring Bech32m here is what rejects a bech32 checksummed string
-        //* carrying the same payload; bech32::decode would accept either and
-        //* not report which one matched. The HRP check below, not the
-        //* checksum, is what separates this from a bitcoin taproot address.
-        let mut checked = CheckedHrpstring::new::<Bech32m>(address)?;
-        let network = network_for_hrp(checked.hrp())?;
+        //* This is the parser bitcoin itself uses for bc1 and tb1 strings,
+        //* minus the `KnownHrp` restriction that would reject ours. It applies
+        //* the BIP350 pairing of witness version to checksum, the 90 character
+        //* limit, the 2 to 40 byte program bounds and the padding rules, so
+        //* the only decisions left here are which network the HRP names and
+        //* whether `from_witness_program` accepts the version.
+        let (hrp, version_field, program_bytes) =
+            segwit::decode(address).map_err(|error| match error.0 {
+                //* No data and a first symbol above 16 are different failures
+                //* and are reported as such rather than as one vague encoding
+                //* error, because a miner reads these when their p2p= value is
+                //* rejected.
+                SegwitHrpstringError::NoData => AddressError::MissingWitnessVersion,
+                SegwitHrpstringError::InvalidWitnessVersion(field) => {
+                    AddressError::InvalidWitnessVersion(field.to_char())
+                }
+                SegwitHrpstringError::Padding(padding) => AddressError::Padding(padding),
+                other => AddressError::Encoding(other),
+            })?;
 
-        //* The witness version is a single field element and must come off
-        //* before the remaining elements regroup into key bytes.
-        //*
-        //* remove_witness_version returns None for two different reasons, an
-        //* empty data part and a first symbol above 16, so they are separated
-        //* here rather than reported as one misleading error. The slice borrows
-        //* the input string, not `checked`, so taking it before the mutable
-        //* call is fine.
-        let data_part = checked.data_part_ascii_no_checksum();
-        let Some(&first_symbol) = data_part.first() else {
-            return Err(AddressError::MissingWitnessVersion);
-        };
-        let witness_version = checked
-            .remove_witness_version()
-            .ok_or(AddressError::InvalidWitnessVersion(first_symbol as char))?;
-        if witness_version != WITNESS_VERSION_1 {
-            return Err(AddressError::UnsupportedWitnessVersion(
-                witness_version.to_u8(),
-            ));
-        }
-        checked.validate_segwit_padding()?;
-
-        let key_bytes: Vec<u8> = checked.byte_iter().collect();
-        if key_bytes.len() != OUTPUT_KEY_LENGTH {
-            return Err(AddressError::InvalidOutputKeyLength(key_bytes.len()));
-        }
-        //* Validating the point here keeps script_pubkey infallible and stops
-        //* an unspendable output key entering the share chain at all.
-        let output_key = XOnlyPublicKey::from_slice(&key_bytes)?;
-        Ok(Self {
-            network,
-            output_key,
-        })
+        let network = network_for_hrp(hrp)?;
+        //* segwit::decode already rejected anything above 16, so this only
+        //* converts the field element into the typed version.
+        let witness_version = WitnessVersion::try_from(version_field)
+            .map_err(|_| AddressError::InvalidWitnessVersion(version_field.to_char()))?;
+        let witness_program = WitnessProgram::new(witness_version, &program_bytes)?;
+        Self::from_witness_program(witness_program, network)
     }
 }
 
@@ -357,6 +401,10 @@ mod tests {
         XOnlyPublicKey::from_slice(&hex::decode(OUTPUT_KEY_HEX).unwrap()).unwrap()
     }
 
+    fn witness_program() -> WitnessProgram {
+        WitnessProgram::p2tr_tweaked(TweakedPublicKey::dangerous_assume_tweaked(output_key()))
+    }
+
     #[test]
     fn display_encodes_mainnet_address() {
         let address = Address::from_output_key(output_key(), Network::Bitcoin).unwrap();
@@ -385,7 +433,7 @@ mod tests {
     fn parse_round_trips_mainnet_address() {
         let address: Address = MAINNET_ADDRESS.parse().unwrap();
         assert_eq!(address.network(), Network::Bitcoin);
-        assert_eq!(address.output_key(), output_key());
+        assert_eq!(address.witness_program(), witness_program());
         assert_eq!(address.to_string(), MAINNET_ADDRESS);
     }
 
@@ -393,7 +441,7 @@ mod tests {
     fn parse_round_trips_testnet4_address() {
         let address: Address = TESTNET4_ADDRESS.parse().unwrap();
         assert_eq!(address.network(), Network::Testnet4);
-        assert_eq!(address.output_key(), output_key());
+        assert_eq!(address.witness_program(), witness_program());
         assert_eq!(address.to_string(), TESTNET4_ADDRESS);
     }
 
@@ -401,7 +449,7 @@ mod tests {
     fn parse_round_trips_signet_address() {
         let address: Address = SIGNET_ADDRESS.parse().unwrap();
         assert_eq!(address.network(), Network::Signet);
-        assert_eq!(address.output_key(), output_key());
+        assert_eq!(address.witness_program(), witness_program());
         assert_eq!(address.to_string(), SIGNET_ADDRESS);
     }
 
@@ -409,7 +457,7 @@ mod tests {
     fn parse_round_trips_regtest_address() {
         let address: Address = REGTEST_ADDRESS.parse().unwrap();
         assert_eq!(address.network(), Network::Regtest);
-        assert_eq!(address.output_key(), output_key());
+        assert_eq!(address.witness_program(), witness_program());
         assert_eq!(address.to_string(), REGTEST_ADDRESS);
     }
 
@@ -466,13 +514,32 @@ mod tests {
     /// Witness version 0 is what a P2WPKH share address would have used. It
     /// must be rejected rather than silently accepted, so that a future soft
     /// fork widening the format is a deliberate consensus change.
+    ///
+    /// Encoded here rather than hardcoded so it carries the bech32 checksum
+    /// BIP350 pairs with version 0. It therefore decodes cleanly and is
+    /// refused for its version, which is the rejection worth pinning; a
+    /// hardcoded bech32m string would be refused by the checksum first and
+    /// this test would pass without the version policy existing at all.
     #[test]
     fn witness_version_0_is_rejected() {
-        let version_zero = "sp2pool1qx6e0gj7q7xurl08cwnpmeve6w6zf4tw6aujzp6";
+        let version_zero = segwit::encode_v0(Hrp::parse(HRP_SIGNET).unwrap(), &[0x42; 20]).unwrap();
         assert_eq!(
             version_zero.parse::<Address>().unwrap_err(),
             AddressError::UnsupportedWitnessVersion(0)
         );
+    }
+
+    /// BIP350 pairs version 0 with bech32 and every later version with
+    /// bech32m. A version 0 payload under a bech32m checksum is not a valid
+    /// segwit string at all, and is refused before the version policy is
+    /// reached.
+    #[test]
+    fn witness_version_0_under_bech32m_checksum_is_rejected() {
+        let bech32m_version_zero = "sp2pool1qx6e0gj7q7xurl08cwnpmeve6w6zf4tw6aujzp6";
+        assert!(matches!(
+            bech32m_version_zero.parse::<Address>(),
+            Err(AddressError::Encoding(_))
+        ));
     }
 
     #[test]
@@ -516,15 +583,17 @@ mod tests {
         );
     }
 
-    /// Thirty two bytes that are not a curve point would encode an unspendable
-    /// output, so they are refused at parse time rather than at spend time.
+    /// Thirty two bytes that are not a curve point are still a well formed
+    /// P2TR output, and bitcoin lets anyone pay to one, so a miner may name
+    /// one here too. It is unspendable and that is the miner's own loss; no
+    /// other participant is affected, and refusing it would mean decompressing
+    /// a point on a path that only ever needs the raw program.
     #[test]
-    fn invalid_curve_point_is_rejected() {
+    fn program_that_is_not_a_curve_point_is_accepted() {
         let not_a_point = "sp2pool1plllllllllllllllllllllllllllllllllllllllllllllllllllskmdz0g";
-        assert!(matches!(
-            not_a_point.parse::<Address>(),
-            Err(AddressError::InvalidOutputKey(_))
-        ));
+        let address: Address = not_a_point.parse().unwrap();
+        assert!(address.script_pubkey().is_p2tr());
+        assert_eq!(address.to_string(), not_a_point);
     }
 
     /// The same payload under a BIP173 bech32 checksum must not parse. This is
@@ -635,7 +704,7 @@ mod tests {
         let key_path_only =
             Address::from_internal_key(internal_key, None, Network::Signet, &secp).unwrap();
 
-        assert_ne!(with_tree.output_key(), key_path_only.output_key());
+        assert_ne!(with_tree.witness_program(), key_path_only.witness_program());
         assert_eq!(
             with_tree.script_pubkey(),
             bitcoin::Address::p2tr(&secp, internal_key, Some(merkle_root), Network::Signet)
