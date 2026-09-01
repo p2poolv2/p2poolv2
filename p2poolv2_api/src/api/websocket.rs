@@ -97,14 +97,14 @@ pub(crate) async fn websocket_handler(
     Ok(upgrade.on_upgrade(move |socket| handle_socket(socket, monitoring_event_sender, network)))
 }
 
-/// Serialize a monitoring event for the wire, naming share chain owners as
-/// addresses on the pool's configured network.
+/// Serialize a monitoring event for the wire, rendering miner addresses in
+/// bech32m for the pool's configured network.
 ///
-/// A `ShareInfo` carries the owner as a bare witness program, because the
+/// A `ShareInfo` carries the miner address as a bare witness program, because the
 /// store that builds it is network agnostic. This is the layer that knows the
 /// network, so it is the one that can render the bech32m form.
 ///
-/// The owner fields are overwritten on the serialized value, from the typed
+/// The miner address fields are overwritten on the serialized value, from the typed
 /// event rather than by parsing the hex back, so no round trip is involved.
 /// Mirroring `ShareInfo` in a second struct would be the alternative, and it
 /// would silently drop any field added to `ShareInfo` later; this carries new
@@ -353,11 +353,11 @@ mod tests {
         );
     }
 
-    /// Uncles carry an owner too, and they are nested, so the rewrite has to
-    /// reach them. A regression here would show the nephew as an address and
-    /// every uncle as hex.
+    /// Uncles carry a miner address too, and they are nested, so the rewrite
+    /// has to reach them. A regression here would show the nephew as an
+    /// address and every uncle as hex.
     #[test]
-    fn event_to_json_names_owners_of_the_share_and_its_uncles() {
+    fn event_to_json_renders_addresses_of_the_share_and_its_uncles() {
         let uncle = UncleInfo {
             blockhash: bitcoin::BlockHash::all_zeros(),
             prev_blockhash: bitcoin::BlockHash::all_zeros(),
@@ -390,10 +390,10 @@ mod tests {
         );
     }
 
-    /// The same event on a different network names the same owner differently,
-    /// which is the whole reason the header does not store the network.
+    /// The same event on a different network spells the same miner address
+    /// differently, which is why the header does not store the network.
     #[test]
-    fn event_to_json_names_the_owner_for_the_configured_network() {
+    fn event_to_json_renders_the_address_for_the_configured_network() {
         let event = MonitoringEvent::Share(ShareInfo {
             blockhash: bitcoin::BlockHash::all_zeros(),
             prev_blockhash: bitcoin::BlockHash::all_zeros(),

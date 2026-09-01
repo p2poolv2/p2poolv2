@@ -21,7 +21,7 @@ use axum::{
     Json,
     extract::{Query, State},
 };
-use p2poolv2_lib::store::dag_store::ShareInfo;
+use p2poolv2_lib::address_display::ShareInfoDisplay;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -39,7 +39,7 @@ pub struct CandidatesQuery {
 pub struct CandidatesResponse {
     pub from_height: u32,
     pub to_height: u32,
-    pub shares: Vec<ShareInfo>,
+    pub shares: Vec<ShareInfoDisplay>,
 }
 
 /// Returns candidate shares and their uncles for a height range.
@@ -84,7 +84,7 @@ pub(crate) async fn candidates(
     Ok(Json(CandidatesResponse {
         from_height,
         to_height,
-        shares: candidates,
+        shares: ShareInfoDisplay::from_share_infos(&candidates, Some(state.app_config.network)),
     }))
 }
 

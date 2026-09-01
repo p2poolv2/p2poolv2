@@ -47,9 +47,9 @@ pub struct ShareCommitment {
     /// Bitcoin address identifying the miner mining the share
     #[serde(serialize_with = "address_serde::serialize")]
     pub miner_bitcoin_address: Address,
-    /// Share chain owner of the share coinbase output: the witness program a
-    /// share chain address encodes. Distinct from `miner_bitcoin_address`,
-    /// which receives the bitcoin payout.
+    /// Share chain miner address owning the share coinbase output, stored as
+    /// the witness program that address encodes. Distinct from
+    /// `miner_bitcoin_address`, which receives the bitcoin payout.
     ///
     /// Not hashed directly: the share coinbase pays it, and `merkle_root`
     /// commits to that coinbase.
@@ -359,7 +359,7 @@ mod tests {
         assert_ne!(hash1, hash2);
     }
 
-    /// Changing the share chain owner changes the share coinbase, hence the
+    /// Changing the miner address changes the share coinbase, hence the
     /// merkle root, hence the commitment hash. The address is not hashed
     /// directly; this is what makes that indirection sufficient.
     #[test]

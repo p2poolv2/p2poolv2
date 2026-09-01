@@ -100,7 +100,7 @@ pub fn to_hex(witness_program: &WitnessProgram) -> String {
 
 /// Render a witness program as a share chain address on `network`.
 ///
-/// This is the other end of storing the owner as a bare program: a
+/// This is the other end of storing a miner address as a bare program: a
 /// `ShareHeader` cannot name a network, so the layers that know the
 /// configured one -- the API and the CLI -- turn the program back into the
 /// bech32m form an operator recognises.
@@ -189,7 +189,7 @@ mod tests {
     /// A field holding a bare witness program, standing in for the one in
     /// `ShareHeader`.
     #[derive(Debug, PartialEq, Serialize, Deserialize)]
-    struct Owner {
+    struct BareWitness {
         #[serde(with = "serde_hex")]
         witness_program: WitnessProgram,
     }
@@ -265,28 +265,34 @@ mod tests {
 
     #[test]
     fn serde_round_trips_as_hex_of_the_consensus_encoding() {
-        let owner = Owner {
+        let bare_witness = BareWitness {
             witness_program: witness_program(),
         };
-        let json = serde_json::to_string(&owner).unwrap();
+        let json = serde_json::to_string(&bare_witness).unwrap();
 
         assert_eq!(
             json,
             "{\"witness_program\":\"0120ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d\"}"
         );
-        assert_eq!(serde_json::from_str::<Owner>(&json).unwrap(), owner);
+        assert_eq!(
+            serde_json::from_str::<BareWitness>(&json).unwrap(),
+            bare_witness
+        );
     }
 
-    /// The same owner is one owner, spelled for whichever network the pool
-    /// runs on. This is exactly the presentation the consensus encoding
-    /// deliberately does not carry.
+    /// One miner address is spelled differently per network. That spelling is
+    /// exactly the presentation the consensus encoding deliberately does not
+    /// carry.
     #[test]
-    fn to_address_string_spells_one_owner_per_network() {
-        let owner = witness_program();
-        assert!(to_address_string(&owner, Network::Signet).starts_with("sp2pool1"));
-        assert!(to_address_string(&owner, Network::Bitcoin).starts_with("p2pool1"));
-        assert!(to_address_string(&owner, Network::Testnet4).starts_with("tp2pool1"));
-        assert_eq!(to_address_string(&owner, Network::Signet), SIGNET_ADDRESS);
+    fn to_address_string_spells_one_address_per_network() {
+        let miner_address = witness_program();
+        assert!(to_address_string(&miner_address, Network::Signet).starts_with("sp2pool1"));
+        assert!(to_address_string(&miner_address, Network::Bitcoin).starts_with("p2pool1"));
+        assert!(to_address_string(&miner_address, Network::Testnet4).starts_with("tp2pool1"));
+        assert_eq!(
+            to_address_string(&miner_address, Network::Signet),
+            SIGNET_ADDRESS
+        );
     }
 
     /// A network with no share chain prefix must still render something a
@@ -302,7 +308,7 @@ mod tests {
     #[test]
     fn serde_rejects_a_share_chain_address_string() {
         let json = format!("{{\"witness_program\":\"{SIGNET_ADDRESS}\"}}");
-        assert!(serde_json::from_str::<Owner>(&json).is_err());
+        assert!(serde_json::from_str::<BareWitness>(&json).is_err());
     }
 
     /// The codec is deliberately wider than the address policy: it carries any
@@ -326,16 +332,19 @@ mod tests {
 
     #[test]
     fn serde_round_trips_a_program_no_address_would_accept() {
-        let owner = Owner {
+        let bare_witness = BareWitness {
             witness_program: WitnessProgram::new(WitnessVersion::V0, &[0x11; 20]).unwrap(),
         };
-        let json = serde_json::to_string(&owner).unwrap();
+        let json = serde_json::to_string(&bare_witness).unwrap();
 
         assert_eq!(
             json,
             "{\"witness_program\":\"00141111111111111111111111111111111111111111\"}"
         );
-        assert_eq!(serde_json::from_str::<Owner>(&json).unwrap(), owner);
+        assert_eq!(
+            serde_json::from_str::<BareWitness>(&json).unwrap(),
+            bare_witness
+        );
     }
 
     /// The shortest and longest programs BIP141 allows, so the length byte is
