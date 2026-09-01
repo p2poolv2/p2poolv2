@@ -33,10 +33,11 @@
 //! [`consensus_decode`] refuses a longer length before it reads any program
 //! bytes. Nothing an untrusted peer sends can make a header allocate.
 
+use crate::Address;
 use bitcoin::consensus::encode;
 use bitcoin::consensus::{Decodable, Encodable};
 use bitcoin::hex::DisplayHex;
-use bitcoin::{WitnessProgram, WitnessVersion, witness_program};
+use bitcoin::{Network, WitnessProgram, WitnessVersion, witness_program};
 
 /// Bytes a witness program can occupy: version, length, and the program.
 pub const MAX_ENCODED_LENGTH: usize = 1 + 1 + witness_program::MAX_SIZE;
@@ -97,6 +98,24 @@ pub fn to_hex(witness_program: &WitnessProgram) -> String {
     encoded.to_lower_hex_string()
 }
 
+/// Render a witness program as a share chain address on `network`.
+///
+/// This is the other end of storing the owner as a bare program: a
+/// `ShareHeader` cannot name a network, so the layers that know the
+/// configured one -- the API and the CLI -- turn the program back into the
+/// bech32m form an operator recognises.
+///
+/// Falls back to [`to_hex`] when the program is not one this network can
+/// name, which today means a witness version the address format does not
+/// accept. Such a program can still reach a node in a header from a peer, and
+/// a diagnostic view should render it rather than fail; the hex is the same
+/// encoding the header uses, so it stays comparable with a raw header dump.
+pub fn to_address_string(witness_program: &WitnessProgram, network: Network) -> String {
+    Address::from_witness_program(*witness_program, network)
+        .map(|address| address.to_string())
+        .unwrap_or_else(|_| to_hex(witness_program))
+}
+
 /// Serde for a `WitnessProgram` field, as hex of its consensus encoding.
 ///
 /// Use with `#[serde(with = "p2poolv2_address::witness_program_codec::serde_hex")]`.
@@ -126,6 +145,37 @@ pub mod serde_hex {
         let encoded: String = serde::Deserialize::deserialize(deserializer)?;
         let bytes = Vec::<u8>::from_hex(&encoded).map_err(D::Error::custom)?;
         consensus_decode(&mut bytes.as_slice()).map_err(D::Error::custom)
+    }
+}
+
+/// Serde for an `Option<WitnessProgram>` field, as hex of its consensus
+/// encoding when present.
+///
+/// Use with `#[serde(with = "p2poolv2_address::witness_program_codec::serde_hex_option")]`.
+pub mod serde_hex_option {
+    use bitcoin::WitnessProgram;
+
+    pub fn serialize<S: serde::Serializer>(
+        witness_program: &Option<WitnessProgram>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        match witness_program {
+            Some(program) => serializer.serialize_some(&super::to_hex(program)),
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<WitnessProgram>, D::Error> {
+        let encoded: Option<String> = serde::Deserialize::deserialize(deserializer)?;
+        match encoded {
+            Some(encoded) => {
+                super::serde_hex::deserialize(serde::de::value::StringDeserializer::new(encoded))
+                    .map(Some)
+            }
+            None => Ok(None),
+        }
     }
 }
 
@@ -225,6 +275,28 @@ mod tests {
             "{\"witness_program\":\"0120ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d\"}"
         );
         assert_eq!(serde_json::from_str::<Owner>(&json).unwrap(), owner);
+    }
+
+    /// The same owner is one owner, spelled for whichever network the pool
+    /// runs on. This is exactly the presentation the consensus encoding
+    /// deliberately does not carry.
+    #[test]
+    fn to_address_string_spells_one_owner_per_network() {
+        let owner = witness_program();
+        assert!(to_address_string(&owner, Network::Signet).starts_with("sp2pool1"));
+        assert!(to_address_string(&owner, Network::Bitcoin).starts_with("p2pool1"));
+        assert!(to_address_string(&owner, Network::Testnet4).starts_with("tp2pool1"));
+        assert_eq!(to_address_string(&owner, Network::Signet), SIGNET_ADDRESS);
+    }
+
+    /// A network with no share chain prefix must still render something a
+    /// reader can compare against a header dump.
+    #[test]
+    fn to_address_string_falls_back_to_hex_without_a_prefix() {
+        assert_eq!(
+            to_address_string(&witness_program(), Network::Testnet),
+            to_hex(&witness_program())
+        );
     }
 
     #[test]

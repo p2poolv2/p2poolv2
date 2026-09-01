@@ -44,7 +44,6 @@ use crate::store::dag_store::ShareInfo;
 use crate::store::writer::StoreError;
 use crate::stratum::work::notify::{NotifyCmd, NotifySender};
 use bitcoin::BlockHash;
-use p2poolv2_address::witness_program_codec;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::{Arc, RwLock};
@@ -797,7 +796,7 @@ impl OrganiseWorker {
             prev_blockhash: header.prev_share_blockhash,
             height,
             miner_bitcoin_address: header.miner_bitcoin_address.to_string(),
-            miner_address: witness_program_codec::to_hex(&header.miner_address),
+            miner_address: header.miner_address,
             timestamp: header.time,
             bits: header.bits,
             uncles: uncle_infos,

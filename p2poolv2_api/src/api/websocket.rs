@@ -28,8 +28,11 @@ use axum::{
     http::StatusCode,
     response::Response,
 };
+use bitcoin::Network;
+use p2poolv2_lib::address::witness_program_codec::to_address_string;
 use p2poolv2_lib::monitoring_events::{MonitoringEvent, MonitoringEventSender};
 use serde::Deserialize;
+use serde_json::Value;
 use std::collections::HashSet;
 use std::sync::Arc;
 use tracing::{debug, warn};
@@ -90,7 +93,36 @@ pub(crate) async fn websocket_handler(
     }
 
     let monitoring_event_sender = state.monitoring_event_sender.clone();
-    Ok(upgrade.on_upgrade(move |socket| handle_socket(socket, monitoring_event_sender)))
+    let network = state.app_config.network;
+    Ok(upgrade.on_upgrade(move |socket| handle_socket(socket, monitoring_event_sender, network)))
+}
+
+/// Serialize a monitoring event for the wire, naming share chain owners as
+/// addresses on the pool's configured network.
+///
+/// A `ShareInfo` carries the owner as a bare witness program, because the
+/// store that builds it is network agnostic. This is the layer that knows the
+/// network, so it is the one that can render the bech32m form.
+///
+/// The owner fields are overwritten on the serialized value, from the typed
+/// event rather than by parsing the hex back, so no round trip is involved.
+/// Mirroring `ShareInfo` in a second struct would be the alternative, and it
+/// would silently drop any field added to `ShareInfo` later; this carries new
+/// fields through untouched and rewrites only what needs the network.
+fn event_to_json(event: &MonitoringEvent, network: Network) -> Result<String, serde_json::Error> {
+    let mut value = serde_json::to_value(event)?;
+
+    if let MonitoringEvent::Share(share) = event
+        && let Some(data) = value.get_mut("data")
+    {
+        data["miner_address"] = Value::String(to_address_string(&share.miner_address, network));
+        for (index, uncle) in share.uncles.iter().enumerate() {
+            data["uncles"][index]["miner_address"] =
+                Value::String(to_address_string(&uncle.miner_address, network));
+        }
+    }
+
+    serde_json::to_string(&value)
 }
 
 /// Per-client WebSocket loop.
@@ -98,7 +130,11 @@ pub(crate) async fn websocket_handler(
 /// Subscribes to the broadcast channel and forwards matching events as
 /// JSON text frames. Processes client subscribe/unsubscribe messages to
 /// update the topic filter set.
-async fn handle_socket(mut socket: WebSocket, monitoring_event_sender: MonitoringEventSender) {
+async fn handle_socket(
+    mut socket: WebSocket,
+    monitoring_event_sender: MonitoringEventSender,
+    network: Network,
+) {
     let mut event_receiver = monitoring_event_sender.subscribe();
     let mut subscriptions: HashSet<Topic> = HashSet::with_capacity(TOPIC_COUNT);
 
@@ -126,7 +162,7 @@ async fn handle_socket(mut socket: WebSocket, monitoring_event_sender: Monitorin
                 match event_result {
                     Ok(event) => {
                         if event_matches_subscriptions(&event, &subscriptions) {
-                            match serde_json::to_string(&event) {
+                            match event_to_json(&event, network) {
                                 Ok(json) => {
                                     if socket.send(Message::Text(json)).await.is_err() {
                                         debug!("WebSocket send failed, closing connection");
@@ -187,7 +223,8 @@ mod tests {
     use super::*;
     use bitcoin::hashes::Hash;
     use p2poolv2_lib::monitoring_events::create_monitoring_event_channel;
-    use p2poolv2_lib::store::dag_store::ShareInfo;
+    use p2poolv2_lib::store::dag_store::{ShareInfo, UncleInfo};
+    use p2poolv2_lib::test_utils::make_test_share_program;
 
     #[test]
     fn test_parse_topic_valid() {
@@ -211,8 +248,7 @@ mod tests {
             prev_blockhash: bitcoin::BlockHash::all_zeros(),
             height: 1,
             miner_bitcoin_address: "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q".to_string(),
-            miner_address: "sp2pool1pmfr3p9j00pfxjh0zmgp99y8zftmd3s5pmedqhyptwy6lm87hf5ss5najrp"
-                .to_string(),
+            miner_address: make_test_share_program(1),
             timestamp: 0,
             bits: bitcoin::CompactTarget::from_consensus(0x1d00ffff),
             uncles: vec![],
@@ -292,8 +328,7 @@ mod tests {
             prev_blockhash: bitcoin::BlockHash::all_zeros(),
             height: 42,
             miner_bitcoin_address: "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q".to_string(),
-            miner_address: "sp2pool1pmfr3p9j00pfxjh0zmgp99y8zftmd3s5pmedqhyptwy6lm87hf5ss5najrp"
-                .to_string(),
+            miner_address: make_test_share_program(1),
             timestamp: 1000,
             bits: bitcoin::CompactTarget::from_consensus(0x1d00ffff),
             uncles: vec![],
@@ -304,7 +339,7 @@ mod tests {
         let received = receiver.recv().await.unwrap();
         assert!(event_matches_subscriptions(&received, &subscriptions));
 
-        let json = serde_json::to_string(&received).unwrap();
+        let json = event_to_json(&received, Network::Signet).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed["topic"], "Share");
         assert_eq!(parsed["data"]["height"], 42);
@@ -315,6 +350,77 @@ mod tests {
         assert_eq!(
             parsed["data"]["miner_address"],
             "sp2pool1pmfr3p9j00pfxjh0zmgp99y8zftmd3s5pmedqhyptwy6lm87hf5ss5najrp"
+        );
+    }
+
+    /// Uncles carry an owner too, and they are nested, so the rewrite has to
+    /// reach them. A regression here would show the nephew as an address and
+    /// every uncle as hex.
+    #[test]
+    fn event_to_json_names_owners_of_the_share_and_its_uncles() {
+        let uncle = UncleInfo {
+            blockhash: bitcoin::BlockHash::all_zeros(),
+            prev_blockhash: bitcoin::BlockHash::all_zeros(),
+            miner_bitcoin_address: "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q".to_string(),
+            miner_address: make_test_share_program(2),
+            timestamp: 999,
+            height: Some(41),
+        };
+        let event = MonitoringEvent::Share(ShareInfo {
+            blockhash: bitcoin::BlockHash::all_zeros(),
+            prev_blockhash: bitcoin::BlockHash::all_zeros(),
+            height: 42,
+            miner_bitcoin_address: "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q".to_string(),
+            miner_address: make_test_share_program(1),
+            timestamp: 1000,
+            bits: bitcoin::CompactTarget::from_consensus(0x1d00ffff),
+            uncles: vec![uncle],
+        });
+
+        let json = event_to_json(&event, Network::Signet).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(
+            parsed["data"]["miner_address"],
+            to_address_string(&make_test_share_program(1), Network::Signet)
+        );
+        assert_eq!(
+            parsed["data"]["uncles"][0]["miner_address"],
+            to_address_string(&make_test_share_program(2), Network::Signet)
+        );
+    }
+
+    /// The same event on a different network names the same owner differently,
+    /// which is the whole reason the header does not store the network.
+    #[test]
+    fn event_to_json_names_the_owner_for_the_configured_network() {
+        let event = MonitoringEvent::Share(ShareInfo {
+            blockhash: bitcoin::BlockHash::all_zeros(),
+            prev_blockhash: bitcoin::BlockHash::all_zeros(),
+            height: 42,
+            miner_bitcoin_address: "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q".to_string(),
+            miner_address: make_test_share_program(1),
+            timestamp: 1000,
+            bits: bitcoin::CompactTarget::from_consensus(0x1d00ffff),
+            uncles: vec![],
+        });
+
+        let signet: serde_json::Value =
+            serde_json::from_str(&event_to_json(&event, Network::Signet).unwrap()).unwrap();
+        let mainnet: serde_json::Value =
+            serde_json::from_str(&event_to_json(&event, Network::Bitcoin).unwrap()).unwrap();
+
+        assert!(
+            signet["data"]["miner_address"]
+                .as_str()
+                .unwrap()
+                .starts_with("sp2pool1")
+        );
+        assert!(
+            mainnet["data"]["miner_address"]
+                .as_str()
+                .unwrap()
+                .starts_with("p2pool1")
         );
     }
 
@@ -335,8 +441,7 @@ mod tests {
             prev_blockhash: bitcoin::BlockHash::all_zeros(),
             height: 1,
             miner_bitcoin_address: "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string(),
-            miner_address: "sp2pool1pet7ep3czdu9k4wvdlz2fp5p8x2yp7t6ttyqg2c6cmh0lgeuu9laswyta9v"
-                .to_string(),
+            miner_address: make_test_share_program(1),
             timestamp: 0,
             bits: bitcoin::CompactTarget::from_consensus(0x1d00ffff),
             uncles: vec![],
