@@ -3,7 +3,7 @@
     "prev_share_blockhash": "0000000000000000000000000000000000000000000000000000000000000000",
     "uncles": [],
     "miner_bitcoin_address": "tb1qx6e0gj7q7xurl08cwnpmeve6w6zf4tw6vfwe3f",
-    "miner_address": "sp2pool1pvmde7zkgeg9qqcpsy7e6g3w6dm3d7mqwqnudcmuedk6wt8gwgkls4zffd6",
+    "miner_address": "012066db9f0ac8ca0a00603027b3a445da6ee2df6c0e04f8dc6f996db4e59d0e45bf",
     "merkle_root": "23a1c1a01fb23e95e331b64337f79e68d311e5a5753198355c1f4ffb2acf202e",
     "bitcoin_header": {
       "version": 1,
@@ -54,21 +54,21 @@
     "template_merkle_branches": []
   },
   {
-    "prev_share_blockhash": "93207b88ebd68faba3bcfa078760190cbd0bde05f261fc3f0a52bbc0e1a61964",
+    "prev_share_blockhash": "f2e87888be7e392c4b9d82b90d2f955ca720156920f752cf00c8f9951e37454f",
     "uncles": [],
     "miner_bitcoin_address": "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q",
-    "miner_address": "sp2pool1pmfr3p9j00pfxjh0zmgp99y8zftmd3s5pmedqhyptwy6lm87hf5ss5najrp",
+    "miner_address": "0120da4710964f7852695de2da025290e24af6d8c281de5a0b902b7135fd9fd74d21",
     "merkle_root": "e469dd299ff986cbf4eb16d6c9332c901b0d18cb006ba6d3606e8dc91d1970f9",
     "bitcoin_header": {
-      "version": 537116672,
-      "prev_blockhash": "000000f797186c27454e2265fc45e383457862a97623a0236dbc2baa28afa00d",
-      "merkle_root": "1b86dbfcf178d2a0326a6c266e90676437e50c2c3c7e94e64c6b266f382319c6",
-      "time": 1788184725,
+      "version": 537182208,
+      "prev_blockhash": "0000000000b3b3c3ab2babc5ddc15c561825d4b4b0be57495a3373fceb759759",
+      "merkle_root": "15a661212c3811e9fdb94bd3c2210833e70abdfc9213c5afebbf48b394eb5853",
+      "time": 1788250798,
       "bits": 503543726,
-      "nonce": 4085607564
+      "nonce": 3766958632
     },
     "bits": 456674263,
-    "time": 1788184725,
+    "time": 1788250798,
     "donation_address": null,
     "donation": null,
     "fee_address": null,
@@ -76,9 +76,9 @@
     "coinbase_value": 5000000000,
     "coinbaseaux_flags": null,
     "witness_commitment": "6a24aa21a9ede2f61c3f71d1defd3fa999dfa36953755c690689799962b48bebd836974e8cf9",
-    "bitcoin_height": 1759,
-    "coinbase_nsecs": 1788184725996819727,
-    "extranonce": "55c619ac0700000000000000",
+    "bitcoin_height": 1779,
+    "coinbase_nsecs": 1788250798835194942,
+    "extranonce": "8e5180120500000000000000",
     "transactions": [
       {
         "version": 2,
@@ -108,21 +108,21 @@
     "template_merkle_branches": []
   },
   {
-    "prev_share_blockhash": "2f3f63e736546fffefef72dc794081fa6db45aa549e29b5504a758edcdcc6e32",
+    "prev_share_blockhash": "a372484fce47c67d11add42bce7df0504c2aa5174056c0824dab582c09ee7b07",
     "uncles": [],
     "miner_bitcoin_address": "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q",
-    "miner_address": "sp2pool1pmfr3p9j00pfxjh0zmgp99y8zftmd3s5pmedqhyptwy6lm87hf5ss5najrp",
+    "miner_address": "0120da4710964f7852695de2da025290e24af6d8c281de5a0b902b7135fd9fd74d21",
     "merkle_root": "e469dd299ff986cbf4eb16d6c9332c901b0d18cb006ba6d3606e8dc91d1970f9",
     "bitcoin_header": {
-      "version": 537763840,
-      "prev_blockhash": "0000000000155c20ff261e8f2cc34e46304134f2502838321cc3d76b68202d0a",
-      "merkle_root": "514d10c279bbd998ae3471c31e7036396656c365070cfae8a48e907bea7d41a3",
-      "time": 1788184730,
+      "version": 537190400,
+      "prev_blockhash": "0000000000092ddd920187703055756988869444fd63a83f6aa0432e560b33d0",
+      "merkle_root": "2004608018eefd3c9fb8e05863ab6f49e6ca3bb76d68a3c6781895619d42db7f",
+      "time": 1788250801,
       "bits": 503543726,
-      "nonce": 1934654768
+      "nonce": 1986702088
     },
     "bits": 456674263,
-    "time": 1788184730,
+    "time": 1788250801,
     "donation_address": null,
     "donation": null,
     "fee_address": null,
@@ -130,9 +130,9 @@
     "coinbase_value": 5000000000,
     "coinbaseaux_flags": null,
     "witness_commitment": "6a24aa21a9ede2f61c3f71d1defd3fa999dfa36953755c690689799962b48bebd836974e8cf9",
-    "bitcoin_height": 1760,
-    "coinbase_nsecs": 1788184730098557235,
-    "extranonce": "55c619ac0700000000000000",
+    "bitcoin_height": 1780,
+    "coinbase_nsecs": 1788250801687807253,
+    "extranonce": "8e5180121300000000000000",
     "transactions": [
       {
         "version": 2,
@@ -162,21 +162,21 @@
     "template_merkle_branches": []
   },
   {
-    "prev_share_blockhash": "d7fee985895f06325086ef4b252ae3d84328c0c1d6655319250fa5a775aa698f",
+    "prev_share_blockhash": "9589a784206744ba15597ac63207574af26bbc24013942b22789b70152e1987b",
     "uncles": [],
     "miner_bitcoin_address": "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q",
-    "miner_address": "sp2pool1pmfr3p9j00pfxjh0zmgp99y8zftmd3s5pmedqhyptwy6lm87hf5ss5najrp",
+    "miner_address": "0120da4710964f7852695de2da025290e24af6d8c281de5a0b902b7135fd9fd74d21",
     "merkle_root": "e469dd299ff986cbf4eb16d6c9332c901b0d18cb006ba6d3606e8dc91d1970f9",
     "bitcoin_header": {
-      "version": 537862144,
-      "prev_blockhash": "000000000005c39d00efa2294463342cec5bb0d0c9d6dd818f6bb0616538e7e8",
-      "merkle_root": "2c846b495bf4605777c4e01c41a6a2ecae31e616dc3c11ff50a67c57a4c68177",
-      "time": 1788184734,
+      "version": 537452544,
+      "prev_blockhash": "0000000000232240aa5e003d35674b65b4561f4250393bdfeb65462c3688e387",
+      "merkle_root": "cb5e4068f8433a8572548a93ec3896aba85b1568d014e8e21e8751904d96bd88",
+      "time": 1788250811,
       "bits": 503543726,
-      "nonce": 3934209888
+      "nonce": 2347024222
     },
     "bits": 456674263,
-    "time": 1788184734,
+    "time": 1788250811,
     "donation_address": null,
     "donation": null,
     "fee_address": null,
@@ -184,9 +184,9 @@
     "coinbase_value": 5000000000,
     "coinbaseaux_flags": null,
     "witness_commitment": "6a24aa21a9ede2f61c3f71d1defd3fa999dfa36953755c690689799962b48bebd836974e8cf9",
-    "bitcoin_height": 1761,
-    "coinbase_nsecs": 1788184734312397623,
-    "extranonce": "55c619ac1200000000000000",
+    "bitcoin_height": 1781,
+    "coinbase_nsecs": 1788250811625549844,
+    "extranonce": "8e5180120000000000000000",
     "transactions": [
       {
         "version": 2,
@@ -216,21 +216,21 @@
     "template_merkle_branches": []
   },
   {
-    "prev_share_blockhash": "2f873dc05ae74d52a4de65dbe6a52e1050a1aee5f3e1c3a8195fffd72bfb523f",
+    "prev_share_blockhash": "b12526a5cd2273d56f6aad20498144a573d2359f2d50c46936df7a53d468f10a",
     "uncles": [],
     "miner_bitcoin_address": "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q",
-    "miner_address": "sp2pool1pmfr3p9j00pfxjh0zmgp99y8zftmd3s5pmedqhyptwy6lm87hf5ss5najrp",
+    "miner_address": "0120da4710964f7852695de2da025290e24af6d8c281de5a0b902b7135fd9fd74d21",
     "merkle_root": "e469dd299ff986cbf4eb16d6c9332c901b0d18cb006ba6d3606e8dc91d1970f9",
     "bitcoin_header": {
-      "version": 536944640,
-      "prev_blockhash": "00000000000e6a26b338edc5a623f62cac6405080f6b5455c3478f79b8600ea8",
-      "merkle_root": "24fbadce6d31566564d728c9193f1f234b94b1918cfc0d5a59fd8d61fc5dfa11",
-      "time": 1788184745,
+      "version": 536952832,
+      "prev_blockhash": "0000000000219db8d2048e48f5443501e0a06a3dd48f5d3b6ea63bbd74141124",
+      "merkle_root": "b620aeda0239660a7f64a8fba97f93ede3895007d0cac031705639c3e6b62add",
+      "time": 1788250812,
       "bits": 503543726,
-      "nonce": 888810035
+      "nonce": 3043996196
     },
     "bits": 456674263,
-    "time": 1788184745,
+    "time": 1788250812,
     "donation_address": null,
     "donation": null,
     "fee_address": null,
@@ -238,9 +238,9 @@
     "coinbase_value": 5000000000,
     "coinbaseaux_flags": null,
     "witness_commitment": "6a24aa21a9ede2f61c3f71d1defd3fa999dfa36953755c690689799962b48bebd836974e8cf9",
-    "bitcoin_height": 1762,
-    "coinbase_nsecs": 1788184745481857578,
-    "extranonce": "55c619ac0f00000000000000",
+    "bitcoin_height": 1782,
+    "coinbase_nsecs": 1788250812131867162,
+    "extranonce": "8e5180120200000000000000",
     "transactions": [
       {
         "version": 2,

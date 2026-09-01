@@ -22,10 +22,12 @@ use axum::{
     extract::{Query, State},
 };
 use bitcoin::TxMerkleNode;
+use p2poolv2_lib::address_display::render_header_addresses;
 use p2poolv2_lib::shares::share_block::ShareHeader;
 use p2poolv2_lib::shares::share_block::share_transaction::ShareTransaction;
 use p2poolv2_lib::store::writer::StoreError;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::sync::Arc;
 
 /// Query parameters for the /share_headers endpoint.
@@ -69,7 +71,7 @@ pub struct ShareHeadersResponse {
 pub(crate) async fn share_headers(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ShareHeadersQuery>,
-) -> Result<Json<ShareHeadersResponse>, ApiError> {
+) -> Result<Json<Value>, ApiError> {
     let chain_store_handle = &state.chain_store_handle;
     let num = query.num.unwrap_or(10);
 
@@ -103,7 +105,7 @@ pub(crate) async fn share_headers(
 
     let store = chain_store_handle.store_handle().store();
 
-    let headers = if need_full_blocks {
+    let headers: Vec<ShareHeaderEntry> = if need_full_blocks {
         let share_blocks = store
             .query_share_blocks(from_height, to_height)
             .map_err(|error| match &error {
@@ -149,11 +151,26 @@ pub(crate) async fn share_headers(
             .collect()
     };
 
-    Ok(Json(ShareHeadersResponse {
+    let response = ShareHeadersResponse {
         from_height,
         to_height,
         headers,
-    }))
+    };
+
+    // ShareHeaderEntry flattens the header, so miner_address sits at the top
+    // level of each entry rather than under a "header" key. Rendering it
+    // needs both the serialized value and the typed source, so the response
+    // is serialized here rather than by axum.
+    let mut value = serde_json::to_value(&response)
+        .map_err(|error| ApiError::ServerError(format!("Failed to serialize response: {error}")))?;
+    render_header_addresses(
+        &mut value["headers"],
+        &response.headers,
+        state.app_config.network,
+        |entry| &entry.header,
+    );
+
+    Ok(Json(value))
 }
 
 #[cfg(test)]
@@ -161,7 +178,9 @@ mod tests {
     use super::*;
     use crate::api::server::{AppConfig, AppState};
     use axum::extract::{Query, State};
+    use bitcoin::Network;
     use p2poolv2_lib::accounting::stats::metrics;
+    use p2poolv2_lib::address::witness_program_codec::to_address_string;
     use p2poolv2_lib::monitoring_events::create_monitoring_event_channel;
     use p2poolv2_lib::node::actor::NodeHandle;
     use p2poolv2_lib::stratum::work::tracker::start_tracker_actor;
@@ -247,11 +266,20 @@ mod tests {
         assert!(result.is_ok());
 
         let response = result.unwrap().0;
-        assert_eq!(response.from_height, 0);
-        assert_eq!(response.to_height, 0);
-        assert_eq!(response.headers.len(), 1);
-        assert_eq!(response.headers[0].header, genesis.header);
-        assert!(response.headers[0].transactions.is_none());
+        assert_eq!(response["from_height"], 0);
+        assert_eq!(response["to_height"], 0);
+        assert_eq!(response["headers"].as_array().unwrap().len(), 1);
+        // ShareHeaderEntry flattens the header, so its fields sit at the top
+        // level of the entry.
+        assert_eq!(
+            response["headers"][0]["merkle_root"],
+            genesis.header.merkle_root.to_string()
+        );
+        assert_eq!(
+            response["headers"][0]["miner_address"],
+            to_address_string(&genesis.header.miner_address, Network::Signet)
+        );
+        assert!(response["headers"][0]["transactions"].is_null());
     }
 
     #[tokio::test]
@@ -277,11 +305,16 @@ mod tests {
         assert!(result.is_ok());
 
         let response = result.unwrap().0;
-        assert_eq!(response.from_height, 0);
-        assert_eq!(response.to_height, 0);
-        assert_eq!(response.headers.len(), 1);
-        assert_eq!(response.headers[0].header, genesis.header);
-        let transactions = response.headers[0].transactions.as_ref().unwrap();
-        assert_eq!(*transactions, genesis.transactions);
+        assert_eq!(response["from_height"], 0);
+        assert_eq!(response["to_height"], 0);
+        assert_eq!(response["headers"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            response["headers"][0]["merkle_root"],
+            genesis.header.merkle_root.to_string()
+        );
+        assert_eq!(
+            response["headers"][0]["transactions"],
+            serde_json::to_value(&genesis.transactions).unwrap()
+        );
     }
 }

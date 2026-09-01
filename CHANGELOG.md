@@ -13,11 +13,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   output key as bech32m under a P2Poolv2 human readable part (`p2pool`,
   `tp2pool`, `sp2pool`, `rp2pool`). Witness version 1 only; testnet3 is
   unsupported.
-- `ShareHeader.miner_address`, the share chain address owning a share's
-  coinbase output, alongside the existing `miner_bitcoin_address` that
-  receives the bitcoin payout. The two are never derived from one another.
+- `ShareHeader.miner_address`, the share chain owner of a share's coinbase
+  output, alongside the existing `miner_bitcoin_address` that receives the
+  bitcoin payout. The two are never derived from one another. It is stored as
+  the taproot witness program an address encodes, not as the address, because
+  an address also names a network and the network is not consensus data.
 - `p2p=<address>` in the stratum password, naming the share chain address for
   a miner's shares. Combines with the existing `d=` and `th=` hints.
+- Any well formed P2TR share chain address is accepted, including one whose
+  output key is not a curve point. Bitcoin lets anyone pay to such an output
+  and it is unspendable at the owner's own cost, while rejecting it would have
+  put an elliptic curve operation on every share header decode.
 - Optional `[stratum] miner_address`. When set it owns every share the pool
   mines, so miners need no password change; a miner sending a different
   address is rejected.
@@ -33,17 +39,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **BREAKING (consensus):** share chain restart on all networks. `ShareHeader`
   gained `miner_address` and the share coinbase now pays it, so every share
   block hash changes, genesis included. The commitment hash embedded in the
-  bitcoin coinbase scriptSig changes with it.
+  bitcoin coinbase scriptSig changes with it. `miner_address` is encoded as a
+  witness version byte, a length byte and the program, rather than as an
+  address string. An address string would have carried the human readable
+  part, which names a network and is covered by `block_hash`, so one owner
+  could be spelled four ways and each spelling would have been a distinct
+  share block carrying the same proof of work. The version travels in the
+  encoding, so accepting a further witness version later is a policy change
+  rather than a format break, and validation rejects anything but P2TR.
 - **BREAKING (stratum):** in p2poolv2 mode, authorize is rejected unless a
   share chain address is available, either from `[stratum] miner_address` or
   from `p2p=<address>` in the miner's password. Hydrapool mode is unaffected,
   and rejects `miner_address` at startup.
 - **BREAKING (JSON API):** `miner_address` on the `/share`, `/shares`,
-  `/candidates` and `/dag` endpoints, in `db-query` output and in WebSocket
-  `Share` events now carries the share chain address. The bitcoin payout
+  `/share_headers`, `/candidates` and `/dag` endpoints, in `db-query` output
+  and in WebSocket `Share` events now carries the share chain address. The bitcoin payout
   address moved to a new `miner_bitcoin_address` field. The key kept its name
   and changed meaning, so consumers must be updated rather than warned by a
   missing field.
+- Share chain addresses are parsed with the same segwit decoder bitcoin uses
+  for its own addresses, minus the restriction on the human readable part, so
+  the BIP350 pairing of witness version to checksum applies: version 0
+  requires bech32 and later versions bech32m. The 90 character segwit limit
+  applies too.
+- `db-query` renders a share chain owner as its witness program hex when no
+  `--config` is given, since without one there is no network to choose a
+  human readable part with. Pass `--config` to see the address form; the API
+  and the WebSocket feed always have the configured network and always render
+  the address.
 - The dashboard shows both addresses, truncated client side.
 - The `share_sync` test fixture is regenerated from a live signet node, with
   bitcoin headers carrying real proof of work mined under the two-address

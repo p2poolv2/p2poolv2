@@ -809,7 +809,7 @@ impl DefaultShareValidator {
         Ok(())
     }
 
-    /// Validate the share chain owner is a P2TR witness program.
+    /// Validate the miner address is a P2TR witness program.
     ///
     /// `ShareHeader` stores a bare `WitnessProgram`, and its decode enforces
     /// only the BIP141 2 to 40 byte bounds. Restricting that to taproot is
@@ -824,7 +824,7 @@ impl DefaultShareValidator {
     fn validate_miner_address(&self, share_header: &ShareHeader) -> Result<(), ValidationError> {
         if !share_header.miner_address.is_p2tr() {
             return Err(ValidationError::consensus(format!(
-                "Share chain owner is witness version {} with a {} byte program, expected version 1 with 32 bytes",
+                "Miner address is witness version {} with a {} byte program, expected version 1 with 32 bytes",
                 share_header.miner_address.version().to_num(),
                 share_header.miner_address.program().len()
             )));

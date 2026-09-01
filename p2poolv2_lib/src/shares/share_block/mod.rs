@@ -69,15 +69,15 @@ pub struct ShareHeader {
     /// Bitcoin address identifying the miner, receiving the bitcoin payout
     #[serde(with = "crate::shares::address_serde")]
     pub miner_bitcoin_address: Address,
-    /// Share chain owner of this share's coinbase output: the witness program
-    /// a share chain address encodes. A different chain and a different key
-    /// from `miner_bitcoin_address`.
+    /// Share chain miner address owning this share's coinbase output, stored
+    /// as the witness program that address encodes. A different chain and a
+    /// different key from `miner_bitcoin_address`.
     ///
     /// The witness program rather than the `Address` because an address also
     /// names a network, and the network is not consensus data: the chain knows
     /// which one it is from its own configuration, and a share from another
-    /// chain fails on its parent hash and difficulty long before its owner
-    /// matters. Storing it would let one output be spelled four ways, and
+    /// chain fails on its parent hash and difficulty long before its miner
+    /// address matters. Storing it would let one output be spelled four ways, and
     /// since `block_hash` covers every field, each spelling would be a
     /// distinct block carrying the same proof of work.
     #[serde(with = "p2poolv2_address::witness_program_codec::serde_hex")]
@@ -666,7 +666,7 @@ mod tests {
         let output = &share.transactions[0].output[0];
         assert_eq!(output.value.to_sat(), 100_000_000);
 
-        // The share coinbase pays the share chain owner; the bitcoin address
+        // The share coinbase pays the share chain miner address; the bitcoin address
         // is the payout identity on bitcoin and is not this output.
         assert_eq!(
             output.script_pubkey,

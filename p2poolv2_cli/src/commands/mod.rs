@@ -33,6 +33,7 @@ use crate::commands;
 use clap::{ArgGroup, Parser, Subcommand};
 use p2poolv2_lib::config::Config;
 use std::error::Error;
+use std::path::Path;
 
 /// P2Pool v2 CLI utility
 #[derive(Parser, Debug)]
@@ -219,13 +220,14 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
                 // Direct database query mode (offline, no running node required)
                 let store = commands::db_query::open_store(db_path)?;
 
-                // A share chain owner is stored as a bare witness program, so
-                // naming it as an address needs the network. --config is
-                // optional in this mode, and without it the owner is rendered
-                // as its program hex rather than guessing a network.
+                // A miner address is stored as the bare witness program it
+                // encodes, so rendering it needs the network. --config is
+                // documented as not required here.
                 let network = match &cli.config {
-                    Some(config_path) => Some(Config::load(config_path)?.stratum.network),
-                    None => None,
+                    Some(config_path) if Path::new(config_path).exists() => {
+                        Some(Config::load(config_path)?.stratum.network)
+                    }
+                    _ => None,
                 };
 
                 match &cli.command {
@@ -243,18 +245,24 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
                         if *dot {
                             commands::db_query::shares_dot(&store, *to, *num, network)?;
                         } else {
-                            commands::db_query::shares(&store, *to, *num)?;
+                            commands::db_query::shares(&store, *to, *num, network)?;
                         }
                     }
                     Some(Commands::Candidates { to, num, dot }) => {
                         if *dot {
                             commands::db_query::candidates_dot(&store, *to, *num, network)?;
                         } else {
-                            commands::db_query::candidates(&store, *to, *num)?;
+                            commands::db_query::candidates(&store, *to, *num, network)?;
                         }
                     }
                     Some(Commands::Share { hash, height, full }) => {
-                        commands::db_query::share_lookup(&store, hash.clone(), *height, *full)?;
+                        commands::db_query::share_lookup(
+                            &store,
+                            hash.clone(),
+                            *height,
+                            *full,
+                            network,
+                        )?;
                     }
                     Some(Commands::Dag { to, num, dot }) => {
                         commands::db_query::dag(&store, *to, *num, *dot, network)?;

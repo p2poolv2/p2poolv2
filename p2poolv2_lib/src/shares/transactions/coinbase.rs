@@ -30,7 +30,7 @@ const BIP141_COMMITMENT_HEADER: [u8; 6] = [0x6a, 0x24, 0xaa, 0x21, 0xa9, 0xed];
 /// witness stack item of the coinbase input.
 const WITNESS_RESERVED_VALUE: [u8; 32] = [0u8; 32];
 
-/// Create a coinbase transaction for the given share chain owner.
+/// Create a coinbase transaction for the given share chain miner address.
 ///
 /// Builds a coinbase that pays the miner one share unit and embeds a
 /// BIP141 witness commitment covering the provided share transactions.
@@ -71,7 +71,7 @@ pub fn build_sharechain_coinbase_transaction(
     }
 }
 
-/// Merkle root over a share's transactions, for the given share chain owner.
+/// Merkle root over a share's transactions, for the given miner address.
 ///
 /// The share commitment is fixed at notify time, before the miner hashes, so
 /// the root has to be computable then. Kept here beside the coinbase builder so
@@ -339,7 +339,7 @@ mod share_merkle_root_tests {
     }
 
     /// The commitment binds the root instead of the share address, so the root
-    /// is what distinguishes one owner's share from another's. If this ever
+    /// is what distinguishes one miner's share from another's. If this ever
     /// held, two miners would produce interchangeable commitments and either
     /// could claim the other's share.
     #[test]

@@ -205,7 +205,7 @@ fn network_for_hrp(hrp: Hrp) -> Result<Network, AddressError> {
 /// bounded by construction. The network is carried alongside it and is a
 /// property of *this* type only -- it never reaches a `ShareHeader`, which
 /// stores the witness program alone. Two addresses that differ only in their
-/// network describe the same output and must not be two different owners.
+/// network describe the same output and must not be two different addresses.
 ///
 /// There is deliberately no constructor that takes a bitcoin address:
 /// a bitcoin payout address is a receive only identity or watch only

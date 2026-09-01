@@ -19,6 +19,7 @@ pub use p2poolv2_address as address;
 pub mod auth;
 pub mod command;
 pub use p2poolv2_config as config;
+pub mod address_display;
 pub mod logging;
 pub mod middleware;
 pub mod monitoring_events;
