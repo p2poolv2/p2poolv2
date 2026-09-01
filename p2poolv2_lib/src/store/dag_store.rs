@@ -19,10 +19,10 @@ use super::{ColumnFamily, Store, writer::StoreError};
 use crate::shares::chain::chain_store_handle::{COMMON_ANCESTOR_DEPTH, ConfirmedHeaderResult};
 use crate::shares::share_block::{ShareBlock, ShareHeader, is_terminal_blockhash};
 use crate::shares::validation::MAX_UNCLES;
+use bitcoin::WitnessProgram;
 use bitcoin::consensus::{self, Encodable, encode};
 use bitcoin::hashes::Hash;
 use bitcoin::{BlockHash, CompactTarget, Work};
-use p2poolv2_address::witness_program_codec;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet, VecDeque};
 use tracing::{debug, warn};
@@ -72,7 +72,13 @@ pub struct ShareInfo {
     pub prev_blockhash: BlockHash,
     pub height: u32,
     pub miner_bitcoin_address: String,
-    pub miner_address: String,
+    /// Share chain owner, as the witness program the header stores.
+    ///
+    /// Not a formatted share chain address: rendering one needs a network,
+    /// and the store is network agnostic by design. The API and CLI layers
+    /// hold the configured network and format it there.
+    #[serde(with = "p2poolv2_address::witness_program_codec::serde_hex")]
+    pub miner_address: WitnessProgram,
     pub timestamp: u32,
     pub bits: CompactTarget,
     pub uncles: Vec<UncleInfo>,
@@ -84,7 +90,10 @@ pub struct UncleInfo {
     pub blockhash: BlockHash,
     pub prev_blockhash: BlockHash,
     pub miner_bitcoin_address: String,
-    pub miner_address: String,
+    /// Share chain owner, as the witness program the header stores. See
+    /// [`ShareInfo::miner_address`].
+    #[serde(with = "p2poolv2_address::witness_program_codec::serde_hex")]
+    pub miner_address: WitnessProgram,
     pub timestamp: u32,
     pub height: Option<u32>,
 }
@@ -658,7 +667,7 @@ impl Store {
                 blockhash,
                 prev_blockhash: header.prev_share_blockhash,
                 miner_bitcoin_address: header.miner_bitcoin_address.to_string(),
-                miner_address: witness_program_codec::to_hex(&header.miner_address),
+                miner_address: header.miner_address,
                 timestamp: header.time,
                 height: metadata_map.get(&blockhash).copied(),
             })
@@ -716,7 +725,7 @@ impl Store {
                 prev_blockhash: header.prev_share_blockhash,
                 height: *height,
                 miner_bitcoin_address: header.miner_bitcoin_address.to_string(),
-                miner_address: witness_program_codec::to_hex(&header.miner_address),
+                miner_address: header.miner_address,
                 timestamp: header.time,
                 bits: header.bits,
                 uncles,
@@ -816,14 +825,9 @@ impl Store {
                             header.prev_share_blockhash,
                             header.uncles.clone(),
                             header.miner_bitcoin_address.to_string(),
-                            witness_program_codec::to_hex(&header.miner_address),
+                            Some(header.miner_address),
                         ),
-                        _ => (
-                            BlockHash::all_zeros(),
-                            vec![],
-                            "unknown".to_string(),
-                            "unknown".to_string(),
-                        ),
+                        _ => (BlockHash::all_zeros(), vec![], "unknown".to_string(), None),
                     };
 
                 let has_block_data = self.share_block_exists(blockhash);
@@ -861,7 +865,12 @@ pub struct DagEntry {
     pub parent: BlockHash,
     pub uncles: Vec<BlockHash>,
     pub miner_bitcoin_address: String,
-    pub miner_address: String,
+    /// Share chain owner, or `None` when the header could not be read.
+    ///
+    /// The witness program rather than a formatted address: the store is
+    /// network agnostic, so the API and CLI layers format it.
+    #[serde(with = "p2poolv2_address::witness_program_codec::serde_hex_option")]
+    pub miner_address: Option<WitnessProgram>,
     pub has_block_data: bool,
 }
 
@@ -869,7 +878,9 @@ pub struct DagEntry {
 mod tests {
     use super::*;
     use crate::test_utils::TestShareBlockBuilder;
+    use crate::test_utils::make_test_share_program;
     use bitcoin::hashes::Hash;
+    use p2poolv2_address::witness_program_codec::to_hex;
     use tempfile::tempdir;
 
     #[test]
@@ -3849,8 +3860,7 @@ mod tests {
             prev_blockhash: BlockHash::all_zeros(),
             height: 42,
             miner_bitcoin_address: "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q".to_string(),
-            miner_address: "sp2pool1pmfr3p9j00pfxjh0zmgp99y8zftmd3s5pmedqhyptwy6lm87hf5ss5najrp"
-                .to_string(),
+            miner_address: make_test_share_program(1),
             timestamp: 1_700_000_000,
             bits: CompactTarget::from_consensus(0x1b4188f5),
             uncles: vec![],
@@ -3863,7 +3873,10 @@ mod tests {
                 "\"miner_bitcoin_address\":\"tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q\""
             )
         );
-        assert!(json.contains("\"miner_address\":\"sp2pool1pmfr3p9j00pfxjh0zmgp99y8zftmd3s5pmedqhyptwy6lm87hf5ss5najrp\""));
+        assert!(json.contains(&format!(
+            "\"miner_address\":\"{}\"",
+            to_hex(&make_test_share_program(1))
+        )));
         assert!(json.contains("\"timestamp\":1700000000"));
     }
 
@@ -3873,8 +3886,7 @@ mod tests {
             blockhash: BlockHash::all_zeros(),
             prev_blockhash: BlockHash::all_zeros(),
             miner_bitcoin_address: "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string(),
-            miner_address: "sp2pool1pet7ep3czdu9k4wvdlz2fp5p8x2yp7t6ttyqg2c6cmh0lgeuu9laswyta9v"
-                .to_string(),
+            miner_address: make_test_share_program(2),
             timestamp: 1_700_000_010,
             height: Some(41),
         };
@@ -3884,19 +3896,14 @@ mod tests {
             prev_blockhash: BlockHash::all_zeros(),
             height: 42,
             miner_bitcoin_address: "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q".to_string(),
-            miner_address: "sp2pool1pmfr3p9j00pfxjh0zmgp99y8zftmd3s5pmedqhyptwy6lm87hf5ss5najrp"
-                .to_string(),
+            miner_address: make_test_share_program(1),
             timestamp: 1_700_000_020,
             bits: CompactTarget::from_consensus(0x1b4188f5),
             uncles: vec![uncle],
         };
 
         let json = serde_json::to_string(&share_info).unwrap();
-        assert!(
-            json.contains(
-                "\"sp2pool1pet7ep3czdu9k4wvdlz2fp5p8x2yp7t6ttyqg2c6cmh0lgeuu9laswyta9v\""
-            )
-        );
+        assert!(json.contains(&format!("\"{}\"", to_hex(&make_test_share_program(2)))));
         assert!(json.contains("\"height\":41"));
     }
 
@@ -3906,8 +3913,7 @@ mod tests {
             blockhash: BlockHash::all_zeros(),
             prev_blockhash: BlockHash::all_zeros(),
             miner_bitcoin_address: "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q".to_string(),
-            miner_address: "sp2pool1pmfr3p9j00pfxjh0zmgp99y8zftmd3s5pmedqhyptwy6lm87hf5ss5najrp"
-                .to_string(),
+            miner_address: make_test_share_program(2),
             timestamp: 1_700_000_005,
             height: Some(10),
         };
@@ -3918,7 +3924,10 @@ mod tests {
                 "\"miner_bitcoin_address\":\"tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q\""
             )
         );
-        assert!(json.contains("\"miner_address\":\"sp2pool1pmfr3p9j00pfxjh0zmgp99y8zftmd3s5pmedqhyptwy6lm87hf5ss5najrp\""));
+        assert!(json.contains(&format!(
+            "\"miner_address\":\"{}\"",
+            to_hex(&make_test_share_program(2))
+        )));
         assert!(json.contains("\"timestamp\":1700000005"));
         assert!(json.contains("\"height\":10"));
     }
@@ -3929,8 +3938,7 @@ mod tests {
             blockhash: BlockHash::all_zeros(),
             prev_blockhash: BlockHash::all_zeros(),
             miner_bitcoin_address: "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string(),
-            miner_address: "sp2pool1pet7ep3czdu9k4wvdlz2fp5p8x2yp7t6ttyqg2c6cmh0lgeuu9laswyta9v"
-                .to_string(),
+            miner_address: make_test_share_program(2),
             timestamp: 1_700_000_005,
             height: None,
         };

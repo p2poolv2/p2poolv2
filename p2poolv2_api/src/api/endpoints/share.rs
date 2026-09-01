@@ -20,8 +20,8 @@ use axum::{
     Json,
     extract::{Query, State},
 };
-use bitcoin::BlockHash;
-use p2poolv2_lib::address::witness_program_codec;
+use bitcoin::{BlockHash, Network};
+use p2poolv2_lib::address::witness_program_codec::to_address_string;
 use p2poolv2_lib::shares::chain::chain_store_handle::ChainStoreHandle;
 use p2poolv2_lib::store::dag_store::MAX_UNCLES_DEPTH;
 use p2poolv2_lib::store::writer::StoreError;
@@ -79,6 +79,7 @@ fn build_share_output(
     chain_store_handle: &ChainStoreHandle,
     blockhash: &BlockHash,
     full: bool,
+    network: Network,
 ) -> Result<ShareLookupOutput, ApiError> {
     let store = chain_store_handle.store_handle().store();
 
@@ -153,7 +154,7 @@ fn build_share_output(
             .map(|uncle| uncle.to_string())
             .collect(),
         miner_bitcoin_address: share_header.miner_bitcoin_address.to_string(),
-        miner_address: share_header.miner_address.to_string(),
+        miner_address: to_address_string(&share_header.miner_address, network),
         merkle_root: share_header.merkle_root.to_string(),
         bits: format!("{:#x}", share_header.bits.to_consensus()),
         time: format_timestamp(share_header.time as u64),
@@ -179,10 +180,17 @@ pub(crate) async fn share(
             let blockhash = BlockHash::from_str(&hash_string).map_err(|error| {
                 ApiError::BadRequest(format!("Invalid blockhash '{hash_string}': {error}"))
             })?;
-            let output = build_share_output(chain_store_handle, &blockhash, full)?;
+            let output = build_share_output(
+                chain_store_handle,
+                &blockhash,
+                full,
+                state.app_config.network,
+            )?;
             Ok(Json(vec![output]))
         }
-        (None, Some(height)) => lookup_by_height(chain_store_handle, height, full),
+        (None, Some(height)) => {
+            lookup_by_height(chain_store_handle, height, full, state.app_config.network)
+        }
         _ => Err(ApiError::BadRequest(
             "Exactly one of hash or height must be provided".to_string(),
         )),
@@ -195,6 +203,7 @@ fn lookup_by_height(
     chain_store_handle: &ChainStoreHandle,
     height: u32,
     full: bool,
+    network: Network,
 ) -> Result<Json<Vec<ShareLookupOutput>>, ApiError> {
     let store = chain_store_handle.store_handle().store();
     let mut blockhashes = Vec::with_capacity(4);
@@ -240,7 +249,12 @@ fn lookup_by_height(
 
     let mut outputs = Vec::with_capacity(blockhashes.len());
     for blockhash in &blockhashes {
-        outputs.push(build_share_output(chain_store_handle, blockhash, full)?);
+        outputs.push(build_share_output(
+            chain_store_handle,
+            blockhash,
+            full,
+            network,
+        )?);
     }
     Ok(Json(outputs))
 }

@@ -219,6 +219,15 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
                 // Direct database query mode (offline, no running node required)
                 let store = commands::db_query::open_store(db_path)?;
 
+                // A share chain owner is stored as a bare witness program, so
+                // naming it as an address needs the network. --config is
+                // optional in this mode, and without it the owner is rendered
+                // as its program hex rather than guessing a network.
+                let network = match &cli.config {
+                    Some(config_path) => Some(Config::load(config_path)?.stratum.network),
+                    None => None,
+                };
+
                 match &cli.command {
                     Some(Commands::Info) => {
                         commands::db_query::info(&store)?;
@@ -232,14 +241,14 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
                     }
                     Some(Commands::Shares { to, num, dot, .. }) => {
                         if *dot {
-                            commands::db_query::shares_dot(&store, *to, *num)?;
+                            commands::db_query::shares_dot(&store, *to, *num, network)?;
                         } else {
                             commands::db_query::shares(&store, *to, *num)?;
                         }
                     }
                     Some(Commands::Candidates { to, num, dot }) => {
                         if *dot {
-                            commands::db_query::candidates_dot(&store, *to, *num)?;
+                            commands::db_query::candidates_dot(&store, *to, *num, network)?;
                         } else {
                             commands::db_query::candidates(&store, *to, *num)?;
                         }
@@ -248,7 +257,7 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
                         commands::db_query::share_lookup(&store, hash.clone(), *height, *full)?;
                     }
                     Some(Commands::Dag { to, num, dot }) => {
-                        commands::db_query::dag(&store, *to, *num, *dot)?;
+                        commands::db_query::dag(&store, *to, *num, *dot, network)?;
                     }
                     Some(Commands::Transactions { command }) => {
                         commands::transactions::execute_db(&store, command)?;
