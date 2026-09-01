@@ -87,6 +87,8 @@
 //! This module never generates, stores or handles a private key. The node only
 //! needs the address to build a share coinbase output.
 
+pub mod witness_program_codec;
+
 use bitcoin::bech32::primitives::decode::{PaddingError, SegwitHrpstringError};
 use bitcoin::bech32::{Hrp, segwit};
 use bitcoin::key::{TweakedPublicKey, UntweakedPublicKey, XOnlyPublicKey};

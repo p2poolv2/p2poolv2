@@ -408,7 +408,8 @@ pub(crate) fn build_notify_from_prepared(
 
     //* The commitment is fixed here, before the miner hashes, so the share
     //* merkle root has to be known now.
-    let share_merkle_root = miner_address.map(|address| compute_share_merkle_root(address, &[]));
+    let share_merkle_root =
+        miner_address.map(|address| compute_share_merkle_root(&address.witness_program(), &[]));
 
     let nsecs = get_timestamp_bytes(&SystemTimeProvider);
 
@@ -419,7 +420,7 @@ pub(crate) fn build_notify_from_prepared(
             prev_share_blockhash: prepared.prev_share_blockhash,
             uncles: prepared.uncles.clone(),
             miner_bitcoin_address: bitcoin_address.clone(),
-            miner_address: *share_address,
+            miner_address: share_address.witness_program(),
             merkle_root,
             bits: prepared.bits,
             time: fresh_time,
@@ -482,6 +483,7 @@ mod tests {
     use crate::stratum::work::block_template::BlockTemplate;
     use crate::stratum::work::tracker::{JobId, start_tracker_actor};
     use crate::test_utils::make_test_share_address;
+    use crate::test_utils::make_test_share_program;
     use bitcoin::{CompressedPublicKey, Network};
 
     fn test_template() -> BlockTemplate {
@@ -617,11 +619,8 @@ mod tests {
             prev_share_blockhash: BlockHash::all_zeros(),
             uncles: Vec::new(),
             miner_bitcoin_address: address,
-            miner_address: make_test_share_address(1, bitcoin::Network::Signet),
-            merkle_root: compute_share_merkle_root(
-                &make_test_share_address(1, bitcoin::Network::Signet),
-                &[],
-            ),
+            miner_address: make_test_share_program(1),
+            merkle_root: compute_share_merkle_root(&make_test_share_program(1), &[]),
             bits,
             time: commitment.time,
             donation_address: None,
@@ -647,7 +646,7 @@ mod tests {
                 .parse()
                 .unwrap();
         let address2 = Address::p2wpkh(&other_pubkey, Network::Signet);
-        let share_address = make_test_share_address(1, Network::Signet);
+        let share_address = make_test_share_program(1);
 
         let time = 1_700_000_000;
         let hash1 = get_commitment_hex(
@@ -691,7 +690,7 @@ mod tests {
             .expect("build should succeed");
 
         let bitcoin_address = test_address();
-        let share_address = make_test_share_address(1, Network::Signet);
+        let share_address = make_test_share_program(1);
         let merkle_root = compute_share_merkle_root(&share_address, &[]);
         let time = 1_700_000_000;
 
@@ -730,8 +729,8 @@ mod tests {
             .expect("build should succeed");
 
         let bitcoin_address = test_address();
-        let share_address1 = make_test_share_address(1, Network::Signet);
-        let share_address2 = make_test_share_address(2, Network::Signet);
+        let share_address1 = make_test_share_program(1);
+        let share_address2 = make_test_share_program(2);
         assert_ne!(share_address1, share_address2);
 
         let time = 1_700_000_000;

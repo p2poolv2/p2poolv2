@@ -22,6 +22,7 @@ use crate::shares::validation::MAX_UNCLES;
 use bitcoin::consensus::{self, Encodable, encode};
 use bitcoin::hashes::Hash;
 use bitcoin::{BlockHash, CompactTarget, Work};
+use p2poolv2_address::witness_program_codec;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet, VecDeque};
 use tracing::{debug, warn};
@@ -657,7 +658,7 @@ impl Store {
                 blockhash,
                 prev_blockhash: header.prev_share_blockhash,
                 miner_bitcoin_address: header.miner_bitcoin_address.to_string(),
-                miner_address: header.miner_address.to_string(),
+                miner_address: witness_program_codec::to_hex(&header.miner_address),
                 timestamp: header.time,
                 height: metadata_map.get(&blockhash).copied(),
             })
@@ -715,7 +716,7 @@ impl Store {
                 prev_blockhash: header.prev_share_blockhash,
                 height: *height,
                 miner_bitcoin_address: header.miner_bitcoin_address.to_string(),
-                miner_address: header.miner_address.to_string(),
+                miner_address: witness_program_codec::to_hex(&header.miner_address),
                 timestamp: header.time,
                 bits: header.bits,
                 uncles,
@@ -815,7 +816,7 @@ impl Store {
                             header.prev_share_blockhash,
                             header.uncles.clone(),
                             header.miner_bitcoin_address.to_string(),
-                            header.miner_address.to_string(),
+                            witness_program_codec::to_hex(&header.miner_address),
                         ),
                         _ => (
                             BlockHash::all_zeros(),

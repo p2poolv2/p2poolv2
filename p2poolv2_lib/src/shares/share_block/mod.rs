@@ -29,11 +29,13 @@ use bitcoin::consensus::encode::Error::ParseFailed;
 use bitcoin::secp256k1::Secp256k1;
 use bitcoin::{
     Address, BlockHash, CompactTarget, CompressedPublicKey, Target, TxMerkleNode, Txid, VarInt,
+    WitnessProgram,
     block::Header,
     consensus::{Decodable, Encodable},
     hashes::Hash,
 };
 use core::mem;
+use p2poolv2_address::witness_program_codec;
 use serde::{Deserialize, Serialize};
 pub use share_transaction::{
     DuplicatePrevoutError, ShareTransaction, SpendingPrevouts, extract_spending_prevouts,
@@ -67,9 +69,19 @@ pub struct ShareHeader {
     /// Bitcoin address identifying the miner, receiving the bitcoin payout
     #[serde(with = "crate::shares::address_serde")]
     pub miner_bitcoin_address: Address,
-    /// Share chain address owning this share's coinbase output. A different
-    /// chain and a different key from `miner_bitcoin_address`.
-    pub miner_address: P2PoolAddress,
+    /// Share chain owner of this share's coinbase output: the witness program
+    /// a share chain address encodes. A different chain and a different key
+    /// from `miner_bitcoin_address`.
+    ///
+    /// The witness program rather than the `Address` because an address also
+    /// names a network, and the network is not consensus data: the chain knows
+    /// which one it is from its own configuration, and a share from another
+    /// chain fails on its parent hash and difficulty long before its owner
+    /// matters. Storing it would let one output be spelled four ways, and
+    /// since `block_hash` covers every field, each spelling would be a
+    /// distinct block carrying the same proof of work.
+    #[serde(with = "p2poolv2_address::witness_program_codec::serde_hex")]
+    pub miner_address: WitnessProgram,
     /// Share block transactions merkle root - from blocktemplate
     pub merkle_root: TxMerkleNode,
     /// Bitcoin header the share is found for
@@ -225,7 +237,7 @@ impl Encodable for ShareHeader {
         len += self.uncles.consensus_encode(w)?;
         let addr_str = self.miner_bitcoin_address.to_string();
         len += addr_str.consensus_encode(w)?;
-        len += self.miner_address.to_string().consensus_encode(w)?;
+        len += witness_program_codec::consensus_encode(&self.miner_address, w)?;
         len += self.merkle_root.consensus_encode(w)?;
         len += self.bitcoin_header.consensus_encode(w)?;
         len += self.bits.consensus_encode(w)?;
@@ -268,9 +280,7 @@ impl Decodable for ShareHeader {
             .parse::<Address<_>>()
             .map_err(|_| ParseFailed("invalid bitcoin address"))?
             .assume_checked();
-        let miner_address = String::consensus_decode(r)?
-            .parse::<P2PoolAddress>()
-            .map_err(|_| ParseFailed("invalid share chain address"))?;
+        let miner_address = witness_program_codec::consensus_decode(r)?;
         let merkle_root = TxMerkleNode::consensus_decode(r)?;
         let bitcoin_header = Header::consensus_decode(r)?;
         let bits = CompactTarget::consensus_decode(r)?;
@@ -401,7 +411,8 @@ impl ShareBlock {
             None,
             network,
             &secp,
-        )?;
+        )?
+        .witness_program();
         let coinbase =
             transactions::coinbase::build_sharechain_coinbase_transaction(&miner_address, &[]);
         let coinbase_value = coinbase
@@ -612,7 +623,8 @@ mod tests {
     use crate::stratum::work::coinbase::build_bitcoin_coinbase_transaction;
     use crate::stratum::work::gbt::compute_merkle_root_from_branches;
     use crate::test_utils::TestShareBlockBuilder;
-    use crate::test_utils::make_test_share_address;
+    use crate::test_utils::make_test_share_program;
+    use bitcoin::ScriptBuf;
     use bitcoin::consensus::{deserialize, serialize};
     use bitcoin::script::PushBytesBuf;
     use bitcoin::transaction::Version;
@@ -658,7 +670,7 @@ mod tests {
         // is the payout identity on bitcoin and is not this output.
         assert_eq!(
             output.script_pubkey,
-            share.header.miner_address.script_pubkey()
+            ScriptBuf::new_witness_program(&share.header.miner_address)
         );
         assert_ne!(
             output.script_pubkey,
@@ -688,7 +700,7 @@ mod tests {
         // Verify the output script matches the builder's share chain address
         assert_eq!(
             output.script_pubkey,
-            share_block.header.miner_address.script_pubkey()
+            ScriptBuf::new_witness_program(&share_block.header.miner_address)
         );
     }
 
@@ -731,7 +743,7 @@ mod tests {
             .unwrap();
         let btcaddress = Address::p2wpkh(&pubkey, bitcoin::Network::Signet);
 
-        let share_address = make_test_share_address(1, bitcoin::Network::Signet);
+        let share_address = make_test_share_program(1);
         let commitment = ShareCommitment {
             miner_address: share_address,
             merkle_root: compute_share_merkle_root(&share_address, &[]),
