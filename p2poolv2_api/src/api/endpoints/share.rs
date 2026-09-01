@@ -21,6 +21,7 @@ use axum::{
     extract::{Query, State},
 };
 use bitcoin::BlockHash;
+use p2poolv2_lib::address::witness_program_codec;
 use p2poolv2_lib::shares::chain::chain_store_handle::ChainStoreHandle;
 use p2poolv2_lib::store::dag_store::MAX_UNCLES_DEPTH;
 use p2poolv2_lib::store::writer::StoreError;

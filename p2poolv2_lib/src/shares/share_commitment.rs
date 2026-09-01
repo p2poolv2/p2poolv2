@@ -17,7 +17,7 @@
 use super::address_serde;
 use super::option_address_serde;
 use super::share_block::ShareHeader;
-use crate::address::Address as P2PoolAddress;
+use bitcoin::WitnessProgram;
 use bitcoin::consensus::Encodable;
 use bitcoin::hashes::Hash;
 use bitcoin::io::Write;
@@ -47,12 +47,14 @@ pub struct ShareCommitment {
     /// Bitcoin address identifying the miner mining the share
     #[serde(serialize_with = "address_serde::serialize")]
     pub miner_bitcoin_address: Address,
-    /// Share chain address owning the share coinbase output. Distinct from
-    /// `miner_bitcoin_address`, which receives the bitcoin payout.
+    /// Share chain owner of the share coinbase output: the witness program a
+    /// share chain address encodes. Distinct from `miner_bitcoin_address`,
+    /// which receives the bitcoin payout.
     ///
     /// Not hashed directly: the share coinbase pays it, and `merkle_root`
     /// commits to that coinbase.
-    pub miner_address: P2PoolAddress,
+    #[serde(with = "p2poolv2_address::witness_program_codec::serde_hex")]
+    pub miner_address: WitnessProgram,
     /// Merkle root over this share's transactions, including the share
     /// coinbase. Committing it is what ties the whole share transaction set to
     /// the bitcoin proof of work.
@@ -296,7 +298,7 @@ mod tests {
     use crate::shares::witness_commitment::WitnessCommitment;
     use crate::stratum::work::block_template::BlockTemplate;
     use crate::test_utils::create_test_commitment;
-    use crate::test_utils::make_test_share_address;
+    use crate::test_utils::make_test_share_program;
     use crate::test_utils::test_coinbase_transaction;
     use bitcoin::hashes::Hash;
     use bitcoin::{CompressedPublicKey, Network, TxMerkleNode};
@@ -369,7 +371,7 @@ mod tests {
             commitment1.miner_bitcoin_address, commitment2.miner_bitcoin_address,
             "only the share address may differ for this test to mean anything"
         );
-        let other_address = make_test_share_address(2, Network::Signet);
+        let other_address = make_test_share_program(2);
         commitment2.miner_address = other_address;
         commitment2.merkle_root = compute_share_merkle_root(&other_address, &[]);
 
@@ -385,8 +387,7 @@ mod tests {
         let commitment1 = create_test_commitment();
         let mut commitment2 = create_test_commitment();
 
-        commitment2.merkle_root =
-            compute_share_merkle_root(&make_test_share_address(3, Network::Signet), &[]);
+        commitment2.merkle_root = compute_share_merkle_root(&make_test_share_program(3), &[]);
 
         assert_ne!(commitment1.hash(), commitment2.hash());
     }

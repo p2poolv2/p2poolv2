@@ -54,6 +54,7 @@ use crate::store::writer::StoreError;
 use crate::stratum::work::coinbase::build_bitcoin_coinbase_transaction;
 use crate::stratum::work::gbt::compute_merkle_root_from_branches;
 use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
+use bitcoin::ScriptBuf;
 use bitcoin::hashes::Hash as HashTrait;
 use bitcoin::script::PushBytesBuf;
 use bitcoin::{
@@ -808,6 +809,29 @@ impl DefaultShareValidator {
         Ok(())
     }
 
+    /// Validate the share chain owner is a P2TR witness program.
+    ///
+    /// `ShareHeader` stores a bare `WitnessProgram`, and its decode enforces
+    /// only the BIP141 2 to 40 byte bounds. Restricting that to taproot is
+    /// this pool's rule, and it belongs here rather than in the codec: a node
+    /// that predates a future witness version must still be able to decode a
+    /// header carrying one and reject it on its merits, which is what makes
+    /// widening a soft fork rather than a format break.
+    ///
+    /// `Address::from_witness_program` applies the same rule to anything an
+    /// operator configures or a miner sends as `p2p=`. This is the same rule
+    /// at the other end, for a program that arrived over the wire.
+    fn validate_miner_address(&self, share_header: &ShareHeader) -> Result<(), ValidationError> {
+        if !share_header.miner_address.is_p2tr() {
+            return Err(ValidationError::consensus(format!(
+                "Share chain owner is witness version {} with a {} byte program, expected version 1 with 32 bytes",
+                share_header.miner_address.version().to_num(),
+                share_header.miner_address.program().len()
+            )));
+        }
+        Ok(())
+    }
+
     /// Validate the share coinbase creates an output with 1 share
     /// unit to the miner address in the header and second a witness commitment output
     fn validate_share_coinbase(&self, share: &ShareBlock) -> Result<(), ValidationError> {
@@ -839,7 +863,7 @@ impl DefaultShareValidator {
             )));
         }
 
-        let expected_script = share.header.miner_address.script_pubkey();
+        let expected_script = ScriptBuf::new_witness_program(&share.header.miner_address);
         if output.script_pubkey != expected_script {
             return Err(ValidationError::consensus(
                 "Share coinbase output does not pay to the miner address in header",
@@ -1087,6 +1111,8 @@ impl ShareValidator for DefaultShareValidator {
         share_header: &ShareHeader,
         chain_store_handle: &ChainStoreHandle,
     ) -> Result<(), ValidationError> {
+        self.validate_miner_address(share_header)?;
+
         let parent_hash = share_header.prev_share_blockhash;
         let parent_header = chain_store_handle
             .get_share_header(&parent_hash)
@@ -1138,6 +1164,7 @@ impl ShareValidator for DefaultShareValidator {
         &self,
         share_header: &ShareHeader,
     ) -> Result<(), ValidationError> {
+        self.validate_miner_address(share_header)?;
         if share_header.uncles.len() > MAX_UNCLES {
             return Err(ValidationError::consensus(format!(
                 "Too many uncles: {} exceeds maximum of {}",

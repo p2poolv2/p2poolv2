@@ -129,10 +129,19 @@ pub fn make_test_share_address(index: usize, network: bitcoin::Network) -> P2Poo
     P2PoolAddress::from_internal_key(pubkey.0.x_only_public_key().0, None, network, &secp).unwrap()
 }
 
+/// The witness program of a well known test share chain address.
+///
+/// Takes no network, and that is the point: the program is what a
+/// `ShareHeader` stores, and it is identical on every network. Anything that
+/// needs the bech32m spelling wants [`make_test_share_address`] instead.
+#[cfg(any(test, feature = "test-utils"))]
+pub fn make_test_share_program(index: usize) -> bitcoin::WitnessProgram {
+    make_test_share_address(index, bitcoin::Network::Signet).witness_program()
+}
+
 #[cfg(any(test, feature = "test-utils"))]
 pub fn test_coinbase_transaction(index: usize) -> bitcoin::Transaction {
-    let address = make_test_share_address(index, bitcoin::Network::Regtest);
-    build_sharechain_coinbase_transaction(&address, &[])
+    build_sharechain_coinbase_transaction(&make_test_share_program(index), &[])
 }
 
 /// Setup returns both chain handle and tempdir (tempdir must stay alive)
@@ -329,11 +338,8 @@ pub fn create_test_commitment() -> ShareCommitment {
         .unwrap(),
         uncles: vec![],
         miner_bitcoin_address: btcaddress,
-        miner_address: make_test_share_address(1, bitcoin::Network::Signet),
-        merkle_root: compute_share_merkle_root(
-            &make_test_share_address(1, bitcoin::Network::Signet),
-            &[],
-        ),
+        miner_address: make_test_share_program(1),
+        merkle_root: compute_share_merkle_root(&make_test_share_program(1), &[]),
         // Use signet-easy target so test bitcoin headers can meet pool difficulty.
         // In production, calculate_target_clamped ensures pool target is never
         // harder than bitcoin difficulty.
@@ -433,11 +439,8 @@ pub fn build_block_from_work_components(path: &str, nsecs: u64) -> ShareBlock {
         prev_share_blockhash: BlockHash::all_zeros(),
         uncles: vec![],
         miner_bitcoin_address: miner_bitcoin_address.clone(),
-        miner_address: make_test_share_address(1, bitcoin::Network::Signet),
-        merkle_root: compute_share_merkle_root(
-            &make_test_share_address(1, bitcoin::Network::Signet),
-            &[],
-        ),
+        miner_address: make_test_share_program(1),
+        merkle_root: compute_share_merkle_root(&make_test_share_program(1), &[]),
         bits: CompactTarget::from_consensus(0x1b4188f5),
         time: 1700000000u32,
         donation_address: None,
@@ -492,7 +495,7 @@ pub fn build_block_from_work_components(path: &str, nsecs: u64) -> ShareBlock {
         prev_share_blockhash: BlockHash::all_zeros(),
         uncles: vec![],
         miner_bitcoin_address,
-        miner_address: make_test_share_address(1, bitcoin::Network::Signet),
+        miner_address: make_test_share_program(1),
         merkle_root: share_merkle_root,
         bitcoin_header,
         time: 1700000000u32,
@@ -611,7 +614,8 @@ impl TestShareBlockBuilder {
             bitcoin::Network::Signet,
             &secp,
         )
-        .unwrap();
+        .unwrap()
+        .witness_program();
 
         let other_share_transactions: Vec<ShareTransaction> = self
             .transactions
@@ -686,7 +690,7 @@ fn test_share_block(
     prev_share_blockhash: &str,
     uncles: Vec<BlockHash>,
     btcaddress: &Address,
-    share_address: &P2PoolAddress,
+    share_address: &bitcoin::WitnessProgram,
     transactions: Vec<ShareTransaction>,
     work: Option<u32>,
     nonce: Option<u32>,
@@ -712,11 +716,8 @@ fn test_share_block(
                 prev_share_blockhash: prev_blockhash,
                 uncles: uncles.clone(),
                 miner_bitcoin_address: btcaddress.clone(),
-                miner_address: make_test_share_address(1, bitcoin::Network::Signet),
-                merkle_root: compute_share_merkle_root(
-                    &make_test_share_address(1, bitcoin::Network::Signet),
-                    &[],
-                ),
+                miner_address: make_test_share_program(1),
+                merkle_root: compute_share_merkle_root(&make_test_share_program(1), &[]),
                 bits: share_bits,
                 time: share_time,
                 donation_address: None,
@@ -835,7 +836,7 @@ impl TestShareHeaderBuilder {
 
     pub fn build(self) -> ShareHeader {
         let default_address = make_test_address(1);
-        let share_address = make_test_share_address(1, bitcoin::Network::Regtest);
+        let share_address = make_test_share_program(1);
 
         let default_merkle_root = {
             let tx = test_coinbase_transaction(1);
