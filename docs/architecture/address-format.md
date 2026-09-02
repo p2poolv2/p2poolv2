@@ -314,8 +314,12 @@ should use the config route instead.
 
 ```toml
 [stratum]
-miner_address = "sp2pool1pvmde7zkgeg9qqcpsy7e6g3w6dm3d7mqwqnudcmuedk6wt8gwgkls4zffd6"
+miner_address = "sp2pool1..."   # your own address, derived as above
 ```
+
+Use an address whose key you control. The genesis addresses listed earlier
+are a NUMS construction with no private key, so shares assigned to one are
+unspendable by anyone, permanently.
 
 When set, this address owns **every** share the pool mines, and no miner
 needs to change anything. Bitcoin PPLNS payouts still go per miner from
