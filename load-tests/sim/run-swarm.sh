@@ -50,6 +50,19 @@ RPC_USER="${RPC_USER:-p2pool}"
 RPC_PASS="${RPC_PASS:-p2pool}"
 ZMQ="${ZMQ:-tcp://127.0.0.1:28332}"
 MINER_ADDRESS="${MINER_ADDRESS:-bcrt1qqclp5usts33x0cgy2l5839659t7798w7g5a0fu}"
+# Share chain identities, cycled across nodes. A share address owns share
+# coinbase outputs and lives on a different chain from the bitcoin payout
+# address, so it cannot be derived from MINER_ADDRESS and bitcoind cannot mint
+# one. Without it the sim emitter refuses to start and the swarm produces no
+# shares at all, so these are fixed regtest addresses rather than optional.
+# Derived from the well known test pubkeys; throwaway, regtest only.
+SHARE_ADDRESSES=(
+  "rp2pool1pmfr3p9j00pfxjh0zmgp99y8zftmd3s5pmedqhyptwy6lm87hf5ssmq4eld"
+  "rp2pool1pet7ep3czdu9k4wvdlz2fp5p8x2yp7t6ttyqg2c6cmh0lgeuu9lasphrkeq"
+  "rp2pool1pgxxyvcmdncdxs06cudd5yvmwwahaesaj6n3eu7st7x4sw9hrchaqgjhspc"
+  "rp2pool1pjvtc2mkj9vmfneuj7w9dsqle70a040ms5tyfswhhz4vjyskznj5q9rjdk6"
+  "rp2pool1paecncecu260mkwvsr63lw5v4s496v9gfn2en56hv4f0d2w2j97fsplatwc"
+)
 HASHRATE="${HASHRATE:-1.0e12}"
 HASHRATE_DIST="${HASHRATE_DIST:-zipf}"
 ZIPF_ALPHA="${ZIPF_ALPHA:-1.0}"
@@ -173,6 +186,10 @@ for i in $(seq 0 $((N - 1))); do
     a=$(new_address)
     if [ -n "$a" ]; then node_addr="$a"; fi
   fi
+  # More nodes than addresses is fine: sharing a share chain identity is
+  # harmless here, and per-share coinbases stay distinct because each carries
+  # its own weak block hash.
+  node_share_addr="${SHARE_ADDRESSES[$((i % ${#SHARE_ADDRESSES[@]}))]}"
 
   # Topology: each node dials up to DIAL_FANOUT earlier nodes (chain + chords),
   # which yields a single connected component. Node 0 dials nobody.
@@ -239,6 +256,7 @@ port = $api_port
 [sim]
 enabled = true
 miner_address = "$node_addr"
+share_address = "$node_share_addr"
 hashrate = $node_hashrate
 block_to_share_ratio = $SHARES_PER_BLOCK
 seed = $seed
