@@ -196,6 +196,7 @@ async fn test_three_nodes_connectivity() {
 /// Load share blocks from the share_sync fixture file.
 ///
 /// Returns a vector of ShareBlock ordered by chain height (genesis first).
+#[cfg(not(feature = "sim"))]
 fn load_share_sync_blocks() -> Vec<ShareBlock> {
     let json_string = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -210,6 +211,10 @@ fn load_share_sync_blocks() -> Vec<ShareBlock> {
 /// Node 1 is seeded with 5 real share headers (from store.db fixture) before
 /// nodes 2 and 3 start. Nodes 2 and 3 dial into node 1 and should sync all
 /// shares via the header-sync and block-fetch protocol.
+///
+/// Skipped under the `sim` feature as under sim the difficulties from
+/// the fixtures don't work out.
+#[cfg(not(feature = "sim"))]
 #[test_log::test(tokio::test)]
 async fn test_three_nodes_share_sync() {
     let fixture_blocks = load_share_sync_blocks();
