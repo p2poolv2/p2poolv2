@@ -251,7 +251,7 @@ mod tests {
             .expect("p2p share block");
 
         // Reconstruct the bitcoin coinbase exactly as validate_bitcoin_payout does.
-        let commitment_hash = ShareCommitment::from_share_header(&share_block.header).hash();
+        let commitment_hash = ShareCommitment::from_share_block(&share_block).hash();
         let flags = match &share_block.header.coinbaseaux_flags {
             Some(aux) => aux.to_push_bytes_buf(),
             None => PushBytesBuf::from(&[0u8]),

@@ -54,8 +54,11 @@ pub async fn handle_stratum_share(
         // build_sharechain_coinbase_transaction so the BIP141 witness
         // commitment covers their wtxids.
         let other_share_transactions: Vec<ShareTransaction> = Vec::new();
+        // The weak block hash is what makes this coinbase unique to this
+        // share.
         let share_coinbase = build_sharechain_coinbase_transaction(
             &share_commitment.miner_address,
+            header.block_hash(),
             &other_share_transactions,
         );
 
@@ -63,11 +66,9 @@ pub async fn handle_stratum_share(
         share_transactions.push(ShareTransaction(share_coinbase));
         share_transactions.extend(other_share_transactions);
 
-        // The header takes its merkle root from the commitment, which was
-        // fixed at notify time. Recompute it from the transactions we actually
-        // assembled and compare: a divergence means our own notify and share
-        // assembly disagree, which would produce a share every peer rejects. This
-        // is a defensive check
+        // The header's merkle root is computed here, from the transactions we
+        // actually assembled, exactly as a bitcoin miner computes theirs once
+        // the coinbase is final.
         let txids = share_transactions
             .iter()
             .map(|tx| tx.compute_txid().to_raw_hash());
@@ -75,16 +76,10 @@ pub async fn handle_stratum_share(
             Some(merkle_root) => merkle_root.into(),
             None => return Err("No coinbase found".into()),
         };
-        if merkle_root != share_commitment.merkle_root {
-            return Err(format!(
-                "Share merkle root {merkle_root} does not match the committed {}",
-                share_commitment.merkle_root
-            )
-            .into());
-        }
 
         let share_header = ShareHeader::from_commitment_and_header(
             share_commitment,
+            merkle_root,
             header,
             blocktemplate
                 .coinbaseaux

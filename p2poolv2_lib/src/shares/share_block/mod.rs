@@ -178,6 +178,7 @@ impl ShareHeader {
     #[allow(clippy::too_many_arguments)] // wiring constructor: each parameter is a distinct collaborator, a params struct would only move the list
     pub(crate) fn from_commitment_and_header(
         commitment: ShareCommitment,
+        merkle_root: TxMerkleNode,
         bitcoin_header: Header,
         coinbaseaux_flags: Option<CoinbaseAuxFlags>,
         witness_commitment: Option<WitnessCommitment>,
@@ -190,7 +191,7 @@ impl ShareHeader {
             uncles: commitment.uncles,
             miner_bitcoin_address: commitment.miner_bitcoin_address,
             miner_address: commitment.miner_address,
-            merkle_root: commitment.merkle_root,
+            merkle_root,
             bitcoin_header,
             bits: commitment.bits,
             time: commitment.time,
@@ -413,8 +414,24 @@ impl ShareBlock {
             &secp,
         )?
         .witness_program();
-        let coinbase =
-            transactions::coinbase::build_sharechain_coinbase_transaction(&miner_address, &[]);
+        let block_hex = hex::decode(genesis_data.bitcoin_block_hex).unwrap();
+        // panic here, as if the genesis block is bad, we bail at the start of the process
+        let bitcoin_block: bitcoin::Block = match bitcoin::consensus::deserialize(&block_hex) {
+            Ok(block) => block,
+            Err(e) => {
+                tracing::error!("Failed to deserialize genesis block: {e}");
+                return Err("Invalid genesis block data".into());
+            }
+        };
+
+        // The bitcoin block is deserialized before the coinbase is built,
+        // because the share coinbase now carries its hash. Genesis is the one
+        // share whose weak block is fixed data rather than mined.
+        let coinbase = transactions::coinbase::build_sharechain_coinbase_transaction(
+            &miner_address,
+            bitcoin_block.header.block_hash(),
+            &[],
+        );
         let coinbase_value = coinbase
             .output
             .iter()
@@ -425,16 +442,6 @@ impl ShareBlock {
             bitcoin::merkle_tree::calculate_root(transactions.iter().map(|tx| tx.compute_txid()))
                 .unwrap()
                 .into();
-
-        let block_hex = hex::decode(genesis_data.bitcoin_block_hex).unwrap();
-        // panic here, as if the genesis block is bad, we bail at the start of the process
-        let bitcoin_block: bitcoin::Block = match bitcoin::consensus::deserialize(&block_hex) {
-            Ok(block) => block,
-            Err(e) => {
-                tracing::error!("Failed to deserialize genesis block: {e}");
-                return Err("Invalid genesis block data".into());
-            }
-        };
 
         let genesis_time = sim_overrides::genesis_timestamp(genesis_data);
         let genesis_bits = sim_overrides::anchor_target();
@@ -619,7 +626,7 @@ mod tests {
         append_proportional_distribution, include_address_and_cut,
     };
     use crate::shares::share_commitment::ShareCommitment;
-    use crate::shares::transactions::coinbase::compute_share_merkle_root;
+    use crate::shares::transactions::coinbase::compute_non_coinbase_root;
     use crate::stratum::work::coinbase::build_bitcoin_coinbase_transaction;
     use crate::stratum::work::gbt::compute_merkle_root_from_branches;
     use crate::test_utils::TestShareBlockBuilder;
@@ -746,7 +753,7 @@ mod tests {
         let share_address = make_test_share_program(1);
         let commitment = ShareCommitment {
             miner_address: share_address,
-            merkle_root: compute_share_merkle_root(&share_address, &[]),
+            non_coinbase_root: compute_non_coinbase_root(&[]),
             prev_share_blockhash: BlockHash::from_str(
                 "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4",
             )
@@ -763,8 +770,12 @@ mod tests {
         };
 
         let cloned = commitment.clone();
+        // The merkle root is passed in now and not taken from the commitment.
+        // It covers a coinbase the commitment deliberately does not.
+        let merkle_root = TxMerkleNode::from_byte_array([0x33; 32]);
         let header = ShareHeader::from_commitment_and_header(
             commitment,
+            merkle_root,
             bitcoin_header,
             None,
             None,
@@ -776,7 +787,8 @@ mod tests {
         assert_eq!(header.prev_share_blockhash, cloned.prev_share_blockhash);
         assert_eq!(header.uncles, cloned.uncles);
         assert_eq!(header.miner_bitcoin_address, cloned.miner_bitcoin_address);
-        assert_eq!(header.merkle_root, cloned.merkle_root);
+        assert_eq!(header.merkle_root, merkle_root);
+        assert_eq!(header.miner_address, cloned.miner_address);
         assert_eq!(header.bitcoin_header, bitcoin_header);
         assert_eq!(header.bits, cloned.bits);
         assert_eq!(header.time, cloned.time);
@@ -877,7 +889,7 @@ mod tests {
                 panic!("Block {index}: failed to compute distribution: {error}")
             });
 
-            let commitment_hash = ShareCommitment::from_share_header(header).hash();
+            let commitment_hash = ShareCommitment::from_share_block(block).hash();
 
             let flags = match &header.coinbaseaux_flags {
                 Some(aux_flags) => aux_flags.to_push_bytes_buf(),

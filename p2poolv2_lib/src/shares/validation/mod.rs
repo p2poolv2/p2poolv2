@@ -44,6 +44,7 @@ use crate::shares::share_block::{
     is_terminal_blockhash,
 };
 use crate::shares::share_commitment::ShareCommitment;
+use crate::shares::transactions::coinbase::build_sharechain_coinbase_transaction;
 use crate::shares::transactions::coinbase::{compute_commitment_hash, compute_witness_root};
 use crate::shares::witness_commitment::WITNESS_COMMITMENT_LENGTH;
 use crate::sim_overrides;
@@ -54,7 +55,6 @@ use crate::store::writer::StoreError;
 use crate::stratum::work::coinbase::build_bitcoin_coinbase_transaction;
 use crate::stratum::work::gbt::compute_merkle_root_from_branches;
 use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
-use bitcoin::ScriptBuf;
 use bitcoin::hashes::Hash as HashTrait;
 use bitcoin::script::PushBytesBuf;
 use bitcoin::{
@@ -840,33 +840,24 @@ impl DefaultShareValidator {
             .first()
             .ok_or_else(|| ValidationError::consensus("Share block has no transactions"))?;
 
-        if !coinbase.is_coinbase() {
+        //* Rebuild the coinbase this share must carry and compare, rather than
+        //* checking its fields one at a time. That proves it is the canonical
+        //* coinbase, not merely a well shaped one, which is what the share unit
+        //* accounting needs: its txid has to be a function of the share alone.
+        //*
+        //* This is only sound because both reconstruction inputs are bound
+        //* elsewhere. `miner_address` is digested into the share commitment, and
+        //* the weak block hash is the proof of work itself. Remove either
+        //* binding and a peer can rebuild a coinbase of their choosing.
+        let expected = build_sharechain_coinbase_transaction(
+            &share.header.miner_address,
+            share.header.bitcoin_header.block_hash(),
+            share.transactions.get(1..).unwrap_or_default(),
+        );
+
+        if coinbase.0 != expected {
             return Err(ValidationError::consensus(
-                "First transaction in share block is not a coinbase transaction",
-            ));
-        }
-
-        // Two coinbase outputs: first to the miner and second a witness commitment output
-        if coinbase.output.len() != 2 {
-            return Err(ValidationError::consensus(format!(
-                "Share coinbase has {} outputs, expected 2",
-                coinbase.output.len()
-            )));
-        }
-
-        let output = &coinbase.output[0];
-        if output.value != Amount::ONE_BTC {
-            return Err(ValidationError::consensus(format!(
-                "Share coinbase pays {} but expected {}",
-                output.value,
-                Amount::ONE_BTC
-            )));
-        }
-
-        let expected_script = ScriptBuf::new_witness_program(&share.header.miner_address);
-        if output.script_pubkey != expected_script {
-            return Err(ValidationError::consensus(
-                "Share coinbase output does not pay to the miner address in header",
+                "Share coinbase is not the coinbase this share's owner and weak block imply",
             ));
         }
 
@@ -992,7 +983,7 @@ impl DefaultShareValidator {
 
         let expected_outputs =
             Self::build_expected_outputs(&share.header, &address_difficulty_map, coinbase_value)?;
-        let expected_commitment_hash = ShareCommitment::from_share_header(&share.header).hash();
+        let expected_commitment_hash = ShareCommitment::from_share_block(share).hash();
 
         let flags = match &share.header.coinbaseaux_flags {
             Some(aux_flags) => aux_flags.to_push_bytes_buf(),
@@ -3484,7 +3475,7 @@ mod tests {
         share_block.header.coinbase_value = 312_500_000;
         share_block.header.bitcoin_height = 840_000;
 
-        let commitment_hash = ShareCommitment::from_share_header(&share_block.header).hash();
+        let commitment_hash = ShareCommitment::from_share_block(&share_block).hash();
 
         // Build coinbase matching how the validator reconstructs it
         let coinbase_tx = build_bitcoin_coinbase_transaction(
@@ -3558,7 +3549,7 @@ mod tests {
         share_block.header.coinbase_value = 312_500_000;
         share_block.header.bitcoin_height = 840_000;
 
-        let commitment_hash = ShareCommitment::from_share_header(&share_block.header).hash();
+        let commitment_hash = ShareCommitment::from_share_block(&share_block).hash();
 
         // Build coinbase with 50/50 split (wrong for 60/40 distribution)
         let coinbase_tx = build_bitcoin_coinbase_transaction(
@@ -3752,7 +3743,7 @@ mod tests {
         share_block.header.coinbase_value = 1;
         share_block.header.bitcoin_height = 840_000;
 
-        let commitment_hash = ShareCommitment::from_share_header(&share_block.header).hash();
+        let commitment_hash = ShareCommitment::from_share_block(&share_block).hash();
 
         // Build coinbase with 1 sat matching the header
         let coinbase_tx = build_bitcoin_coinbase_transaction(
@@ -3851,7 +3842,7 @@ mod tests {
         share_block.header.coinbase_value = total_coinbase_sats;
         share_block.header.bitcoin_height = 840_000;
 
-        let commitment_hash = ShareCommitment::from_share_header(&share_block.header).hash();
+        let commitment_hash = ShareCommitment::from_share_block(&share_block).hash();
 
         // Build coinbase: donation, fee, then 3 miners in sorted address order
         let coinbase_tx = build_bitcoin_coinbase_transaction(
@@ -3958,7 +3949,7 @@ mod tests {
             .as_deref()
             .and_then(|hex_str| WitnessCommitment::from_hex(hex_str).ok());
 
-        let commitment_hash = ShareCommitment::from_share_header(&share_block.header).hash();
+        let commitment_hash = ShareCommitment::from_share_block(&share_block).hash();
 
         let coinbase_tx = build_bitcoin_coinbase_transaction(
             Version::TWO,
