@@ -47,6 +47,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   share block carrying the same proof of work. The version travels in the
   encoding, so accepting a further witness version later is a policy change
   rather than a format break, and validation rejects anything but P2TR.
+- **BREAKING (consensus):** the share coinbase carries the weak block hash in
+  its scriptSig, and is no longer covered by the share commitment. Every share
+  a miner produced was previously byte identical -- null prevout, empty
+  scriptSig, and a payout derived only from the address -- so one miner's
+  shares all shared a txid and their share units collided on a single
+  outpoint. A miner with ten thousand shares held one. The weak block hash is
+  unique per share by construction, because `prev_share_blockhash` is in the
+  commitment, so a replay under a different parent changes the commitment, the
+  bitcoin coinbase, and therefore the hash.
+
+  This required the commitment to stop covering the coinbase, which would
+  otherwise be circular: the commitment is fixed before the miner hashes,
+  while the weak block hash exists only afterwards. `ShareCommitment` drops
+  `merkle_root` and gains `non_coinbase_root`, the merkle root over the share
+  transactions excluding the coinbase, which is all zeros while share blocks
+  carry nothing else. It also now digests `miner_address` directly: that used
+  to be committed only through the coinbase that pays it, so with the coinbase
+  outside the commitment it is the sole binding between a share's owner and
+  its proof of work.
+
+  `ShareHeader` is unchanged in shape. `merkle_root` keeps bitcoin's meaning,
+  the root over all share transactions with the coinbase at leaf zero, and is
+  computed at assembly from the final coinbase rather than copied from the
+  commitment. `validate_share_coinbase` rebuilds the coinbase from the header
+  and compares, which proves it is the canonical one rather than merely well
+  shaped.
 - **BREAKING (stratum):** in p2poolv2 mode, authorize is rejected unless a
   share chain address is available, either from `[stratum] miner_address` or
   from `p2p=<address>` in the miner's password. Hydrapool mode is unaffected,
@@ -70,7 +96,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The dashboard shows both addresses, truncated client side.
 - The `share_sync` test fixture is regenerated from a live signet node, with
   bitcoin headers carrying real proof of work mined under the two-address
-  commitment.
+  commitment and the per-share coinbase.
+- `impl Encodable for ShareCommitment` is removed. It was a second, unused
+  definition of the commitment byte layout that had already drifted from the
+  one `hash()` uses, so it could only ever produce a digest no peer would
+  reconstruct.
+- The notify path no longer computes a share merkle root. The commitment does
+  not cover the coinbase, so there is nothing per-miner left to compute there;
+  the root was previously recomputed for every miner on every notify despite
+  being constant for the life of a session.
 - **BREAKING (JSON API):** the `status` field is renamed to
   `validation_status` on the `/share` and `/dag` endpoints and in
   `db-query` output; read the sibling `chain` field for chain position.
