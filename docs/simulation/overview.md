@@ -90,6 +90,10 @@ mined. Build and run with the `sim` feature and a `[sim]` config section:
 [sim]
 enabled = true
 miner_address = "bcrt1q..."   # this node's payout identity (regtest address)
+share_address = "rp2pool1..." # this node's share chain identity; REQUIRED, and
+                              # not derivable from miner_address -- different
+                              # chain, different key. Without it the emitter
+                              # refuses to start and the node emits nothing.
 hashrate = 1.0e12             # modeled Hᵢ; sets emission rate (≈ D·2³²/H per share)
 block_to_share_ratio = 10000  # 1-in-N shares is a (future) block-find
 seed = 1                      # per-node; differ per node in multi-node runs

@@ -305,6 +305,13 @@ build_analysis_binaries() {
   VERIFY_BIN="$target_dir/verify_chain"
   CLI_BIN="$target_dir/p2poolv2_cli"
 
+  # Always build, never just check the binary exists. Both binaries decode
+  # share headers out of the node stores, so a binary older than the last
+  # consensus change reads them with the wrong format and reports every header
+  # as corrupt -- a confusing failure that looks like data loss. cargo is
+  # incremental, so this is nearly free when already current. Both binaries
+  # live in p2poolv2_node; p2poolv2_cli is a library-only package, so building
+  # it produces no p2poolv2_cli executable at all.
   log_message "Building verify_chain and p2poolv2_cli ($profile)..."
   ( cd "$REPO_ROOT" && cargo build -p p2poolv2_node \
       --bin verify_chain --bin p2poolv2_cli \
