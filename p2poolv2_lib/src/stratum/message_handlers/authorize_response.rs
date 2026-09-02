@@ -71,7 +71,10 @@ fn resolve_share_address(
         (Some(configured), Some(Err(error))) => Err(format!(
             "Could not read the p2p= share address ({error}). Remove it to use the node's address {configured}, or correct it. Note p2p=<address> is 71 characters and some miner firmware truncates the password field."
         )),
-        (Some(configured), _) => Ok(Some(configured)),
+	// Double check the configured miner address has correct network
+        (Some(configured), _) => configured.require_network(network).map(Some).map_err(|error| {
+            format!("Configured share address is not usable on this pool: {error}")
+        }),
         (None, Some(Ok(supplied))) => supplied
             .require_network(network)
             .map(Some)
@@ -275,7 +278,7 @@ mod tests {
             ignore_difficulty: false,
             validate_addresses: true,
             emissions_tx,
-            network: bitcoin::network::Network::Testnet,
+            network: bitcoin::network::Network::Testnet4,
             metrics: metrics_handle,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
@@ -365,7 +368,7 @@ mod tests {
             ignore_difficulty: false,
             validate_addresses: true,
             emissions_tx,
-            network: bitcoin::network::Network::Testnet,
+            network: bitcoin::network::Network::Testnet4,
             metrics: metrics_handle,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
@@ -496,7 +499,7 @@ mod tests {
             ignore_difficulty: false,
             validate_addresses: true,
             emissions_tx,
-            network: bitcoin::network::Network::Testnet,
+            network: bitcoin::network::Network::Testnet4,
             metrics: metrics_handle,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
@@ -592,7 +595,7 @@ mod tests {
             ignore_difficulty: false,
             validate_addresses: true,
             emissions_tx,
-            network: bitcoin::network::Network::Testnet,
+            network: bitcoin::network::Network::Testnet4,
             metrics: metrics_handle,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
@@ -649,7 +652,7 @@ mod tests {
             ignore_difficulty: false,
             validate_addresses: true,
             emissions_tx,
-            network: bitcoin::network::Network::Testnet,
+            network: bitcoin::network::Network::Testnet4,
             metrics: metrics_handle,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
@@ -708,7 +711,7 @@ mod tests {
             ignore_difficulty: false,
             validate_addresses: true,
             emissions_tx,
-            network: bitcoin::network::Network::Testnet,
+            network: bitcoin::network::Network::Testnet4,
             metrics: metrics_handle,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
@@ -771,7 +774,7 @@ mod tests {
             ignore_difficulty: false,
             validate_addresses: true,
             emissions_tx,
-            network: bitcoin::network::Network::Testnet,
+            network: bitcoin::network::Network::Testnet4,
             metrics: metrics_handle,
             chain_store_handle,
             mode: PoolMode::P2poolv2,
@@ -1367,8 +1370,7 @@ mod resolve_share_address_tests {
         assert_eq!(resolved, Some(configured()));
     }
 
-    /// A miner-supplied address is network checked here, unlike a configured
-    /// one which config parse already validated.
+    /// Both a supplied and a configured address are network checked here.
     #[test]
     fn supplied_address_for_another_network_is_rejected() {
         let supplied = Ok(make_test_share_address(1, Network::Testnet4));
@@ -1377,6 +1379,47 @@ mod resolve_share_address_tests {
                 .unwrap_err();
 
         assert!(reason.contains("not usable on this pool"), "{reason}");
+    }
+
+    /// A configured address is held to the same rule. Config parse checks it
+    /// too, but `StratumServerBuilder::miner_address` takes any address, so a
+    /// path that skips config parsing would otherwise commit every share on
+    /// the pool to an address written for another chain without complaint.
+    #[test]
+    fn configured_address_for_another_network_is_rejected() {
+        let configured = make_test_share_address(1, Network::Testnet4);
+        let reason =
+            resolve_share_address(Some(configured), None, Network::Signet, PoolMode::P2poolv2)
+                .unwrap_err();
+
+        assert!(reason.contains("Configured share address"), "{reason}");
+    }
+
+    /// The same rule applies when the miner names the very same address: the
+    /// pair agreeing does not make either of them usable here.
+    #[test]
+    fn configured_address_for_another_network_is_rejected_even_when_supplied_matches() {
+        let configured = make_test_share_address(1, Network::Testnet4);
+        let supplied = Ok(make_test_share_address(1, Network::Testnet4));
+        let reason = resolve_share_address(
+            Some(configured),
+            Some(&supplied),
+            Network::Signet,
+            PoolMode::P2poolv2,
+        )
+        .unwrap_err();
+
+        assert!(reason.contains("Configured share address"), "{reason}");
+    }
+
+    #[test]
+    fn configured_address_on_its_own_network_is_accepted() {
+        let configured = make_test_share_address(1, Network::Signet);
+        let resolved =
+            resolve_share_address(Some(configured), None, Network::Signet, PoolMode::P2poolv2)
+                .unwrap();
+
+        assert_eq!(resolved, Some(configured));
     }
 
     #[test]
