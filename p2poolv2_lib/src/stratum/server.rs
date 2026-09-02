@@ -444,12 +444,8 @@ pub(crate) struct StratumContext {
     pub chain_store_handle: ChainStoreHandle,
     pub mode: PoolMode,
     /// Pool wide share chain address from `[stratum] miner_address`, when the
-    /// operator configured one. Every share is then owned by it, and a miner
-    /// sending a different `p2p=` is rejected at authorize.
-    ///
-    /// Plumbed here ahead of the authorize side that resolves it against the
-    /// miner's `p2p=` value, which is why nothing reads it yet.
-    #[allow(dead_code)]
+    /// operator configured one. Every share then carries it as its miner
+    /// address, and a miner sending a different `p2p=` is rejected at authorize.
     pub miner_address: Option<P2PoolAddress>,
 }
 
