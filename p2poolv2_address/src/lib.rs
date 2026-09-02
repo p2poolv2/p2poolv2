@@ -167,15 +167,26 @@ pub enum AddressError {
     },
 }
 
+/// The human readable part every share chain address on `network` must carry.
+///
+/// This is the rule a share address is checked against: an address belongs to
+/// a network exactly when its prefix is this one, which is what
+/// [`Address::require_network`] enforces. Exposed so a caller can say what it
+/// expected rather than only that something did not match, and so a
+/// configuration can be checked before any address exists to compare.
+pub fn expected_hrp(network: Network) -> Result<&'static str, AddressError> {
+    match network {
+        Network::Bitcoin => Ok(HRP_MAINNET),
+        Network::Testnet4 => Ok(HRP_TESTNET4),
+        Network::Signet => Ok(HRP_SIGNET),
+        Network::Regtest => Ok(HRP_REGTEST),
+        other => Err(AddressError::UnsupportedNetwork(other)),
+    }
+}
+
 /// Return the human readable part for a network.
 fn hrp_for(network: Network) -> Result<Hrp, AddressError> {
-    let prefix = match network {
-        Network::Bitcoin => HRP_MAINNET,
-        Network::Testnet4 => HRP_TESTNET4,
-        Network::Signet => HRP_SIGNET,
-        Network::Regtest => HRP_REGTEST,
-        other => return Err(AddressError::UnsupportedNetwork(other)),
-    };
+    let prefix = expected_hrp(network)?;
     Ok(Hrp::parse(prefix).expect("share chain HRP constants are valid bech32 HRPs"))
 }
 
@@ -768,5 +779,35 @@ mod tests {
     fn serde_rejects_a_bitcoin_address() {
         let json = "\"tb1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqhqjek6\"";
         assert!(serde_json::from_str::<Address>(json).is_err());
+    }
+
+    /// These prefixes are consensus: they are what a peer's address must carry
+    /// to be accepted, so changing one silently splits the pool. Pinned one at
+    /// a time so a regression names the network it broke.
+    #[test]
+    fn expected_hrp_pins_the_mainnet_prefix() {
+        assert_eq!(expected_hrp(Network::Bitcoin).unwrap(), "p2pool");
+    }
+
+    #[test]
+    fn expected_hrp_pins_the_testnet4_prefix() {
+        assert_eq!(expected_hrp(Network::Testnet4).unwrap(), "tp2pool");
+    }
+
+    #[test]
+    fn expected_hrp_pins_the_signet_prefix() {
+        assert_eq!(expected_hrp(Network::Signet).unwrap(), "sp2pool");
+    }
+
+    #[test]
+    fn expected_hrp_pins_the_regtest_prefix() {
+        assert_eq!(expected_hrp(Network::Regtest).unwrap(), "rp2pool");
+    }
+
+    /// A network with no prefix can accept no share address at all, so callers
+    /// get an error they can refuse to start on rather than a usable default.
+    #[test]
+    fn expected_hrp_rejects_a_network_with_no_prefix() {
+        assert!(expected_hrp(Network::Testnet).is_err());
     }
 }

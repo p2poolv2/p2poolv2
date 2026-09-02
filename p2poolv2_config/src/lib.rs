@@ -212,6 +212,16 @@ impl StratumConfig<Raw> {
             });
         }
 
+        // The network should be one we support an hrp for.
+        if self.mode == PoolMode::P2poolv2 {
+            p2poolv2_address::expected_hrp(self.network).map_err(|error| ConfigError {
+                message: format!(
+                    "Network {} cannot be used for a share chain: {error}",
+                    self.network
+                ),
+            })?;
+        }
+
         let bootstrap_address_parsed = parse_address(&self.bootstrap_address, self.network)?;
 
         let miner_address_parsed = self
@@ -837,6 +847,41 @@ mod tests {
         assert!(config.listen_address.is_empty());
     }
 
+    /// A share address belongs to a network exactly when its prefix is the one
+    /// that network expects, so a network with no prefix can never accept one.
+    /// Caught at startup: otherwise the node runs and rejects every authorize,
+    /// forever, for a reason no miner can fix.
+    ///
+    /// `miner_address` is unset here, which is an ordinary p2poolv2 setup --
+    /// miners supply their own with `p2p=`. So the network cannot be validated
+    /// through a configured address; it has to be checked on its own.
+    #[test]
+    fn parse_rejects_a_network_with_no_share_address_prefix() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.network = Network::Testnet;
+        config.mode = PoolMode::P2poolv2;
+        assert!(config.miner_address.is_none());
+
+        let error = config.parse().expect_err("testnet v3 has no share prefix");
+        assert!(
+            error.message.contains("cannot be used for a share chain"),
+            "unexpected message: {}",
+            error.message
+        );
+    }
+
+    /// Hydrapool builds no share commitment, so it needs no share address and
+    /// must not be held to a rule that does not apply to it.
+    #[test]
+    fn parse_allows_an_unusable_network_in_hydrapool_mode() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.network = Network::Testnet;
+        config.mode = PoolMode::Hydrapool;
+        config.miner_address = None;
+
+        assert!(config.parse().is_ok());
+    }
+
     #[test]
     fn test_pool_signature_option() {
         // Test with None
@@ -1014,11 +1059,18 @@ mod miner_address_tests {
     const TESTNET4_ADDRESS: &str =
         "tp2pool1pvmde7zkgeg9qqcpsy7e6g3w6dm3d7mqwqnudcmuedk6wt8gwgkls3qc3th";
 
+    /// A p2poolv2 pool with no configured address is a normal setup, not an
+    /// edge case: each miner supplies its own with `p2p=`. The mode is set
+    /// explicitly rather than left to `PoolMode::default()`, so this keeps
+    /// covering p2poolv2 even if that default ever changes.
     #[test]
     fn absent_miner_address_parses_to_none() {
-        let config = StratumConfig::<Raw>::new_for_test_default();
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.mode = PoolMode::P2poolv2;
+
         let parsed = config.parse().unwrap();
         assert!(parsed.miner_address().is_none());
+        assert_eq!(parsed.mode, PoolMode::P2poolv2);
     }
 
     #[test]
