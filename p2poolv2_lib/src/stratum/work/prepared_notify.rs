@@ -24,11 +24,11 @@ use crate::address::Address as P2PoolAddress;
 use crate::shares::share_commitment::{
     ShareCommitment, build_commitment_prefix, build_commitment_suffix, commitment_digest,
 };
-use crate::shares::transactions::coinbase::compute_share_merkle_root;
+use crate::shares::transactions::coinbase::compute_non_coinbase_root;
 use crate::shares::witness_commitment::WitnessCommitment;
 use crate::stratum::util::{reverse_four_byte_chunks, to_be_hex};
 use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
-use bitcoin::TxMerkleNode;
+use bitcoin::WitnessProgram;
 use bitcoin::hashes::{self, Hash};
 use bitcoin::transaction::Version;
 use bitcoin::{Address, BlockHash, CompactTarget};
@@ -321,6 +321,7 @@ impl PreparedNotifyParamsBuilder {
             self.donation,
             &self.fee_address,
             self.fee,
+            compute_non_coinbase_root(&[]),
         );
 
         Ok(PreparedNotifyParams {
@@ -360,14 +361,14 @@ fn get_commitment_hex(
     time: u32,
     commitment_suffix: &[u8],
     miner_bitcoin_address: Option<&Address>,
-    merkle_root: Option<TxMerkleNode>,
+    miner_address: Option<WitnessProgram>,
 ) -> String {
     let digest = commitment_digest(
         commitment_prefix,
         time,
         commitment_suffix,
         miner_bitcoin_address,
-        merkle_root,
+        miner_address,
     );
     hex::encode(digest.as_byte_array())
 }
@@ -406,22 +407,17 @@ pub(crate) fn build_notify_from_prepared(
 ) -> Result<String, WorkError> {
     let fresh_time = SystemTimeProvider.seconds_since_epoch() as u32;
 
-    //* The commitment is fixed here, before the miner hashes, so the share
-    //* merkle root has to be known now.
-    let share_merkle_root =
-        miner_address.map(|address| compute_share_merkle_root(&address.witness_program(), &[]));
-
     let nsecs = get_timestamp_bytes(&SystemTimeProvider);
 
     // Build ShareCommitment only when both addresses are available: the share
     // chain coinbase needs an owner and the bitcoin coinbase needs a payee.
-    let share_commitment = match (miner_bitcoin_address, miner_address, share_merkle_root) {
-        (Some(bitcoin_address), Some(share_address), Some(merkle_root)) => Some(ShareCommitment {
+    let share_commitment = match (miner_bitcoin_address, miner_address) {
+        (Some(bitcoin_address), Some(share_address)) => Some(ShareCommitment {
             prev_share_blockhash: prepared.prev_share_blockhash,
             uncles: prepared.uncles.clone(),
             miner_bitcoin_address: bitcoin_address.clone(),
             miner_address: share_address.witness_program(),
-            merkle_root,
+            non_coinbase_root: compute_non_coinbase_root(&[]),
             bits: prepared.bits,
             time: fresh_time,
             donation_address: prepared.donation_address.clone(),
@@ -441,7 +437,7 @@ pub(crate) fn build_notify_from_prepared(
         fresh_time,
         &prepared.commitment_suffix,
         miner_bitcoin_address,
-        share_merkle_root,
+        miner_address.map(|address| address.witness_program()),
     );
 
     // Build per-miner coinbase2
@@ -620,7 +616,7 @@ mod tests {
             uncles: Vec::new(),
             miner_bitcoin_address: address,
             miner_address: make_test_share_program(1),
-            merkle_root: compute_share_merkle_root(&make_test_share_program(1), &[]),
+            non_coinbase_root: compute_non_coinbase_root(&[]),
             bits,
             time: commitment.time,
             donation_address: None,
@@ -654,14 +650,14 @@ mod tests {
             time,
             &prepared.commitment_suffix,
             Some(&address1),
-            Some(compute_share_merkle_root(&share_address, &[])),
+            Some(share_address),
         );
         let hash2 = get_commitment_hex(
             &prepared.commitment_prefix,
             time,
             &prepared.commitment_suffix,
             Some(&address2),
-            Some(compute_share_merkle_root(&share_address, &[])),
+            Some(share_address),
         );
 
         assert_ne!(
@@ -691,7 +687,7 @@ mod tests {
 
         let bitcoin_address = test_address();
         let share_address = make_test_share_program(1);
-        let merkle_root = compute_share_merkle_root(&share_address, &[]);
+        let non_coinbase_root = compute_non_coinbase_root(&[]);
         let time = 1_700_000_000;
 
         let from_notify = get_commitment_hex(
@@ -699,7 +695,7 @@ mod tests {
             time,
             &prepared.commitment_suffix,
             Some(&bitcoin_address),
-            Some(merkle_root),
+            Some(share_address),
         );
 
         let commitment = ShareCommitment {
@@ -707,7 +703,7 @@ mod tests {
             uncles: prepared.uncles.clone(),
             miner_bitcoin_address: bitcoin_address,
             miner_address: share_address,
-            merkle_root,
+            non_coinbase_root,
             bits: prepared.bits,
             time,
             donation_address: prepared.donation_address.clone(),
@@ -739,14 +735,14 @@ mod tests {
             time,
             &prepared.commitment_suffix,
             Some(&bitcoin_address),
-            Some(compute_share_merkle_root(&share_address1, &[])),
+            Some(share_address1),
         );
         let hash2 = get_commitment_hex(
             &prepared.commitment_prefix,
             time,
             &prepared.commitment_suffix,
             Some(&bitcoin_address),
-            Some(compute_share_merkle_root(&share_address2, &[])),
+            Some(share_address2),
         );
 
         assert_ne!(
