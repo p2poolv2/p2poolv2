@@ -145,6 +145,10 @@ NOTE: A taproot address is not a share chain address. `tb1p...` and
 `sp2pool1p...` encode the same 32 bytes, but the prefix is covered by the
 checksum, so neither parser accepts the other's form.
 
+Optional authenticated Bitcoin Core RPC gateway configuration and limitations
+are documented in
+link:./docs/rpc/bitcoin-core-proxy.md[Bitcoin Core JSON-RPC gateway].
+
 === Enable Dashboard
 
 P2Poolv2 includes a web dashboard for monitoring your node. The static

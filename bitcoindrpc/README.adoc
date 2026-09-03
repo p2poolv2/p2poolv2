@@ -1,40 +1,16 @@
 == BitcoindRPC
 
-This crate is used by p2poolv2 to make bitcoind API calls.
+This crate is used by P2Poolv2 to make authenticated Bitcoin Core JSON-RPC
+calls. `BitcoindRpcClient::request` and `BitcoindRpcClient::call_value` are the
+generic call methods; they do not impose an RPC allowlist.
 
-We only support the endpoints that we need to call. As we need more,
-we will add more here.
+Typed convenience methods currently provided by the client:
 
-List of supported calls:
-
-Chain & mempool:
-
-. getbestblockhash
-. getblock
 . getblockchaininfo
-. getblockcount
-. getblockfilter
-. getblockhash
-. getblockheader
-. getmempoolentry
-. getnetworkinfo
-. getrawmempool
-. getrawtransaction
-. gettxout
-
-Fees / broadcast / validation:
-
-. estimatesmartfee
-. sendrawtransaction
-. testmempoolaccept
-
-Decode:
-
 . decoderawtransaction
-. decoderawtransaction_hex (proxy-friendly hex-string version)
-
-Internal use:
-
-. getdifficulty
+. get_difficulty (calls `getdifficulty`)
 . getblocktemplate
-. submitblock
+. submit_block (calls `submitblock`)
+
+The separate HTTP gateway has its own 16-method allowlist, documented in
+link:../docs/rpc/bitcoin-core-proxy.md[Bitcoin Core JSON-RPC gateway].

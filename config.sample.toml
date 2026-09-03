@@ -78,24 +78,25 @@ url = "http://127.0.0.1:38332"
 username = "p2pool"
 password = "p2pool"
 
-# Bitcoin Core compatible JSON-RPC proxy — disabled by default.
-# When enabled, p2poolv2 exposes a second listener that forwards a subset of
-# Bitcoin Core RPC methods to the upstream bitcoind node.  Mining software that
-# speaks Bitcoin Core JSON-RPC (e.g. some monitoring tools) can point at this
-# address instead of bitcoind directly.
+# Authenticated Bitcoin Core JSON-RPC gateway, disabled by default.
+# This forwards 16 allowed methods to the [bitcoinrpc] upstream; it is not a
+# P2Poolv2 chain backend, a complete Bitcoin Core RPC server, or an Electrum,
+# Esplora, or NBXplorer implementation. See docs/rpc/bitcoin-core-proxy.md.
 #
-# Required bitcoin.conf settings on the upstream node:
-#   rpcallowip=127.0.0.1
-#   rpcbind=127.0.0.1
-#   rpcuser=<user>
-#   rpcpassword=<password>
+# bitcoind enables RPC and binds it to loopback by default. server=1 is needed
+# for bitcoin-qt, not normal bitcoind use. The [bitcoinrpc] credentials above
+# must match the upstream. Arbitrary historical getrawtransaction calls need
+# txindex=1, and getblockfilter needs blockfilterindex=1.
+#
+# This listener is plain HTTP. Basic Auth credentials are not encrypted without
+# TLS, so keep the loopback default and do not expose it to the public Internet.
 [bitcoin_rpc_api]
 # enabled = false
 # Defaults to loopback when omitted.
 # host = "127.0.0.1"
 # Required when enabled.
 # port = 18332
-# Both credentials are required when enabled.
+# Both gateway client credentials are required when enabled.
 # rpcuser = "p2pool"
 # rpcpassword = "p2pool"
 # Maximum number of RPC calls allowed in a single batch request (default: 20)
