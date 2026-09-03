@@ -30,7 +30,7 @@ pub mod test_utils;
 #[derive(Serialize)]
 struct JsonRpcRequest {
     method: String,
-    params: Vec<serde_json::Value>,
+    params: serde_json::Value,
     id: u64,
 }
 
@@ -38,9 +38,9 @@ struct JsonRpcRequest {
 /// In JSON-RPC 1.0, both result and error are always present
 /// One will be the actual value, the other will be null
 #[derive(Deserialize, Debug)]
-struct JsonRpcResponse<T> {
-    result: T,
-    error: Option<JsonRpcError>,
+struct JsonRpcResponse {
+    result: serde_json::Value,
+    error: serde_json::Value,
 }
 
 /// JSON-RPC 1.0 error structure
@@ -155,11 +155,27 @@ impl BitcoindRpcClient {
         })
     }
 
+    /// Calls a Bitcoin RPC method and deserializes its result.
     pub async fn request<T: serde::de::DeserializeOwned>(
         &self,
         method: &str,
         params: Vec<serde_json::Value>,
     ) -> Result<T, BitcoindRpcError> {
+        let result = self
+            .call_value(method, serde_json::Value::Array(params))
+            .await?;
+
+        serde_json::from_value(result).map_err(|error| BitcoindRpcError::ParseError {
+            message: format!("Failed to parse result: {error}"),
+        })
+    }
+
+    /// Forwards JSON parameters to a Bitcoin RPC method and returns its JSON result unchanged.
+    pub async fn call_value(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, BitcoindRpcError> {
         let id = self.request_id.fetch_add(1, Ordering::SeqCst);
 
         let request = JsonRpcRequest {
@@ -199,16 +215,22 @@ impl BitcoindRpcClient {
             });
         }
 
-        let rpc_response: JsonRpcResponse<T> =
+        let rpc_response: JsonRpcResponse =
             response
                 .json()
                 .await
-                .map_err(|e| BitcoindRpcError::ParseError {
-                    message: format!("Failed to parse response: {e}"),
+                .map_err(|error| BitcoindRpcError::ParseError {
+                    message: format!("Failed to parse response: {error}"),
                 })?;
 
         // JSON-RPC 1.0: check error first, then return result
-        if let Some(error) = rpc_response.error {
+        if !rpc_response.error.is_null() {
+            let error: JsonRpcError =
+                serde_json::from_value(rpc_response.error).map_err(|error| {
+                    BitcoindRpcError::ParseError {
+                        message: format!("Failed to parse RPC error: {error}"),
+                    }
+                })?;
             return Err(BitcoindRpcError::RpcError {
                 code: error.code,
                 message: error.message,
@@ -1323,7 +1345,91 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_rpc_error_code_and_message_preserved() {
+    async fn test_call_value_with_positional_parameters() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(body_json(serde_json::json!({
+                "method": "test",
+                "params": ["value", 42],
+                "id": 0
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": true,
+                "error": null,
+                "id": 0
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
+        let result = client
+            .call_value("test", serde_json::json!(["value", 42]))
+            .await
+            .unwrap();
+
+        assert_eq!(result, serde_json::json!(true));
+    }
+
+    #[tokio::test]
+    async fn test_call_value_with_named_parameters() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(body_json(serde_json::json!({
+                "method": "test",
+                "params": { "height": 42 },
+                "id": 0
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": "ok",
+                "error": null,
+                "id": 0
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
+        let result = client
+            .call_value("test", serde_json::json!({ "height": 42 }))
+            .await
+            .unwrap();
+
+        assert_eq!(result, serde_json::json!("ok"));
+    }
+
+    #[tokio::test]
+    async fn test_call_value_with_null_result() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(body_json(serde_json::json!({
+                "method": "test",
+                "params": null,
+                "id": 0
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": null,
+                "error": null,
+                "id": 0
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
+        let result = client
+            .call_value("test", serde_json::Value::Null)
+            .await
+            .unwrap();
+
+        assert!(result.is_null());
+    }
+
+    #[tokio::test]
+    async fn test_upstream_rpc_error_with_null_result() {
         let mock_server = MockServer::start().await;
 
         Mock::given(method("POST"))
@@ -1346,9 +1452,10 @@ mod tests {
             .await;
 
         let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
-        let result = client.getmempoolentry("unknowntxid").await;
+        let result: Result<String, BitcoindRpcError> = client
+            .request("getmempoolentry", vec![serde_json::json!("unknowntxid")])
+            .await;
 
-        assert!(result.is_err());
         match result.unwrap_err() {
             BitcoindRpcError::RpcError { code, message } => {
                 assert_eq!(code, -5);
@@ -1359,10 +1466,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_request_with_4xx_http_error() {
+    async fn test_malformed_upstream_response() {
         let mock_server = MockServer::start().await;
 
-        // Mock a 401 Unauthorized response
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(body_json(serde_json::json!({
+                "method": "test",
+                "params": [],
+                "id": 0
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
+            .mount(&mock_server)
+            .await;
+
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
+        let result = client.call_value("test", serde_json::json!([])).await;
+
+        assert!(matches!(result, Err(BitcoindRpcError::ParseError { .. })));
+    }
+
+    #[tokio::test]
+    async fn test_http_failure() {
+        let mock_server = MockServer::start().await;
+
         Mock::given(method("POST"))
             .and(path("/"))
             .and(header("Authorization", "Basic cDJwb29sOnAycG9vbA=="))
@@ -1376,9 +1503,10 @@ mod tests {
             .await;
 
         let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
-        let result: Result<f64, BitcoindRpcError> = client.get_difficulty().await;
+        let result = client
+            .call_value("getdifficulty", serde_json::json!([]))
+            .await;
 
-        assert!(result.is_err());
         if let Err(BitcoindRpcError::HttpError {
             status_code,
             message,
