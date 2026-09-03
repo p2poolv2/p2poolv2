@@ -42,11 +42,17 @@ timing attacks on the credential check.  A failed authentication returns
 
 ## Wire format
 
-The proxy follows the Bitcoin Core JSON-RPC 1.0 wire format exactly:
+The proxy follows Bitcoin Core's legacy and JSON-RPC 2.0 wire formats. A
+request is JSON-RPC 2.0 only when it contains `"jsonrpc":"2.0"`; all other
+requests use the legacy format.
 
-- Every response always contains `result`, `error`, and `id` fields.
-- `result` is `null` when the call fails; `error` is `null` on success.
-- Both single calls and batch requests (JSON arrays) are accepted.
+- Legacy responses contain `result`, `error`, and `id`.
+- JSON-RPC 2.0 responses contain `jsonrpc`, `id`, and exactly one of `result`
+  or `error`.
+- JSON-RPC 2.0 requests without `id` are executed as notifications and omitted
+  from the response. Notification-only requests return HTTP 204.
+- Both single calls and batch requests are accepted. Empty batches are
+  rejected.
 
 ### Single request
 
@@ -86,11 +92,11 @@ The maximum number of calls in a single batch is controlled by
 `max_batch_size` (default: 20).  Exceeding it returns a single error response
 with code `-32600`.
 
-## Named parameters
+## Parameters
 
-Bitcoin Core accepts both positional and named parameters.  The proxy normalises
-named parameters to positional before forwarding, stripping trailing `null`
-values so optional arguments are handled cleanly.
+Bitcoin Core accepts positional parameters, named parameters, and the named
+`args` parameter. The proxy forwards the parameter array or object unchanged,
+so Bitcoin Core remains the source of truth for each method's parameter schema.
 
 Example with named params:
 

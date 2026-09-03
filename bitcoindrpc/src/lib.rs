@@ -190,31 +190,29 @@ impl BitcoindRpcClient {
         };
 
         let status = response.status();
-
-        // Check for non-success HTTP status codes
-        if !status.is_success() {
-            let status_code = status.as_u16();
-            let error_body = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Failed to read error body".to_string());
-            error!(
-                "Error reaching bitcoin node with status={:?}. Message={:?}",
-                status_code, error_body
-            );
-            return Err(BitcoindRpcError::HttpError {
-                status_code,
-                message: error_body,
-            });
-        }
-
-        let rpc_response: JsonRpcResponse =
-            response
-                .json()
-                .await
-                .map_err(|error| BitcoindRpcError::ParseError {
+        let response_body = response.bytes().await.map_err(|error| {
+            BitcoindRpcError::Other(format!("Failed to read response: {error}"))
+        })?;
+        let rpc_response: JsonRpcResponse = match serde_json::from_slice(&response_body) {
+            Ok(rpc_response) => rpc_response,
+            Err(_) if !status.is_success() => {
+                let status_code = status.as_u16();
+                let message = String::from_utf8_lossy(&response_body).into_owned();
+                error!(
+                    "Error reaching bitcoin node with status={:?}. Message={:?}",
+                    status_code, message
+                );
+                return Err(BitcoindRpcError::HttpError {
+                    status_code,
+                    message,
+                });
+            }
+            Err(error) => {
+                return Err(BitcoindRpcError::ParseError {
                     message: format!("Failed to parse response: {error}"),
-                })?;
+                });
+            }
+        };
 
         // JSON-RPC 1.0: check error first, then return result
         if !rpc_response.error.is_null() {
@@ -835,7 +833,7 @@ mod tests {
                 "params": ["unknowntxid"],
                 "id": 0
             })))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            .respond_with(ResponseTemplate::new(500).set_body_json(serde_json::json!({
                 "result": null,
                 "error": {
                     "code": -5,
