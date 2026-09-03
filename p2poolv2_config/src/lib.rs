@@ -20,6 +20,7 @@ use bitcoindrpc::BitcoinRpcConfig;
 use p2poolv2_address::Address as ShareAddress;
 use serde::Deserialize;
 use std::marker::PhantomData;
+use std::net::IpAddr;
 use std::str::FromStr;
 
 /// Error type for configuration parsing and validation.
@@ -552,9 +553,8 @@ pub struct BitcoinRpcApiConfig {
     /// Bind host for the proxy listener
     #[serde(default = "default_bitcoin_rpc_host")]
     pub host: String,
-    /// Bind port for the proxy listener
-    #[serde(default = "default_bitcoin_rpc_port")]
-    pub port: u16,
+    /// Bind port for the proxy listener. Required when enabled.
+    pub port: Option<u16>,
     /// Username clients must supply via HTTP Basic Auth
     pub rpcuser: Option<String>,
     /// Password clients must supply via HTTP Basic Auth
@@ -582,7 +582,7 @@ impl Default for BitcoinRpcApiConfig {
         Self {
             enabled: false,
             host: default_bitcoin_rpc_host(),
-            port: default_bitcoin_rpc_port(),
+            port: None,
             rpcuser: None,
             rpcpassword: None,
             max_batch_size: default_bitcoin_rpc_max_batch_size(),
@@ -590,12 +590,51 @@ impl Default for BitcoinRpcApiConfig {
     }
 }
 
-fn default_bitcoin_rpc_host() -> String {
-    "127.0.0.1".to_string()
+impl BitcoinRpcApiConfig {
+    /// Validate listener and authentication settings.
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        self.host.parse::<IpAddr>().map_err(|error| ConfigError {
+            message: format!("Invalid bitcoin_rpc_api host '{}': {error}", self.host),
+        })?;
+
+        if self.max_batch_size == 0 {
+            return Err(ConfigError {
+                message: "bitcoin_rpc_api max_batch_size must be greater than zero".to_string(),
+            });
+        }
+
+        if self.enabled {
+            if self.port.is_none() {
+                return Err(ConfigError {
+                    message: "bitcoin_rpc_api port is required when enabled".to_string(),
+                });
+            }
+            if self.rpcuser.as_deref().is_none_or(str::is_empty) {
+                return Err(ConfigError {
+                    message: "bitcoin_rpc_api rpcuser is required when enabled".to_string(),
+                });
+            }
+            if self.rpcpassword.as_deref().is_none_or(str::is_empty) {
+                return Err(ConfigError {
+                    message: "bitcoin_rpc_api rpcpassword is required when enabled".to_string(),
+                });
+            }
+        }
+
+        if self.rpcuser.is_some() != self.rpcpassword.is_some() {
+            return Err(ConfigError {
+                message:
+                    "bitcoin_rpc_api rpcuser and rpcpassword must both be set or both be unset"
+                        .to_string(),
+            });
+        }
+
+        Ok(())
+    }
 }
 
-fn default_bitcoin_rpc_port() -> u16 {
-    18332
+fn default_bitcoin_rpc_host() -> String {
+    "127.0.0.1".to_string()
 }
 
 fn default_bitcoin_rpc_max_batch_size() -> usize {
@@ -622,12 +661,18 @@ pub struct Config {
 
 #[allow(dead_code)]
 impl Config {
+    /// Load and validate configuration from a file and environment overrides.
     pub fn load(path: &str) -> Result<Self, config::ConfigError> {
-        config::Config::builder()
+        let loaded_config: Self = config::Config::builder()
             .add_source(config::File::with_name(path))
             .add_source(config::Environment::with_prefix("P2POOL").separator("_"))
             .build()?
-            .try_deserialize()
+            .try_deserialize()?;
+        loaded_config
+            .bitcoin_rpc_api
+            .validate()
+            .map_err(|error| config::ConfigError::Message(error.message))?;
+        Ok(loaded_config)
     }
 
     pub fn with_listen_address(mut self, listen_address: String) -> Self {
@@ -941,6 +986,125 @@ mod tests {
         config.miner_address = None;
 
         assert!(config.parse().is_ok());
+    }
+
+    #[test]
+    fn bitcoin_rpc_api_is_disabled_by_default() {
+        let config = BitcoinRpcApiConfig::default();
+
+        assert!(!config.enabled);
+        assert_eq!(config.host, "127.0.0.1");
+        assert_eq!(config.port, None);
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn enabled_bitcoin_rpc_api_config_is_valid() {
+        let config = BitcoinRpcApiConfig {
+            enabled: true,
+            port: Some(0),
+            rpcuser: Some("gateway-user".to_string()),
+            rpcpassword: Some("gateway-password".to_string()),
+            ..BitcoinRpcApiConfig::default()
+        };
+
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn enabled_bitcoin_rpc_api_requires_port() {
+        let config = BitcoinRpcApiConfig {
+            enabled: true,
+            rpcuser: Some("gateway-user".to_string()),
+            rpcpassword: Some("gateway-password".to_string()),
+            ..BitcoinRpcApiConfig::default()
+        };
+
+        assert!(config.validate().unwrap_err().message.contains("port"));
+    }
+
+    #[test]
+    fn enabled_bitcoin_rpc_api_requires_username() {
+        let config = BitcoinRpcApiConfig {
+            enabled: true,
+            port: Some(18332),
+            rpcpassword: Some("gateway-password".to_string()),
+            ..BitcoinRpcApiConfig::default()
+        };
+
+        assert!(config.validate().unwrap_err().message.contains("rpcuser"));
+    }
+
+    #[test]
+    fn enabled_bitcoin_rpc_api_requires_password() {
+        let config = BitcoinRpcApiConfig {
+            enabled: true,
+            port: Some(18332),
+            rpcuser: Some("gateway-user".to_string()),
+            ..BitcoinRpcApiConfig::default()
+        };
+
+        assert!(
+            config
+                .validate()
+                .unwrap_err()
+                .message
+                .contains("rpcpassword")
+        );
+    }
+
+    #[test]
+    fn bitcoin_rpc_api_rejects_only_one_credential() {
+        let config = BitcoinRpcApiConfig {
+            rpcuser: Some("gateway-user".to_string()),
+            ..BitcoinRpcApiConfig::default()
+        };
+
+        assert!(
+            config
+                .validate()
+                .unwrap_err()
+                .message
+                .contains("both be set")
+        );
+    }
+
+    #[test]
+    fn bitcoin_rpc_api_rejects_invalid_bind_address() {
+        let config = BitcoinRpcApiConfig {
+            host: "not-an-ip-address".to_string(),
+            ..BitcoinRpcApiConfig::default()
+        };
+
+        assert!(config.validate().unwrap_err().message.contains("host"));
+    }
+
+    #[test]
+    fn bitcoin_rpc_api_rejects_zero_maximum_batch_size() {
+        let config = BitcoinRpcApiConfig {
+            max_batch_size: 0,
+            ..BitcoinRpcApiConfig::default()
+        };
+
+        assert!(
+            config
+                .validate()
+                .unwrap_err()
+                .message
+                .contains("max_batch_size")
+        );
+    }
+
+    #[test]
+    fn bitcoin_rpc_api_debug_redacts_password() {
+        let config = BitcoinRpcApiConfig {
+            rpcpassword: Some("do-not-log-this".to_string()),
+            ..BitcoinRpcApiConfig::default()
+        };
+        let debug_output = format!("{config:?}");
+
+        assert!(!debug_output.contains("do-not-log-this"));
+        assert!(debug_output.contains("[redacted]"));
     }
 
     #[test]

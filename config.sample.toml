@@ -91,8 +91,11 @@ password = "p2pool"
 #   rpcpassword=<password>
 [bitcoin_rpc_api]
 # enabled = false
+# Defaults to loopback when omitted.
 # host = "127.0.0.1"
+# Required when enabled.
 # port = 18332
+# Both credentials are required when enabled.
 # rpcuser = "p2pool"
 # rpcpassword = "p2pool"
 # Maximum number of RPC calls allowed in a single batch request (default: 20)

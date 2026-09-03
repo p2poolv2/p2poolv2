@@ -19,7 +19,9 @@ rpcpassword = "p2pool"
 ```
 
 The proxy binds to `host:port` and forwards requests to the `[bitcoinrpc]`
-upstream defined elsewhere in the same config file.
+upstream defined elsewhere in the same config file. The gateway is disabled by
+default, `host` defaults to `127.0.0.1`, and `port` must be set explicitly when
+the gateway is enabled.
 
 ### Required `bitcoin.conf` settings
 
@@ -32,9 +34,9 @@ rpcpassword=p2pool
 
 ## Authentication
 
-HTTP Basic Auth is supported.  Set `rpcuser` and `rpcpassword` in
-`[bitcoin_rpc_api]` to require credentials on incoming requests.  If neither
-field is set, all requests are accepted without authentication.
+HTTP Basic Auth is required whenever the gateway is enabled. Set both `rpcuser`
+and `rpcpassword` in `[bitcoin_rpc_api]`; startup rejects missing or incomplete
+credentials.
 
 The proxy uses constant-time comparison (SHA-256 hash then `ct_eq`) to prevent
 timing attacks on the credential check.  A failed authentication returns

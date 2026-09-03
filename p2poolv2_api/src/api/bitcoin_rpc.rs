@@ -64,8 +64,8 @@ const INTERNAL_ERROR: i32 = -32603;
 struct BitcoinRpcState {
     client: BitcoindRpcClient,
     max_batch_size: usize,
-    rpcuser: Option<String>,
-    rpcpassword: Option<String>,
+    rpcuser: String,
+    rpcpassword: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -294,11 +294,6 @@ async fn bitcoin_rpc_auth_middleware(
     request: Request,
     next: Next,
 ) -> Response {
-    let (Some(expected_user), Some(expected_password)) = (&state.rpcuser, &state.rpcpassword)
-    else {
-        return next.run(request).await;
-    };
-
     let auth_header = headers
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok());
@@ -328,8 +323,8 @@ async fn bitcoin_rpc_auth_middleware(
                     return unauthorized_response();
                 }
             };
-            if constant_time_eq_str(username, expected_user)
-                && constant_time_eq_str(password, expected_password)
+            if constant_time_eq_str(username, &state.rpcuser)
+                & constant_time_eq_str(password, &state.rpcpassword)
             {
                 next.run(request).await
             } else {
@@ -345,12 +340,15 @@ async fn bitcoin_rpc_auth_middleware(
 }
 
 fn build_router(state: Arc<BitcoinRpcState>) -> Router {
+    build_handler_router(state.clone()).layer(middleware::from_fn_with_state(
+        state,
+        bitcoin_rpc_auth_middleware,
+    ))
+}
+
+fn build_handler_router(state: Arc<BitcoinRpcState>) -> Router {
     Router::new()
         .route("/", post(bitcoin_rpc_handler))
-        .layer(middleware::from_fn_with_state(
-            state.clone(),
-            bitcoin_rpc_auth_middleware,
-        ))
         .with_state(state)
 }
 
@@ -362,6 +360,16 @@ pub async fn start_bitcoin_rpc_server(
     config: BitcoinRpcApiConfig,
     bitcoin_rpc: &BitcoinRpcConfig,
 ) -> Result<(oneshot::Sender<()>, u16), std::io::Error> {
+    config
+        .validate()
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error.message))?;
+    if !config.enabled {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "bitcoin_rpc_api must be enabled before starting the listener",
+        ));
+    }
+
     let client = BitcoindRpcClient::new(
         &bitcoin_rpc.url,
         &bitcoin_rpc.username,
@@ -372,17 +380,24 @@ pub async fn start_bitcoin_rpc_server(
     let state = Arc::new(BitcoinRpcState {
         client,
         max_batch_size: config.max_batch_size,
-        rpcuser: config.rpcuser.clone(),
-        rpcpassword: config.rpcpassword.clone(),
+        rpcuser: config
+            .rpcuser
+            .expect("enabled bitcoin_rpc_api config was validated"),
+        rpcpassword: config
+            .rpcpassword
+            .expect("enabled bitcoin_rpc_api config was validated"),
     });
 
-    let ip_address = config.host.parse().map_err(|error| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!("Invalid bitcoin_rpc bind host '{}': {error}", config.host),
-        )
-    })?;
-    let address = SocketAddr::new(ip_address, config.port);
+    let ip_address = config
+        .host
+        .parse()
+        .expect("bitcoin_rpc_api host was validated");
+    let address = SocketAddr::new(
+        ip_address,
+        config
+            .port
+            .expect("enabled bitcoin_rpc_api config was validated"),
+    );
 
     let app = build_router(state);
     let listener = tokio::net::TcpListener::bind(address).await?;
@@ -416,6 +431,7 @@ mod tests {
     use super::*;
     use axum::{body::Body, http};
     use base64::Engine;
+    use std::time::Duration;
     use tower::ServiceExt;
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
@@ -525,8 +541,8 @@ mod tests {
         let state = Arc::new(BitcoinRpcState {
             client: BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap(),
             max_batch_size: 20,
-            rpcuser: None,
-            rpcpassword: None,
+            rpcuser: "unused".to_string(),
+            rpcpassword: "unused".to_string(),
         });
         let request = http::Request::builder()
             .method("POST")
@@ -551,7 +567,7 @@ mod tests {
             ))
             .unwrap();
 
-        let response = build_router(state).oneshot(request).await.unwrap();
+        let response = build_handler_router(state).oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -569,8 +585,8 @@ mod tests {
         let state = Arc::new(BitcoinRpcState {
             client: BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap(),
             max_batch_size: 20,
-            rpcuser: None,
-            rpcpassword: None,
+            rpcuser: "unused".to_string(),
+            rpcpassword: "unused".to_string(),
         });
         let request = http::Request::builder()
             .method("POST")
@@ -582,7 +598,7 @@ mod tests {
             ))
             .unwrap();
 
-        let response = build_router(state).oneshot(request).await.unwrap();
+        let response = build_handler_router(state).oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -611,8 +627,8 @@ mod tests {
         let state = Arc::new(BitcoinRpcState {
             client: BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap(),
             max_batch_size: 20,
-            rpcuser: None,
-            rpcpassword: None,
+            rpcuser: "unused".to_string(),
+            rpcpassword: "unused".to_string(),
         });
         let request = http::Request::builder()
             .method("POST")
@@ -626,7 +642,7 @@ mod tests {
             ))
             .unwrap();
 
-        let response = build_router(state).oneshot(request).await.unwrap();
+        let response = build_handler_router(state).oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -676,8 +692,8 @@ mod tests {
         let state = Arc::new(BitcoinRpcState {
             client: BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap(),
             max_batch_size: 20,
-            rpcuser: None,
-            rpcpassword: None,
+            rpcuser: "unused".to_string(),
+            rpcpassword: "unused".to_string(),
         });
         let request = http::Request::builder()
             .method("POST")
@@ -693,7 +709,7 @@ mod tests {
             ))
             .unwrap();
 
-        let response = build_router(state).oneshot(request).await.unwrap();
+        let response = build_handler_router(state).oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -730,8 +746,8 @@ mod tests {
         let state = Arc::new(BitcoinRpcState {
             client: BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap(),
             max_batch_size: 20,
-            rpcuser: None,
-            rpcpassword: None,
+            rpcuser: "unused".to_string(),
+            rpcpassword: "unused".to_string(),
         });
         let request = http::Request::builder()
             .method("POST")
@@ -747,7 +763,7 @@ mod tests {
             ))
             .unwrap();
 
-        let response = build_router(state).oneshot(request).await.unwrap();
+        let response = build_handler_router(state).oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -761,8 +777,8 @@ mod tests {
         let state = Arc::new(BitcoinRpcState {
             client: BitcoindRpcClient::new("http://127.0.0.1:1", "p2pool", "p2pool").unwrap(),
             max_batch_size: 20,
-            rpcuser: None,
-            rpcpassword: None,
+            rpcuser: "unused".to_string(),
+            rpcpassword: "unused".to_string(),
         });
         let request = http::Request::builder()
             .method("POST")
@@ -778,7 +794,7 @@ mod tests {
             ))
             .unwrap();
 
-        let response = build_router(state).oneshot(request).await.unwrap();
+        let response = build_handler_router(state).oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -811,8 +827,8 @@ mod tests {
         let state = Arc::new(BitcoinRpcState {
             client: BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap(),
             max_batch_size: 20,
-            rpcuser: None,
-            rpcpassword: None,
+            rpcuser: "unused".to_string(),
+            rpcpassword: "unused".to_string(),
         });
         let request = http::Request::builder()
             .method("POST")
@@ -827,7 +843,7 @@ mod tests {
             ))
             .unwrap();
 
-        let response = build_router(state).oneshot(request).await.unwrap();
+        let response = build_handler_router(state).oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -871,8 +887,8 @@ mod tests {
         let state = Arc::new(BitcoinRpcState {
             client: BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap(),
             max_batch_size: 20,
-            rpcuser: None,
-            rpcpassword: None,
+            rpcuser: "unused".to_string(),
+            rpcpassword: "unused".to_string(),
         });
         let request = http::Request::builder()
             .method("POST")
@@ -887,7 +903,7 @@ mod tests {
             ))
             .unwrap();
 
-        let response = build_router(state).oneshot(request).await.unwrap();
+        let response = build_handler_router(state).oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::NO_CONTENT);
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -900,8 +916,8 @@ mod tests {
         let state = Arc::new(BitcoinRpcState {
             client: BitcoindRpcClient::new("http://127.0.0.1:1", "p2pool", "p2pool").unwrap(),
             max_batch_size: 20,
-            rpcuser: None,
-            rpcpassword: None,
+            rpcuser: "unused".to_string(),
+            rpcpassword: "unused".to_string(),
         });
         let request = http::Request::builder()
             .method("POST")
@@ -910,7 +926,7 @@ mod tests {
             .body(Body::from("[]"))
             .unwrap();
 
-        let response = build_router(state).oneshot(request).await.unwrap();
+        let response = build_handler_router(state).oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
@@ -926,8 +942,8 @@ mod tests {
         let state = Arc::new(BitcoinRpcState {
             client: BitcoindRpcClient::new("http://127.0.0.1:1", "p2pool", "p2pool").unwrap(),
             max_batch_size: 20,
-            rpcuser: None,
-            rpcpassword: None,
+            rpcuser: "unused".to_string(),
+            rpcpassword: "unused".to_string(),
         });
 
         for value in [json!(null), json!(true), json!(1), json!("request")] {
@@ -937,7 +953,10 @@ mod tests {
                 .header("Content-Type", "application/json")
                 .body(Body::from(serde_json::to_vec(&value).unwrap()))
                 .unwrap();
-            let response = build_router(state.clone()).oneshot(request).await.unwrap();
+            let response = build_handler_router(state.clone())
+                .oneshot(request)
+                .await
+                .unwrap();
             let body = axum::body::to_bytes(response.into_body(), usize::MAX)
                 .await
                 .unwrap();
@@ -985,8 +1004,8 @@ mod tests {
         let state = Arc::new(BitcoinRpcState {
             client: BitcoindRpcClient::new("http://127.0.0.1:1", "p2pool", "p2pool").unwrap(),
             max_batch_size: 20,
-            rpcuser: None,
-            rpcpassword: None,
+            rpcuser: "unused".to_string(),
+            rpcpassword: "unused".to_string(),
         });
         let request = http::Request::builder()
             .method("POST")
@@ -995,7 +1014,7 @@ mod tests {
             .body(Body::from("{"))
             .unwrap();
 
-        let response = build_router(state).oneshot(request).await.unwrap();
+        let response = build_handler_router(state).oneshot(request).await.unwrap();
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
@@ -1031,8 +1050,8 @@ mod tests {
         let state = Arc::new(BitcoinRpcState {
             client: BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap(),
             max_batch_size: 20,
-            rpcuser: Some("user".to_string()),
-            rpcpassword: Some("pass".to_string()),
+            rpcuser: "user".to_string(),
+            rpcpassword: "pass".to_string(),
         });
         let request = http::Request::builder()
             .method("POST")
@@ -1046,6 +1065,59 @@ mod tests {
 
         let response = build_router(state).oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn malformed_credentials_return_unauthorized() {
+        let state = Arc::new(BitcoinRpcState {
+            client: BitcoindRpcClient::new("http://127.0.0.1:1", "p2pool", "p2pool").unwrap(),
+            max_batch_size: 20,
+            rpcuser: "user".to_string(),
+            rpcpassword: "pass".to_string(),
+        });
+        let credentials_without_separator =
+            base64::engine::general_purpose::STANDARD.encode("userpass");
+
+        for authorization in [
+            "Bearer token".to_string(),
+            "Basic !!!".to_string(),
+            format!("Basic {credentials_without_separator}"),
+        ] {
+            let request = http::Request::builder()
+                .method("POST")
+                .uri("/")
+                .header("Content-Type", "application/json")
+                .header("Authorization", authorization)
+                .body(Body::from("{}"))
+                .unwrap();
+
+            let response = build_router(state.clone()).oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
+    }
+
+    #[tokio::test]
+    async fn wrong_credentials_return_unauthorized() {
+        let state = Arc::new(BitcoinRpcState {
+            client: BitcoindRpcClient::new("http://127.0.0.1:1", "p2pool", "p2pool").unwrap(),
+            max_batch_size: 20,
+            rpcuser: "user".to_string(),
+            rpcpassword: "pass".to_string(),
+        });
+
+        for credentials in ["wrong:pass", "user:wrong"] {
+            let credentials = base64::engine::general_purpose::STANDARD.encode(credentials);
+            let request = http::Request::builder()
+                .method("POST")
+                .uri("/")
+                .header("Content-Type", "application/json")
+                .header("Authorization", format!("Basic {credentials}"))
+                .body(Body::from("{}"))
+                .unwrap();
+
+            let response = build_router(state.clone()).oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
     }
 
     #[tokio::test]
@@ -1068,8 +1140,8 @@ mod tests {
         let state = Arc::new(BitcoinRpcState {
             client: BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap(),
             max_batch_size: 20,
-            rpcuser: Some("alice".to_string()),
-            rpcpassword: Some("secret".to_string()),
+            rpcuser: "alice".to_string(),
+            rpcpassword: "secret".to_string(),
         });
         let credentials = base64::engine::general_purpose::STANDARD.encode("alice:secret");
         let request = http::Request::builder()
@@ -1093,13 +1165,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn listener_uses_ephemeral_port_and_shuts_down() {
+        let config = BitcoinRpcApiConfig {
+            enabled: true,
+            port: Some(0),
+            rpcuser: Some("user".to_string()),
+            rpcpassword: Some("pass".to_string()),
+            ..BitcoinRpcApiConfig::default()
+        };
+        let bitcoin_rpc = BitcoinRpcConfig {
+            url: "http://127.0.0.1:1".to_string(),
+            username: "upstream-user".to_string(),
+            password: "upstream-password".to_string(),
+        };
+
+        let (shutdown_sender, port) = start_bitcoin_rpc_server(config, &bitcoin_rpc)
+            .await
+            .unwrap();
+        assert_ne!(port, 0);
+        shutdown_sender.send(()).unwrap();
+
+        let address = SocketAddr::from(([127, 0, 0, 1], port));
+        let rebound_listener = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                match tokio::net::TcpListener::bind(address).await {
+                    Ok(listener) => return listener,
+                    Err(_) => tokio::task::yield_now().await,
+                }
+            }
+        })
+        .await
+        .expect("Bitcoin RPC gateway did not shut down");
+        drop(rebound_listener);
+    }
+
+    #[tokio::test]
     async fn oversized_batch_is_rejected() {
         let mock_server = MockServer::start().await;
         let state = Arc::new(BitcoinRpcState {
             client: BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap(),
             max_batch_size: 2,
-            rpcuser: None,
-            rpcpassword: None,
+            rpcuser: "unused".to_string(),
+            rpcpassword: "unused".to_string(),
         });
         let request = http::Request::builder()
             .method("POST")
@@ -1115,7 +1222,7 @@ mod tests {
             ))
             .unwrap();
 
-        let response = build_router(state).oneshot(request).await.unwrap();
+        let response = build_handler_router(state).oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
