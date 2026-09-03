@@ -38,6 +38,8 @@ Read `docs/architecture/` when working in the relevant area:
 - `store-architecture.md` -- read/write separation, StoreWriter thread
 - `pruning.md` -- TTL-based share pruning
 - `metrics.md` -- Prometheus exposition, metric sources, Grafana panels
+- `address-format.md` -- share chain address encoding, parser rules,
+  test vectors, and how a miner supplies one over stratum
 
 Also: `docs/simulation/` (sim feature), `docs/difficulty_adjustment/`
 (ASERT algorithm).
@@ -53,6 +55,7 @@ Never infer architecture from filenames alone. Read the relevant architecture do
 | `p2poolv2_cli` | CLI utilities: share queries, address generation, auth signing |
 | `p2poolv2_api` | REST API + WebSocket server (axum) |
 | `p2poolv2_config` | TOML config parsing with phantom-type state machine (Raw -> Parsed) |
+| `p2poolv2_address` | Share chain address type: bech32m over a witness v1 (P2TR) output key, HRP `p2pool`/`tp2pool`/`sp2pool`/`rp2pool` |
 | `p2poolv2_tests` | Integration tests (multi-node P2P, stratum, API) |
 | `p2poolv2_sim` | No-PoW load-test simulation binary (feature-gated with `sim`) |
 | `bitcoindrpc` | JSON-RPC 1.0 client for Bitcoin Core |
@@ -82,6 +85,13 @@ Most modules are discoverable by name; these are the non-obvious ones:
   validation
 - **Emission**: a stratum share submission packaged for the node
   pipeline (defined in `stratum/emission.rs`)
+- **Two miner addresses**: a share header carries both. Never derive one
+  from the other, and never substitute one for the other.
+  `miner_bitcoin_address` (`bitcoin::Address`) receives the PPLNS payout
+  from a found block's coinbase; `miner_address`
+  (`p2poolv2_address::Address`, stored as a `WitnessProgram`) owns the
+  share coinbase output and must be spend-capable, because shares are
+  traded and the share chain runs real script validation.
 - **ASERT**: difficulty adjustment algorithm for share target
 - **PPLNS**: pay-per-last-N-shares payout scheme
 - **Pool modes**: P2Poolv2 (sharechain PPLNS) vs Hydrapool (time-window
