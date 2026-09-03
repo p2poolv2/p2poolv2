@@ -35,15 +35,6 @@ struct JsonRpcRequest {
     id: u64,
 }
 
-/// JSON-RPC 1.0 response structure (Bitcoin Core format)
-/// In JSON-RPC 1.0, both result and error are always present
-/// One will be the actual value, the other will be null
-#[derive(Deserialize, Debug)]
-struct JsonRpcResponse {
-    result: serde_json::Value,
-    error: serde_json::Value,
-}
-
 /// JSON-RPC 1.0 error structure
 #[derive(Deserialize, Debug)]
 struct JsonRpcError {
@@ -156,7 +147,7 @@ impl BitcoindRpcClient {
         params: Vec<serde_json::Value>,
     ) -> Result<T, BitcoindRpcError> {
         let result = self
-            .call_value(method, serde_json::Value::Array(params))
+            .call_value(method, Some(serde_json::Value::Array(params)))
             .await?;
 
         serde_json::from_value(result).map_err(|error| BitcoindRpcError::ParseError {
@@ -165,18 +156,16 @@ impl BitcoindRpcClient {
     }
 
     /// Forwards optional JSON parameters to a Bitcoin RPC method and returns its JSON result.
-    ///
-    /// `None` omits the `params` field; `Some` preserves its value, including JSON null.
     pub async fn call_value(
         &self,
         method: &str,
-        params: impl Into<Option<serde_json::Value>>,
+        params: Option<serde_json::Value>,
     ) -> Result<serde_json::Value, BitcoindRpcError> {
         let id = self.request_id.fetch_add(1, Ordering::SeqCst);
 
         let request = JsonRpcRequest {
             method: method.to_string(),
-            params: params.into(),
+            params,
             id,
         };
 
@@ -196,7 +185,7 @@ impl BitcoindRpcClient {
         let response_body = response.bytes().await.map_err(|error| {
             BitcoindRpcError::Other(format!("Failed to read response: {error}"))
         })?;
-        let rpc_response: JsonRpcResponse = match serde_json::from_slice(&response_body) {
+        let rpc_response: serde_json::Value = match serde_json::from_slice(&response_body) {
             Ok(rpc_response) => rpc_response,
             Err(_) if !status.is_success() => {
                 let status_code = status.as_u16();
@@ -217,10 +206,14 @@ impl BitcoindRpcClient {
             }
         };
 
-        // JSON-RPC 1.0: check error first, then return result
-        if !rpc_response.error.is_null() {
+        let rpc_error = rpc_response
+            .get("error")
+            .ok_or_else(|| BitcoindRpcError::ParseError {
+                message: "RPC response is missing error".to_string(),
+            })?;
+        if !rpc_error.is_null() {
             let error: JsonRpcError =
-                serde_json::from_value(rpc_response.error).map_err(|error| {
+                serde_json::from_value(rpc_error.clone()).map_err(|error| {
                     BitcoindRpcError::ParseError {
                         message: format!("Failed to parse RPC error: {error}"),
                     }
@@ -231,8 +224,12 @@ impl BitcoindRpcClient {
             });
         }
 
-        // In JSON-RPC 1.0, result is always present (can be null for void methods like submitblock)
-        Ok(rpc_response.result)
+        rpc_response
+            .get("result")
+            .cloned()
+            .ok_or_else(|| BitcoindRpcError::ParseError {
+                message: "RPC response is missing result".to_string(),
+            })
     }
 
     /// Get current bitcoin difficulty from bitcoind rpc
@@ -761,7 +758,7 @@ mod tests {
 
         let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
         let result = client
-            .call_value("test", serde_json::json!(["value", 42]))
+            .call_value("test", Some(serde_json::json!(["value", 42])))
             .await
             .unwrap();
 
@@ -789,7 +786,7 @@ mod tests {
 
         let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
         let result = client
-            .call_value("test", serde_json::json!({ "height": 42 }))
+            .call_value("test", Some(serde_json::json!({ "height": 42 })))
             .await
             .unwrap();
 
@@ -817,7 +814,7 @@ mod tests {
 
         let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
         let result = client
-            .call_value("test", serde_json::Value::Null)
+            .call_value("test", Some(serde_json::Value::Null))
             .await
             .unwrap();
 
@@ -877,7 +874,7 @@ mod tests {
             .await;
 
         let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
-        let result = client.call_value("test", serde_json::json!([])).await;
+        let result = client.call_value("test", Some(serde_json::json!([]))).await;
 
         assert!(matches!(result, Err(BitcoindRpcError::ParseError { .. })));
     }
@@ -900,7 +897,7 @@ mod tests {
 
         let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
         let result = client
-            .call_value("getdifficulty", serde_json::json!([]))
+            .call_value("getdifficulty", Some(serde_json::json!([])))
             .await;
 
         if let Err(BitcoindRpcError::HttpError {

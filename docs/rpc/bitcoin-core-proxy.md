@@ -213,25 +213,24 @@ Status means:
 - **Not tested**: no end-to-end result is recorded; no compatibility claim is
   made.
 
-The repository contains no successful end-to-end run against an exact version
-or commit of any target below. Mock-backed coverage and method overlap do not
-establish compatibility.
+Mock-backed coverage and method overlap do not establish compatibility. Only
+the end-to-end results recorded below support a compatibility status.
 
 | Software | Status | Version or commit | Scope and limitations |
 |---|---|---|---|
-| Bitcoin Core | Not tested | None recorded | An ignored live-regtest comparison exists, but no successful run or Bitcoin Core version is recorded. |
-| LND | Not tested | None | No LND release or commit has been tested. LND normally also connects directly to Bitcoin Core's raw-block and raw-transaction ZMQ endpoints; setting `bitcoind.rpcpolling=true` selects its RPC polling mode instead. Neither mode has been validated with this gateway. |
-| CLN | Not tested | None | No Core Lightning release or commit has been tested. Its default `bcli` Bitcoin backend has not been validated against this allowlist. |
+| Bitcoin Core | Tested | 31.1.0; `bitcoin/bitcoin@sha256:da25cedc66b1daefff9f412ee196c901a899c3fa68a33b20849c3e08b5c40d63` | The ignored live-regtest contract passed for scalar, hex, object, nullable, Core error, `testmempoolaccept`, `sendrawtransaction`, batch, and notification behavior. This does not test every allowed method or make the gateway a complete Core RPC implementation. |
+| LND | Partially tested | 0.21.1-beta, commit `2b8788`; `lightninglabs/lnd@sha256:4af8f9bbf98c8b86b0e54b065d6ea45d1387256a43fa9270c11ef849511abae0` | In RPC-polling mode, LND connected through the gateway to Core 31.1 and started block and mempool polling at height 101. Full startup then failed because LND requires `getdeploymentinfo`, which v1 does not allow. LND is therefore not compatible with this v1 gateway. Its normal ZMQ mode was not tested. |
+| CLN | Partially tested | 26.06.6; `elementsproject/lightningd@sha256:094be3630f865c795649d6063a8796afa0f78e82a0c311bb34f2b0bd570c819a` | The default `bcli` backend connected through the gateway to Core 31.1, synchronized to regtest height 101, and `lightning-cli getinfo` succeeded. Channel opening, transaction broadcast, fee updates, rescans, and long-running operation were not tested. |
 | CoinSwap | Not tested | None | No CoinSwap implementation, release, or commit has been selected or tested. |
 | Ark | Not tested | None | No Ark implementation, release, or commit has been selected or tested. |
 
 ## Official references
 
-- [Bitcoin Core 31.0 JSON-RPC interface](https://github.com/bitcoin/bitcoin/blob/v31.0/doc/JSON-RPC-interface.md)
-- [Bitcoin Core 31.0 `bitcoind` server default](https://github.com/bitcoin/bitcoin/blob/v31.0/src/bitcoind.cpp)
-- [Bitcoin Core 31.0 `getrawtransaction`](https://bitcoincore.org/en/doc/31.0.0/rpc/rawtransactions/getrawtransaction/)
-- [Bitcoin Core 31.0 `getblockfilter`](https://bitcoincore.org/en/doc/31.0.0/rpc/blockchain/getblockfilter/)
-- [LND installation and `bitcoind` backend](https://github.com/lightningnetwork/lnd/blob/master/docs/INSTALL.md)
-- [LND sample configuration for ZMQ and RPC polling](https://github.com/lightningnetwork/lnd/blob/master/sample-lnd.conf)
+- [Bitcoin Core 31.1 JSON-RPC interface](https://github.com/bitcoin/bitcoin/blob/v31.1/doc/JSON-RPC-interface.md)
+- [Bitcoin Core 31.1 `bitcoind` server default](https://github.com/bitcoin/bitcoin/blob/v31.1/src/bitcoind.cpp)
+- [Bitcoin Core 31.1 `getrawtransaction` implementation](https://github.com/bitcoin/bitcoin/blob/v31.1/src/rpc/rawtransaction.cpp)
+- [Bitcoin Core 31.1 `getblockfilter` implementation](https://github.com/bitcoin/bitcoin/blob/v31.1/src/rpc/blockchain.cpp)
+- [LND 0.21.1-beta installation and `bitcoind` backend](https://github.com/lightningnetwork/lnd/blob/v0.21.1-beta/docs/INSTALL.md)
+- [LND 0.21.1-beta sample configuration for ZMQ and RPC polling](https://github.com/lightningnetwork/lnd/blob/v0.21.1-beta/sample-lnd.conf)
 - [Core Lightning Bitcoin Core backend](https://docs.corelightning.org/docs/bitcoin-core)
 - [Core Lightning Bitcoin backend plugin interface](https://docs.corelightning.org/docs/bitcoin-backend)

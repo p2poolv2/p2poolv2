@@ -14,7 +14,6 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::api::error::ApiError;
 use axum::{
     Json, Router,
     body::Bytes,
@@ -32,7 +31,7 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::{net::SocketAddr, sync::Arc};
 use subtle::ConstantTimeEq;
-use tokio::sync::oneshot;
+use tokio::{sync::oneshot, task::JoinHandle};
 use tracing::{info, warn};
 
 const ALLOWED_METHODS: [&str; 16] = [
@@ -350,12 +349,12 @@ fn build_handler_router(state: Arc<BitcoinRpcState>) -> Router {
 
 /// Start the Bitcoin Core compatible JSON-RPC gateway on its own listener.
 ///
-/// Returns the shutdown sender and the actual bound port. The caller is
-/// responsible for sending on the shutdown channel when the node stops.
+/// Returns the shutdown sender, server task, and actual bound port. The caller
+/// must signal shutdown and await the task when the node stops.
 pub async fn start_bitcoin_rpc_server(
     config: BitcoinRpcApiConfig,
     bitcoin_rpc: &BitcoinRpcConfig,
-) -> Result<(oneshot::Sender<()>, u16), std::io::Error> {
+) -> Result<(oneshot::Sender<()>, JoinHandle<()>, u16), std::io::Error> {
     config
         .validate()
         .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error.message))?;
@@ -395,7 +394,7 @@ pub async fn start_bitcoin_rpc_server(
             .expect("enabled bitcoin_rpc_api config was validated"),
     );
 
-    let app = build_router(state);
+    let router = build_router(state);
     let listener = tokio::net::TcpListener::bind(address).await?;
     let actual_port = listener.local_addr()?.port();
 
@@ -406,20 +405,21 @@ pub async fn start_bitcoin_rpc_server(
 
     let (shutdown_sender, shutdown_receiver) = oneshot::channel::<()>();
 
-    tokio::spawn(async move {
-        axum::serve(listener, app)
+    let server_handle = tokio::spawn(async move {
+        if let Err(error) = axum::serve(listener, router)
             .with_graceful_shutdown(async move {
                 let _ = shutdown_receiver.await;
                 info!("Bitcoin RPC gateway shutdown signal received");
             })
             .await
-            .map_err(|error| ApiError::ServerError(error.to_string()))?;
+        {
+            warn!("Bitcoin RPC gateway stopped with an error: {error}");
+        }
 
         info!("Bitcoin RPC gateway stopped");
-        Ok::<(), ApiError>(())
     });
 
-    Ok((shutdown_sender, actual_port))
+    Ok((shutdown_sender, server_handle, actual_port))
 }
 
 #[cfg(test)]
@@ -427,7 +427,7 @@ mod tests {
     use super::*;
     use axum::{body::Body, http};
     use base64::Engine;
-    use std::{env, time::Duration};
+    use std::env;
     use tower::ServiceExt;
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
@@ -1539,23 +1539,17 @@ mod tests {
             password: "upstream-password".to_string(),
         };
 
-        let (shutdown_sender, port) = start_bitcoin_rpc_server(config, &bitcoin_rpc)
+        let (shutdown_sender, server_handle, port) = start_bitcoin_rpc_server(config, &bitcoin_rpc)
             .await
             .unwrap();
         assert_ne!(port, 0);
         shutdown_sender.send(()).unwrap();
+        server_handle.await.unwrap();
 
         let address = SocketAddr::from(([127, 0, 0, 1], port));
-        let rebound_listener = tokio::time::timeout(Duration::from_secs(1), async {
-            loop {
-                match tokio::net::TcpListener::bind(address).await {
-                    Ok(listener) => return listener,
-                    Err(_) => tokio::task::yield_now().await,
-                }
-            }
-        })
-        .await
-        .expect("Bitcoin RPC gateway did not shut down");
+        let rebound_listener = tokio::net::TcpListener::bind(address)
+            .await
+            .expect("Bitcoin RPC gateway did not release its listener");
         drop(rebound_listener);
     }
 
@@ -1565,6 +1559,12 @@ mod tests {
         const SETUP: &str = "set P2POOL_REGTEST_RPC_URL, P2POOL_REGTEST_RPC_USERNAME, and P2POOL_REGTEST_RPC_PASSWORD to run this ignored test";
         const GATEWAY_USERNAME: &str = "contract-user";
         const GATEWAY_PASSWORD: &str = "contract-password";
+        const MISSING_INPUT_TRANSACTION: &str = concat!(
+            "0200000001",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            "0000000000ffffffff01",
+            "0000000000000000016a00000000"
+        );
 
         let upstream_url = env::var("P2POOL_REGTEST_RPC_URL").expect(SETUP);
         let upstream_username = env::var("P2POOL_REGTEST_RPC_USERNAME").expect(SETUP);
@@ -1581,7 +1581,7 @@ mod tests {
             username: upstream_username.clone(),
             password: upstream_password.clone(),
         };
-        let (shutdown_sender, gateway_port) =
+        let (shutdown_sender, server_handle, gateway_port) =
             start_bitcoin_rpc_server(gateway_config, &upstream_config)
                 .await
                 .expect("failed to start the Bitcoin RPC gateway");
@@ -1669,6 +1669,16 @@ mod tests {
                 "method": "getrawtransaction",
                 "params": ["0000000000000000000000000000000000000000000000000000000000000000"],
                 "id": 9
+            },
+            {
+                "method": "testmempoolaccept",
+                "params": [[MISSING_INPUT_TRANSACTION]],
+                "id": 10
+            },
+            {
+                "method": "sendrawtransaction",
+                "params": [MISSING_INPUT_TRANSACTION],
+                "id": 11
             }
         ]);
         let direct_batch: serde_json::Value = http_client
@@ -1735,6 +1745,7 @@ mod tests {
         shutdown_sender
             .send(())
             .expect("Bitcoin RPC gateway stopped before test shutdown");
+        server_handle.await.expect("failed to join gateway task");
     }
 
     #[tokio::test]
