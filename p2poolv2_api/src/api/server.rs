@@ -14,7 +14,6 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
-use crate::api::btcrpc::{BtcRpcState, build_btcrpc_router};
 use crate::api::endpoints;
 use crate::api::error::ApiError;
 use crate::api::{auth::auth_middleware, websocket::websocket_handler};
@@ -26,14 +25,13 @@ use axum::{
     response::Response,
     routing::{delete, get, post},
 };
-use bitcoindrpc::BitcoindRpcClient;
 use chrono::DateTime;
 use p2poolv2_lib::monitoring_events::MonitoringEventSender;
 use p2poolv2_lib::node::actor::NodeHandle;
 use p2poolv2_lib::stratum::work::tracker::{JobTracker, parse_coinbase};
 use p2poolv2_lib::{
     accounting::{payout::simple_pplns::SimplePplnsShare, stats::metrics::MetricsHandle},
-    config::{ApiConfig, BitcoinRpcApiConfig},
+    config::ApiConfig,
     shares::chain::chain_store_handle::ChainStoreHandle,
 };
 use serde::Deserialize;
@@ -403,62 +401,6 @@ async fn pplns_shares(
     );
 
     Ok(Json(shares))
-}
-
-/// Start the Bitcoin Core compatible JSON-RPC proxy on its own listener.
-///
-/// Returns the shutdown sender and the actual bound port.  The caller is
-/// responsible for sending on the shutdown channel when the node stops.
-/// Both this listener and `start_api_server`'s listener must receive their
-/// respective shutdown signals so that graceful shutdown works end-to-end.
-pub async fn start_btcrpc_server(
-    config: BitcoinRpcApiConfig,
-    bitcoinrpc: &bitcoindrpc::BitcoinRpcConfig,
-) -> Result<(oneshot::Sender<()>, u16), std::io::Error> {
-    let client =
-        BitcoindRpcClient::new(&bitcoinrpc.url, &bitcoinrpc.username, &bitcoinrpc.password)
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
-
-    let state = Arc::new(BtcRpcState {
-        client: Arc::new(client),
-        max_batch_size: config.max_batch_size,
-        rpcuser: config.rpcuser.clone(),
-        rpcpassword: config.rpcpassword.clone(),
-    });
-
-    let ip: std::net::IpAddr = config.host.parse().map_err(|e| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!("Invalid btcrpc bind host '{}': {}", config.host, e),
-        )
-    })?;
-    let addr = SocketAddr::new(ip, config.port);
-
-    let app = build_btcrpc_router(state);
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    let actual_port = listener.local_addr()?.port();
-
-    info!(
-        "Bitcoin Core RPC proxy listening on {}:{}",
-        config.host, actual_port
-    );
-
-    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-
-    tokio::spawn(async move {
-        axum::serve(listener, app)
-            .with_graceful_shutdown(async move {
-                let _ = shutdown_rx.await;
-                info!("Bitcoin Core RPC proxy shutdown signal received");
-            })
-            .await
-            .map_err(|e| ApiError::ServerError(e.to_string()))?;
-
-        info!("Bitcoin Core RPC proxy stopped");
-        Ok::<(), ApiError>(())
-    });
-
-    Ok((shutdown_tx, actual_port))
 }
 
 #[cfg(test)]

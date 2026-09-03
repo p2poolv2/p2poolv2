@@ -550,17 +550,17 @@ pub struct BitcoinRpcApiConfig {
     #[serde(default)]
     pub enabled: bool,
     /// Bind host for the proxy listener
-    #[serde(default = "default_btcrpc_host")]
+    #[serde(default = "default_bitcoin_rpc_host")]
     pub host: String,
     /// Bind port for the proxy listener
-    #[serde(default = "default_btcrpc_port")]
+    #[serde(default = "default_bitcoin_rpc_port")]
     pub port: u16,
     /// Username clients must supply via HTTP Basic Auth
     pub rpcuser: Option<String>,
     /// Password clients must supply via HTTP Basic Auth
     pub rpcpassword: Option<String>,
     /// Maximum requests allowed in a single JSON-RPC batch (default: 20)
-    #[serde(default = "default_btcrpc_max_batch_size")]
+    #[serde(default = "default_bitcoin_rpc_max_batch_size")]
     pub max_batch_size: usize,
 }
 
@@ -581,24 +581,24 @@ impl Default for BitcoinRpcApiConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            host: default_btcrpc_host(),
-            port: default_btcrpc_port(),
+            host: default_bitcoin_rpc_host(),
+            port: default_bitcoin_rpc_port(),
             rpcuser: None,
             rpcpassword: None,
-            max_batch_size: default_btcrpc_max_batch_size(),
+            max_batch_size: default_bitcoin_rpc_max_batch_size(),
         }
     }
 }
 
-fn default_btcrpc_host() -> String {
+fn default_bitcoin_rpc_host() -> String {
     "127.0.0.1".to_string()
 }
 
-fn default_btcrpc_port() -> u16 {
+fn default_bitcoin_rpc_port() -> u16 {
     18332
 }
 
-fn default_btcrpc_max_batch_size() -> usize {
+fn default_bitcoin_rpc_max_batch_size() -> usize {
     20
 }
 
