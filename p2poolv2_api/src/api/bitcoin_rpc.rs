@@ -179,11 +179,7 @@ async fn handle_single(
                     },
                 )
             } else {
-                let params = request
-                    .get("params")
-                    .filter(|params| !params.is_null())
-                    .cloned()
-                    .unwrap_or_else(|| serde_json::Value::Array(Vec::new()));
+                let params = request.get("params").cloned();
                 match client.call_value(method, params).await {
                     Ok(result) => make_success_response(version, id, result),
                     Err(error) => {
@@ -438,44 +434,69 @@ mod tests {
         matchers::{body_json, method, path},
     };
 
-    #[test]
-    fn allowlist_contains_exactly_v1_methods() {
-        let cases = [
-            ("getbestblockhash", true),
-            ("getblock", true),
-            ("getblockchaininfo", true),
-            ("getblockcount", true),
-            ("getblockfilter", true),
-            ("getblockhash", true),
-            ("getblockheader", true),
-            ("getmempoolentry", true),
-            ("getnetworkinfo", true),
-            ("getrawmempool", true),
-            ("getrawtransaction", true),
-            ("gettxout", true),
-            ("estimatesmartfee", true),
-            ("sendrawtransaction", true),
-            ("testmempoolaccept", true),
-            ("decoderawtransaction", true),
-            ("listunspent", false),
+    #[tokio::test]
+    async fn every_v1_method_is_forwarded() {
+        let method_names = [
+            "getbestblockhash",
+            "getblock",
+            "getblockchaininfo",
+            "getblockcount",
+            "getblockfilter",
+            "getblockhash",
+            "getblockheader",
+            "getmempoolentry",
+            "getnetworkinfo",
+            "getrawmempool",
+            "getrawtransaction",
+            "gettxout",
+            "estimatesmartfee",
+            "sendrawtransaction",
+            "testmempoolaccept",
+            "decoderawtransaction",
         ];
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "result": true,
+                "error": null,
+                "id": 0
+            })))
+            .expect(method_names.len() as u64)
+            .mount(&mock_server)
+            .await;
+        let state = Arc::new(BitcoinRpcState {
+            client: BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap(),
+            max_batch_size: 20,
+            rpcuser: "unused".to_string(),
+            rpcpassword: "unused".to_string(),
+        });
 
-        assert_eq!(ALLOWED_METHODS.len(), 16);
-        for (method_name, expected) in cases {
-            assert_eq!(ALLOWED_METHODS.contains(&method_name), expected);
-        }
-    }
+        for (request_id, method_name) in method_names.into_iter().enumerate() {
+            let request = http::Request::builder()
+                .method("POST")
+                .uri("/")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({
+                        "method": method_name,
+                        "params": [],
+                        "id": request_id
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap();
+            let response = build_handler_router(state.clone())
+                .oneshot(request)
+                .await
+                .unwrap();
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-    #[test]
-    fn only_exact_json_rpc_2_marker_selects_version_2() {
-        assert!(RpcVersion::from_request(&json!({ "jsonrpc": "2.0" })) == RpcVersion::V2);
-        for request in [
-            json!({}),
-            json!({ "jsonrpc": "1.0" }),
-            json!({ "jsonrpc": "2" }),
-            json!({ "jsonrpc": 2 }),
-        ] {
-            assert!(RpcVersion::from_request(&request) == RpcVersion::Legacy);
+            assert_eq!(body["result"], true, "method {method_name} was rejected");
+            assert!(body["error"].is_null(), "method {method_name} failed");
         }
     }
 
@@ -528,13 +549,26 @@ mod tests {
             .and(path("/"))
             .and(body_json(json!({
                 "method": "getblockcount",
-                "params": [],
+                "params": null,
                 "id": 3
             })))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "result": 42,
+                "result": "null",
                 "error": null,
                 "id": 3
+            })))
+            .mount(&mock_server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(body_json(json!({
+                "method": "getblockcount",
+                "id": 4
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "result": "absent",
+                "error": null,
+                "id": 4
             })))
             .mount(&mock_server)
             .await;
@@ -561,7 +595,8 @@ mod tests {
                         "params": { "args": ["000000000000abc"], "verbosity": 2 },
                         "id": 9
                     },
-                    { "method": "getblockcount", "id": 10 }
+                    { "method": "getblockcount", "params": null, "id": 10 },
+                    { "method": "getblockcount", "id": 11 }
                 ]))
                 .unwrap(),
             ))
@@ -576,37 +611,129 @@ mod tests {
         assert_eq!(body[0]["result"], "positional");
         assert_eq!(body[1]["result"], "named");
         assert_eq!(body[2]["result"], "args");
-        assert_eq!(body[3]["result"], 42);
+        assert_eq!(body[3]["result"], "null");
+        assert_eq!(body[4]["result"], "absent");
     }
 
     #[tokio::test]
-    async fn unlisted_method_returns_method_not_found() {
+    async fn incorrect_method_names_are_rejected() {
         let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
+            .mount(&mock_server)
+            .await;
         let state = Arc::new(BitcoinRpcState {
             client: BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap(),
             max_batch_size: 20,
             rpcuser: "unused".to_string(),
             rpcpassword: "unused".to_string(),
         });
-        let request = http::Request::builder()
-            .method("POST")
-            .uri("/")
-            .header("Content-Type", "application/json")
-            .body(Body::from(
-                serde_json::to_vec(&json!({"method": "listunspent", "params": [], "id": 3}))
-                    .unwrap(),
-            ))
-            .unwrap();
 
-        let response = build_handler_router(state).oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert!(body["result"].is_null());
-        assert_eq!(body["error"]["code"], METHOD_NOT_FOUND);
-        assert_eq!(body["id"], 3);
+        for (request_id, method_name) in [
+            "getblockcounts",
+            "getblockcoun",
+            "GetBlockCount",
+            "getblockcount ",
+            "getblock.count",
+            "listunspent",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let request = http::Request::builder()
+                .method("POST")
+                .uri("/")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(
+                        &json!({"method": method_name, "params": [], "id": request_id}),
+                    )
+                    .unwrap(),
+                ))
+                .unwrap();
+            let response = build_handler_router(state.clone())
+                .oneshot(request)
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+            assert!(body["result"].is_null(), "method {method_name}");
+            assert_eq!(
+                body["error"]["code"], METHOD_NOT_FOUND,
+                "method {method_name}"
+            );
+            assert_eq!(body["id"], request_id, "method {method_name}");
+        }
+    }
+
+    #[tokio::test]
+    async fn json_result_types_are_relayed() {
+        let mock_server = MockServer::start().await;
+        let results = [
+            json!(42),
+            json!({ "height": 42 }),
+            json!(["transaction", 42]),
+            json!("000000000000abc"),
+            json!(true),
+            json!(null),
+        ];
+
+        for (upstream_id, result) in results.iter().enumerate() {
+            Mock::given(method("POST"))
+                .and(path("/"))
+                .and(body_json(json!({
+                    "method": "getblockcount",
+                    "params": [],
+                    "id": upstream_id
+                })))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "result": result,
+                    "error": null,
+                    "id": upstream_id
+                })))
+                .expect(1)
+                .mount(&mock_server)
+                .await;
+        }
+        let state = Arc::new(BitcoinRpcState {
+            client: BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap(),
+            max_batch_size: 20,
+            rpcuser: "unused".to_string(),
+            rpcpassword: "unused".to_string(),
+        });
+
+        for (request_id, expected_result) in results.into_iter().enumerate() {
+            let request = http::Request::builder()
+                .method("POST")
+                .uri("/")
+                .header("Content-Type", "application/json")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({
+                        "method": "getblockcount",
+                        "params": [],
+                        "id": request_id
+                    }))
+                    .unwrap(),
+                ))
+                .unwrap();
+            let response = build_handler_router(state.clone())
+                .oneshot(request)
+                .await
+                .unwrap();
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+            assert_eq!(body["result"], expected_result, "result case {request_id}");
+            assert!(body["error"].is_null(), "result case {request_id}");
+        }
     }
 
     #[tokio::test]
@@ -727,13 +854,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn request_ids_are_preserved_without_batch_deduplication() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "result": true,
+                "error": null,
+                "id": 0
+            })))
+            .expect(8)
+            .mount(&mock_server)
+            .await;
+        let state = Arc::new(BitcoinRpcState {
+            client: BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap(),
+            max_batch_size: 20,
+            rpcuser: "unused".to_string(),
+            rpcpassword: "unused".to_string(),
+        });
+        let request = http::Request::builder()
+            .method("POST")
+            .uri("/")
+            .header("Content-Type", "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&json!([
+                    { "method": "getblockcount", "id": "string-id" },
+                    { "jsonrpc": "2.0", "method": "getblockcount", "id": 42 },
+                    { "method": "getblockcount", "id": null },
+                    { "jsonrpc": "2.0", "method": "getblockcount", "id": null },
+                    { "method": "getblockcount", "id": 7 },
+                    { "jsonrpc": "2.0", "method": "getblockcount", "id": 7 },
+                    { "method": "getblockcount" },
+                    { "jsonrpc": "2.0", "method": "getblockcount" }
+                ]))
+                .unwrap(),
+            ))
+            .unwrap();
+
+        let response = build_handler_router(state).oneshot(request).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(
+            body,
+            json!([
+                { "result": true, "error": null, "id": "string-id" },
+                { "jsonrpc": "2.0", "result": true, "id": 42 },
+                { "result": true, "error": null, "id": null },
+                { "jsonrpc": "2.0", "result": true, "id": null },
+                { "result": true, "error": null, "id": 7 },
+                { "jsonrpc": "2.0", "result": true, "id": 7 },
+                { "result": true, "error": null, "id": null }
+            ])
+        );
+    }
+
+    #[tokio::test]
     async fn json_rpc_2_success_contains_only_result() {
         let mock_server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/"))
             .and(body_json(json!({
                 "method": "getblockcount",
-                "params": [],
                 "id": 0
             })))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -807,13 +991,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn only_exact_json_rpc_2_marker_selects_version_2_envelope() {
+        let state = Arc::new(BitcoinRpcState {
+            client: BitcoindRpcClient::new("http://127.0.0.1:1", "p2pool", "p2pool").unwrap(),
+            max_batch_size: 20,
+            rpcuser: "unused".to_string(),
+            rpcpassword: "unused".to_string(),
+        });
+        let cases = [
+            (json!({ "method": "listunspent", "id": 1 }), false),
+            (
+                json!({ "jsonrpc": "1.0", "method": "listunspent", "id": 1 }),
+                false,
+            ),
+            (
+                json!({ "jsonrpc": "2", "method": "listunspent", "id": 1 }),
+                false,
+            ),
+            (
+                json!({ "jsonrpc": 2, "method": "listunspent", "id": 1 }),
+                false,
+            ),
+            (
+                json!({ "jsonrpc": "2.0", "method": "listunspent", "id": 1 }),
+                true,
+            ),
+        ];
+
+        for (request_body, is_version_2) in cases {
+            let request = http::Request::builder()
+                .method("POST")
+                .uri("/")
+                .header("Content-Type", "application/json")
+                .body(Body::from(serde_json::to_vec(&request_body).unwrap()))
+                .unwrap();
+            let response = build_handler_router(state.clone())
+                .oneshot(request)
+                .await
+                .unwrap();
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+            assert_eq!(body.get("jsonrpc").is_some(), is_version_2);
+            assert_eq!(body.get("result").is_none(), is_version_2);
+            assert_eq!(body["error"]["code"], METHOD_NOT_FOUND);
+            assert_eq!(body["id"], 1);
+        }
+    }
+
+    #[tokio::test]
     async fn single_notification_is_executed_without_response() {
         let mock_server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/"))
             .and(body_json(json!({
                 "method": "getblockcount",
-                "params": [],
                 "id": 0
             })))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -858,7 +1092,6 @@ mod tests {
             .and(path("/"))
             .and(body_json(json!({
                 "method": "getblockcount",
-                "params": [],
                 "id": 0
             })))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -873,7 +1106,6 @@ mod tests {
             .and(path("/"))
             .and(body_json(json!({
                 "method": "getbestblockhash",
-                "params": [],
                 "id": 1
             })))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -909,6 +1141,51 @@ mod tests {
             .await
             .unwrap();
         assert!(body.is_empty());
+    }
+
+    #[tokio::test]
+    async fn single_item_batch_returns_an_array() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(body_json(json!({
+                "method": "getblockcount",
+                "params": [],
+                "id": 0
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "result": 42,
+                "error": null,
+                "id": 0
+            })))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+        let state = Arc::new(BitcoinRpcState {
+            client: BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap(),
+            max_batch_size: 20,
+            rpcuser: "unused".to_string(),
+            rpcpassword: "unused".to_string(),
+        });
+        let request = http::Request::builder()
+            .method("POST")
+            .uri("/")
+            .header("Content-Type", "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&json!([
+                    { "method": "getblockcount", "params": [], "id": 1 }
+                ]))
+                .unwrap(),
+            ))
+            .unwrap();
+
+        let response = build_handler_router(state).oneshot(request).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(body, json!([{ "result": 42, "error": null, "id": 1 }]));
     }
 
     #[tokio::test]
@@ -970,29 +1247,61 @@ mod tests {
 
     #[tokio::test]
     async fn missing_and_invalid_methods_are_rejected() {
-        let client = BitcoindRpcClient::new("http://127.0.0.1:1", "p2pool", "p2pool").unwrap();
+        let state = Arc::new(BitcoinRpcState {
+            client: BitcoindRpcClient::new("http://127.0.0.1:1", "p2pool", "p2pool").unwrap(),
+            max_batch_size: 20,
+            rpcuser: "unused".to_string(),
+            rpcpassword: "unused".to_string(),
+        });
 
         for request in [json!({ "id": 1 }), json!({ "method": 1, "id": 2 })] {
-            let response = handle_single(&client, &request).await.unwrap();
-            assert_eq!(response["error"]["code"], INVALID_REQUEST);
-            assert!(response["result"].is_null());
+            let request = http::Request::builder()
+                .method("POST")
+                .uri("/")
+                .header("Content-Type", "application/json")
+                .body(Body::from(serde_json::to_vec(&request).unwrap()))
+                .unwrap();
+            let response = build_handler_router(state.clone())
+                .oneshot(request)
+                .await
+                .unwrap();
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+            assert_eq!(body["error"]["code"], INVALID_REQUEST);
+            assert!(body["result"].is_null());
         }
     }
 
     #[tokio::test]
     async fn invalid_params_are_rejected() {
-        let client = BitcoindRpcClient::new("http://127.0.0.1:1", "p2pool", "p2pool").unwrap();
-        let response = handle_single(
-            &client,
-            &json!({
-                "jsonrpc": "2.0",
-                "method": "getblockcount",
-                "params": true,
-                "id": 1
-            }),
-        )
-        .await
-        .unwrap();
+        let state = Arc::new(BitcoinRpcState {
+            client: BitcoindRpcClient::new("http://127.0.0.1:1", "p2pool", "p2pool").unwrap(),
+            max_batch_size: 20,
+            rpcuser: "unused".to_string(),
+            rpcpassword: "unused".to_string(),
+        });
+        let request = http::Request::builder()
+            .method("POST")
+            .uri("/")
+            .header("Content-Type", "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&json!({
+                    "jsonrpc": "2.0",
+                    "method": "getblockcount",
+                    "params": true,
+                    "id": 1
+                }))
+                .unwrap(),
+            ))
+            .unwrap();
+        let response = build_handler_router(state).oneshot(request).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let response: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
         assert_eq!(response["jsonrpc"], "2.0");
         assert_eq!(response["error"]["code"], INVALID_PARAMS);
@@ -1032,16 +1341,67 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
             .mount(&mock_server)
             .await;
-        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
-        let response = handle_single(
-            &client,
-            &json!({ "jsonrpc": "2.0", "method": "getblockcount", "id": 1 }),
-        )
-        .await
-        .unwrap();
+        let state = Arc::new(BitcoinRpcState {
+            client: BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap(),
+            max_batch_size: 20,
+            rpcuser: "unused".to_string(),
+            rpcpassword: "unused".to_string(),
+        });
+        let request = http::Request::builder()
+            .method("POST")
+            .uri("/")
+            .header("Content-Type", "application/json")
+            .body(Body::from(
+                serde_json::to_vec(
+                    &json!({ "jsonrpc": "2.0", "method": "getblockcount", "id": 1 }),
+                )
+                .unwrap(),
+            ))
+            .unwrap();
+        let response = build_handler_router(state).oneshot(request).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let response: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
         assert_eq!(response["error"]["code"], INTERNAL_ERROR);
         assert!(response.get("result").is_none());
+    }
+
+    #[tokio::test]
+    async fn upstream_http_failure_returns_internal_error() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .respond_with(ResponseTemplate::new(503).set_body_string("unavailable"))
+            .mount(&mock_server)
+            .await;
+        let state = Arc::new(BitcoinRpcState {
+            client: BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap(),
+            max_batch_size: 20,
+            rpcuser: "unused".to_string(),
+            rpcpassword: "unused".to_string(),
+        });
+        let request = http::Request::builder()
+            .method("POST")
+            .uri("/")
+            .header("Content-Type", "application/json")
+            .body(Body::from(
+                serde_json::to_vec(
+                    &json!({ "jsonrpc": "2.0", "method": "getblockcount", "id": 1 }),
+                )
+                .unwrap(),
+            ))
+            .unwrap();
+
+        let response = build_handler_router(state).oneshot(request).await.unwrap();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(body["error"]["code"], INTERNAL_ERROR);
+        assert!(body.get("result").is_none());
     }
 
     #[tokio::test]

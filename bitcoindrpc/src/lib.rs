@@ -30,7 +30,8 @@ pub mod test_utils;
 #[derive(Serialize)]
 struct JsonRpcRequest {
     method: String,
-    params: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    params: Option<serde_json::Value>,
     id: u64,
 }
 
@@ -163,17 +164,19 @@ impl BitcoindRpcClient {
         })
     }
 
-    /// Forwards JSON parameters to a Bitcoin RPC method and returns its JSON result unchanged.
+    /// Forwards optional JSON parameters to a Bitcoin RPC method and returns its JSON result.
+    ///
+    /// `None` omits the `params` field; `Some` preserves its value, including JSON null.
     pub async fn call_value(
         &self,
         method: &str,
-        params: serde_json::Value,
+        params: impl Into<Option<serde_json::Value>>,
     ) -> Result<serde_json::Value, BitcoindRpcError> {
         let id = self.request_id.fetch_add(1, Ordering::SeqCst);
 
         let request = JsonRpcRequest {
             method: method.to_string(),
-            params,
+            params: params.into(),
             id,
         };
 
