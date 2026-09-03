@@ -427,7 +427,7 @@ mod tests {
     use super::*;
     use axum::{body::Body, http};
     use base64::Engine;
-    use std::time::Duration;
+    use std::{env, time::Duration};
     use tower::ServiceExt;
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
@@ -1557,6 +1557,184 @@ mod tests {
         .await
         .expect("Bitcoin RPC gateway did not shut down");
         drop(rebound_listener);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a locally running Bitcoin Core regtest node"]
+    async fn regtest_matches_bitcoin_core_contract() {
+        const SETUP: &str = "set P2POOL_REGTEST_RPC_URL, P2POOL_REGTEST_RPC_USERNAME, and P2POOL_REGTEST_RPC_PASSWORD to run this ignored test";
+        const GATEWAY_USERNAME: &str = "contract-user";
+        const GATEWAY_PASSWORD: &str = "contract-password";
+
+        let upstream_url = env::var("P2POOL_REGTEST_RPC_URL").expect(SETUP);
+        let upstream_username = env::var("P2POOL_REGTEST_RPC_USERNAME").expect(SETUP);
+        let upstream_password = env::var("P2POOL_REGTEST_RPC_PASSWORD").expect(SETUP);
+        let gateway_config = BitcoinRpcApiConfig {
+            enabled: true,
+            port: Some(0),
+            rpcuser: Some(GATEWAY_USERNAME.to_string()),
+            rpcpassword: Some(GATEWAY_PASSWORD.to_string()),
+            ..BitcoinRpcApiConfig::default()
+        };
+        let upstream_config = BitcoinRpcConfig {
+            url: upstream_url.clone(),
+            username: upstream_username.clone(),
+            password: upstream_password.clone(),
+        };
+        let (shutdown_sender, gateway_port) =
+            start_bitcoin_rpc_server(gateway_config, &upstream_config)
+                .await
+                .expect("failed to start the Bitcoin RPC gateway");
+        let gateway_url = format!("http://127.0.0.1:{gateway_port}");
+        let http_client = reqwest::Client::new();
+        let normalize = |mut response: serde_json::Value| {
+            let responses = response
+                .as_array_mut()
+                .expect("Bitcoin Core and the gateway must return batch arrays");
+            responses.sort_by_key(|item| item["id"].as_u64());
+            for item in responses.iter_mut() {
+                let object = item
+                    .as_object_mut()
+                    .expect("every batch response must be an object");
+                object.remove("id");
+                object.remove("jsonrpc");
+                if object.get("error").is_some_and(serde_json::Value::is_null) {
+                    object.remove("error");
+                } else {
+                    object.remove("result");
+                }
+            }
+            responses.clone()
+        };
+
+        let genesis_request = json!({
+            "method": "getblockhash",
+            "params": { "height": 0 },
+            "id": 0
+        });
+        let direct_genesis: serde_json::Value = http_client
+            .post(&upstream_url)
+            .basic_auth(&upstream_username, Some(&upstream_password))
+            .json(&genesis_request)
+            .send()
+            .await
+            .expect("failed to call Bitcoin Core directly")
+            .error_for_status()
+            .expect("Bitcoin Core returned an HTTP error")
+            .json()
+            .await
+            .expect("Bitcoin Core returned invalid JSON");
+        let gateway_genesis: serde_json::Value = http_client
+            .post(&gateway_url)
+            .basic_auth(GATEWAY_USERNAME, Some(GATEWAY_PASSWORD))
+            .json(&genesis_request)
+            .send()
+            .await
+            .expect("failed to call the Bitcoin RPC gateway")
+            .error_for_status()
+            .expect("the Bitcoin RPC gateway returned an HTTP error")
+            .json()
+            .await
+            .expect("the Bitcoin RPC gateway returned invalid JSON");
+        assert_eq!(
+            normalize(json!([direct_genesis.clone()])),
+            normalize(json!([gateway_genesis]))
+        );
+        let genesis_hash = direct_genesis["result"]
+            .as_str()
+            .expect("getblockhash for regtest genesis must return a hash");
+
+        let requests = json!([
+            { "method": "getblockcount", "params": [], "id": 1 },
+            { "method": "getbestblockhash", "params": [], "id": 2 },
+            { "method": "getblockchaininfo", "params": [], "id": 3 },
+            { "method": "getrawmempool", "params": [], "id": 4 },
+            { "method": "getnetworkinfo", "params": [], "id": 5 },
+            {
+                "method": "getblockheader",
+                "params": { "blockhash": genesis_hash, "verbose": true },
+                "id": 6
+            },
+            {
+                "method": "getblock",
+                "params": { "blockhash": genesis_hash, "verbosity": 1 },
+                "id": 7
+            },
+            {
+                "method": "gettxout",
+                "params": ["0000000000000000000000000000000000000000000000000000000000000000", 0],
+                "id": 8
+            },
+            {
+                "method": "getrawtransaction",
+                "params": ["0000000000000000000000000000000000000000000000000000000000000000"],
+                "id": 9
+            }
+        ]);
+        let direct_batch: serde_json::Value = http_client
+            .post(&upstream_url)
+            .basic_auth(&upstream_username, Some(&upstream_password))
+            .json(&requests)
+            .send()
+            .await
+            .expect("failed to send a batch directly to Bitcoin Core")
+            .error_for_status()
+            .expect("Bitcoin Core returned an HTTP error for the batch")
+            .json()
+            .await
+            .expect("Bitcoin Core returned invalid batch JSON");
+        let gateway_batch: serde_json::Value = http_client
+            .post(&gateway_url)
+            .basic_auth(GATEWAY_USERNAME, Some(GATEWAY_PASSWORD))
+            .json(&requests)
+            .send()
+            .await
+            .expect("failed to send a batch to the Bitcoin RPC gateway")
+            .error_for_status()
+            .expect("the Bitcoin RPC gateway returned an HTTP error for the batch")
+            .json()
+            .await
+            .expect("the Bitcoin RPC gateway returned invalid batch JSON");
+        assert!(
+            direct_batch.as_array().is_some_and(|responses| responses
+                .iter()
+                .any(|response| response["id"] == 3 && response["result"]["chain"] == "regtest")),
+            "P2POOL_REGTEST_RPC_URL must point to a regtest node"
+        );
+        assert_eq!(normalize(direct_batch), normalize(gateway_batch));
+
+        let notification = json!({ "jsonrpc": "2.0", "method": "getblockcount" });
+        let direct_notification = http_client
+            .post(&upstream_url)
+            .basic_auth(&upstream_username, Some(&upstream_password))
+            .json(&notification)
+            .send()
+            .await
+            .expect("failed to send a notification directly to Bitcoin Core");
+        let direct_notification_success = direct_notification.status().is_success();
+        let direct_notification_body = direct_notification
+            .bytes()
+            .await
+            .expect("failed to read Bitcoin Core's notification response");
+        let gateway_notification = http_client
+            .post(&gateway_url)
+            .basic_auth(GATEWAY_USERNAME, Some(GATEWAY_PASSWORD))
+            .json(&notification)
+            .send()
+            .await
+            .expect("failed to send a notification to the Bitcoin RPC gateway");
+        let gateway_notification_success = gateway_notification.status().is_success();
+        let gateway_notification_body = gateway_notification
+            .bytes()
+            .await
+            .expect("failed to read the gateway's notification response");
+        assert_eq!(direct_notification_success, gateway_notification_success);
+        assert_eq!(direct_notification_body, gateway_notification_body);
+        assert!(gateway_notification_body.is_empty());
+
+        shutdown_sender
+            .send(())
+            .expect("Bitcoin RPC gateway stopped before test shutdown");
     }
 
     #[tokio::test]
