@@ -121,7 +121,7 @@ fn build_prepared_notify(
         clean_jobs,
     )
     .prev_share_blockhash(tip)
-    .uncles(uncles.into_iter().collect())
+    .uncles(uncles)
     .bits(target)
     .donation_address(context.config.donation_address().cloned())
     .donation(context.config.donation)
@@ -340,7 +340,7 @@ mod tests {
         let genesis_header = genesis.header.clone();
         chain_store_handle
             .expect_get_mining_base_and_uncles()
-            .returning(move || Ok((genesis_hash, std::collections::HashSet::new())));
+            .returning(move || Ok((genesis_hash, vec![])));
         chain_store_handle
             .expect_get_share_height_and_time()
             .returning(|_| Ok((0, genesis_for_tests().header.time)));
@@ -408,7 +408,7 @@ mod tests {
         let genesis_header = genesis.header.clone();
         chain_store_handle
             .expect_get_mining_base_and_uncles()
-            .returning(move || Ok((genesis_hash, std::collections::HashSet::new())));
+            .returning(move || Ok((genesis_hash, vec![])));
 
         let pool_difficulty =
             pool_difficulty::PoolDifficulty::new(genesis_header.bits, genesis_header.time, 0);
@@ -503,7 +503,7 @@ mod tests {
         let genesis_hash = genesis.block_hash();
         chain_store_handle
             .expect_get_mining_base_and_uncles()
-            .returning(move || Ok((genesis_hash, std::collections::HashSet::new())));
+            .returning(move || Ok((genesis_hash, vec![])));
 
         chain_store_handle
             .expect_get_share_height_and_time()
