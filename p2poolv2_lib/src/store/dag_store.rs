@@ -3530,21 +3530,123 @@ mod tests {
         // find_uncles should return exactly 3 uncles, prioritizing higher chain_work
         // uncle_d has work=2, uncle_a/b/c have default work=1
         let uncles = store.find_uncles(&store.get_chain_tip().unwrap()).unwrap();
-        assert_eq!(uncles.len(), 3);
 
-        // uncle_d should be first (highest chain_work)
-        assert_eq!(uncles[0], uncle_d.block_hash());
-
-        // The remaining 2 should be from uncle_a, uncle_b, uncle_c (all same chain_work)
-        let height_1_uncles: HashSet<BlockHash> = [
+        // uncle_d leads on chain_work. uncle_a/b/c tie behind it and only two
+        // of the three fit, so the blockhash tiebreak decides both which pair
+        // is kept and the order it is kept in.
+        let mut tied = [
             uncle_a.block_hash(),
             uncle_b.block_hash(),
             uncle_c.block_hash(),
-        ]
-        .into_iter()
-        .collect();
-        assert!(height_1_uncles.contains(&uncles[1]));
-        assert!(height_1_uncles.contains(&uncles[2]));
+        ];
+        tied.sort();
+        assert_eq!(uncles, vec![uncle_d.block_hash(), tied[0], tied[1]]);
+    }
+
+    /// Uncles of equal chain_work are ordered by blockhash ascending.
+    #[test]
+    fn test_find_uncles_orders_equal_work_uncles_by_blockhash() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // share0 (confirmed, height 0)
+        //   /   |     |       \
+        // share1 uncle_a uncle_b uncle_c (height 1, all default work)
+        // (confirmed)
+        let share0 = TestShareBlockBuilder::new().nonce(0).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&share0, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share0.block_hash().to_string())
+            .nonce(1)
+            .build();
+        let uncle_a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share0.block_hash().to_string())
+            .nonce(100)
+            .build();
+        let uncle_b = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share0.block_hash().to_string())
+            .nonce(101)
+            .build();
+        let uncle_c = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share0.block_hash().to_string())
+            .nonce(102)
+            .build();
+
+        store.store_with_valid_metadata(&uncle_a);
+        store.store_with_valid_metadata(&uncle_b);
+        store.store_with_valid_metadata(&uncle_c);
+        store.push_to_confirmed_chain(&share1).unwrap();
+
+        let uncles = store.find_uncles(&share1.block_hash()).unwrap();
+
+        // Same parent and same work, so chain_work ties and only the blockhash
+        // separates them.
+        let mut expected = vec![
+            uncle_a.block_hash(),
+            uncle_b.block_hash(),
+            uncle_c.block_hash(),
+        ];
+        expected.sort();
+        assert_eq!(uncles, expected);
+    }
+
+    /// When more equal-work candidates exist than MAX_UNCLES, the blockhash
+    /// order decides which are kept, not just how the kept ones are arranged.
+    /// Without the tiebreak this selection differs between nodes.
+    #[test]
+    fn test_find_uncles_keeps_lowest_blockhashes_when_equal_work_exceeds_max() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // share0 (confirmed, height 0)
+        //   /   |      |      |      \
+        // share1 uncle_a uncle_b uncle_c uncle_d (height 1, all default work)
+        // (confirmed)
+        let share0 = TestShareBlockBuilder::new().nonce(0).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&share0, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share0.block_hash().to_string())
+            .nonce(1)
+            .build();
+        let uncle_a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share0.block_hash().to_string())
+            .nonce(100)
+            .build();
+        let uncle_b = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share0.block_hash().to_string())
+            .nonce(101)
+            .build();
+        let uncle_c = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share0.block_hash().to_string())
+            .nonce(102)
+            .build();
+        let uncle_d = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share0.block_hash().to_string())
+            .nonce(103)
+            .build();
+
+        store.store_with_valid_metadata(&uncle_a);
+        store.store_with_valid_metadata(&uncle_b);
+        store.store_with_valid_metadata(&uncle_c);
+        store.store_with_valid_metadata(&uncle_d);
+        store.push_to_confirmed_chain(&share1).unwrap();
+
+        let uncles = store.find_uncles(&share1.block_hash()).unwrap();
+
+        let mut candidates = [
+            uncle_a.block_hash(),
+            uncle_b.block_hash(),
+            uncle_c.block_hash(),
+            uncle_d.block_hash(),
+        ];
+        candidates.sort();
+        assert_eq!(uncles.as_slice(), &candidates[..MAX_UNCLES]);
     }
 
     #[test]
@@ -3787,17 +3889,12 @@ mod tests {
         store.push_to_confirmed_chain(&share2).unwrap();
 
         let uncles = store.find_uncles(&store.get_chain_tip().unwrap()).unwrap();
-        assert_eq!(uncles.len(), 3);
 
-        // uncle_high (work=3) should come first
-        assert_eq!(uncles[0], uncle_high.block_hash());
-
-        // uncle_mid_a and uncle_mid_b (both work=2) should be selected over uncle_low (work=1)
-        let mid_uncles: HashSet<BlockHash> = [uncle_mid_a.block_hash(), uncle_mid_b.block_hash()]
-            .into_iter()
-            .collect();
-        assert!(mid_uncles.contains(&uncles[1]));
-        assert!(mid_uncles.contains(&uncles[2]));
+        // uncle_high (work=3) comes first, then uncle_mid_a and uncle_mid_b
+        // (both work=2) in blockhash order.
+        let mut tied = [uncle_mid_a.block_hash(), uncle_mid_b.block_hash()];
+        tied.sort();
+        assert_eq!(uncles, vec![uncle_high.block_hash(), tied[0], tied[1]]);
 
         // uncle_low at height 2 is excluded despite being at higher height than the mids
         assert!(!uncles.contains(&uncle_low.block_hash()));
