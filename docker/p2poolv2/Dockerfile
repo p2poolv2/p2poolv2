@@ -35,11 +35,14 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/p2poolv2/target \
     cargo fetch --locked
 
+# Every workspace crate in the p2poolv2_node dependency graph.
 COPY --parents bitcoindrpc/ .
-COPY --parents p2poolv2_cli/ .
-COPY --parents p2poolv2_node/ .
-COPY --parents p2poolv2_lib/ .
+COPY --parents p2poolv2_address/ .
 COPY --parents p2poolv2_api/ .
+COPY --parents p2poolv2_cli/ .
+COPY --parents p2poolv2_config/ .
+COPY --parents p2poolv2_lib/ .
+COPY --parents p2poolv2_node/ .
 
 ENV RUST_LOG=info
 
