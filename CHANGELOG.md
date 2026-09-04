@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.14.0] - 2026-09-04
+
 ### Added
 
 - Share chain addresses: a new `p2poolv2_address` crate encoding a taproot
@@ -32,6 +34,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pool-wide block fund tracking, with effort reset only on a pool-wide
   block find rather than on every bitcoin block.
 - Grafana dashboard setup instructions in the README.
+- `p2poolv2_cli address`, which encodes a taproot output key as a share chain
+  address. It takes the `witness_program` field of `bitcoin-cli
+  getaddressinfo` on stdin or as an argument, applies no tweak because the
+  wallet already did, and checks the key is a curve point so a typo cannot
+  produce an address whose shares nobody can spend. It needs no running node
+  and no config file, and it never sees a private key.
 - A security policy file.
 
 ### Changed
@@ -77,6 +85,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   share chain address is available, either from `[stratum] miner_address` or
   from `p2p=<address>` in the miner's password. Hydrapool mode is unaffected,
   and rejects `miner_address` at startup.
+- In p2poolv2 mode, config parsing rejects a network that has no share chain
+  human readable part, and a configured `miner_address` is re-checked against
+  the pool's network when a miner authorizes. Without the startup check the
+  node ran and rejected every authorize forever, for a reason no miner could
+  fix.
 - **BREAKING (JSON API):** `miner_address` on the `/share`, `/shares`,
   `/share_headers`, `/candidates` and `/dag` endpoints, in `db-query` output
   and in WebSocket `Share` events now carries the share chain address. The bitcoin payout
@@ -960,7 +973,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 We used tags like hydrapool.v0.x.0 and we didn't keep a changelog.
 
-[Unreleased]: https://github.com/p2poolv2/p2poolv2/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/p2poolv2/p2poolv2/compare/v0.14.0...HEAD
+[v0.14.0]: https://github.com/p2poolv2/p2poolv2/compare/v0.13.0...v0.14.0
 [v0.13.0]: https://github.com/p2poolv2/p2poolv2/compare/v0.12.0...v0.13.0
 [v0.12.0]: https://github.com/p2poolv2/p2poolv2/compare/v0.11.2...v0.12.0
 [v0.11.2]: https://github.com/p2poolv2/p2poolv2/compare/v0.11.0...v0.11.2
