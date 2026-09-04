@@ -126,20 +126,34 @@ source is a Bitcoin Core wallet:
 
 [,shell]
 ----
-bitcoin-cli -signet getnewaddress "p2pool share owner" bech32m
-bitcoin-cli -signet getaddressinfo <that address>
+ADDR=$(bitcoin-cli -signet getnewaddress "p2pool share owner" bech32m)
+bitcoin-cli -signet getaddressinfo "$ADDR"    # check "ismine" and "solvable"
+bitcoin-cli -signet getaddressinfo "$ADDR" | jq -r .witness_program \
+  | p2poolv2_cli address --network signet
 ----
 
-Use the `witness_program` field, which is the 32 byte taproot output key.
-Encoding those bytes as bech32m under the `sp2pool` prefix (`p2pool` for
-mainnet, `tp2pool` for testnet4, `rp2pool` for regtest) gives the share
-address for that wallet key. Check `"ismine": true` and `"solvable": true` in
-the same output, or you are assigning shares to a key you cannot sign with.
+`witness_program` is the 32 byte taproot output key; `p2poolv2_cli address`
+encodes it under the share chain prefix for the network you name (`main`,
+`testnet4`, `signet` or `regtest`, as Bitcoin Core names them). Check
+`"ismine": true` and `"solvable": true` in the `getaddressinfo` output, or you
+are assigning shares to a key you cannot sign with.
+
+Use the address either on the node, as `[stratum] miner_address` in
+`config.toml`, or from the miner, as the stratum password:
+
+[,shell]
+----
+p2p=sp2pool1p504yc8zlqs4w077ss6787v8z5zxgke6nc333md75k87t82u5ryqqd9033x,d=1000
+----
+
+The `p2p=` key is case insensitive and the fields may be in any order, comma,
+space, tab or semicolon separated. The stratum *username* stays your bitcoin
+payout address. Note that `p2p=<address>` alone is 71 characters, so check your
+firmware does not truncate the password field; a truncated address fails its
+checksum rather than sending your shares elsewhere.
 
 P2Poolv2 does not generate private keys and ships no tool to do so, by design.
-It also does not yet ship the bech32m encoder for the step above; until it
-does, setting `[stratum] miner_address` once on the node is the simplest route
-for a pool.
+The encoder takes a public output key only, never a private key.
 
 NOTE: A taproot address is not a share chain address. `tb1p...` and
 `sp2pool1p...` encode the same 32 bytes, but the prefix is covered by the

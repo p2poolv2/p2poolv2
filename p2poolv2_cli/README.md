@@ -120,6 +120,37 @@ heights with more than 20 blocks. Retains Confirmed, Candidate, and
 BlockValid blocks, plus HeaderValid blocks that are referenced as
 uncles by other blocks.
 
+### address
+
+Print the share chain address for a taproot output key. Does not
+require a running node or config file.
+
+The input is the `witness_program` field of `bitcoin-cli
+getaddressinfo`: the already tweaked 32 byte taproot output key, in hex.
+No tweak is applied here, because the wallet applied it. The key is
+checked to be a real curve point, so a typo cannot produce an address
+whose shares nobody can ever spend.
+
+```sh
+ADDR=$(bitcoin-cli -signet getnewaddress "p2pool share owner" bech32m)
+bitcoin-cli -signet getaddressinfo "$ADDR" \
+  | jq -r .witness_program \
+  | p2poolv2_cli address --network signet
+```
+
+The output key can also be passed as an argument instead of on stdin:
+
+```sh
+p2poolv2_cli address --network signet a3ea4c1c5f042ae7fbd086bc7f30e2a08c8b6753c4631db7d4b1fcb3ab941900
+```
+
+Networks are named as Bitcoin Core names them: `main`, `testnet4`,
+`signet` or `regtest`. Check `"ismine": true` and `"solvable": true` in
+the same `getaddressinfo` output; those are what tell you the wallet can
+sign for the key. Use the result as `[stratum] miner_address`, or as the
+stratum password `p2p=<address>`. See
+`docs/architecture/address-format.md`.
+
 ### gen-auth
 
 Generate API authentication credentials. Does not require a running
