@@ -500,7 +500,7 @@ impl Store {
                 .map(move |child| (*ancestor, child))
         });
 
-        let mut uncles_with_work: Vec<(BlockHash, Work)> = children
+        let uncles_with_work: HashSet<(BlockHash, Work)> = children
             .filter(|(_, blockhash)| {
                 !ancestry.contains(blockhash)
                     && !self.is_confirmed(blockhash)
@@ -518,8 +518,10 @@ impl Store {
             })
             .collect();
 
-        // Sort by chain_work descending and take top MAX_UNCLES
-        uncles_with_work.sort_by_key(|(_, work)| std::cmp::Reverse(*work));
+        // Sort by chain_work descending then blockhash ascending and take top MAX_UNCLES
+        let mut uncles_with_work: Vec<(BlockHash, Work)> = uncles_with_work.into_iter().collect();
+        uncles_with_work.sort_by_key(|(blockhash, work)| (std::cmp::Reverse(*work), *blockhash));
+
         let uncles = uncles_with_work
             .into_iter()
             .take(MAX_UNCLES)
