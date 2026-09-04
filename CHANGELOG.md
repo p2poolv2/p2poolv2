@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.14.1] - 2026-09-04
+
+### Fixed
+
+- Docker image build to handle new p2poolv2_address crate.
+
 ## [v0.14.0] - 2026-09-04
 
 ### Added
@@ -974,6 +980,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 We used tags like hydrapool.v0.x.0 and we didn't keep a changelog.
 
 [Unreleased]: https://github.com/p2poolv2/p2poolv2/compare/v0.14.0...HEAD
+[v0.14.1]: https://github.com/p2poolv2/p2poolv2/compare/v0.14.0...v0.14.1
 [v0.14.0]: https://github.com/p2poolv2/p2poolv2/compare/v0.13.0...v0.14.0
 [v0.13.0]: https://github.com/p2poolv2/p2poolv2/compare/v0.12.0...v0.13.0
 [v0.12.0]: https://github.com/p2poolv2/p2poolv2/compare/v0.11.2...v0.12.0
