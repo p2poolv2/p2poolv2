@@ -667,6 +667,7 @@ mod tests {
                 auth_password: None,
                 cors_allowed: false,
             },
+            bitcoin_rpc_api: Default::default(),
         };
         config.network = network_config;
 
@@ -780,6 +781,7 @@ mod tests {
                 auth_password: None,
                 cors_allowed: false,
             },
+            bitcoin_rpc_api: Default::default(),
         }
     }
 

@@ -25,7 +25,7 @@ pub mod background_tasks;
 pub mod preflight;
 pub mod signal;
 
-use p2poolv2_api::start_api_server;
+use p2poolv2_api::{start_api_server, start_bitcoin_rpc_server};
 use p2poolv2_lib::accounting::payout::build_payout_for_mode;
 use p2poolv2_lib::accounting::stats::metrics;
 use p2poolv2_lib::config::Config;
@@ -82,6 +82,8 @@ pub struct NodeRunner {
     node_handle: NodeHandle,
     stratum_shutdown_tx: tokio::sync::oneshot::Sender<()>,
     api_shutdown_tx: tokio::sync::oneshot::Sender<()>,
+    bitcoin_rpc_shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
+    bitcoin_rpc_server_handle: Option<JoinHandle<()>>,
     metrics_handle: metrics::MetricsHandle,
     stats_dir: String,
 }
@@ -95,6 +97,8 @@ impl NodeRunner {
         let node_handle = self.node_handle;
         let stratum_shutdown_tx = self.stratum_shutdown_tx;
         let api_shutdown_tx = self.api_shutdown_tx;
+        let bitcoin_rpc_shutdown_tx = self.bitcoin_rpc_shutdown_tx;
+        let bitcoin_rpc_server_handle = self.bitcoin_rpc_server_handle;
         let metrics_handle = self.metrics_handle;
         let stats_dir = self.stats_dir;
 
@@ -116,6 +120,14 @@ impl NodeRunner {
 
             let _ = stratum_shutdown_tx.send(());
             let _ = api_shutdown_tx.send(());
+            if let Some(shutdown_sender) = bitcoin_rpc_shutdown_tx {
+                let _ = shutdown_sender.send(());
+            }
+            if let Some(server_handle) = bitcoin_rpc_server_handle
+                && let Err(error) = server_handle.await
+            {
+                error!("Failed to join Bitcoin RPC gateway task: {error}");
+            }
             let _ = exit_sender.send(reason);
             reason
         };
@@ -401,6 +413,21 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
         config.api.hostname, config.api.port
     );
 
+    let (bitcoin_rpc_shutdown_tx, bitcoin_rpc_server_handle) = if config.bitcoin_rpc_api.enabled {
+        match start_bitcoin_rpc_server(config.bitcoin_rpc_api.clone(), &config.bitcoinrpc).await {
+            Ok((shutdown_sender, server_handle, port)) => {
+                info!("Bitcoin RPC gateway started on port {port}");
+                (Some(shutdown_sender), Some(server_handle))
+            }
+            Err(e) => {
+                error!("Error starting Bitcoin RPC gateway: {e}");
+                return Err(ExitCode::FAILURE);
+            }
+        }
+    } else {
+        (None, None)
+    };
+
     let handles = NodeHandles {
         emissions_tx: emissions_tx_for_handles,
         template_rx: template_rx_for_handles,
@@ -414,6 +441,8 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
         node_handle,
         stratum_shutdown_tx,
         api_shutdown_tx,
+        bitcoin_rpc_shutdown_tx,
+        bitcoin_rpc_server_handle,
         metrics_handle,
         stats_dir: config.logging.stats_dir.clone(),
     };

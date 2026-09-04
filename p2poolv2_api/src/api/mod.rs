@@ -15,7 +15,10 @@
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
 mod auth;
+mod bitcoin_rpc;
 pub mod endpoints;
 pub mod error;
 pub mod server;
 pub(crate) mod websocket;
+
+pub use bitcoin_rpc::start_bitcoin_rpc_server;

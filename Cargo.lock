@@ -3230,6 +3230,7 @@ dependencies = [
  "axum",
  "base64",
  "bitcoin",
+ "bitcoindrpc",
  "bytes",
  "chrono",
  "hex",
@@ -3249,6 +3250,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "wiremock",
 ]
 
 [[package]]
