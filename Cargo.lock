@@ -3262,6 +3262,7 @@ dependencies = [
  "config",
  "hex",
  "hmac",
+ "p2poolv2_address",
  "p2poolv2_lib",
  "rand 0.8.5",
  "reqwest",

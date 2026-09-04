@@ -14,6 +14,7 @@
 // You should have received a copy of the GNU General Public License along with
 // P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
 
+pub mod address;
 pub mod api_client;
 pub mod blocked_ips;
 pub mod candidates;
@@ -30,6 +31,7 @@ pub mod shares;
 pub mod transactions;
 
 use crate::commands;
+use bitcoin::Network;
 use clap::{ArgGroup, Parser, Subcommand};
 use p2poolv2_lib::config::Config;
 use std::error::Error;
@@ -39,7 +41,7 @@ use std::path::Path;
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 pub struct Cli {
-    /// Path to p2poolv2 config file (not required for gen-auth or --db-path commands)
+    /// Path to p2poolv2 config file (not required for address, gen-auth or --db-path commands)
     #[arg(short, long, env("P2POOL_CONFIG"), global = true)]
     pub config: Option<String>,
 
@@ -138,6 +140,18 @@ pub enum Commands {
         #[command(subcommand)]
         command: DbCommands,
     },
+    /// Print the share chain address for a taproot output key
+    ///
+    /// Takes the `witness_program` field of `bitcoin-cli getaddressinfo`, the
+    /// already tweaked 32 byte taproot output key, in hex. Reads it from stdin
+    /// when no argument is given.
+    Address {
+        /// Taproot output key, hex. Omit to read it from stdin.
+        witness_program: Option<String>,
+        /// Network whose prefix to encode under: main, testnet4, signet or regtest
+        #[arg(short, long, value_parser = commands::address::parse_network)]
+        network: Network,
+    },
     /// Generate API authentication credentials (salt, password, HMAC)
     GenAuth {
         /// Username for API authentication
@@ -189,6 +203,12 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
 
     match &cli.command {
+        Some(Commands::Address {
+            witness_program,
+            network,
+        }) => {
+            commands::address::execute(witness_program.clone(), *network)?;
+        }
         Some(Commands::GenAuth { username, password }) => {
             commands::gen_auth::execute(username.clone(), password.clone())?;
         }

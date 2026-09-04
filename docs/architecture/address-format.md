@@ -246,19 +246,40 @@ Note that the taproot address is not itself accepted. `tb1p...` and
 checksum, so the strings are not interchangeable and both parsers reject
 the other's form. That is the whole point of the separate type.
 
-**There is no P2Poolv2 tool that performs the bech32m re-encoding
-today.** The format is fully specified above, including verified test
-vectors, so external tooling can implement it. Until such a tool exists,
-the working route for a pool is the operator setting `[stratum]
-miner_address` once, so no miner needs to supply an address at all; see
-"Supplying an address" below.
+### The encoder
 
-A future encoder should take a **public key or output key, never a
-private key and never a bitcoin address**. Public key input keeps every
-private key outside this project, and is a weak spend-capability signal
-in its own right: you cannot produce the pubkey behind someone else's
-exchange deposit address, which is the same argument that ruled out
-deriving `miner_address` from `miner_bitcoin_address`.
+`p2poolv2_cli address` performs the bech32m re-encoding, taking the
+`witness_program` hex on stdin or as an argument:
+
+```sh
+ADDR=$(bitcoin-cli -signet getnewaddress "p2pool share owner" bech32m)
+bitcoin-cli -signet getaddressinfo "$ADDR" \
+  | jq -r .witness_program \
+  | p2poolv2_cli address --network signet
+```
+
+Networks are named as Bitcoin Core names them, so the flag matches the
+`bitcoin-cli` invocation: `main`, `testnet4`, `signet` or `regtest`. The
+command needs neither a config file nor a running node, and prints the
+address alone so it can be piped.
+
+It takes an **output key, never a private key and never a bitcoin
+address**. Public key input keeps every private key outside this
+project, and is a weak spend-capability signal in its own right: you
+cannot produce the pubkey behind someone else's exchange deposit
+address, which is the same argument that ruled out deriving
+`miner_address` from `miner_bitcoin_address`. A bitcoin address is
+refused for the same reason `Address` has no constructor taking one.
+
+The 32 bytes are checked to be a valid x-only curve point rather than
+re-encoded blindly, so a mistyped key fails here instead of yielding an
+address whose shares nobody can ever spend. The format is fully
+specified above, including verified test vectors, so other tooling can
+implement it independently.
+
+An operator who would rather not have miners supply an address at all
+can set `[stratum] miner_address` once instead; see "Supplying an
+address" below.
 
 ### No P2Poolv2 crate generates private keys
 
