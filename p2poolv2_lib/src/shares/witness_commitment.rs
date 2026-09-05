@@ -28,7 +28,7 @@ pub const WITNESS_COMMITMENT_LENGTH: usize = 38;
 /// Stack-allocated BIP141 witness commitment (exactly 38 bytes).
 ///
 /// Stores the full commitment script bytes, avoiding heap allocation.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct WitnessCommitment([u8; WITNESS_COMMITMENT_LENGTH]);
 
 /// Error for invalid witness commitment construction.

@@ -38,7 +38,44 @@ pub async fn handle_getdata_block<C: Send + Sync>(
     response_channel: C,
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    debug!("Received GetData::Block request for {}", block_hash);
+    handle_getdata(
+        GetData::Block(block_hash),
+        chain_store_handle,
+        response_channel,
+        swarm_tx,
+    )
+    .await
+}
+
+/// Handle a compact-block request from a peer by serving the full share block.
+pub async fn handle_getdata_compact_block<C: Send + Sync>(
+    block_hash: BlockHash,
+    chain_store_handle: ChainStoreHandle,
+    response_channel: C,
+    swarm_tx: mpsc::Sender<SwarmSend<C>>,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    handle_getdata(
+        GetData::CompactBlock(block_hash),
+        chain_store_handle,
+        response_channel,
+        swarm_tx,
+    )
+    .await
+}
+
+async fn handle_getdata<C: Send + Sync>(
+    request: GetData,
+    chain_store_handle: ChainStoreHandle,
+    response_channel: C,
+    swarm_tx: mpsc::Sender<SwarmSend<C>>,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let block_hash = match &request {
+        GetData::Block(hash) | GetData::CompactBlock(hash) => *hash,
+        GetData::Txid(_) => {
+            return Err("getdata block handler received a transaction request".into());
+        }
+    };
+    debug!("Received getdata request for {}", block_hash);
 
     let response_message = match chain_store_handle.get_share(&block_hash) {
         Some(share_block) => {
@@ -47,7 +84,7 @@ pub async fn handle_getdata_block<C: Send + Sync>(
         }
         None => {
             debug!("Block {} not found, sending notfound", block_hash);
-            Message::NotFound(GetData::Block(block_hash))
+            Message::NotFound(request)
         }
     };
 
@@ -67,6 +104,7 @@ mod tests {
     #[mockall_double::double]
     use crate::shares::chain::chain_store_handle::ChainStoreHandle;
     use crate::test_utils::TestShareBlockBuilder;
+    use bitcoin::hashes::Hash;
     use tokio::sync::mpsc;
 
     #[tokio::test]
@@ -150,6 +188,64 @@ mod tests {
                     .to_string()
                     .contains("Failed to send getdata block response")
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_getdata_compact_block_falls_back_to_full_block() {
+        let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<u32>>(1);
+        let response_channel = 1u32;
+        let mut chain_store_handle = ChainStoreHandle::default();
+        let block = TestShareBlockBuilder::new().build();
+        let block_hash = block.block_hash();
+        let expected_block = block.clone();
+
+        chain_store_handle
+            .expect_get_share()
+            .returning(move |_| Some(block.clone()));
+
+        let result = handle_getdata_compact_block(
+            block_hash,
+            chain_store_handle,
+            response_channel,
+            swarm_tx,
+        )
+        .await;
+
+        assert!(result.is_ok());
+        match swarm_rx.recv().await {
+            Some(SwarmSend::Response(channel, Message::ShareBlock(share_block))) => {
+                assert_eq!(channel, response_channel);
+                assert_eq!(share_block, expected_block);
+            }
+            _ => panic!("Expected full ShareBlock fallback response"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_getdata_compact_block_not_found_preserves_request_type() {
+        let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<u32>>(1);
+        let response_channel = 1u32;
+        let mut chain_store_handle = ChainStoreHandle::default();
+        let block_hash = BlockHash::all_zeros();
+
+        chain_store_handle.expect_get_share().returning(|_| None);
+
+        let result = handle_getdata_compact_block(
+            block_hash,
+            chain_store_handle,
+            response_channel,
+            swarm_tx,
+        )
+        .await;
+
+        assert!(result.is_ok());
+        match swarm_rx.recv().await {
+            Some(SwarmSend::Response(channel, Message::NotFound(GetData::CompactBlock(hash)))) => {
+                assert_eq!(channel, response_channel);
+                assert_eq!(hash, block_hash);
+            }
+            _ => panic!("Expected compact-block notfound response"),
         }
     }
 }

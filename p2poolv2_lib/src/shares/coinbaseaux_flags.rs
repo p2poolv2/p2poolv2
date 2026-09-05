@@ -26,7 +26,7 @@ pub const MAX_COINBASEAUX_FLAGS_LENGTH: usize = 32;
 ///
 /// Stores decoded bytes directly, avoiding heap allocation. Flags
 /// longer than 32 bytes are truncated at construction time.
-#[derive(Clone, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug, PartialOrd, Ord, Hash)]
 pub struct CoinbaseAuxFlags {
     data: [u8; MAX_COINBASEAUX_FLAGS_LENGTH],
     length: u8,
