@@ -915,19 +915,19 @@ mod tests {
         });
     }
 
-    /// The exact keys docker-compose sets, asserted together so the container
-    /// and the config schema cannot drift apart.
+    /// The exact keys docker/docker-compose.p2poolv2.yml sets, asserted
+    /// together so the container and the config schema cannot drift apart.
     ///
-    /// Three of these did nothing before the separator change:
-    /// P2POOL_BITCOIN_NETWORK and P2POOL_BITCOIN_URL named a `bitcoin` section
-    /// that does not exist, and P2POOL_NETWORK_LISTEN_ADDRESS could not reach
-    /// a field whose name contains an underscore.
+    /// Compose deliberately does not set `stratum.network` or
+    /// `bitcoinrpc.url`. Those are the operator's, from the mounted
+    /// config.toml: an override here would silently contradict that file and
+    /// fail late, either on the wrong chain or against the wrong bitcoind.
+    /// `env_override_reaches_the_network_listen_address` covers the one key
+    /// that used to be unreachable and now applies.
     #[test]
     fn env_overrides_used_by_docker_compose_all_apply() {
         temp_env::with_vars(
             [
-                ("P2POOL_STRATUM__NETWORK", Some("signet")),
-                ("P2POOL_BITCOINRPC__URL", Some("http://127.0.0.1:38332")),
                 ("P2POOL_STORE__PATH", Some("/p2poolv2/data/signet")),
                 ("P2POOL_STRATUM__PORT", Some("3333")),
                 ("P2POOL_API__PORT", Some("46884")),
@@ -938,13 +938,57 @@ mod tests {
             ],
             || {
                 let config = Config::load("../config.sample.toml").unwrap();
-                assert_eq!(config.stratum.network, bitcoin::Network::Signet);
-                assert_eq!(config.bitcoinrpc.url, "http://127.0.0.1:38332");
                 assert_eq!(config.store.path, "/p2poolv2/data/signet");
                 assert_eq!(config.stratum.port, 3333);
                 assert_eq!(config.api.port, 46884);
                 assert_eq!(config.network.listen_address, "/ip4/0.0.0.0/tcp/6884");
             },
+        );
+    }
+
+    /// The bitcoind endpoint must stay a passthrough in compose, never a
+    /// forced value.
+    #[test]
+    fn docker_compose_passes_the_bitcoind_endpoint_through_without_a_default() {
+        let entries: Vec<&str> = include_str!("../../docker/docker-compose.p2poolv2.yml")
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.starts_with("- P2POOL_"))
+            .collect();
+        let endpoint = entries
+            .iter()
+            .find(|line| line.contains("BITCOINRPC__URL"))
+            .expect("compose should pass the bitcoind endpoint through");
+        assert_eq!(
+            *endpoint, "- P2POOL_BITCOINRPC__URL",
+            "must be a bare passthrough, with no value or default"
+        );
+    }
+
+    /// NETWORK drives both the chain and the store directory, and is required
+    /// rather than defaulted.
+    #[test]
+    fn docker_compose_requires_network_and_uses_it_for_chain_and_store() {
+        let entries: Vec<&str> = include_str!("../../docker/docker-compose.p2poolv2.yml")
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.starts_with("- P2POOL_"))
+            .collect();
+        let chain = entries
+            .iter()
+            .find(|line| line.contains("STRATUM__NETWORK"))
+            .expect("compose should set the chain from NETWORK");
+        assert!(
+            chain.contains("${NETWORK:?"),
+            "NETWORK must be required, not defaulted: {chain}"
+        );
+        let store = entries
+            .iter()
+            .find(|line| line.contains("STORE__PATH"))
+            .expect("compose should set the store path");
+        assert!(
+            store.contains("${NETWORK}"),
+            "store path must follow the same NETWORK as the chain: {store}"
         );
     }
 

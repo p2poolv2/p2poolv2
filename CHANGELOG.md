@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - RocksDB engine moves from 10.4.2 to 11.8.1 with the `rocksdb` 0.25 upgrade,
   and libp2p moves from 0.53 to 0.56. Both are format-relevant and land
   together with the planned chain reset.
+- docker-compose now requires `NETWORK` in `.env` and refuses to start without
+  it. It selects bitcoind's config file and p2poolv2's share chain and store
+  directory, so one value keeps them on the same chain. It overrides `network`
+  in a mounted `config.toml`, which is ignored under compose.
 
 ### Added
 
@@ -61,11 +65,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Three docker-compose environment overrides that silently did nothing:
-  `P2POOL_BITCOIN_NETWORK` and `P2POOL_BITCOIN_URL` named a `bitcoin` config
-  section that does not exist, and `P2POOL_NETWORK_LISTEN_ADDRESS` could not
-  reach a field whose name contains an underscore. The compose deployment was
-  ignoring its network, bitcoind URL and listen address settings.
+- `P2POOL_NETWORK_LISTEN_ADDRESS` in docker-compose silently did nothing,
+  because it could not reach a field whose name contains an underscore. It now
+  applies, with the same default the shipped config already used.
+- docker-compose hardcoded the bitcoind endpoint to `127.0.0.1`, contradicting
+  the `http://bitcoind:38332` in the shipped config. It is now passed through
+  only when set, so platforms that inject it (Umbrel and similar) can, while
+  everyone else keeps the value from their `config.toml`. Neither this nor the
+  chain override had any effect before, because both named a `bitcoin` config
+  section that does not exist.
 - `publish = false` had no effect on eight of the nine crates. Workspace
   package keys apply only where a member opts in, so those crates were
   publishable despite the workspace declaring otherwise.
