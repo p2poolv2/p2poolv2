@@ -11,6 +11,7 @@ repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
 rust-version.workspace = true
+publish.workspace = true
 
 [features]
 # Passthrough so this crate can see, and skip, tests that a sim-enabled
