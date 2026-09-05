@@ -21,18 +21,18 @@ bitcoin.workspace = true
 reqwest = { workspace = true, features = ["json"] }
 serde.workspace = true
 serde_json.workspace = true
-mockall = { version = "0.13.1", optional = true }
+mockall = { workspace = true, optional = true }
 hex.workspace = true
-wiremock = { version = "0.6.2", optional = true }
+wiremock = { workspace = true, optional = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
-test-log = { version = "0.2.17", features = ["trace"] }
-tokio = { version = "1.0", features = ["full", "test-util"] }
-mockall = "0.13.1"
-wiremock = "0.6.2"
+test-log = { workspace = true }
+tokio = { workspace = true, features = ["full", "test-util"] }
+mockall = { workspace = true }
+wiremock = { workspace = true }
 
 [features]
 test-utils = ["wiremock"]
