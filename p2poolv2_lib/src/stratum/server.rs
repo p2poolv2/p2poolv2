@@ -268,8 +268,7 @@ impl StratumServer {
         )
         .map_err(|e| -> Box<dyn std::error::Error + Send> {
             Box::new(std::io::Error::other(format!(
-                "Failed to create BitcoindRpcClient: {}",
-                e
+                "Failed to create BitcoindRpcClient: {e}"
             )))
         })?;
 

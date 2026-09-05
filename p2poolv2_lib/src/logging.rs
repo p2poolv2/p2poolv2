@@ -71,7 +71,7 @@ pub fn setup_logging(
     };
 
     let file_layer = if let Some(file_path) = &logging_config.file {
-        eprintln!("File logging is enabled, writing to: {}", file_path);
+        eprintln!("File logging is enabled, writing to: {file_path}");
         if let Some(parent) = std::path::Path::new(file_path).parent() {
             std::fs::create_dir_all(parent)?;
         }

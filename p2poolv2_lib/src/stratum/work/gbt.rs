@@ -508,7 +508,7 @@ mod gbt_server_tests {
         )
         .await;
 
-        println!("Result: {:?}", result);
+        println!("Result: {result:?}");
 
         assert!(result.is_ok());
 

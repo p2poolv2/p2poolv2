@@ -1308,9 +1308,7 @@ mod tests {
             assert_eq!(
                 confirmed,
                 share.block_hash(),
-                "Confirmed at height {} should match share {}",
-                height,
-                index
+                "Confirmed at height {height} should match share {index}"
             );
         }
 

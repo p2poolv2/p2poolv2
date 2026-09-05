@@ -149,8 +149,7 @@ mod tests {
         let new_dsps = decay_time(dsps, difficulty, elapsed_time, interval);
         assert!(
             (new_dsps - 0.003134).abs() < 1e-6,
-            "Expected new dsps to be approximately 0.003134, got {}",
-            new_dsps
+            "Expected new dsps to be approximately 0.003134, got {new_dsps}"
         );
     }
 
@@ -164,8 +163,7 @@ mod tests {
         let new_dsps = decay_time(dsps, difficulty, elapsed_time, interval);
         assert!(
             (new_dsps - 12.992719).abs() < 1e-6,
-            "Expected new dsps to be approximately 12.992719, got {}",
-            new_dsps
+            "Expected new dsps to be approximately 12.992719, got {new_dsps}"
         );
     }
 

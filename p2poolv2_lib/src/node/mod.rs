@@ -714,13 +714,11 @@ mod tests {
                                     || err_str_lower.contains("connection refused")
                                     || err_str_lower
                                         .contains("failed to negotiate transport protocol"),
-                                "Expected timeout or connection refused error, got: {}",
-                                err_str
+                                "Expected timeout or connection refused error, got: {err_str}"
                             );
                             assert!(
                                 elapsed.as_secs_f32() <= 10.0,
-                                "Dialing took too long: {:?}, expected ~10s",
-                                elapsed
+                                "Dialing took too long: {elapsed:?}, expected ~10s"
                             );
                             break;
                         }
