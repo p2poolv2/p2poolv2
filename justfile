@@ -80,6 +80,15 @@ perf config="config.toml":
 check:
     cargo check --workspace
 
+# Lint the entire workspace, matching what CI enforces
+clippy:
+    cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+# The full gate a change must pass before it is done
+preflight: clippy
+    cargo fmt --all -- --check
+    just test
+
 # Run cli commands using p2poolv2-cli - e.g. just cli info
 cli *args:
     cargo run -p p2poolv2_node --bin p2poolv2_cli -- {{ args }}

@@ -66,14 +66,7 @@ fn is_uncle_ancestor_type(
     nephew_height: u32,
     confirmed_hashes: &HashMap<u32, BlockHash>,
 ) -> bool {
-    for height in 0..nephew_height {
-        if let Some(confirmed_hash) = confirmed_hashes.get(&height) {
-            if *confirmed_hash == *uncle_parent {
-                return true;
-            }
-        }
-    }
-    false
+    (0..nephew_height).any(|height| confirmed_hashes.get(&height) == Some(uncle_parent))
 }
 
 fn main() {
@@ -336,7 +329,7 @@ fn main() {
         }
 
         // Progress indicator every 1000 blocks
-        if height % 1000 == 0 && height > 0 {
+        if height.is_multiple_of(1000) && height > 0 {
             println!("  verified {height} / {top_height} confirmed blocks...");
         }
 
