@@ -1,0 +1,111 @@
+---
+# Grafana + Prometheus role -- native install and configuration for
+# monitoring p2poolv2 metrics
+
+# --- Grafana repository setup (Debian/Ubuntu) ---
+
+- name: Ensure keyring directory exists (Debian/Ubuntu)
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: "0755"
+  when: ansible_os_family == "Debian"
+
+- name: Download Grafana GPG key (Debian/Ubuntu)
+  ansible.builtin.get_url:
+    url: https://apt.grafana.com/gpg.key
+    dest: /etc/apt/keyrings/grafana.asc
+    mode: "0644"
+  when: ansible_os_family == "Debian"
+
+- name: Add Grafana apt repository (Debian/Ubuntu)
+  ansible.builtin.apt_repository:
+    repo: "deb [signed-by=/etc/apt/keyrings/grafana.asc] https://apt.grafana.com stable main"
+    state: present
+    filename: grafana
+  when: ansible_os_family == "Debian"
+
+- name: Update apt cache after adding Grafana repo (Debian/Ubuntu)
+  ansible.builtin.apt:
+    update_cache: true
+  when: ansible_os_family == "Debian"
+
+# --- Install packages ---
+# Prometheus is available in default repos on both Debian/Ubuntu (universe)
+# and Arch (extra), so no extra repo setup is needed for it.
+
+- name: Install prometheus and grafana
+  ansible.builtin.package:
+    name:
+      - prometheus
+      - grafana
+    state: present
+
+# --- Deploy Prometheus config ---
+
+- name: Deploy prometheus.yml
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../prometheus/prometheus.yml"
+    dest: /etc/prometheus/prometheus.yml
+    owner: root
+    group: root
+    mode: "0644"
+  notify: restart prometheus
+
+# --- Deploy Grafana provisioning and dashboards ---
+
+- name: Ensure Grafana provisioning directory exists
+  ansible.builtin.file:
+    path: /etc/grafana/provisioning
+    state: directory
+    mode: "0755"
+
+- name: Deploy Grafana datasource provisioning
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../prometheus/grafana/provisioning/datasources/"
+    dest: /etc/grafana/provisioning/datasources/
+    owner: root
+    group: grafana
+    mode: "0644"
+  notify: restart grafana-server
+
+- name: Deploy Grafana dashboard provisioning config
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../prometheus/grafana/provisioning/dashboards/"
+    dest: /etc/grafana/provisioning/dashboards/
+    owner: root
+    group: grafana
+    mode: "0644"
+  notify: restart grafana-server
+
+- name: Ensure Grafana dashboards directory exists
+  ansible.builtin.file:
+    path: /var/lib/grafana/dashboards
+    state: directory
+    owner: grafana
+    group: grafana
+    mode: "0755"
+
+- name: Deploy Grafana dashboard JSON files
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../prometheus/grafana/dashboards/"
+    dest: /var/lib/grafana/dashboards/
+    owner: grafana
+    group: grafana
+    mode: "0644"
+  notify: restart grafana-server
+
+# --- Enable and start services ---
+
+- name: Enable and start prometheus service
+  ansible.builtin.systemd:
+    name: prometheus
+    enabled: true
+    state: started
+
+- name: Enable and start grafana-server service
+  ansible.builtin.systemd:
+    name: grafana-server
+    enabled: true
+    state: started
+
