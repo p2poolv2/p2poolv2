@@ -38,8 +38,13 @@ put their funds, hashrate, or infrastructure at risk.
 
 The following are generally out of scope:
 
-- Vulnerabilities in third-party dependencies (report these upstream;
-  do let us know if a dependency issue materially affects P2Poolv2).
+- Vulnerabilities in third-party dependencies, where the fix belongs
+  upstream (report these to that project). We do track them: `cargo deny`
+  runs in CI against the RustSec advisory database, on every pull request
+  and daily. Advisories we cannot yet fix are listed in `deny.toml` with
+  the reason and the condition for removing the entry. Do tell us if a
+  dependency issue materially affects P2Poolv2, or if you find one our
+  tooling has missed.
 - Issues requiring physical access or root access to the host machine.
 - Denial-of-service attacks that are generic to any P2P network and
   require resources disproportionate to the impact.

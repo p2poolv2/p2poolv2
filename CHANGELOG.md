@@ -7,6 +7,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+
+- Environment variable overrides now use `__` between a config section and its
+  key: `P2POOL_STORE__PATH`, not `P2POOL_STORE_PATH`. A single underscore could
+  not address a field whose own name contains one, so
+  `P2POOL_STORE_PPLNS_TTL_DAYS` resolved to `store.pplns.ttl.days` and was
+  silently discarded. Operators setting any `P2POOL_*` override must add the
+  second underscore. `P2POOL_CONFIG` and `P2POOL_STATIC_DIR` are unaffected;
+  they are read directly rather than through the config crate.
+- RocksDB engine moves from 10.4.2 to 11.8.1 with the `rocksdb` 0.25 upgrade,
+  and libp2p moves from 0.53 to 0.56. Both are format-relevant and land
+  together with the planned chain reset.
+
+### Added
+
+- `cargo-deny` in CI, checking advisories, licences, duplicate versions and
+  source registries, with a `deny.toml` policy and `just deny`. Licence, ban
+  and source violations block; advisories run non-blocking with a daily
+  schedule, so a newly published advisory does not stop an unrelated merge.
+- Dependabot for cargo, GitHub Actions and Docker base images, weekly.
+  Semver-compatible cargo updates arrive as one grouped PR. Majors are left to
+  Dependabot except for libp2p, rocksdb and bitcoinconsensus, and bitcoin is
+  also held at minor because 0.32 to 0.33 changes consensus serialization.
+- Known-answer tests for `password_to_hmac` and `build_basic_auth_header`,
+  pinning the values that operator `auth_token` config depends on.
+- Characterisation tests for environment-variable overrides, including the
+  exact keys docker-compose sets.
+
+### Changed
+
+- Dependencies updated across the tree. Packages with known advisories drop
+  from 25 to 3, and the lockfile from 574 packages to 542. The three that
+  remain are blocked upstream in libp2p and are recorded in `deny.toml` with
+  the conditions for removing them.
+- `reqwest` 0.13 changes what `default-tls` means, so TLS moves from OpenSSL to
+  rustls. `openssl`, `openssl-sys`, `native-tls` and `hyper-tls` leave the tree
+  entirely. Certificate trust is unchanged: `rustls-platform-verifier` still
+  uses the platform trust store.
+- Container base images move to Debian 13 (trixie) for both build and runtime
+  stages, and the runtime image now installs `ca-certificates`, which rustls
+  requires when constructing an HTTPS client.
+- CI lint runs `cargo clippy --workspace --all-targets --all-features
+  -- -D warnings`, matching what AGENTS.md already required.
+- GitHub Actions in `rust.yml` are pinned by commit SHA, as `docker.yml`
+  already did.
+
+### Removed
+
+- `void` and `rust_decimal` dependencies. libp2p 0.55 replaced `void::Void`
+  with `std::convert::Infallible`, and `rust_decimal` had no references in any
+  source file.
+
+### Fixed
+
+- Three docker-compose environment overrides that silently did nothing:
+  `P2POOL_BITCOIN_NETWORK` and `P2POOL_BITCOIN_URL` named a `bitcoin` config
+  section that does not exist, and `P2POOL_NETWORK_LISTEN_ADDRESS` could not
+  reach a field whose name contains an underscore. The compose deployment was
+  ignoring its network, bitcoind URL and listen address settings.
+- `publish = false` had no effect on eight of the nine crates. Workspace
+  package keys apply only where a member opts in, so those crates were
+  publishable despite the workspace declaring otherwise.
+- `OutgoingConnectionError` logged every failed outbound connection twice.
+
 ## [v0.14.1] - 2026-09-04
 
 ### Fixed
