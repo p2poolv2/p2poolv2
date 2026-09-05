@@ -57,6 +57,13 @@ allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 # ignore list is deliberately empty: the current advisories are the baseline
 # this upgrade work is measured against, not noise to be suppressed.
 # Triage procedure and the ignore-entry format live in audit.toml.
-ignore = []
+# Shorter than the list in .cargo/audit.toml, and deliberately so. cargo-audit
+# scans the whole lockfile; this file scopes the graph to the platforms we ship
+# (see [graph] targets), which already excludes the lockfile-only crates. Only
+# advisories cargo-deny can actually see belong here - listing the rest makes it
+# report "no crate matched advisory criteria". Triage lives in the audit config.
+ignore = [
+    "RUSTSEC-2026-0119",  # hickory-proto 0.24.4, via libp2p-dns
+]
 yanked = "deny"
 unmaintained = "workspace"

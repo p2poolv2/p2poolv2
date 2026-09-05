@@ -1,0 +1,60 @@
+# cargo-audit configuration.
+#
+# TRIAGE PROCEDURE
+#
+# cargo-audit reads Cargo.lock, which carries entries for target platforms and
+# optional features this workspace never builds. Before adding an ignore entry,
+# classify the advisory:
+#
+#   1. cargo tree -i <crate>@<version> --workspace --all-features
+#      Nothing printed means it is not in the host build graph.
+#   2. cargo tree -i <crate>@<version> --target all --all-features
+#      Shows which target or feature would pull it in.
+#   3. Classify as one of:
+#      reachable and fixable  -> fix it, do not ignore
+#      reachable but blocked  -> ignore, naming the upstream blocker
+#      lockfile only          -> ignore, naming the target or feature
+#
+# Every ignore entry must carry the advisory id, the classification, the
+# blocker, and the condition under which the entry is removed. An ignore list
+# without removal conditions becomes permanent.
+#
+# The list below is intentionally empty. Every advisory currently outstanding
+# traces to libp2p 0.53 and is cleared by upgrading it, so these are the
+# recorded baseline for that work rather than noise to suppress. Triage as of
+# the current lockfile:
+#
+#   reachable, blocked on the libp2p upgrade
+#     RUSTSEC-2026-0119  hickory-proto 0.24.4  via libp2p-dns
+#     RUSTSEC-2024-0384  instant 0.1.13        via libp2p, libp2p-kad
+#     RUSTSEC-2024-0436  paste 1.0.15          via libp2p-tcp (build-time)
+#     RUSTSEC-2026-0002  lru 0.12.5            via libp2p-identify
+#     RUSTSEC-2026-0253  lru 0.12.5            via libp2p-identify
+#
+#   lockfile only, not reachable from any target even with --all-features.
+#   These are optional dependencies of libp2p 0.53 features we never enable.
+#     RUSTSEC-2026-0258  h2 0.3.27
+#     RUSTSEC-2025-0009  ring 0.16.20
+#     RUSTSEC-2025-0010  ring 0.16.20
+#     RUSTSEC-2026-0098  rustls-webpki 0.101.7
+#     RUSTSEC-2026-0099  rustls-webpki 0.101.7
+#     RUSTSEC-2026-0104  rustls-webpki 0.101.7
+
+[advisories]
+ignore = [
+    # Reachable, blocked on the libp2p 0.53 -> 0.56 upgrade. Remove each entry
+    # once that lands and `cargo audit` no longer reports it.
+    "RUSTSEC-2026-0119",  # hickory-proto 0.24.4, via libp2p-dns
+
+    # Lockfile only. These are optional dependencies of libp2p 0.53 features
+    # this workspace never enables, so they are present in Cargo.lock but never
+    # compiled. Verified with `cargo tree -i <crate> --target all --all-features`,
+    # which reports nothing for each. Remove once libp2p is upgraded.
+    "RUSTSEC-2026-0258",  # h2 0.3.27
+    "RUSTSEC-2025-0009",  # ring 0.16.20
+    "RUSTSEC-2026-0098",  # rustls-webpki 0.101.7
+    "RUSTSEC-2026-0099",  # rustls-webpki 0.101.7
+    "RUSTSEC-2026-0104",  # rustls-webpki 0.101.7
+]
+informational_warnings = ["unmaintained", "unsound", "notice"]
+severity_threshold = "low"
