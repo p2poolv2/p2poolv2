@@ -1,3 +1,9 @@
+# The workspace is publish = false so nothing reaches crates.io by accident.
+# dist skips unpublished packages by default, so it has to be told explicitly
+# that this package carries the release binaries.
+[dist]
+dist = true
+
 [dist.binaries]
 aarch64-apple-darwin = ["p2poolv2", "p2poolv2_cli"]
 aarch64-unknown-linux-gnu = ["p2poolv2", "p2poolv2_cli"]
