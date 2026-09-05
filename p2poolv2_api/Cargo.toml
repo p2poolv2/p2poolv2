@@ -16,7 +16,7 @@ publish.workspace = true
 [dependencies]
 p2poolv2_lib = { workspace = true }
 bitcoin = { workspace = true }
-axum = { version = "0.7", features = ["ws"] }
+axum = { version = "0.8", features = ["ws"] }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -28,7 +28,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
 subtle = "2"
-tower-http = { version = "0.6", features = ["fs", "cors"] }
+tower-http = { version = "0.7", features = ["fs", "cors"] }
 
 [dev-dependencies]
 p2poolv2_lib = { workspace = true, features = ["test-utils"] }

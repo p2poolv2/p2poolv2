@@ -164,7 +164,7 @@ async fn handle_socket(
                         if event_matches_subscriptions(&event, &subscriptions) {
                             match event_to_json(&event, network) {
                                 Ok(json) => {
-                                    if socket.send(Message::Text(json)).await.is_err() {
+                                    if socket.send(Message::Text(json.into())).await.is_err() {
                                         debug!("WebSocket send failed, closing connection");
                                         return;
                                     }
