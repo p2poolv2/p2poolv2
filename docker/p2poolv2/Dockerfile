@@ -72,7 +72,7 @@ EXPOSE 3333 \
 # Set sane container defaults
 ENV RUST_BACKTRACE=full \
     RUST_LOG=debug \
-    P2POOL_LOGGING_CONSOLE=1 \
+    P2POOL_LOGGING__CONSOLE=1 \
     P2POOL_CONFIG=/etc/p2poolv2/config.toml
 
 COPY --from=builder /usr/local/cargo/bin/p2poolv2 /usr/local/bin/p2poolv2

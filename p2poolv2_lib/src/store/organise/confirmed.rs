@@ -417,7 +417,7 @@ impl Store {
         let serialized_height = consensus::serialize(&height);
         batch.put_cf(
             &block_height_cf,
-            TOP_CONFIRMED_KEY.as_bytes().as_ref(),
+            TOP_CONFIRMED_KEY.as_bytes(),
             serialized_height,
         );
     }
@@ -427,7 +427,7 @@ impl Store {
         let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
         match self
             .db
-            .get_cf(&block_height_cf, TOP_CONFIRMED_KEY.as_bytes().as_ref())
+            .get_cf(&block_height_cf, TOP_CONFIRMED_KEY.as_bytes())
         {
             Ok(Some(height_bytes)) => Ok(encode::deserialize(&height_bytes)?),
             Ok(None) => Err(StoreError::NotFound("No confirmed found at top".into())),

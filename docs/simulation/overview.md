@@ -102,7 +102,7 @@ seed = 1                      # per-node; differ per node in multi-node runs
 ```sh
 cargo build -p p2poolv2_sim --features sim
 # fresh store via env override so existing dev data is untouched:
-P2POOL_STORE_PATH=/tmp/store-sim-test.db \
+P2POOL_STORE__PATH=/tmp/store-sim-test.db \
   ./target/debug/p2poolv2_sim --config config-dev.toml
 ```
 

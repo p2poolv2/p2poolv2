@@ -93,7 +93,7 @@ Run it as a **single line** (don't split it with a `\` — pasting the
 continuation often drops you into a `dquote>` prompt; if that happens, Ctrl-C):
 
 ```sh
-P2POOL_STORE_PATH=/tmp/store-sim-A.db ./target/debug/p2poolv2_sim --config config-dev.toml > /tmp/sim-A.log 2>&1 &
+P2POOL_STORE__PATH=/tmp/store-sim-A.db ./target/debug/p2poolv2_sim --config config-dev.toml > /tmp/sim-A.log 2>&1 &
 ```
 
 zsh prints the background pid itself (e.g. `[1] 12345`).

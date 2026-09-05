@@ -564,7 +564,15 @@ impl Config {
     pub fn load(path: &str) -> Result<Self, config::ConfigError> {
         config::Config::builder()
             .add_source(config::File::with_name(path))
-            .add_source(config::Environment::with_prefix("P2POOL").separator("_"))
+            // Nesting uses `__` so that a single `_` stays part of a field name.
+            // With a single-underscore separator, P2POOL_STORE_PPLNS_TTL_DAYS
+            // addresses store.pplns.ttl.days, which does not exist, and the
+            // override is silently discarded. See the env_override tests.
+            .add_source(
+                config::Environment::with_prefix("P2POOL")
+                    .prefix_separator("_")
+                    .separator("__"),
+            )
             .build()?
             .try_deserialize()
     }
@@ -826,10 +834,124 @@ mod tests {
         assert_eq!(config.store.pplns_ttl_days, 7);
     }
 
+    /// Characterisation tests for environment-variable overrides.
+    ///
+    /// `Config::load` layers `config::Environment` with prefix `P2POOL` and
+    /// separator `_` over the TOML file. The separator is also what appears
+    /// inside many field names, so which keys are reachable is not obvious.
+    /// These tests pin the behaviour, because getting it wrong starts the node
+    /// with the wrong settings rather than failing.
+    #[test]
+    fn env_override_applies_to_a_nested_string_field() {
+        with_var("P2POOL_LOGGING__LEVEL", Some("trace"), || {
+            let config = Config::load("../config.sample.toml").unwrap();
+            assert_eq!(config.logging.level, "trace");
+        });
+    }
+
+    /// Integers arrive from the environment as strings and have to be coerced.
+    #[test]
+    fn env_override_applies_to_a_nested_integer_field() {
+        with_var("P2POOL_API__PORT", Some("59999"), || {
+            let config = Config::load("../config.sample.toml").unwrap();
+            assert_eq!(config.api.port, 59999);
+        });
+    }
+
+    /// Booleans are coerced from strings the same way integers are.
+    #[test]
+    fn env_override_applies_to_a_nested_bool_field() {
+        with_var("P2POOL_LOGGING__CONSOLE", Some("false"), || {
+            let config = Config::load("../config.sample.toml").unwrap();
+            assert_eq!(config.logging.console, Some(false));
+        });
+    }
+
+    /// An Option<String> field is populated, not left None.
+    #[test]
+    fn env_override_applies_to_a_nested_option_field() {
+        with_var("P2POOL_LOGGING__FILE", Some("/tmp/env.log"), || {
+            let config = Config::load("../config.sample.toml").unwrap();
+            assert_eq!(config.logging.file, Some("/tmp/env.log".to_string()));
+        });
+    }
+
+    /// A field whose own name contains an underscore is reachable, because the
+    /// nesting separator is `__` and single underscores stay part of the key.
+    ///
+    /// With a single-underscore separator this override was silently discarded:
+    /// `P2POOL_STORE_PPLNS_TTL_DAYS` addressed `store.pplns.ttl.days`, which
+    /// does not exist, so the file value survived and nothing reported it.
+    #[test]
+    fn env_override_reaches_a_field_whose_name_contains_an_underscore() {
+        with_var("P2POOL_STORE__PPLNS_TTL_DAYS", Some("99"), || {
+            let config = Config::load("../config.sample.toml").unwrap();
+            assert_eq!(config.store.pplns_ttl_days, 99);
+        });
+    }
+
+    /// The listen address is the other field docker-compose sets that a
+    /// single-underscore separator could not reach.
+    #[test]
+    fn env_override_reaches_the_network_listen_address() {
+        with_var(
+            "P2POOL_NETWORK__LISTEN_ADDRESS",
+            Some("/ip4/10.0.0.1/tcp/6884"),
+            || {
+                let config = Config::load("../config.sample.toml").unwrap();
+                assert_eq!(config.network.listen_address, "/ip4/10.0.0.1/tcp/6884");
+            },
+        );
+    }
+
+    /// A single-underscore key no longer resolves, so an operator carrying the
+    /// old spelling forward gets the file value rather than a silent surprise
+    /// in a different field.
+    #[test]
+    fn env_override_ignores_the_old_single_underscore_spelling() {
+        with_var("P2POOL_API_PORT", Some("59999"), || {
+            let config = Config::load("../config.sample.toml").unwrap();
+            assert_ne!(config.api.port, 59999);
+        });
+    }
+
+    /// The exact keys docker-compose sets, asserted together so the container
+    /// and the config schema cannot drift apart.
+    ///
+    /// Three of these did nothing before the separator change:
+    /// P2POOL_BITCOIN_NETWORK and P2POOL_BITCOIN_URL named a `bitcoin` section
+    /// that does not exist, and P2POOL_NETWORK_LISTEN_ADDRESS could not reach
+    /// a field whose name contains an underscore.
+    #[test]
+    fn env_overrides_used_by_docker_compose_all_apply() {
+        temp_env::with_vars(
+            [
+                ("P2POOL_STRATUM__NETWORK", Some("signet")),
+                ("P2POOL_BITCOINRPC__URL", Some("http://127.0.0.1:38332")),
+                ("P2POOL_STORE__PATH", Some("/p2poolv2/data/signet")),
+                ("P2POOL_STRATUM__PORT", Some("3333")),
+                ("P2POOL_API__PORT", Some("46884")),
+                (
+                    "P2POOL_NETWORK__LISTEN_ADDRESS",
+                    Some("/ip4/0.0.0.0/tcp/6884"),
+                ),
+            ],
+            || {
+                let config = Config::load("../config.sample.toml").unwrap();
+                assert_eq!(config.stratum.network, bitcoin::Network::Signet);
+                assert_eq!(config.bitcoinrpc.url, "http://127.0.0.1:38332");
+                assert_eq!(config.store.path, "/p2poolv2/data/signet");
+                assert_eq!(config.stratum.port, 3333);
+                assert_eq!(config.api.port, 46884);
+                assert_eq!(config.network.listen_address, "/ip4/0.0.0.0/tcp/6884");
+            },
+        );
+    }
+
     #[test]
     fn test_config_from_env_vars() {
         with_var(
-            "P2POOL_BITCOINRPC_URL",
+            "P2POOL_BITCOINRPC__URL",
             Some("http://bitcoin-from-env:8332"),
             || {
                 // Load config from file first

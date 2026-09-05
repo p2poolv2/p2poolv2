@@ -35,7 +35,15 @@ impl SimNodeConfig {
     pub fn load(path: &str) -> Result<Self, config::ConfigError> {
         config::Config::builder()
             .add_source(config::File::with_name(path))
-            .add_source(config::Environment::with_prefix("P2POOL").separator("_"))
+            // Nesting uses `__` so that a single `_` stays part of a field name.
+            // With a single-underscore separator, P2POOL_STORE_PPLNS_TTL_DAYS
+            // addresses store.pplns.ttl.days, which does not exist, and the
+            // override is silently discarded. See the env_override tests.
+            .add_source(
+                config::Environment::with_prefix("P2POOL")
+                    .prefix_separator("_")
+                    .separator("__"),
+            )
             .build()?
             .try_deserialize()
     }
