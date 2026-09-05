@@ -1,0 +1,54 @@
+name: Security
+
+# Advisories land against unchanged code, so this cannot be a PR-only check.
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  schedule:
+    - cron: "0 6 * * 24"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+jobs:
+  # Licence, duplicate-version and source-registry policy. These are
+  # deterministic: they only change when a dependency changes, so they block.
+  deny:
+    name: cargo-deny (licences, bans, sources)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      - uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8 # v2.87.5
+        with:
+          tool: cargo-deny
+
+      - run: cargo deny check licenses bans sources
+
+  # Vulnerability advisories. Non-blocking for now: a newly published RUSTSEC
+  # advisory can turn this red overnight on unchanged code, and the dependency
+  # upgrade work has not landed yet. Flip to blocking once the tree is clean.
+  audit:
+    name: cargo-audit (advisories)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      - uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8 # v2.87.5
+        with:
+          tool: cargo-audit
+
+      - run: cargo audit
