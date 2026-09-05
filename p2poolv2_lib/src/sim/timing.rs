@@ -30,7 +30,7 @@
 //! regtest ~50% trap). All randomness is caller-supplied so runs are
 //! reproducible from a per-node seed.
 
-use rand::Rng;
+use rand::RngExt;
 
 /// Number of hashes, on expectation, to find one difficulty-1 share (2^32).
 const HASHES_PER_DIFFICULTY_1: f64 = 4_294_967_296.0; // 2^32
@@ -63,14 +63,14 @@ pub fn mean_share_interval_secs(pool_difficulty: f64, hashrate_hps: f64) -> f64 
 /// Uses inverse-transform sampling: `-mean · ln(1 - u)` with `u ∈ [0, 1)`.
 /// We use `1 - u` so the argument to `ln` is in `(0, 1]`, never zero.
 /// A non-finite `mean` (e.g. from a zero hashrate) yields `f64::INFINITY`.
-pub fn sample_exponential_secs<R: Rng + ?Sized>(mean_secs: f64, rng: &mut R) -> f64 {
+pub fn sample_exponential_secs<R: RngExt + ?Sized>(mean_secs: f64, rng: &mut R) -> f64 {
     if !mean_secs.is_finite() {
         return f64::INFINITY;
     }
     if mean_secs <= 0.0 {
         return 0.0;
     }
-    let u: f64 = rng.gen_range(0.0..1.0); // [0, 1)
+    let u: f64 = rng.random_range(0.0..1.0); // [0, 1)
     -mean_secs * (1.0 - u).ln()
 }
 
@@ -90,14 +90,14 @@ pub fn block_find_probability(block_to_share_ratio: u64) -> f64 {
 ///
 /// This is the only place a block-find is decided. It is a single O(1) draw,
 /// deliberately NOT a header hash against the network target.
-pub fn is_block_find<R: Rng + ?Sized>(probability: f64, rng: &mut R) -> bool {
+pub fn is_block_find<R: RngExt + ?Sized>(probability: f64, rng: &mut R) -> bool {
     if probability <= 0.0 {
         return false;
     }
     if probability >= 1.0 {
         return true;
     }
-    rng.gen_range(0.0..1.0) < probability
+    rng.random_range(0.0..1.0) < probability
 }
 
 #[cfg(test)]

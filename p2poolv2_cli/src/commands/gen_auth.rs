@@ -17,20 +17,20 @@
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use p2poolv2_lib::auth::password_to_hmac;
-use rand::Rng;
+use rand::RngExt;
 use std::error::Error;
 
 /// Generate a 16-byte hex salt (32 hex characters)
 fn generate_salt() -> String {
-    let mut rng = rand::thread_rng();
-    let salt_bytes: [u8; 16] = rng.r#gen();
+    let mut rng = rand::rng();
+    let salt_bytes: [u8; 16] = rng.random();
     hex::encode(salt_bytes)
 }
 
 /// Generate a 32-byte URL-safe base64 password
 fn generate_password() -> String {
-    let mut rng = rand::thread_rng();
-    let password_bytes: [u8; 32] = rng.r#gen();
+    let mut rng = rand::rng();
+    let password_bytes: [u8; 32] = rng.random();
     URL_SAFE_NO_PAD.encode(password_bytes)
 }
 

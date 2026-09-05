@@ -41,7 +41,7 @@ use crate::stratum::work::tracker::{JobTracker, start_tracker_actor};
 use bitcoin::Address;
 use bitcoindrpc::BitcoindRpcClient;
 use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
+use rand::{RngExt, SeedableRng};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
@@ -131,10 +131,10 @@ impl SimEmitter {
                 None => continue,
             };
 
-            let enonce1_hex = format!("{:08x}", rng.gen_range(0..=u32::MAX));
+            let enonce1_hex = format!("{:08x}", rng.random_range(0..=u32::MAX));
             let enonce2_hex = format!("{enonce2_counter:016x}");
             enonce2_counter = enonce2_counter.wrapping_add(1);
-            let nonce: u32 = rng.gen_range(0..=u32::MAX);
+            let nonce: u32 = rng.random_range(0..=u32::MAX);
             let ntime = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_secs() as u32)

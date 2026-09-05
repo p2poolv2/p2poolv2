@@ -81,7 +81,7 @@ use bitcoin::TxMerkleNode;
 use bitcoin::script::PushBytesBuf;
 use bitcoin::secp256k1::Secp256k1;
 #[cfg(test)]
-use rand::{Rng, thread_rng};
+use rand::{RngExt, rng};
 
 /// Well-known secp256k1 compressed public keys (multiples of the generator G).
 /// Use these when constructing test share blocks that need distinct, valid miner keys.
@@ -365,7 +365,7 @@ pub fn create_test_commitment() -> ShareCommitment {
 #[cfg(test)]
 /// Generate a random hex string of specified length (defaults to 64 characters)
 pub fn random_hex_string(length: usize, leading_zeroes: usize) -> String {
-    let mut rng = thread_rng();
+    let mut rng = rng();
     let mut bytes = [0u8; 32];
     rng.fill(&mut bytes[..length / 2]);
     // Set the specified number of leading bytes to zero
