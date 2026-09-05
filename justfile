@@ -89,13 +89,10 @@ preflight: clippy
     cargo fmt --all -- --check
     just test
 
-# Check dependencies for known vulnerability advisories
-audit:
-    cargo audit
-
-# Check dependency licences, duplicate versions and source registries
+# Check dependency advisories, licences, duplicate versions and source registries
 deny:
-    cargo deny check licenses bans sources advisories
+    cargo deny check
+
 
 # Run cli commands using p2poolv2-cli - e.g. just cli info
 cli *args:

@@ -17,9 +17,9 @@ permissions:
   contents: read
 
 jobs:
-  # Licence, duplicate-version and source-registry policy. These are
-  # deterministic: they only change when a dependency changes, so they block.
-  deny:
+  # Licence, duplicate-version and source-registry policy. Deterministic: the
+  # result only changes when a dependency changes, so this blocks.
+  policy:
     name: cargo-deny (licences, bans, sources)
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -34,11 +34,12 @@ jobs:
 
       - run: cargo deny check licenses bans sources
 
-  # Vulnerability advisories. Non-blocking for now: a newly published RUSTSEC
-  # advisory can turn this red overnight on unchanged code, and the dependency
-  # upgrade work has not landed yet. Flip to blocking once the tree is clean.
-  audit:
-    name: cargo-audit (advisories)
+  # Vulnerability advisories, from the same tool and the same deny.toml.
+  # Split out and non-blocking because a newly published RUSTSEC advisory can
+  # turn this red overnight against unchanged code, which should not stop an
+  # unrelated merge. The daily schedule above is what surfaces those.
+  advisories:
+    name: cargo-deny (advisories)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     continue-on-error: true
@@ -49,6 +50,6 @@ jobs:
 
       - uses: taiki-e/install-action@5bf6ce016fd2e72eefc647cbca1e4213f65955b8 # v2.87.5
         with:
-          tool: cargo-audit
+          tool: cargo-deny
 
-      - run: cargo audit
+      - run: cargo deny check advisories

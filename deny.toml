@@ -52,20 +52,38 @@ unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 
 [advisories]
-# Advisories are the one check that can turn CI red overnight on unchanged
-# code, so this runs non-blocking until the dependency upgrades land. The
-# ignore list is deliberately empty: the current advisories are the baseline
-# this upgrade work is measured against, not noise to be suppressed.
-# Triage procedure and the ignore-entry format live in audit.toml.
-# Shorter than the list in .cargo/audit.toml, and deliberately so. cargo-audit
-# scans the whole lockfile; this file scopes the graph to the platforms we ship
-# (see [graph] targets), which already excludes the lockfile-only crates. Only
-# advisories cargo-deny can actually see belong here - listing the rest makes it
-# report "no crate matched advisory criteria". Triage lives in the audit config.
+# TRIAGE PROCEDURE
+#
+# This check reads Cargo.lock, but [graph] targets scopes it to the platforms
+# we ship, so crates that are only lockfile entries for features we never
+# enable do not appear here at all. Before adding an ignore entry, classify it:
+#
+#   1. cargo tree -i <crate>@<version> --workspace --all-features
+#      Nothing printed means it is not in the host build graph.
+#   2. cargo tree -i <crate>@<version> --target all --all-features
+#      Shows which target or feature would pull it in.
+#   3. Classify as one of:
+#      reachable and fixable  -> fix it, do not ignore
+#      reachable but blocked  -> ignore, naming the upstream blocker
+#      lockfile only          -> should not reach this file; check the scoping
+#
+# Every entry carries the advisory id, why it is unfixable here, and the
+# condition under which it is removed. An ignore list without removal
+# conditions becomes permanent.
 ignore = [
-    "RUSTSEC-2026-0118",  # hickory-proto 0.25.2, via libp2p-dns, no fix published
-    "RUSTSEC-2026-0119",  # hickory-proto 0.25.2, via libp2p-dns, fixed in >=0.26.1
-    "RUSTSEC-2024-0436",  # paste 1.0.15, build-time, via libp2p-tcp -> if-watch
+    # Reachable, blocked upstream in libp2p. libp2p-dns 0.44 pins
+    # hickory-resolver 0.25, and the fix for RUSTSEC-2026-0119 is in
+    # hickory-proto 0.26.1. RUSTSEC-2026-0118 has no patched release at all.
+    # Remove both when libp2p moves to hickory 0.26.
+    "RUSTSEC-2026-0118",  # hickory-proto 0.25.2, no fix published
+    "RUSTSEC-2026-0119",  # hickory-proto 0.25.2, fixed in >=0.26.1
+
+    # Unmaintained proc macro, build-time only, reached through
+    # libp2p-tcp -> if-watch -> netlink-packet-core. Remove when that chain
+    # drops paste.
+    "RUSTSEC-2024-0436",  # paste 1.0.15
 ]
 yanked = "deny"
-unmaintained = "workspace"
+# "all" rather than "workspace": unmaintained transitive crates are the ones we
+# are least likely to notice otherwise. paste above is exactly that case.
+unmaintained = "all"
