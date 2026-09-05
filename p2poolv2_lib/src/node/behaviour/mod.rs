@@ -29,9 +29,9 @@ use request_response::{
     ConsensusCodec, P2PoolRequestResponseProtocol, kad_protocol_string, protocol_string,
 };
 use request_response::{RequestResponseBehaviour, RequestResponseEvent};
+use std::convert::Infallible;
 use std::error::Error;
 use std::time::Duration;
-use void;
 
 /// Interval between ping probes sent to each connected peer
 const PING_INTERVAL_SECS: u64 = 30;
@@ -65,11 +65,10 @@ impl P2PoolBehaviour {
     pub fn new(local_key: &Keypair, config: &Config) -> Result<Self, Box<dyn Error>> {
         // Initialise Kademlia
         let store = MemoryStore::new(local_key.public().to_peer_id());
-        let mut kad_config = kad::Config::default();
-        kad_config.set_query_timeout(tokio::time::Duration::from_secs(60));
-        kad_config.set_protocol_names(vec![libp2p::StreamProtocol::try_from_owned(
+        let mut kad_config = kad::Config::new(libp2p::StreamProtocol::try_from_owned(
             kad_protocol_string(config.stratum.network),
-        )?]);
+        )?);
+        kad_config.set_query_timeout(tokio::time::Duration::from_secs(60));
 
         let mut kademlia_behaviour =
             kad::Behaviour::with_config(local_key.public().to_peer_id(), store, kad_config);
@@ -147,11 +146,10 @@ impl From<RequestResponseEvent> for P2PoolBehaviourEvent {
     }
 }
 
-// Provide From for the void (unreachable) type for connection_limits behaviour
-impl From<void::Void> for P2PoolBehaviourEvent {
-    fn from(void: void::Void) -> Self {
-        // Since void::Void is uninhabited (can never be constructed),
-        // we can safely make this unreachable
-        match void {}
+// Provide From for the uninhabited type the connection_limits behaviour emits.
+impl From<Infallible> for P2PoolBehaviourEvent {
+    fn from(event: Infallible) -> Self {
+        // Infallible can never be constructed, so this is unreachable.
+        match event {}
     }
 }

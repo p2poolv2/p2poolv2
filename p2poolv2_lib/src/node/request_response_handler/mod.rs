@@ -38,6 +38,7 @@ use crate::shares::validation::ShareValidator;
 use crate::utils::time_provider::SystemTimeProvider;
 use libp2p::PeerId;
 use libp2p::request_response::ResponseChannel;
+use libp2p::swarm::ConnectionId;
 use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
@@ -113,15 +114,20 @@ impl RequestResponseHandler<ResponseChannel<Message>> {
         match event {
             RequestResponseEvent::Message {
                 peer,
+                connection_id,
                 message:
                     libp2p::request_response::Message::Request {
                         request_id: _,
                         request,
                         channel,
                     },
-            } => self.dispatch_request(peer, request, channel).await,
+            } => {
+                self.dispatch_request(peer, connection_id, request, channel)
+                    .await
+            }
             RequestResponseEvent::Message {
                 peer,
+                connection_id,
                 message:
                     libp2p::request_response::Message::Response {
                         request_id,
@@ -129,35 +135,44 @@ impl RequestResponseHandler<ResponseChannel<Message>> {
                     },
             } => {
                 debug!(
-                    "Received response {} for request {} from peer {}",
-                    response, request_id, peer
+                    "Received response {} for request {} from peer {} on connection {}",
+                    response, request_id, peer, connection_id
                 );
-                self.dispatch_response(peer, response).await
+                self.dispatch_response(peer, connection_id, response).await
             }
             RequestResponseEvent::OutboundFailure {
                 peer,
+                connection_id,
                 request_id,
                 error: failure_error,
             } => {
                 debug!(
-                    "Outbound failure from peer {}, request_id: {}, error: {:?}",
-                    peer, request_id, failure_error
+                    "Outbound failure from peer {} on connection {}, request_id: {}, error: {:?}",
+                    peer, connection_id, request_id, failure_error
                 );
                 Ok(())
             }
             RequestResponseEvent::InboundFailure {
                 peer,
+                connection_id,
                 request_id,
                 error: failure_error,
             } => {
                 debug!(
-                    "Inbound failure from peer {}, request_id: {}, error: {:?}",
-                    peer, request_id, failure_error
+                    "Inbound failure from peer {} on connection {}, request_id: {}, error: {:?}",
+                    peer, connection_id, request_id, failure_error
                 );
                 Ok(())
             }
-            RequestResponseEvent::ResponseSent { peer, request_id } => {
-                debug!("Response sent to peer {}, request_id: {}", peer, request_id);
+            RequestResponseEvent::ResponseSent {
+                peer,
+                connection_id,
+                request_id,
+            } => {
+                debug!(
+                    "Response sent to peer {} on connection {}, request_id: {}",
+                    peer, connection_id, request_id
+                );
                 Ok(())
             }
         }
@@ -233,6 +248,10 @@ impl<C: Send + Sync + 'static> RequestResponseHandler<C> {
     /// Records peer block knowledge, then forwards the request
     /// context to the peer's channel via try_send.
     ///
+    /// `connection_id` identifies the libp2p connection the request arrived on
+    /// and is logged with each failure, so a peer with several concurrent
+    /// connections can be told apart in the logs.
+    ///
     /// - Full: peer is overwhelming us, disconnect.
     /// - Closed: task exited (rate limit or error), remove the stale
     ///   handle so the next request spawns a fresh one.
@@ -240,6 +259,7 @@ impl<C: Send + Sync + 'static> RequestResponseHandler<C> {
     async fn dispatch_request(
         &mut self,
         peer: PeerId,
+        connection_id: ConnectionId,
         request: Message,
         channel: C,
     ) -> Result<(), Box<dyn Error>> {
@@ -262,8 +282,8 @@ impl<C: Send + Sync + 'static> RequestResponseHandler<C> {
             Some(handle) => handle,
             None => {
                 warn!(
-                    "No service handle for peer {}, creating one on the fly",
-                    peer
+                    "No service handle for peer {} on connection {}, creating one on the fly",
+                    peer, connection_id
                 );
                 self.add_peer(peer);
                 self.peer_handles.get(&peer).unwrap()
@@ -273,11 +293,17 @@ impl<C: Send + Sync + 'static> RequestResponseHandler<C> {
         match peer_handle.try_send(ctx) {
             Ok(()) => {}
             Err(mpsc::error::TrySendError::Full(_)) => {
-                error!("Peer {} service channel full, disconnecting", peer);
+                error!(
+                    "Peer {} service channel full on connection {}, disconnecting",
+                    peer, connection_id
+                );
                 let _ = self.swarm_tx.send(SwarmSend::Disconnect(peer)).await;
             }
             Err(mpsc::error::TrySendError::Closed(_)) => {
-                warn!("Peer {} service task exited, removing stale handle", peer);
+                warn!(
+                    "Peer {} service task exited on connection {}, removing stale handle",
+                    peer, connection_id
+                );
                 self.peer_handles.remove(&peer);
             }
         }
@@ -291,9 +317,13 @@ impl<C: Send + Sync + 'static> RequestResponseHandler<C> {
     /// the Tower service layers (rate limiting, inactivity tracking)
     /// because they are solicited by us and libp2p only delivers them
     /// for matching outstanding requests.
+    ///
+    /// `connection_id` identifies the libp2p connection the response arrived
+    /// on and is logged on the error path.
     async fn dispatch_response(
         &mut self,
         peer: PeerId,
+        connection_id: ConnectionId,
         response: Message,
     ) -> Result<(), Box<dyn Error>> {
         self.record_peer_knowledge(&peer, &response);
@@ -310,7 +340,10 @@ impl<C: Send + Sync + 'static> RequestResponseHandler<C> {
         )
         .await
         {
-            error!("Error handling response from peer {}: {}", peer, err);
+            error!(
+                "Error handling response from peer {} on connection {}: {}",
+                peer, connection_id, err
+            );
         }
         Ok(())
     }
@@ -421,7 +454,11 @@ mod tests {
         let share_headers = vec![header1, header2];
 
         let result = handler
-            .dispatch_response(peer_id, Message::ShareHeaders(share_headers))
+            .dispatch_response(
+                peer_id,
+                ConnectionId::new_unchecked(1),
+                Message::ShareHeaders(share_headers),
+            )
             .await;
 
         assert!(result.is_ok());
@@ -442,6 +479,7 @@ mod tests {
         let result = handler
             .dispatch_response(
                 peer_id,
+                ConnectionId::new_unchecked(1),
                 Message::NotFound(GetData::Block(BlockHash::all_zeros())),
             )
             .await;
@@ -468,7 +506,11 @@ mod tests {
         let inventory = InventoryMessage::BlockHashes(block_hashes);
 
         let result = handler
-            .dispatch_response(peer_id, Message::Inventory(inventory))
+            .dispatch_response(
+                peer_id,
+                ConnectionId::new_unchecked(1),
+                Message::Inventory(inventory),
+            )
             .await;
 
         assert!(result.is_ok());
@@ -488,6 +530,7 @@ mod tests {
         let result = handler
             .dispatch_response(
                 peer_id,
+                ConnectionId::new_unchecked(1),
                 Message::GetData(crate::node::messages::GetData::Block(BlockHash::all_zeros())),
             )
             .await;
@@ -526,6 +569,7 @@ mod tests {
         let result = handler
             .dispatch_request(
                 peer_id,
+                ConnectionId::new_unchecked(1),
                 Message::GetShareHeaders(block_hashes, stop_block_hash),
                 response_tx,
             )
@@ -564,6 +608,7 @@ mod tests {
         let result = handler
             .dispatch_request(
                 peer_id,
+                ConnectionId::new_unchecked(1),
                 Message::Inventory(InventoryMessage::BlockHashes(vec![BlockHash::all_zeros()])),
                 channel_tx,
             )
@@ -598,6 +643,7 @@ mod tests {
         let result = handler
             .dispatch_request(
                 peer_id,
+                ConnectionId::new_unchecked(1),
                 Message::NotFound(GetData::Block(BlockHash::all_zeros())),
                 channel_tx,
             )
@@ -632,7 +678,12 @@ mod tests {
         let (channel_tx, _channel_rx) = oneshot::channel::<Message>();
 
         let result = handler
-            .dispatch_request(peer_id, Message::Inventory(inventory), channel_tx)
+            .dispatch_request(
+                peer_id,
+                ConnectionId::new_unchecked(1),
+                Message::Inventory(inventory),
+                channel_tx,
+            )
             .await;
         assert!(result.is_ok());
 
@@ -683,7 +734,11 @@ mod tests {
         let block_hash = block.block_hash();
 
         let result = handler
-            .dispatch_response(peer_id, Message::ShareBlock(block))
+            .dispatch_response(
+                peer_id,
+                ConnectionId::new_unchecked(1),
+                Message::ShareBlock(block),
+            )
             .await;
         assert!(result.is_ok());
 
@@ -710,7 +765,11 @@ mod tests {
         let inventory = InventoryMessage::BlockHashes(vec![block_hash]);
 
         let result = handler
-            .dispatch_response(peer_id, Message::Inventory(inventory))
+            .dispatch_response(
+                peer_id,
+                ConnectionId::new_unchecked(1),
+                Message::Inventory(inventory),
+            )
             .await;
         assert!(result.is_ok());
 
@@ -742,7 +801,12 @@ mod tests {
         let (channel_tx, _channel_rx) = oneshot::channel::<Message>();
 
         let _ = handler
-            .dispatch_request(peer_id, Message::Inventory(inventory), channel_tx)
+            .dispatch_request(
+                peer_id,
+                ConnectionId::new_unchecked(1),
+                Message::Inventory(inventory),
+                channel_tx,
+            )
             .await;
         assert!(
             handler

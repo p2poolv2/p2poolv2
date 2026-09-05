@@ -63,7 +63,9 @@ allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 # advisories cargo-deny can actually see belong here - listing the rest makes it
 # report "no crate matched advisory criteria". Triage lives in the audit config.
 ignore = [
-    "RUSTSEC-2026-0119",  # hickory-proto 0.24.4, via libp2p-dns
+    "RUSTSEC-2026-0118",  # hickory-proto 0.25.2, via libp2p-dns, no fix published
+    "RUSTSEC-2026-0119",  # hickory-proto 0.25.2, via libp2p-dns, fixed in >=0.26.1
+    "RUSTSEC-2024-0436",  # paste 1.0.15, build-time, via libp2p-tcp -> if-watch
 ]
 yanked = "deny"
 unmaintained = "workspace"

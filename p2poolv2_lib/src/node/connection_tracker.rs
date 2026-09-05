@@ -174,6 +174,7 @@ impl ConnectionTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use libp2p::core::transport::PortUse;
     use libp2p::core::{ConnectedPoint, Endpoint};
 
     fn make_dialer_endpoint(address: &str) -> ConnectedPoint {
@@ -181,6 +182,7 @@ mod tests {
         ConnectedPoint::Dialer {
             address: multiaddr,
             role_override: Endpoint::Dialer,
+            port_use: PortUse::New,
         }
     }
 

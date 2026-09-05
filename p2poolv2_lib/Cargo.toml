@@ -45,7 +45,6 @@ bitcoin = { workspace = true }
 p2poolv2_address = { workspace = true }
 bitcoinconsensus = { workspace = true }
 base64 = { workspace = true }
-void = { workspace = true }
 tower = { workspace = true, features = ["util", "limit"] }
 tokio-util = { workspace = true }
 tokio-stream = { workspace = true }
