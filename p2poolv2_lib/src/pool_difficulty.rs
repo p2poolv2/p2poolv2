@@ -60,8 +60,7 @@ fn target_to_u512(target: Target) -> U512 {
 /// Convert a `U512` value back to a `Target`, assuming it fits in 256 bits.
 /// The caller must ensure the value has been clamped to the 256-bit range.
 fn u512_to_target(value: U512) -> Target {
-    let mut bytes = [0u8; 64];
-    value.to_little_endian(&mut bytes);
+    let bytes = value.to_little_endian();
     Target::from_le_bytes(bytes[..32].try_into().expect("slice is 32 bytes"))
 }
 

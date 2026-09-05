@@ -17,7 +17,8 @@
 //! Benchmark for grouping 210,000 (u64, u64) tuples by first element and
 //! summing the second element per group.
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
+use std::hint::black_box;
 
 const ELEMENT_COUNT: usize = 210_000;
 const GROUP_COUNT: usize = 500;

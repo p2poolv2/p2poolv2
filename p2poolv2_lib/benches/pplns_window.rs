@@ -22,11 +22,12 @@
 use bitcoin::BlockHash;
 use bitcoin::CompressedPublicKey;
 use bitcoin::hashes::Hash;
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
 use p2poolv2_lib::accounting::payout::sharechain_pplns::pplns_window::PplnsWindow;
 use p2poolv2_lib::test_utils::{
     PUBKEY_2G, PUBKEY_3G, PUBKEY_4G, PUBKEY_5G, PUBKEY_G, setup_test_chain_store_handle,
 };
+use std::hint::black_box;
 
 /// Total confirmed shares to fill the window (MAX_PPLNS_WINDOW_SHARES).
 const TOTAL_CONFIRMED_SHARES: usize = 120960;
