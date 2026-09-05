@@ -89,10 +89,18 @@ preflight: clippy
     cargo fmt --all -- --check
     just test
 
-# Check dependency advisories, licences, duplicate versions and source registries
+# Check dependency licences, duplicate versions and source registries.
+# Matches the blocking CI job. Advisories are deliberately not included: CI runs
+# them non-blocking, so failing here would report a problem that does not gate
+# the merge. Run `just advisories` for those.
 deny:
-    cargo deny check
+    cargo deny check licenses bans sources
 
+# Check dependencies against the RustSec advisory database. Informational: the
+# CI job for this is non-blocking, because a newly published advisory should not
+# stop an unrelated merge.
+advisories:
+    cargo deny check advisories
 
 # Run cli commands using p2poolv2-cli - e.g. just cli info
 cli *args:

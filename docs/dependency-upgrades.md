@@ -12,7 +12,8 @@ standard gate:
 
 ```sh
 just preflight        # fmt, clippy --workspace --all-targets --all-features, tests
-cargo deny check      # advisories, licences, duplicate versions, sources
+just deny             # licences, duplicate versions, sources -- blocking in CI
+just advisories       # RustSec advisories -- non-blocking in CI, informational
 ```
 
 `cargo build --workspace --release` is worth adding when the change touches
