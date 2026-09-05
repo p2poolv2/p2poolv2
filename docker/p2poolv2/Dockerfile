@@ -59,7 +59,12 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 # Must match the builder's Debian release. See the note above.
 FROM debian:trixie-slim AS runner
 
-RUN apt-get update && apt-get install -y --no-install-recommends curl
+# ca-certificates is required, not optional: reqwest builds its HTTPS client
+# through rustls-platform-verifier, which loads the platform trust store when
+# the client is constructed. Without it every client build fails, so the node
+# cannot reach bitcoind even over plain http. curl needs it too.
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /p2poolv2
 VOLUME /p2poolv2
