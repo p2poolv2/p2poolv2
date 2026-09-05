@@ -180,7 +180,7 @@ mod tests {
     #[test]
     fn test_multiple_dots_in_username() {
         let mainnet_address = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa";
-        let multiple_dots = format!("{}.worker.with.dots", mainnet_address);
+        let multiple_dots = format!("{mainnet_address}.worker.with.dots");
         let result = validate(&multiple_dots, true, Network::Bitcoin);
         assert!(result.is_ok());
         let validated = result.unwrap();

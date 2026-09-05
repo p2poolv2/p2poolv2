@@ -103,7 +103,7 @@ mod zmq_tests {
         let err = ZmqError {
             message: "test error".to_string(),
         };
-        assert_eq!(format!("{}", err), "ZMQ Error: test error");
+        assert_eq!(format!("{err}"), "ZMQ Error: test error");
     }
 
     #[test_log::test]

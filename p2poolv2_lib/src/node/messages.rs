@@ -594,7 +594,7 @@ mod tests {
     #[test]
     fn test_message_discriminants_unique() {
         use message_discriminants::*;
-        let discriminants = vec![
+        let discriminants = [
             INVENTORY,
             NOT_FOUND,
             GET_SHARE_HEADERS,
@@ -612,8 +612,7 @@ mod tests {
             for j in (i + 1)..discriminants.len() {
                 assert_ne!(
                     discriminants[i], discriminants[j],
-                    "Discriminants at positions {} and {} are not unique",
-                    i, j
+                    "Discriminants at positions {i} and {j} are not unique"
                 );
             }
         }

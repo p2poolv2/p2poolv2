@@ -416,13 +416,11 @@ mod tests {
         assert!(exposition.contains("# HELP worker_last_share_at"));
         assert!(exposition.contains("# TYPE worker_last_share_at gauge"));
         assert!(exposition.contains(&format!(
-            "worker_last_share_at{{btcaddress=\"bc1quser1\",workername=\"worker1\"}} {}",
-            recent
+            "worker_last_share_at{{btcaddress=\"bc1quser1\",workername=\"worker1\"}} {recent}"
         )));
         // Inactive worker2 should NOT be present
         assert!(!exposition.contains(&format!(
-            "worker_last_share_at{{btcaddress=\"bc1quser1\",workername=\"worker2\"}} {}",
-            recent
+            "worker_last_share_at{{btcaddress=\"bc1quser1\",workername=\"worker2\"}} {recent}"
         )));
 
         // Verify no p2pool_ prefix
@@ -484,8 +482,7 @@ mod tests {
             )
         );
         assert!(exposition.contains(&format!(
-            r#"worker_last_share_at{{btcaddress="bc1qtest",workername="unnamed"}} {}"#,
-            recent
+            r#"worker_last_share_at{{btcaddress="bc1qtest",workername="unnamed"}} {recent}"#
         )));
     }
 }

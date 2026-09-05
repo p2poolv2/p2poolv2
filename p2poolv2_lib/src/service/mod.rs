@@ -262,7 +262,7 @@ mod tests {
         if let SwarmSend::Disconnect(disconnected_peer) = received {
             assert_eq!(disconnected_peer, peer_id);
         } else {
-            panic!("Expected SwarmSend::Disconnect, got {:?}", received);
+            panic!("Expected SwarmSend::Disconnect, got {received:?}");
         }
     }
 

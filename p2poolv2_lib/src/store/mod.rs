@@ -761,8 +761,7 @@ mod tests {
         assert_eq!(
             hashes.len(),
             2,
-            "Both hashes should survive compaction, got: {:?}",
-            hashes
+            "Both hashes should survive compaction, got: {hashes:?}"
         );
         assert!(hashes.contains(&hash1), "hash1 lost after compaction");
         assert!(hashes.contains(&hash2), "hash2 lost after compaction");

@@ -540,14 +540,12 @@ impl Store {
                     .get_cf(outputs_cf, outpoint_key.as_bytes())?
                     .ok_or_else(|| {
                         StoreError::NotFound(format!(
-                            "Input output not found for coinbase_root_height: {}",
-                            outpoint_key
+                            "Input output not found for coinbase_root_height: {outpoint_key}"
                         ))
                     })?;
                 let stored_out: StoredTxOut = consensus::deserialize(&bytes).map_err(|_| {
                     StoreError::Serialization(format!(
-                        "Failed to deserialize output for coinbase_root_height: {}",
-                        outpoint_key
+                        "Failed to deserialize output for coinbase_root_height: {outpoint_key}"
                     ))
                 })?;
                 stored_out.coinbase_root_height
@@ -2534,8 +2532,7 @@ mod tests {
             assert_eq!(retrieved_blockhashes.len(), 1);
             assert_eq!(
                 retrieved_blockhashes[0], blockhash,
-                "txid {} should map to blockhash {}",
-                txid, blockhash
+                "txid {txid} should map to blockhash {blockhash}"
             );
         }
 
