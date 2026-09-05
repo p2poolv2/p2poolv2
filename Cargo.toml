@@ -87,7 +87,7 @@ p2poolv2_address = { path = "p2poolv2_address" }
 p2poolv2_config = { path = "p2poolv2_config" }
 p2poolv2_api = { path = "p2poolv2_api" }
 p2poolv2_lib = { path = "p2poolv2_lib", features = ["test-utils"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "default-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "default-tls"] }
 mockall = "0.15"
 mockall_double = "0.3.1"
 tempfile = "3.15.0"
