@@ -41,7 +41,7 @@ jobs:
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.description="P2Poolv2 is a peer-to-peer Bitcoin mining pool where miners coordinate directly and verify their rewards without centralized operators."
-            org.opencontainers.image.licenses=GPL-3.0
+            org.opencontainers.image.licenses=AGPL-3.0-or-later
           cache-from: type=gha,scope=build-docker-amd64
           cache-to: type=gha,scope=build-docker-amd64,mode=max
           load: true
@@ -51,9 +51,12 @@ jobs:
           docker run --rm --entrypoint /bin/sh ${{ env.IMAGE_NAME }}:${IMAGE_TAG} -c \
             'test -f /usr/local/bin/p2poolv2 && test -f /usr/local/bin/p2poolv2_cli && echo "Binaries OK" && sha256sum /usr/local/bin/p2poolv2 /usr/local/bin/p2poolv2_cli'
 
+      # Executing cli binary to catch linking or runtime errors
       - name: Run CLI
         run: |
           docker run --rm ${{ env.IMAGE_NAME }}:${IMAGE_TAG} --help
+          docker run --rm --entrypoint /usr/local/bin/p2poolv2_cli \
+            ${{ env.IMAGE_NAME }}:${IMAGE_TAG} --help
 
   multi-arch-push:
     name: Build ${{ matrix.platform }}
@@ -106,7 +109,7 @@ jobs:
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.description="P2Poolv2 is a peer-to-peer Bitcoin mining pool where miners coordinate directly and verify their rewards without centralized operators."
-            org.opencontainers.image.licenses=GPL-3.0
+            org.opencontainers.image.licenses=AGPL-3.0-or-later
           cache-from: type=gha,scope=build-docker-${{ matrix.arch }}
           cache-to: type=gha,scope=build-docker-${{ matrix.arch }},mode=max
 

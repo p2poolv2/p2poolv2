@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/devcontainers/rust:1-bullseye
+FROM mcr.microsoft.com/devcontainers/rust:1-trixie
 
 # Install additional packages
 RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
