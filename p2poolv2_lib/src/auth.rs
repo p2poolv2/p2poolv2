@@ -55,6 +55,32 @@ mod tests {
         assert_eq!(hmac, hmac2);
     }
 
+    /// Known-answer test pinning the exact HMAC-SHA256 output.
+    ///
+    /// `password_to_hmac` output is persisted in operator config files as
+    /// `auth_token`, so a change here silently invalidates every deployed
+    /// token. The expected value is derived from the HMAC-SHA256 specification
+    /// independently of this implementation, not captured from it.
+    #[test]
+    fn test_password_to_hmac_known_answer() {
+        let salt = "0123456789abcdef0123456789abcdef";
+        let password = "testpassword123";
+        assert_eq!(
+            password_to_hmac(salt, password).unwrap(),
+            "e6eb13e97ec482011d014112984f4b4e2ff82c25117f07bf4b616257df1923b7"
+        );
+    }
+
+    /// Known-answer test for the Basic auth header, which is sent on the wire
+    /// to bitcoind and to the P2Poolv2 API.
+    #[test]
+    fn test_build_basic_auth_header_known_answer() {
+        assert_eq!(
+            build_basic_auth_header("admin", "secret"),
+            "Basic YWRtaW46c2VjcmV0"
+        );
+    }
+
     #[test]
     fn test_password_to_hmac_different_inputs() {
         let salt = "0123456789abcdef0123456789abcdef";

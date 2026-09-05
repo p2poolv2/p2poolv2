@@ -63,6 +63,12 @@ config = { version = "0.13", default-features = false, features = ["toml"] }
 serde = { version = "1.0", features = ["derive"] }
 clap = { version = "4.0", features = ["derive", "env"] }
 hex = "0.4.3"
+# Held at the digest 0.10 generation on purpose. hmac 0.13 / sha2 0.11 move to
+# digest 0.11, but libp2p-identity still pins the older stack through
+# ed25519-dalek, hkdf and curve25519-dalek, so upgrading compiles both and adds
+# seven duplicate crates for no functional gain. Revisit when libp2p-identity
+# moves to digest 0.11. The known-answer tests in p2poolv2_lib/src/auth.rs pin
+# the output, so the upgrade is safe whenever it happens.
 hmac = "0.12"
 sha2 = "0.10"
 rocksdb = { version = "0.24.0", features = ["multi-threaded-cf"] }
@@ -72,7 +78,7 @@ serde_json = "1.0.135"
 zmq = "0.10"
 bitcoin = { version = "0.32.5", features = ["serde", "rand"] }
 bitcoinconsensus = { version = "0.106.0" }
-base64 = "0.22.1"
+base64 = "0.23.1"
 chrono = { version = "0.4", features = ["serde"] }
 tokio-util = { version = "0.7.15", features = ["codec"] }
 tokio-stream = "0.1.17"
