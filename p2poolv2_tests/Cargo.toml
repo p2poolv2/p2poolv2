@@ -33,19 +33,8 @@ tempfile = { workspace = true }
 tokio-test = { workspace = true }
 zmq = { workspace = true }
 tracing = { workspace = true }
-libp2p = { workspace = true, features = [
-        "tcp",
-        "dns",
-        "tokio",
-        "noise",
-        "yamux",
-        "identify",
-        "macros",
-        "kad",
-        "secp256k1",
-        "request-response",
-] }
+libp2p = { workspace = true }
 reqwest = { workspace = true, features = ["json", "blocking"] }
 bitcoindrpc = { workspace = true, features = ["test-utils"] }
 chrono.workspace = true
-test-log = { version = "0.2.17", features = ["trace"] }
+test-log = { workspace = true }

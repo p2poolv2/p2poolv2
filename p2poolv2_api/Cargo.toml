@@ -24,7 +24,7 @@ hmac = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 serde = { workspace = true }
-serde_json = "1"
+serde_json = { workspace = true }
 chrono = { workspace = true }
 subtle = "2"
 tower-http = { version = "0.6", features = ["fs", "cors"] }
@@ -32,13 +32,13 @@ tower-http = { version = "0.6", features = ["fs", "cors"] }
 [dev-dependencies]
 p2poolv2_lib = { workspace = true, features = ["test-utils"] }
 tempfile.workspace = true
-test-log = { version = "0.2", features = ["trace"] }
+test-log = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
-tower = "0.5"
+tower = { workspace = true }
 http = "1"
 http-body-util = "0.1"
 bytes = "1"
-reqwest = "0.12"
+reqwest = { workspace = true, features = ["json"] }
 
 [lib]
 name = "p2poolv2_api"

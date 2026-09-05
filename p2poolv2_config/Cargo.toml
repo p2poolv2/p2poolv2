@@ -23,7 +23,7 @@ config = { workspace = true }
 serde = { workspace = true }
 
 [dev-dependencies]
-temp-env = "0.3.6"
+temp-env = { workspace = true }
 tokio-test = { workspace = true }
 
 [lib]
