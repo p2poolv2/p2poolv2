@@ -1,5 +1,8 @@
 # syntax=docker/dockerfile:1.20
-FROM rust:1.88-slim-bullseye AS builder
+# The builder and runner stages must stay on the same Debian release. A builder
+# on a newer release links the binaries against a newer glibc than the runner
+# provides, and they fail to start with "GLIBC_2.xx not found".
+FROM rust:1.88-slim-trixie AS builder
 
 # Install required build dependencies
 RUN apt-get update && \
@@ -53,7 +56,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/p2poolv2/target \
     cargo install --locked --offline --path ./p2poolv2_node
 
-FROM debian:bullseye-slim AS runner
+# Must match the builder's Debian release. See the note above.
+FROM debian:trixie-slim AS runner
 
 RUN apt-get update && apt-get install -y --no-install-recommends curl
 
@@ -81,7 +85,7 @@ ENV P2POOL_STATIC_DIR=/var/www/dashboard
 
 LABEL org.opencontainers.image.source=https://github.com/p2poolv2/p2poolv2
 LABEL org.opencontainers.image.description="P2Poolv2 is a peer-to-peer Bitcoin mining pool where miners coordinate directly and verify their rewards without centralized operators."
-LABEL org.opencontainers.image.licenses=GPL-3.0
+LABEL org.opencontainers.image.licenses=AGPL-3.0-or-later
 
 # TODO: add non-root user
 
