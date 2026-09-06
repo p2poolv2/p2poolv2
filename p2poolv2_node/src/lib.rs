@@ -185,7 +185,7 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
         .init_or_setup_genesis(genesis.clone())
         .await
     {
-        error!("Failed to initialise chain: {e}");
+        error!("Failed to initialise chain at {}: {e}", config.store.path);
         return Err(ExitCode::FAILURE);
     }
 

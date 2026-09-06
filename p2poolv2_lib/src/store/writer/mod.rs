@@ -52,6 +52,10 @@ pub enum StoreError {
     /// A block metadata state transition was requested that violates an
     /// invariant (for example marking a Pending or Invalid block BlockValid).
     InvalidStatusTransition(String),
+    /// The store was built on a different share chain than this node is
+    /// compiled for. Raised at startup so a stale store is never mixed
+    /// with a new chain.
+    GenesisMismatch(String),
 }
 
 impl fmt::Display for StoreError {
@@ -64,6 +68,7 @@ impl fmt::Display for StoreError {
             StoreError::InvalidStatusTransition(msg) => {
                 write!(f, "Invalid status transition: {msg}")
             }
+            StoreError::GenesisMismatch(msg) => write!(f, "Genesis mismatch: {msg}"),
         }
     }
 }

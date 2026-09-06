@@ -80,21 +80,36 @@ impl ChainStoreHandle {
     /// Initialise the chain from an existing store or set up genesis.
     ///
     /// If genesis is already in store, initialises chain state from existing data.
-    /// Otherwise, adds genesis block to create a new chain.
+    /// If the store is empty, adds genesis block to create a new chain.
+    ///
+    /// Returns `StoreError::GenesisMismatch` when the store holds a share
+    /// chain that started from a different genesis. The store must be
+    /// deleted before the node can join the new chain: continuing would
+    /// leave both chains in one database, and the old chain usually carries
+    /// more work, so this node would serve it to peers on the new chain.
     pub async fn init_or_setup_genesis(&self, genesis_block: ShareBlock) -> Result<(), StoreError> {
         let genesis_block_hash = genesis_block.header.block_hash();
-        let genesis_in_store = self.store_handle.get_share(&genesis_block_hash);
 
-        if genesis_in_store.is_none() {
-            // Set up new chain with genesis
-            self.add_share_block(genesis_block).await?;
-        } else {
-            // Initialise chain state from existing store data
-            self.store_handle
+        if self.store_handle.get_share(&genesis_block_hash).is_some() {
+            return self
+                .store_handle
                 .init_chain_state_from_store(genesis_block_hash)
-                .await?;
+                .await;
         }
-        Ok(())
+
+        //* Our genesis is absent, so the store is either empty or built on
+        //* another share chain. `setup_genesis` confirms genesis at height
+        //* 0, so the confirmed block there is the store's own genesis and
+        //* tells the two cases apart.
+        match self.get_confirmed_at_height(0) {
+            Ok(stored_genesis) => Err(StoreError::GenesisMismatch(format!(
+                "store was built on share chain genesis {stored_genesis}, but this node \
+                 is built for genesis {genesis_block_hash}. Delete the store directory \
+                 to join this chain."
+            ))),
+            Err(StoreError::NotFound(_)) => self.add_share_block(genesis_block).await,
+            Err(error) => Err(error),
+        }
     }
 
     /// Get direct access to the underlying store handle.
@@ -906,11 +921,49 @@ mockall::mock! {
 #[cfg(test)]
 mod tests {
     use crate::store::Store;
+    use crate::store::writer::StoreError;
     use crate::test_utils::{
         TestShareBlockBuilder, genesis_for_tests, setup_test_chain_store_handle,
     };
     use bitcoin::BlockHash;
     use bitcoin::hashes::Hash;
+
+    /// A store already holding another share chain must be rejected, not
+    /// quietly given a second genesis. This is the stale-store case an
+    /// operator hits by upgrading across a chain reset without deleting the
+    /// store directory.
+    ///
+    /// The restart is simulated by calling init again with a different
+    /// genesis: the in-memory genesis blockhash a real restart clears does
+    /// not gate this path, so the branch taken is the same one.
+    #[tokio::test]
+    async fn test_init_or_setup_genesis_rejects_store_built_on_another_chain() {
+        let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let genesis = genesis_for_tests();
+        chain_handle
+            .init_or_setup_genesis(genesis.clone())
+            .await
+            .unwrap();
+
+        let other_genesis = TestShareBlockBuilder::new().nonce(0xe9695792).build();
+        assert_ne!(other_genesis.block_hash(), genesis.block_hash());
+
+        let error = chain_handle
+            .init_or_setup_genesis(other_genesis)
+            .await
+            .expect_err("store on another chain must be rejected");
+
+        assert!(
+            matches!(error, StoreError::GenesisMismatch(_)),
+            "expected GenesisMismatch, got {error:?}"
+        );
+        assert!(
+            error
+                .to_string()
+                .contains(&genesis.block_hash().to_string()),
+            "error must name the genesis already in the store: {error}"
+        );
+    }
 
     #[tokio::test]
     async fn test_chain_store_handle_creation() {
