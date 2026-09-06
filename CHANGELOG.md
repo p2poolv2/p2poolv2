@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.15.2] - 2026-09-06
+
+### Fixed
+
+- Increase docker action timeout on github
+
+### Removed
+
+- x86_64 macOS (Intel) release binaries
+- linux/arm/v7 docker images
+
 ## [v0.15.1] - 2026-09-06
 
 ### Breaking
@@ -1075,7 +1086,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 We used tags like hydrapool.v0.x.0 and we didn't keep a changelog.
 
-[Unreleased]: https://github.com/p2poolv2/p2poolv2/compare/v0.15.1...HEAD
+[Unreleased]: https://github.com/p2poolv2/p2poolv2/compare/v0.15.2...HEAD
+[v0.15.2]: https://github.com/p2poolv2/p2poolv2/compare/v0.15.1...v0.15.2
 [v0.15.1]: https://github.com/p2poolv2/p2poolv2/compare/v0.14.1...v0.15.1
 [v0.14.1]: https://github.com/p2poolv2/p2poolv2/compare/v0.14.0...v0.14.1
 [v0.14.0]: https://github.com/p2poolv2/p2poolv2/compare/v0.13.0...v0.14.0
