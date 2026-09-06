@@ -23,25 +23,51 @@ use libp2p::request_response::{Codec, OutboundFailure};
 use std::io;
 
 use crate::node::messages::{Message, RawMessage};
+use bitcoin::BlockHash;
 
-/// Build the network-aware libp2p protocol string for a given bitcoin network.
+/// Hex characters of the share chain genesis hash carried in the protocol
+/// string. Eight is ample: this separates share chains that were never meant
+/// to meet, it is not a security boundary, and the Noise handshake the string
+/// feeds provides the cryptographic part.
+const GENESIS_TAG_LEN: usize = 8;
+
+/// Short, stable tag identifying the share chain a node is built for.
 ///
-/// Network isolation is enforced through protocol negotiation: nodes on
-/// different networks derive different protocol strings and therefore fail to
-/// negotiate a shared protocol. Centralizing construction here keeps the string
-/// consistent across the request-response protocol, Identify, and the Noise
-/// prologue, and gives a single place to extend for a future network_id.
-pub fn protocol_string(network: bitcoin::Network) -> String {
-    format!("/p2pool/{}/1.0.0", network.to_core_arg())
+/// A share chain is reset by re-anchoring its genesis, which changes this tag
+/// without anyone having to remember to bump a version. Two nodes built for
+/// different chains therefore cannot derive the same protocol string.
+fn genesis_tag(genesis_hash: BlockHash) -> String {
+    let mut tag = genesis_hash.to_string();
+    tag.truncate(GENESIS_TAG_LEN);
+    tag
 }
 
-/// Build the network-aware Kademlia protocol string for a given bitcoin network.
+/// Build the libp2p protocol string for a bitcoin network and share chain.
+///
+/// Network isolation is enforced through protocol negotiation: nodes on
+/// different networks, or on share chains with different genesis blocks,
+/// derive different protocol strings and therefore fail to negotiate a shared
+/// protocol. Centralizing construction here keeps the string consistent across
+/// the request-response protocol, Identify, and the Noise prologue.
+pub fn protocol_string(network: bitcoin::Network, genesis_hash: BlockHash) -> String {
+    format!(
+        "/p2pool/{}/{}/1.0.0",
+        network.to_core_arg(),
+        genesis_tag(genesis_hash)
+    )
+}
+
+/// Build the Kademlia protocol string for a bitcoin network and share chain.
 ///
 /// Kademlia uses a distinct protocol name from [`protocol_string`] but shares
-/// the same per-network segment, so it is derived here to keep both in step for
-/// a future network_id.
-pub fn kad_protocol_string(network: bitcoin::Network) -> String {
-    format!("/p2pool/{}/kad/1.0.0", network.to_core_arg())
+/// the same network and genesis segments, so it is derived here to keep both
+/// in step.
+pub fn kad_protocol_string(network: bitcoin::Network, genesis_hash: BlockHash) -> String {
+    format!(
+        "/p2pool/{}/{}/kad/1.0.0",
+        network.to_core_arg(),
+        genesis_tag(genesis_hash)
+    )
 }
 
 // Protocol name for our request-response protocol
@@ -49,8 +75,8 @@ pub fn kad_protocol_string(network: bitcoin::Network) -> String {
 pub struct P2PoolRequestResponseProtocol(String);
 
 impl P2PoolRequestResponseProtocol {
-    pub fn new(network: bitcoin::Network) -> Self {
-        Self(protocol_string(network))
+    pub fn new(network: bitcoin::Network, genesis_hash: BlockHash) -> Self {
+        Self(protocol_string(network, genesis_hash))
     }
 }
 
@@ -191,4 +217,56 @@ pub enum RequestResponseError {
 
     #[error("IO error: {0}")]
     Io(#[from] io::Error),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{GENESIS_TAG_LEN, kad_protocol_string, protocol_string};
+    use crate::shares::share_block::ShareBlock;
+
+    #[test]
+    fn test_protocol_string_carries_network_and_genesis_tag() {
+        let genesis_hash = ShareBlock::build_genesis_for_network(bitcoin::Network::Signet)
+            .unwrap()
+            .block_hash();
+        let expected_tag = &genesis_hash.to_string()[..GENESIS_TAG_LEN];
+
+        assert_eq!(
+            protocol_string(bitcoin::Network::Signet, genesis_hash),
+            format!("/p2pool/signet/{expected_tag}/1.0.0")
+        );
+    }
+
+    /// The isolation property a chain reset relies on: re-anchoring genesis
+    /// changes the protocol string even though the bitcoin network is
+    /// unchanged, so nodes on the old chain cannot negotiate with new ones.
+    #[test]
+    fn test_protocol_string_differs_when_genesis_differs_on_same_network() {
+        let genesis_hash = ShareBlock::build_genesis_for_network(bitcoin::Network::Testnet4)
+            .unwrap()
+            .block_hash();
+        let other_genesis_hash = ShareBlock::build_genesis_for_network(bitcoin::Network::Signet)
+            .unwrap()
+            .block_hash();
+        assert_ne!(genesis_hash, other_genesis_hash);
+
+        assert_ne!(
+            protocol_string(bitcoin::Network::Testnet4, genesis_hash),
+            protocol_string(bitcoin::Network::Testnet4, other_genesis_hash)
+        );
+    }
+
+    /// Kademlia negotiates a distinct protocol name, but must isolate on the
+    /// same genesis so a peer cannot join the DHT of a chain it is not on.
+    #[test]
+    fn test_kad_protocol_string_is_distinct_but_carries_same_genesis_tag() {
+        let genesis_hash = ShareBlock::build_genesis_for_network(bitcoin::Network::Signet)
+            .unwrap()
+            .block_hash();
+        let expected_tag = &genesis_hash.to_string()[..GENESIS_TAG_LEN];
+
+        let kad = kad_protocol_string(bitcoin::Network::Signet, genesis_hash);
+        assert_eq!(kad, format!("/p2pool/signet/{expected_tag}/kad/1.0.0"));
+        assert_ne!(kad, protocol_string(bitcoin::Network::Signet, genesis_hash));
+    }
 }

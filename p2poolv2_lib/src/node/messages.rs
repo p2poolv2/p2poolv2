@@ -84,10 +84,6 @@ pub struct HandshakeData {
 }
 
 /// A complete P2P network message with protocol framing.
-///
-/// Network isolation is enforced at the libp2p protocol negotiation and Noise
-/// prologue layers (see `behaviour::request_response::protocol_string`), so the
-/// wire framing carries no network magic bytes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RawMessage {
     /// The actual message payload

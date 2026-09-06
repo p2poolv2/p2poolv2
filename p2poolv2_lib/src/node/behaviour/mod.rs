@@ -16,6 +16,7 @@
 
 pub mod request_response;
 use crate::config::Config;
+use bitcoin::BlockHash;
 use libp2p::connection_limits;
 use libp2p::ping;
 use libp2p::request_response::ProtocolSupport;
@@ -62,11 +63,18 @@ pub enum P2PoolBehaviourEvent {
 
 #[allow(dead_code)]
 impl P2PoolBehaviour {
-    pub fn new(local_key: &Keypair, config: &Config) -> Result<Self, Box<dyn Error>> {
+    /// Build the swarm behaviour for the share chain identified by
+    /// `genesis_hash`. The hash is carried in every protocol name so peers on
+    /// another share chain cannot negotiate with this node.
+    pub fn new(
+        local_key: &Keypair,
+        config: &Config,
+        genesis_hash: BlockHash,
+    ) -> Result<Self, Box<dyn Error>> {
         // Initialise Kademlia
         let store = MemoryStore::new(local_key.public().to_peer_id());
         let mut kad_config = kad::Config::new(libp2p::StreamProtocol::try_from_owned(
-            kad_protocol_string(config.stratum.network),
+            kad_protocol_string(config.stratum.network, genesis_hash),
         )?);
         kad_config.set_query_timeout(tokio::time::Duration::from_secs(60));
 
@@ -74,10 +82,12 @@ impl P2PoolBehaviour {
             kad::Behaviour::with_config(local_key.public().to_peer_id(), store, kad_config);
         kademlia_behaviour.set_mode(Some(kad::Mode::Server));
 
-        let identify_config =
-            identify::Config::new(protocol_string(config.stratum.network), local_key.public())
-                .with_agent_version(format!("p2poolv2/{}", env!("CARGO_PKG_VERSION")))
-                .with_push_listen_addr_updates(true);
+        let identify_config = identify::Config::new(
+            protocol_string(config.stratum.network, genesis_hash),
+            local_key.public(),
+        )
+        .with_agent_version(format!("p2poolv2/{}", env!("CARGO_PKG_VERSION")))
+        .with_push_listen_addr_updates(true);
         let identify_behaviour = identify::Behaviour::new(identify_config);
 
         let limits_config = connection_limits::ConnectionLimits::default()
@@ -99,7 +109,7 @@ impl P2PoolBehaviour {
             request_response: RequestResponseBehaviour::with_codec(
                 ConsensusCodec,
                 std::iter::once((
-                    P2PoolRequestResponseProtocol::new(config.stratum.network),
+                    P2PoolRequestResponseProtocol::new(config.stratum.network, genesis_hash),
                     ProtocolSupport::Full,
                 )),
                 libp2p::request_response::Config::default(),

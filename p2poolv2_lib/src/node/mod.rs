@@ -133,7 +133,12 @@ impl Node {
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let id_keys = libp2p::identity::Keypair::generate_ed25519();
 
-        let behavior = match P2PoolBehaviour::new(&id_keys, &config) {
+        let genesis_hash = ShareBlock::build_genesis_for_network(config.stratum.network)
+            .map_err(|error| -> Box<dyn Error> { error })?
+            .block_hash();
+        let network_protocol = protocol_string(config.stratum.network, genesis_hash);
+
+        let behavior = match P2PoolBehaviour::new(&id_keys, &config, genesis_hash) {
             Ok(behavior) => behavior,
             Err(err) => {
                 error!("Failed to create P2PoolBehaviour: {}", err);
@@ -145,8 +150,7 @@ impl Node {
 
         let tcp_config = TcpConfig::default().nodelay(true);
         let noise_config = match libp2p::noise::Config::new(&id_keys) {
-            //* Bind the handshake to this network via a prologue
-            Ok(cfg) => cfg.with_prologue(protocol_string(config.stratum.network).into_bytes()),
+            Ok(cfg) => cfg.with_prologue(network_protocol.as_bytes().to_vec()),
             Err(err) => {
                 error!("Failed to create Noise config: {}", err);
                 return Err(Box::new(err));
@@ -170,6 +174,7 @@ impl Node {
             .build();
 
         info!("Local peer id: {}", swarm.local_peer_id());
+        info!("P2P protocol string: {network_protocol}");
 
         let listen_port = address_filter::extract_listen_port(&config.network.listen_address);
 
