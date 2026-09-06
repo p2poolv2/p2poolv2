@@ -70,7 +70,7 @@ hex = "0.4.3"
 # moves to digest 0.11. The known-answer tests in p2poolv2_lib/src/auth.rs pin
 # the output, so the upgrade is safe whenever it happens.
 hmac = "0.12"
-sha2 = "0.10"
+sha2 = "0.11"
 rocksdb = { version = "0.25.0", features = ["multi-threaded-cf"] }
 async-trait = "0.1.83"
 thiserror = "2.0.8"
