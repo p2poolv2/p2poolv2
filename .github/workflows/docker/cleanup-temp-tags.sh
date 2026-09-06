@@ -17,7 +17,7 @@ else
   BASE="/users/${OWNER}/packages/container/${PKG}"
 fi
 
-for ARCH in amd64 arm64 armv7; do
+for ARCH in amd64 arm64; do
   TAG="${IMAGE_SHA}-${ARCH}"
   VID=$(gh api "${BASE}/versions" \
     --jq ".[] | select(.metadata.container.tags | index(\"${TAG}\")) | .id" \

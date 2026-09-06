@@ -16,8 +16,7 @@ docker buildx imagetools create \
   --annotation "${ANNOTATION_SOURCE}" \
   --annotation "${ANNOTATION_DESC}" \
   "${SRC_TAG}-amd64" \
-  "${SRC_TAG}-arm64" \
-  "${SRC_TAG}-armv7"
+  "${SRC_TAG}-arm64"
 
 echo "=== 2/5 Docker Hub: copy multi-arch manifest (self-contained) ==="
 docker buildx imagetools create -t "${DH_TAG}" "${SRC_TAG}"
