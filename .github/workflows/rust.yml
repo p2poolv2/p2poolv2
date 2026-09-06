@@ -76,7 +76,14 @@ jobs:
       # state and can fail here while passing there.
       - name: Generate code coverage
         run: cargo llvm-cov nextest --all-features --workspace --lcov --output-path lcov.info
+      # Dependabot runs read the Dependabot secret store, not the Actions one,
+      # so the token is empty there and a protected branch rejects the upload.
+      # Coverage is still generated above, which is what catches a dependency
+      # bump that breaks the build. The delta itself is not useful on a
+      # lockfile bump, and skipping keeps the token out of a job that compiles
+      # and runs build scripts from newly proposed dependency versions.
       - name: Upload coverage to Codecov
+        if: github.actor != 'dependabot[bot]'
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
