@@ -90,7 +90,12 @@ impl ChainStoreHandle {
     pub async fn init_or_setup_genesis(&self, genesis_block: ShareBlock) -> Result<(), StoreError> {
         let genesis_block_hash = genesis_block.header.block_hash();
 
-        if self.store_handle.get_share(&genesis_block_hash).is_some() {
+        // Read header as it is never pruned out
+        if self
+            .store_handle
+            .get_share_header(&genesis_block_hash)?
+            .is_some()
+        {
             return self
                 .store_handle
                 .init_chain_state_from_store(genesis_block_hash)
