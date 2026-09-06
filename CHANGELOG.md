@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.15.1] - 2026-09-06
+
 ### Breaking
 
 - Environment variable overrides now use `__` between a config section and its
@@ -23,6 +25,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it. It selects bitcoind's config file and p2poolv2's share chain and store
   directory, so one value keeps them on the same chain. It overrides `network`
   in a mounted `config.toml`, which is ignored under compose.
+- The libp2p protocol strings now carry the share chain genesis hash as well as
+  the bitcoin network: `/p2pool/<network>/<genesis prefix>/1.0.0`, used for the
+  request-response protocol, Kademlia, Identify and the Noise prologue. Nodes on
+  different share chains no longer negotiate a protocol, so a node on an older
+  release cannot connect to one on this release. The genesis hash is derived in
+  code rather than taken from config, so a chain cannot be joined by mistyping a
+  network name.
+- The testnet4 share chain genesis moves to bitcoin block
+  `0000000000a57b6dd9b7340a2e2cbb7069a0ccdf28f3db69070ea89d7287444b` at height
+  151197, resetting that share chain. Existing testnet4 stores are on the old
+  chain and must be deleted.
 
 ### Added
 
@@ -38,6 +51,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pinning the values that operator `auth_token` config depends on.
 - Characterisation tests for environment-variable overrides, including the
   exact keys docker-compose sets.
+- Startup check that the genesis this node is built for matches the one the
+  store was built on. A store holding another share chain now fails with
+  `GenesisMismatch` naming both hashes and telling the operator to delete the
+  store directory, instead of quietly keeping two chains in one database and
+  serving the heavier old one to peers on the new chain. The check reads the
+  share header, which pruning never removes.
 
 ### Changed
 
@@ -56,6 +75,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   -- -D warnings`, matching what AGENTS.md already required.
 - GitHub Actions in `rust.yml` are pinned by commit SHA, as `docker.yml`
   already did.
+- The node logs its P2P protocol string at startup, so an operator can see which
+  share chain a node will peer on.
+- CI runs coverage through `cargo nextest`, pins the remaining action hashes,
+  builds on a newer Rust docker image, and skips the codecov upload on
+  dependabot PRs, where the token is not available.
 
 ### Removed
 
@@ -1051,7 +1075,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 We used tags like hydrapool.v0.x.0 and we didn't keep a changelog.
 
-[Unreleased]: https://github.com/p2poolv2/p2poolv2/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/p2poolv2/p2poolv2/compare/v0.15.1...HEAD
+[v0.15.1]: https://github.com/p2poolv2/p2poolv2/compare/v0.14.1...v0.15.1
 [v0.14.1]: https://github.com/p2poolv2/p2poolv2/compare/v0.14.0...v0.14.1
 [v0.14.0]: https://github.com/p2poolv2/p2poolv2/compare/v0.13.0...v0.14.0
 [v0.13.0]: https://github.com/p2poolv2/p2poolv2/compare/v0.12.0...v0.13.0
