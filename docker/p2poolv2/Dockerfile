@@ -2,7 +2,7 @@
 # The builder and runner stages must stay on the same Debian release. A builder
 # on a newer release links the binaries against a newer glibc than the runner
 # provides, and they fail to start with "GLIBC_2.xx not found".
-FROM rust:1.88-slim-trixie AS builder
+FROM rust:1.98-slim-trixie AS builder
 
 # Install required build dependencies
 RUN apt-get update && \
