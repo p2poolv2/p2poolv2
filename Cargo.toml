@@ -69,7 +69,7 @@ hex = "0.4.3"
 # seven duplicate crates for no functional gain. Revisit when libp2p-identity
 # moves to digest 0.11. The known-answer tests in p2poolv2_lib/src/auth.rs pin
 # the output, so the upgrade is safe whenever it happens.
-hmac = "0.12"
+hmac = "0.13"
 sha2 = "0.10"
 rocksdb = { version = "0.25.0", features = ["multi-threaded-cf"] }
 async-trait = "0.1.83"
