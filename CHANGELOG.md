@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Relicensed from AGPL-3.0-or-later to the dual license `MIT OR Apache-2.0`.
+  `LICENSE` is replaced by `LICENSE-MIT` and `LICENSE-APACHE`, and every source
+  file now carries an SPDX header instead of the GPL notice. Downstream users
+  may take the project under either license at their option.
+
 ## [v0.15.2] - 2026-09-06
 
 ### Fixed

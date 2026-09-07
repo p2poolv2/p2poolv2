@@ -90,7 +90,7 @@ ENV P2POOL_STATIC_DIR=/var/www/dashboard
 
 LABEL org.opencontainers.image.source=https://github.com/p2poolv2/p2poolv2
 LABEL org.opencontainers.image.description="P2Poolv2 is a peer-to-peer Bitcoin mining pool where miners coordinate directly and verify their rewards without centralized operators."
-LABEL org.opencontainers.image.licenses=AGPL-3.0-or-later
+LABEL org.opencontainers.image.licenses="MIT OR Apache-2.0"
 
 # TODO: add non-root user
 

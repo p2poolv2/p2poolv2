@@ -1,5 +1,6 @@
 image:https://github.com/p2poolv2/p2poolv2/actions/workflows/rust.yml/badge.svg[Rust CI, link=https://github.com/p2poolv2/p2poolv2/actions/workflows/rust.yml]
 image:https://codecov.io/gh/p2poolv2/p2poolv2/graph/badge.svg?token=Xeu4GFdASS[Codecov, link=https://codecov.io/gh/p2poolv2/p2poolv2]
+image:https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg[License: MIT OR Apache-2.0, link=#license]
 
 == P2Poolv2
 
@@ -279,3 +280,21 @@ DIAL_FANOUT=3 IDEAL_BLOCK_TIME=1 SHARES_PER_BLOCK=5 NODE_COUNT=10 CONVERGENCE_WA
 
 See the link:docs/simulation/[docs/simulation] directory for detailed
 documentation on how to run the script and interpret the results.
+
+== License
+
+Licensed under either of
+
+* Apache License, Version 2.0 (link:LICENSE-APACHE[LICENSE-APACHE] or
+  https://www.apache.org/licenses/LICENSE-2.0)
+* MIT license (link:LICENSE-MIT[LICENSE-MIT] or
+  https://opensource.org/licenses/MIT)
+
+at your option.
+
+=== Contribution
+
+Unless you explicitly state otherwise, any contribution intentionally
+submitted for inclusion in P2Poolv2 by you, as defined in the Apache-2.0
+license, shall be dual licensed as above, without any additional terms or
+conditions.

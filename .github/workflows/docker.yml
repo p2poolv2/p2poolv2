@@ -41,7 +41,7 @@ jobs:
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.description="P2Poolv2 is a peer-to-peer Bitcoin mining pool where miners coordinate directly and verify their rewards without centralized operators."
-            org.opencontainers.image.licenses=AGPL-3.0-or-later
+            org.opencontainers.image.licenses="MIT OR Apache-2.0"
           cache-from: type=gha,scope=build-docker-amd64
           cache-to: type=gha,scope=build-docker-amd64,mode=max
           load: true
@@ -99,7 +99,7 @@ jobs:
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.description="P2Poolv2 is a peer-to-peer Bitcoin mining pool where miners coordinate directly and verify their rewards without centralized operators."
-            org.opencontainers.image.licenses=AGPL-3.0-or-later
+            org.opencontainers.image.licenses="MIT OR Apache-2.0"
           cache-from: type=gha,scope=build-docker-${{ matrix.arch }}
           cache-to: type=gha,scope=build-docker-${{ matrix.arch }},mode=max
 

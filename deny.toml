@@ -12,9 +12,10 @@ targets = [
 ]
 
 [licenses]
-# P2Poolv2 ships binaries under AGPL-3.0-or-later, so dependency licences must
-# be compatible with distributing a linked AGPL work. Permissive licences are;
-# GPL-2.0-only would not be. Every entry below was observed in the actual tree.
+# P2Poolv2 ships under MIT OR Apache-2.0, so a dependency licence must permit
+# redistributing the linked work under either of those. That means permissive
+# only: any copyleft licence (GPL, AGPL, LGPL, MPL) is disqualifying, a
+# stricter bar than the AGPL era. Every entry below was observed in the tree.
 allow = [
     "MIT",
     "Apache-2.0",
