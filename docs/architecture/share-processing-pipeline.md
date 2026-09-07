@@ -3,6 +3,10 @@ name: Share Processing Pipeline
 description: Documents the data flow for processing shares from stratum submission through storage and organisation
 ---
 
+**The architecture files are LLM generated. The goal is make it easier
+for new comers to the code base and other LLMs to quickly understand
+the design and remain consistent with the design choices.**
+
 # Share Processing Pipeline
 
 This document describes the data flow for processing shares in p2pool-v2.

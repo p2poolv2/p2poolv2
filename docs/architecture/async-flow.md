@@ -1,3 +1,7 @@
+**The architecture files are LLM generated. The goal is make it easier
+for new comers to the code base and other LLMs to quickly understand
+the design and remain consistent with the design choices.**
+
 # Async Flow and Concurrency Model
 
 ## Event Handling Pipeline

@@ -3,6 +3,10 @@ name: Chain Store RocksDB Schema
 description: Captures the rocksdb schema design currently in use
 ---
 
+**The architecture files are LLM generated. The goal is make it easier
+for new comers to the code base and other LLMs to quickly understand
+the design and remain consistent with the design choices.**
+
 # Chain Store RocksDB Schema
 
 This document captures the RocksDB storage schema used by `Store` and `ChainStore` in P2Poolv2.
