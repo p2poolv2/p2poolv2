@@ -7,12 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.15.3] - 2026-09-21
+
 ### Changed
 
 - Relicensed from AGPL-3.0-or-later to the dual license `MIT OR Apache-2.0`.
   `LICENSE` is replaced by `LICENSE-MIT` and `LICENSE-APACHE`, and every source
   file now carries an SPDX header instead of the GPL notice. Downstream users
   may take the project under either license at their option.
+
+### Fixed
+
+- Block fetching no longer degrades to quadratic time on a large initial sync.
+  Duplicate detection across the pending and backlog queues used nested linear
+  scans, so fetching the whole chain could spend a long time enqueuing before it
+  dispatched a single request. It now uses a hash-set membership index and
+  begins requesting block bodies immediately, while the queues keep their
+  request order.
+- `p2poolv2_cli db cleanup-dense-heights` now collapses a dense height to its
+  real chain block. It invalidates off-chain `BlockValid` siblings (shares this
+  node mined onto a losing fork), not only `HeaderValid` ones, and processes
+  heights top-down so flood siblings that merely reference each other as uncles
+  are removed as well; genuine uncles referenced by a served block are kept.
+  Previously such heights stayed dense and could still stop peers syncing past
+  them.
+
+### Security
+
+- Updated `rustls` to 0.23.45, resolving RUSTSEC-2026-0285: version 0.23.43 could
+  accept a TLS 1.3 handshake message packed into the same record as a preceding
+  key-changing message, contrary to RFC 8446 section 5.1. The handshake
+  transcript remains authenticated, so this could not alter or complete a
+  handshake.
 
 ## [v0.15.2] - 2026-09-06
 
