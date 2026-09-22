@@ -322,6 +322,7 @@ impl NodeActor {
         // Clone handles for workers before moving them into Node::new
         let validation_tx_for_worker = validation_tx.clone();
         let validation_tx_for_emission = validation_tx.clone();
+        let validation_tx_for_organise = validation_tx.clone();
         let block_fetcher_tx_for_receiver = block_fetcher_tx.clone();
         let difficulty_multiplier = config.stratum.difficulty_multiplier as u128;
         let pool_signature = config
@@ -359,6 +360,7 @@ impl NodeActor {
         // Spawn organise worker
         let organise_worker = OrganiseWorker::new(
             organise_rx,
+            validation_tx_for_organise,
             chain_store_handle.clone(),
             monitoring_event_sender,
             notify_tx,

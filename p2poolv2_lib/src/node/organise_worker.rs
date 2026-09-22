@@ -18,6 +18,7 @@ use crate::accounting::payout::sharechain_pplns::PplnsWindow;
 use crate::accounting::payout::sharechain_pplns::PplnsWindow;
 use crate::accounting::stats::metrics::MetricsHandle;
 use crate::monitoring_events::{MonitoringEvent, MonitoringEventSender};
+use crate::node::validation_worker::{ValidationEvent, ValidationSender};
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -36,6 +37,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
+use tokio::sync::mpsc::error::TrySendError;
 use tracing::{debug, error, info, warn};
 
 /// Channel capacity for shares pending organisation.
@@ -129,6 +131,11 @@ impl std::error::Error for OrganiseError {}
 /// PplnsWindow cache.
 pub struct OrganiseWorker {
     organise_rx: OrganiseReceiver,
+    /// Re-drives validation of a stranded parent (a block whose body is stored
+    /// but which never became `BlockValid`) when a descendant arrives on top of
+    /// it. Best-effort via `try_send`, so a full channel defers the nudge to the
+    /// next arrival rather than blocking the worker.
+    validation_tx: ValidationSender,
     chain_store_handle: ChainStoreHandle,
     monitoring_event_sender: MonitoringEventSender,
     notify_tx: NotifySender,
@@ -151,8 +158,14 @@ pub struct OrganiseWorker {
 enum ParentState {
     /// Parent is `BlockValid` or on the confirmed chain. Carries its height.
     Valid(u32),
-    /// Parent is only `HeaderValid`/`Pending`; defer the block. Carries the
-    /// parent height used as the buffer key.
+    /// Parent is `HeaderValid` and its body is stored, yet it never became
+    /// `BlockValid` -- stranded (its validation event was lost on restart, or
+    /// dropped). Re-drive its validation, then defer this block behind it.
+    /// Carries the parent height used as the buffer key.
+    Stranded(u32),
+    /// Parent is only `HeaderValid` without its body yet, or `Pending`; defer
+    /// the block and wait for the fetcher / the parent's own validation.
+    /// Carries the parent height used as the buffer key.
     Pending(u32),
     /// Parent is `Invalid`; the block is invalid by descent.
     Invalid,
@@ -183,8 +196,10 @@ enum ProcessOutcome {
 
 impl OrganiseWorker {
     /// Creates a new organise worker.
+    #[allow(clippy::too_many_arguments)] // wiring constructor: each parameter is a distinct collaborator, a params struct would only move the list
     pub fn new(
         organise_rx: OrganiseReceiver,
+        validation_tx: ValidationSender,
         chain_store_handle: ChainStoreHandle,
         monitoring_event_sender: MonitoringEventSender,
         notify_tx: NotifySender,
@@ -194,6 +209,7 @@ impl OrganiseWorker {
     ) -> Self {
         Self {
             organise_rx,
+            validation_tx,
             chain_store_handle,
             monitoring_event_sender,
             notify_tx,
@@ -359,6 +375,11 @@ impl OrganiseWorker {
                 debug!("Dropping {blockhash}: parent metadata unavailable");
                 Ok(ProcessOutcome::Dropped)
             }
+            ParentState::Stranded(parent_height) => {
+                self.redrive_stranded_parent(&share_block.header.prev_share_blockhash);
+                self.buffer_block(parent_height, share_block, content_validated);
+                Ok(ProcessOutcome::Buffered)
+            }
             ParentState::Pending(parent_height) => {
                 self.buffer_block(parent_height, share_block, content_validated);
                 Ok(ProcessOutcome::Buffered)
@@ -366,6 +387,46 @@ impl OrganiseWorker {
             ParentState::Valid(parent_height) => {
                 self.validate_mark_promote(share_block, parent_height, content_validated)
                     .await
+            }
+        }
+    }
+
+    /// Re-drive validation of a stranded parent -- a block whose body is stored
+    /// but which never became `BlockValid` (its validation event was lost on
+    /// restart, or dropped). `ValidateBlockHash` re-reads the block from the
+    /// store and runs the full pipeline, and validating an already-`BlockValid`
+    /// block is a no-op, so the nudge is idempotent.
+    ///
+    /// Best-effort by `try_send`: a blocking send onto `validation_tx` could
+    /// deadlock the cycle organise -> validation -> organise if both bounded
+    /// channels fill, so a full channel defers the nudge. The next descendant to
+    /// arrive re-drives it, and the startup seed covers a restart with no
+    /// arrivals.
+    ///
+    /// A stranded parent found while the node is caught up (`is_current`) means
+    /// an event was lost in normal operation -- a real bug -- so it is logged at
+    /// `warn`; during catch-up it is an expected restart/sync artefact logged at
+    /// `debug`.
+    fn redrive_stranded_parent(&self, parent_hash: &BlockHash) {
+        if self.chain_store_handle.is_current() {
+            warn!(
+                "Parent {parent_hash} has its body but is not BlockValid while current; re-validating (a validation event was lost)"
+            );
+        } else {
+            debug!("Re-driving validation of stranded parent {parent_hash}");
+        }
+        match self
+            .validation_tx
+            .try_send(ValidationEvent::ValidateBlockHash(*parent_hash))
+        {
+            Ok(()) => {}
+            Err(TrySendError::Full(_)) => {
+                debug!(
+                    "Validation channel full; deferring re-drive of stranded parent {parent_hash}"
+                );
+            }
+            Err(TrySendError::Closed(_)) => {
+                error!("Validation channel closed; cannot re-drive stranded parent {parent_hash}");
             }
         }
     }
@@ -576,6 +637,12 @@ impl OrganiseWorker {
         };
         if metadata.status == Status::BlockValid || metadata.chain == ChainMembership::Confirmed {
             ParentState::Valid(height)
+        } else if metadata.status == Status::HeaderValid
+            && self.chain_store_handle.share_block_exists(parent_hash)
+        {
+            // Body stored but never promoted to BlockValid: the parent is
+            // stranded, not merely waiting on the fetcher.
+            ParentState::Stranded(height)
         } else {
             ParentState::Pending(height)
         }
@@ -801,6 +868,7 @@ mod tests {
     use super::*;
     use crate::accounting::payout::sharechain_pplns::pplns_window::MAX_PPLNS_WINDOW_SHARES;
     use crate::monitoring_events::create_monitoring_event_channel;
+    use crate::node::validation_worker::create_validation_channel;
     use crate::shares::chain::chain_store_handle::MockChainStoreHandle;
     use crate::shares::validation::MockDefaultShareValidator;
     use crate::shares::validation::ValidationError;
@@ -838,9 +906,11 @@ mod tests {
     }
 
     /// Build an OrganiseWorker whose chain store returns `metadata_result`
-    /// for any get_block_metadata call. Used to unit-test has_valid_parent.
+    /// for any get_block_metadata call and `body_exists` for any
+    /// share_block_exists call. Used to unit-test parent_state.
     fn worker_with_parent_metadata(
         metadata_result: Result<BlockMetadata, StoreError>,
+        body_exists: bool,
     ) -> OrganiseWorker {
         let mut mock_chain_handle = MockChainStoreHandle::new();
         // The confirmed-block follow-up reads each newly confirmed block
@@ -855,12 +925,16 @@ mod tests {
         mock_chain_handle
             .expect_get_block_metadata()
             .returning(move |_| metadata_result.clone());
+        mock_chain_handle
+            .expect_share_block_exists()
+            .returning(move |_| body_exists);
 
         let (_organise_tx, organise_rx) = create_organise_channel();
         let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         OrganiseWorker::new(
             organise_rx,
+            create_validation_channel().0,
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
@@ -887,10 +961,10 @@ mod tests {
             .block_hash();
 
         // A BlockValid parent (even off-chain) is Valid.
-        let worker = worker_with_parent_metadata(Ok(parent_metadata(
-            Status::BlockValid,
-            ChainMembership::None,
-        )));
+        let worker = worker_with_parent_metadata(
+            Ok(parent_metadata(Status::BlockValid, ChainMembership::None)),
+            false,
+        );
         assert!(matches!(
             worker.parent_state(&parent),
             ParentState::Valid(1)
@@ -898,34 +972,56 @@ mod tests {
 
         // A confirmed parent that is only HeaderValid (genesis, or a block
         // confirmed below the PPLNS zone) is also Valid.
-        let worker = worker_with_parent_metadata(Ok(parent_metadata(
-            Status::HeaderValid,
-            ChainMembership::Confirmed,
-        )));
+        let worker = worker_with_parent_metadata(
+            Ok(parent_metadata(
+                Status::HeaderValid,
+                ChainMembership::Confirmed,
+            )),
+            false,
+        );
         assert!(matches!(
             worker.parent_state(&parent),
             ParentState::Valid(1)
         ));
 
-        // A HeaderValid candidate parent is Pending (not yet validated).
-        let worker = worker_with_parent_metadata(Ok(parent_metadata(
-            Status::HeaderValid,
-            ChainMembership::Candidate,
-        )));
+        // A HeaderValid candidate parent without its body is Pending: still
+        // waiting on the fetcher, defer the block.
+        let worker = worker_with_parent_metadata(
+            Ok(parent_metadata(
+                Status::HeaderValid,
+                ChainMembership::Candidate,
+            )),
+            false,
+        );
         assert!(matches!(
             worker.parent_state(&parent),
             ParentState::Pending(1)
         ));
 
+        // A HeaderValid candidate parent whose body is stored is Stranded: it
+        // has everything it needs to be validated but never became BlockValid.
+        let worker = worker_with_parent_metadata(
+            Ok(parent_metadata(
+                Status::HeaderValid,
+                ChainMembership::Candidate,
+            )),
+            true,
+        );
+        assert!(matches!(
+            worker.parent_state(&parent),
+            ParentState::Stranded(1)
+        ));
+
         // An Invalid parent is Invalid (block is invalid by descent).
-        let worker = worker_with_parent_metadata(Ok(parent_metadata(
-            Status::Invalid,
-            ChainMembership::None,
-        )));
+        let worker = worker_with_parent_metadata(
+            Ok(parent_metadata(Status::Invalid, ChainMembership::None)),
+            false,
+        );
         assert!(matches!(worker.parent_state(&parent), ParentState::Invalid));
 
         // Missing parent metadata is Unknown.
-        let worker = worker_with_parent_metadata(Err(StoreError::NotFound("missing".to_string())));
+        let worker =
+            worker_with_parent_metadata(Err(StoreError::NotFound("missing".to_string())), false);
         assert!(matches!(worker.parent_state(&parent), ParentState::Unknown));
     }
 
@@ -952,6 +1048,7 @@ mod tests {
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let worker = OrganiseWorker::new(
             organise_rx,
+            create_validation_channel().0,
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
@@ -1011,6 +1108,7 @@ mod tests {
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let worker = OrganiseWorker::new(
             organise_rx,
+            create_validation_channel().0,
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
@@ -1090,6 +1188,7 @@ mod tests {
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let worker = OrganiseWorker::new(
             organise_rx,
+            create_validation_channel().0,
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
@@ -1130,6 +1229,9 @@ mod tests {
             .return_once(MockChainStoreHandle::new);
         // Parent is HeaderValid on the candidate chain -- not yet validated.
         mock_chain_handle
+            .expect_share_block_exists()
+            .returning(|_| false);
+        mock_chain_handle
             .expect_get_block_metadata()
             .returning(|_| {
                 Ok(BlockMetadata {
@@ -1158,6 +1260,7 @@ mod tests {
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let worker = OrganiseWorker::new(
             organise_rx,
+            create_validation_channel().0,
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
@@ -1241,6 +1344,7 @@ mod tests {
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let worker = OrganiseWorker::new(
             organise_rx,
+            create_validation_channel().0,
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
@@ -1307,6 +1411,7 @@ mod tests {
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let worker = OrganiseWorker::new(
             organise_rx,
+            create_validation_channel().0,
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
@@ -1365,6 +1470,7 @@ mod tests {
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let worker = OrganiseWorker::new(
             organise_rx,
+            create_validation_channel().0,
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
@@ -1427,6 +1533,7 @@ mod tests {
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let worker = OrganiseWorker::new(
             rx,
+            create_validation_channel().0,
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
@@ -1493,6 +1600,7 @@ mod tests {
         let (notify_tx, mut notify_rx) = create_test_notify_channel();
         let worker = OrganiseWorker::new(
             organise_rx,
+            create_validation_channel().0,
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
@@ -1565,6 +1673,7 @@ mod tests {
         let (notify_tx, mut notify_rx) = create_test_notify_channel();
         let worker = OrganiseWorker::new(
             organise_rx,
+            create_validation_channel().0,
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
@@ -1607,6 +1716,9 @@ mod tests {
             .expect_mark_block_valid()
             .returning(|_| Ok(()));
         mock_chain_handle
+            .expect_share_block_exists()
+            .returning(|_| false);
+        mock_chain_handle
             .expect_get_block_metadata()
             .returning(|_| {
                 Ok(BlockMetadata {
@@ -1628,6 +1740,7 @@ mod tests {
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let worker = OrganiseWorker::new(
             organise_rx,
+            create_validation_channel().0,
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
@@ -1693,6 +1806,7 @@ mod tests {
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let worker = OrganiseWorker::new(
             organise_rx,
+            create_validation_channel().0,
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
@@ -1783,6 +1897,7 @@ mod tests {
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let mut worker = OrganiseWorker::new(
             organise_rx,
+            create_validation_channel().0,
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
@@ -1868,6 +1983,7 @@ mod tests {
         let metrics = create_test_metrics_handle();
         let worker = OrganiseWorker::new(
             organise_rx,
+            create_validation_channel().0,
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
@@ -1947,6 +2063,7 @@ mod tests {
         let metrics = create_test_metrics_handle();
         let worker = OrganiseWorker::new(
             organise_rx,
+            create_validation_channel().0,
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
@@ -2043,6 +2160,7 @@ mod tests {
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let worker = OrganiseWorker::new(
             organise_rx,
+            create_validation_channel().0,
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
@@ -2146,6 +2264,7 @@ mod tests {
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let mut worker = OrganiseWorker::new(
             organise_rx,
+            create_validation_channel().0,
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
@@ -2201,6 +2320,9 @@ mod tests {
             .returning(|| Ok(None));
         // Parent is stored but only HeaderValid, so the block is buffered.
         mock_chain_handle
+            .expect_share_block_exists()
+            .returning(|_| false);
+        mock_chain_handle
             .expect_get_block_metadata()
             .returning(|_| {
                 Ok(BlockMetadata {
@@ -2215,6 +2337,7 @@ mod tests {
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let mut worker = OrganiseWorker::new(
             organise_rx,
+            create_validation_channel().0,
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
@@ -2285,6 +2408,7 @@ mod tests {
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let mut worker = OrganiseWorker::new(
             organise_rx,
+            create_validation_channel().0,
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
@@ -2346,6 +2470,7 @@ mod tests {
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         OrganiseWorker::new(
             organise_rx,
+            create_validation_channel().0,
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
@@ -2450,6 +2575,7 @@ mod tests {
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let mut worker = OrganiseWorker::new(
             organise_rx,
+            create_validation_channel().0,
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
@@ -2499,6 +2625,7 @@ mod tests {
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let mut worker = OrganiseWorker::new(
             organise_rx,
+            create_validation_channel().0,
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
@@ -2537,6 +2664,7 @@ mod tests {
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let mut worker = OrganiseWorker::new(
             organise_rx,
+            create_validation_channel().0,
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
@@ -2606,6 +2734,7 @@ mod tests {
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let mut worker = OrganiseWorker::new(
             organise_rx,
+            create_validation_channel().0,
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
@@ -2665,6 +2794,7 @@ mod tests {
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let mut worker = OrganiseWorker::new(
             organise_rx,
+            create_validation_channel().0,
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
@@ -2736,6 +2866,7 @@ mod tests {
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let mut worker = OrganiseWorker::new(
             organise_rx,
+            create_validation_channel().0,
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
@@ -2808,6 +2939,9 @@ mod tests {
 
         let marked_meta = marked.clone();
         mock_chain_handle
+            .expect_share_block_exists()
+            .returning(|_| false);
+        mock_chain_handle
             .expect_get_block_metadata()
             .returning(move |hash| {
                 let hash = *hash;
@@ -2864,6 +2998,7 @@ mod tests {
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let worker = OrganiseWorker::new(
             organise_rx,
+            create_validation_channel().0,
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
@@ -2939,6 +3074,9 @@ mod tests {
         let c_hash = share_c.block_hash();
 
         mock_chain_handle
+            .expect_share_block_exists()
+            .returning(|_| false);
+        mock_chain_handle
             .expect_get_block_metadata()
             .returning(move |hash| {
                 let (height, status, chain) = if *hash == t_parent {
@@ -2980,6 +3118,7 @@ mod tests {
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let mut worker = OrganiseWorker::new(
             organise_rx,
+            create_validation_channel().0,
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
@@ -3051,6 +3190,7 @@ mod tests {
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let worker = OrganiseWorker::new(
             organise_rx,
+            create_validation_channel().0,
             mock_chain_handle,
             monitoring_tx,
             notify_tx,
@@ -3074,5 +3214,122 @@ mod tests {
             result.is_err(),
             "a store error with a valid parent must be fatal"
         );
+    }
+
+    /// A block whose parent is HeaderValid with its body stored (stranded) is
+    /// buffered, and the parent's validation is re-driven so it can be promoted.
+    #[tokio::test]
+    async fn test_stranded_parent_is_redriven_and_child_buffered() {
+        let parent_hash = TestShareBlockBuilder::new()
+            .nonce(0x11111111)
+            .build()
+            .block_hash();
+        let child = TestShareBlockBuilder::new()
+            .nonce(0x22222222)
+            .prev_share_blockhash(parent_hash.to_string())
+            .build();
+
+        let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_get_block_metadata()
+            .returning(|_| {
+                Ok(BlockMetadata {
+                    expected_height: Some(5),
+                    chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
+                    status: Status::HeaderValid,
+                    chain: ChainMembership::Candidate,
+                })
+            });
+        mock_chain_handle
+            .expect_share_block_exists()
+            .returning(|_| true);
+        mock_chain_handle.expect_is_current().returning(|| false);
+
+        let (_organise_tx, organise_rx) = create_organise_channel();
+        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let (notify_tx, _notify_rx) = create_test_notify_channel();
+        let (validation_tx, mut validation_rx) = create_validation_channel();
+        let mut worker = OrganiseWorker::new(
+            organise_rx,
+            validation_tx,
+            mock_chain_handle,
+            monitoring_tx,
+            notify_tx,
+            create_test_metrics_handle(),
+            create_test_pplns_window(),
+            stub_share_validator_with_success(),
+        );
+
+        let outcome = worker
+            .process_share_block(child, true)
+            .await
+            .expect("process_share_block");
+        assert!(matches!(outcome, ProcessOutcome::Buffered));
+
+        match validation_rx.try_recv() {
+            Ok(ValidationEvent::ValidateBlockHash(hash)) => assert_eq!(hash, parent_hash),
+            Ok(ValidationEvent::ValidateShareBlock(_)) => {
+                panic!("expected ValidateBlockHash, got ValidateShareBlock")
+            }
+            Err(error) => {
+                panic!("expected a re-drive event for the stranded parent, got {error:?}")
+            }
+        }
+        assert_eq!(worker.pending_blocks.get(&5).map(Vec::len), Some(1));
+    }
+
+    /// A block whose parent is HeaderValid but whose body has not arrived is
+    /// buffered without re-driving: there is nothing yet to re-validate.
+    #[tokio::test]
+    async fn test_waiting_parent_is_not_redriven() {
+        let parent_hash = TestShareBlockBuilder::new()
+            .nonce(0x33333333)
+            .build()
+            .block_hash();
+        let child = TestShareBlockBuilder::new()
+            .nonce(0x44444444)
+            .prev_share_blockhash(parent_hash.to_string())
+            .build();
+
+        let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_get_block_metadata()
+            .returning(|_| {
+                Ok(BlockMetadata {
+                    expected_height: Some(7),
+                    chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
+                    status: Status::HeaderValid,
+                    chain: ChainMembership::Candidate,
+                })
+            });
+        mock_chain_handle
+            .expect_share_block_exists()
+            .returning(|_| false);
+
+        let (_organise_tx, organise_rx) = create_organise_channel();
+        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let (notify_tx, _notify_rx) = create_test_notify_channel();
+        let (validation_tx, mut validation_rx) = create_validation_channel();
+        let mut worker = OrganiseWorker::new(
+            organise_rx,
+            validation_tx,
+            mock_chain_handle,
+            monitoring_tx,
+            notify_tx,
+            create_test_metrics_handle(),
+            create_test_pplns_window(),
+            stub_share_validator_with_success(),
+        );
+
+        let outcome = worker
+            .process_share_block(child, true)
+            .await
+            .expect("process_share_block");
+        assert!(matches!(outcome, ProcessOutcome::Buffered));
+        assert!(
+            validation_rx.try_recv().is_err(),
+            "a waiting parent must not be re-driven"
+        );
+        assert_eq!(worker.pending_blocks.get(&7).map(Vec::len), Some(1));
     }
 }
