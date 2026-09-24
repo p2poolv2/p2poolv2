@@ -16,7 +16,7 @@ use bitcoin::{
 };
 use tracing::debug;
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use super::{Chain, Height, TopResult, height_to_key_with_suffix};
 use crate::accounting::payout::sharechain_pplns::pplns_window::PRUNE_DEPTH;
@@ -232,6 +232,59 @@ impl Store {
         result.extend(missing_uncles);
         result.extend(missing);
         Ok(result)
+    }
+
+    /// Candidate-chain blocks from `from_height` upward whose body is stored but
+    /// which are still only `HeaderValid` -- stranded: everything needed to
+    /// validate them is present, yet they never became `BlockValid` (their
+    /// validation events were lost on restart, or dropped).
+    ///
+    /// The complement of [`Store::get_candidate_blocks_missing_data`]: that
+    /// returns candidate blocks whose body is *missing*; this returns those
+    /// whose body is *present* but still unvalidated. The organise worker's
+    /// startup seed uses it to resume promotion after a restart.
+    ///
+    /// Restricted to `ChainMembership::Candidate` so off-chain siblings -- a
+    /// dense height's flood of HeaderValid-with-body blocks -- are never
+    /// re-driven. Returns at most `limit` hashes, height-ascending (parents
+    /// before children).
+    pub fn get_candidate_blocks_needing_validation(
+        &self,
+        from_height: u32,
+        limit: usize,
+    ) -> Result<Vec<BlockHash>, StoreError> {
+        let candidate_height = match self.get_top_candidate_height() {
+            Ok(height) => height,
+            Err(StoreError::NotFound(_)) => return Ok(Vec::new()),
+            Err(error) => return Err(error),
+        };
+        if limit == 0 || candidate_height < from_height {
+            return Ok(Vec::new());
+        }
+
+        let height_entries = self.get_blockhashes_for_height_range(from_height, candidate_height);
+        let total_blocks: usize = height_entries.iter().map(|(_, hashes)| hashes.len()).sum();
+        let mut all_blockhashes = Vec::with_capacity(total_blocks);
+        for (_, blockhashes) in &height_entries {
+            all_blockhashes.extend(blockhashes);
+        }
+
+        let metadata_map: HashMap<BlockHash, BlockMetadata> = self
+            .get_block_metadata_batch(&all_blockhashes)?
+            .into_iter()
+            .collect();
+
+        let stranded: Vec<BlockHash> = all_blockhashes
+            .into_iter()
+            .filter(|blockhash| {
+                metadata_map.get(blockhash).is_some_and(|metadata| {
+                    metadata.status == Status::HeaderValid
+                        && metadata.chain == ChainMembership::Candidate
+                }) && self.share_block_exists(blockhash)
+            })
+            .take(limit)
+            .collect();
+        Ok(stranded)
     }
 
     /// Compute the starting height for the missing-data scan.
@@ -2619,5 +2672,183 @@ mod tests {
                 .reorg_branch_has_invalid(&orphan.block_hash())
                 .unwrap()
         );
+    }
+
+    #[test]
+    fn test_needing_validation_returns_stranded_run_ascending() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695790).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695791)
+            .build();
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+
+        // Both are HeaderValid candidates with their bodies stored: stranded.
+        store.push_to_candidate_chain(&share1).unwrap();
+        store.push_to_candidate_chain(&share2).unwrap();
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&share1, &mut batch).unwrap();
+        store.add_share_block(&share2, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let needing = store
+            .get_candidate_blocks_needing_validation(1, 512)
+            .unwrap();
+        assert_eq!(needing, vec![share1.block_hash(), share2.block_hash()]);
+    }
+
+    #[test]
+    fn test_needing_validation_excludes_block_valid() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695790).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695791)
+            .build();
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+
+        store.push_to_candidate_chain(&share1).unwrap();
+        store.push_to_candidate_chain(&share2).unwrap();
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&share1, &mut batch).unwrap();
+        store.add_share_block(&share2, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // share1 is already validated: it is not stranded.
+        let mut metadata = store.get_block_metadata(&share1.block_hash()).unwrap();
+        metadata.status = Status::BlockValid;
+        let mut batch = Store::get_write_batch();
+        store
+            .update_block_metadata(&share1.block_hash(), &metadata, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let needing = store
+            .get_candidate_blocks_needing_validation(1, 512)
+            .unwrap();
+        assert_eq!(needing, vec![share2.block_hash()]);
+    }
+
+    #[test]
+    fn test_needing_validation_excludes_body_missing() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695790).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695791)
+            .build();
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+
+        store.push_to_candidate_chain(&share1).unwrap();
+        store.push_to_candidate_chain(&share2).unwrap();
+        // Only share1's body is stored; share2 is still waiting on the fetcher.
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&share1, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let needing = store
+            .get_candidate_blocks_needing_validation(1, 512)
+            .unwrap();
+        assert_eq!(needing, vec![share1.block_hash()]);
+    }
+
+    #[test]
+    fn test_needing_validation_excludes_non_candidate_membership() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695790).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695791)
+            .build();
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+
+        store.push_to_candidate_chain(&share1).unwrap();
+        store.push_to_candidate_chain(&share2).unwrap();
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&share1, &mut batch).unwrap();
+        store.add_share_block(&share2, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // share1 is HeaderValid with its body but off the candidate chain
+        // (e.g. confirmed below the prune zone); it must not be re-driven.
+        let mut metadata = store.get_block_metadata(&share1.block_hash()).unwrap();
+        metadata.chain = ChainMembership::Confirmed;
+        let mut batch = Store::get_write_batch();
+        store
+            .update_block_metadata(&share1.block_hash(), &metadata, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let needing = store
+            .get_candidate_blocks_needing_validation(1, 512)
+            .unwrap();
+        assert_eq!(needing, vec![share2.block_hash()]);
+    }
+
+    #[test]
+    fn test_needing_validation_respects_limit() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695790).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695791)
+            .build();
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+
+        store.push_to_candidate_chain(&share1).unwrap();
+        store.push_to_candidate_chain(&share2).unwrap();
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&share1, &mut batch).unwrap();
+        store.add_share_block(&share2, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let needing = store.get_candidate_blocks_needing_validation(1, 1).unwrap();
+        assert_eq!(needing, vec![share1.block_hash()]);
     }
 }
