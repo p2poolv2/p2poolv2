@@ -8,19 +8,35 @@
 #   4. Deploy full SSL config
 #   5. Reload nginx
 
-- name: Install nginx
+- name: Update apt cache (Debian/Ubuntu)
   ansible.builtin.apt:
+    update_cache: true
+  when: ansible_os_family == "Debian"
+
+- name: Install nginx
+  ansible.builtin.package:
     name: nginx
     state: present
-    update_cache: true
 
-- name: Install certbot and nginx plugin
-  ansible.builtin.apt:
+- name: Install certbot and nginx plugin (Debian/Ubuntu)
+  ansible.builtin.package:
     name:
       - certbot
       - python3-certbot-nginx
     state: present
-  when: p2poolv2_certbot_email | default('') | length > 0
+  when: >
+    ansible_os_family == "Debian" and
+    p2poolv2_certbot_email | default('') | length > 0
+
+- name: Install certbot and nginx plugin (Arch)
+  ansible.builtin.package:
+    name:
+      - certbot
+      - certbot-nginx
+    state: present
+  when: >
+    ansible_os_family == "Archlinux" and
+    p2poolv2_certbot_email | default('') | length > 0
 
 - name: Check if SSL certificate exists
   ansible.builtin.stat:

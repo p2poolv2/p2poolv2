@@ -112,6 +112,23 @@ Nginx is configured once per host (not per instance). The config includes:
 - Let's Encrypt certificates via certbot
 - Basic auth header injection toward the API backend (derived from vault credentials)
 
+== Grafana
+
+Installs Prometheus and Grafana natively (via the system package manager, not Docker), and deploys the existing dashboards from `prometheus/grafana/dashboards/` and the datasource/dashboard provisioning from `prometheus/grafana/provisioning/`.
+
+- Prometheus is available in the default repositories on both Debian/Ubuntu and Arch, so no extra repository setup is needed for it
+- Grafana requires its own official repository, which this role adds automatically
+- Both services are enabled and started via systemd (`prometheus`, `grafana-server`)
+- Deploy just this role with:
++
+[source,bash]
+----
+ansible-playbook -i inventory/hosts.yml playbook.yml --tags grafana
+----
+- To expose Grafana externally, set `p2poolv2_grafana_domain` and see the Nginx section above for the reverse proxy setup
+
+This is intentionally kept separate from the Docker-based `docker/docker-compose.metrics.yml` setup, which is meant for fully-Docker deployments (where p2poolv2 itself also runs in Docker). This Ansible role targets natively-run (systemd) p2poolv2 instances instead.
+
 == Secrets
 
 All credentials are stored in `inventory/group_vars/all/vault.yml`, encrypted with ansible-vault. The vault file is gitignored.
@@ -128,7 +145,7 @@ Store the username, password, and resulting token in the vault. The nginx basic 
 == Prerequisites
 
 * Ansible 2.12+
-* A target host running Ubuntu (tested on 22.04)
+* A target host running Ubuntu (tested on 22.04) or Arch Linux
 * SSH access with sudo privileges
 * A running Bitcoin Core node on the target (not managed by this playbook)
 * DNS records pointing your domain(s) to the target host (for Let's Encrypt)
