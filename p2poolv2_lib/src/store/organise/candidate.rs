@@ -24,6 +24,14 @@ use crate::accounting::payout::sharechain_pplns::pplns_window::PRUNE_DEPTH;
 const CANDIDATE_SUFFIX: &str = ":c";
 const TOP_CANDIDATE_KEY: &str = "meta:top_candidate_height";
 
+/// Height span scanned per batch by `get_candidate_blocks_needing_validation`.
+///
+/// Bounds the per-batch working set (blockhashes plus their metadata read) so a
+/// restart with the confirmed tip far below the candidate tip does not load the
+/// entire unconfirmed range up front. One batch usually already yields a full
+/// result window.
+const NEEDING_VALIDATION_SCAN_BATCH_HEIGHTS: u32 = 512;
+
 impl Store {
     /// Increment top candidate key if height is one more than current height
     ///
@@ -248,10 +256,31 @@ impl Store {
     /// dense height's flood of HeaderValid-with-body blocks -- are never
     /// re-driven. Returns at most `limit` hashes, height-ascending (parents
     /// before children).
+    ///
+    /// Scans the candidate range in bounded height batches and stops as soon as
+    /// `limit` blocks are found, so a restart with the confirmed tip far below
+    /// the candidate tip never materialises the whole unconfirmed range (every
+    /// height and every dense-height sibling) or reads its metadata in one shot.
     pub fn get_candidate_blocks_needing_validation(
         &self,
         from_height: u32,
         limit: usize,
+    ) -> Result<Vec<BlockHash>, StoreError> {
+        self.scan_candidate_blocks_needing_validation(
+            from_height,
+            limit,
+            NEEDING_VALIDATION_SCAN_BATCH_HEIGHTS,
+        )
+    }
+
+    /// Batched scan behind `get_candidate_blocks_needing_validation`, with the
+    /// per-batch height span parameterised so tests can exercise the multi-batch
+    /// stitching without building a full window of blocks.
+    fn scan_candidate_blocks_needing_validation(
+        &self,
+        from_height: u32,
+        limit: usize,
+        batch_heights: u32,
     ) -> Result<Vec<BlockHash>, StoreError> {
         let candidate_height = match self.get_top_candidate_height() {
             Ok(height) => height,
@@ -262,28 +291,40 @@ impl Store {
             return Ok(Vec::new());
         }
 
-        let height_entries = self.get_blockhashes_for_height_range(from_height, candidate_height);
-        let total_blocks: usize = height_entries.iter().map(|(_, hashes)| hashes.len()).sum();
-        let mut all_blockhashes = Vec::with_capacity(total_blocks);
-        for (_, blockhashes) in &height_entries {
-            all_blockhashes.extend(blockhashes);
+        let mut stranded = Vec::with_capacity(limit);
+        let mut batch_start = from_height;
+        while batch_start <= candidate_height && stranded.len() < limit {
+            let batch_end = batch_start
+                .saturating_add(batch_heights - 1)
+                .min(candidate_height);
+
+            let height_entries = self.get_blockhashes_for_height_range(batch_start, batch_end);
+            let batch_total: usize = height_entries.iter().map(|(_, hashes)| hashes.len()).sum();
+            let mut batch_hashes = Vec::with_capacity(batch_total);
+            for (_, blockhashes) in &height_entries {
+                batch_hashes.extend(blockhashes);
+            }
+
+            let metadata_map: HashMap<BlockHash, BlockMetadata> = self
+                .get_block_metadata_batch(&batch_hashes)?
+                .into_iter()
+                .collect();
+
+            let remaining = limit - stranded.len();
+            stranded.extend(
+                batch_hashes
+                    .into_iter()
+                    .filter(|blockhash| {
+                        metadata_map.get(blockhash).is_some_and(|metadata| {
+                            metadata.status == Status::HeaderValid
+                                && metadata.chain == ChainMembership::Candidate
+                        }) && self.share_block_exists(blockhash)
+                    })
+                    .take(remaining),
+            );
+
+            batch_start = batch_end.saturating_add(1);
         }
-
-        let metadata_map: HashMap<BlockHash, BlockMetadata> = self
-            .get_block_metadata_batch(&all_blockhashes)?
-            .into_iter()
-            .collect();
-
-        let stranded: Vec<BlockHash> = all_blockhashes
-            .into_iter()
-            .filter(|blockhash| {
-                metadata_map.get(blockhash).is_some_and(|metadata| {
-                    metadata.status == Status::HeaderValid
-                        && metadata.chain == ChainMembership::Candidate
-                }) && self.share_block_exists(blockhash)
-            })
-            .take(limit)
-            .collect();
         Ok(stranded)
     }
 
@@ -2850,5 +2891,57 @@ mod tests {
 
         let needing = store.get_candidate_blocks_needing_validation(1, 1).unwrap();
         assert_eq!(needing, vec![share1.block_hash()]);
+    }
+
+    #[test]
+    fn test_needing_validation_stitches_across_batches() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695790).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695791)
+            .build();
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        let share3 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share2.block_hash().to_string())
+            .nonce(0xe9695793)
+            .build();
+
+        store.push_to_candidate_chain(&share1).unwrap();
+        store.push_to_candidate_chain(&share2).unwrap();
+        store.push_to_candidate_chain(&share3).unwrap();
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&share1, &mut batch).unwrap();
+        store.add_share_block(&share2, &mut batch).unwrap();
+        store.add_share_block(&share3, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        // One height per batch forces the scan across three batches; the result
+        // must stitch them in height order and honour the limit across batches.
+        let all = store
+            .scan_candidate_blocks_needing_validation(1, 512, 1)
+            .unwrap();
+        assert_eq!(
+            all,
+            vec![
+                share1.block_hash(),
+                share2.block_hash(),
+                share3.block_hash()
+            ]
+        );
+
+        let limited = store
+            .scan_candidate_blocks_needing_validation(1, 2, 1)
+            .unwrap();
+        assert_eq!(limited, vec![share1.block_hash(), share2.block_hash()]);
     }
 }
