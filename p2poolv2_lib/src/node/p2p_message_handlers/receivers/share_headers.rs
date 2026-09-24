@@ -214,8 +214,13 @@ pub async fn handle_share_headers<C: Send + Sync>(
         validate_header_chain(&share_headers, &chain_store_handle, share_validator)
     {
         if sync_error.is_retryable() {
+            // The depth is subtracted from build_locator's start height, which
+            // is the candidate tip, so it must be measured against the same
+            // base. Measuring it against the confirmed tip would anchor the
+            // retry higher than intended -- a shallower locator, defeating a
+            // retry whose purpose is to reach further back.
             let tip_height = chain_store_handle
-                .get_tip_height()
+                .get_candidate_tip_height()
                 .ok()
                 .flatten()
                 .unwrap_or(0);
@@ -1443,9 +1448,10 @@ mod tests {
         chain_store_handle
             .expect_get_block_metadata_batch()
             .returning(|_| Ok(Vec::new()));
-        // get_tip_height for computing retry depth
+        // candidate tip height for computing retry depth, matching the base
+        // build_locator subtracts the depth from
         chain_store_handle
-            .expect_get_tip_height()
+            .expect_get_candidate_tip_height()
             .returning(|| Ok(Some(100)));
         // build_locator for the retry getheaders
         chain_store_handle
