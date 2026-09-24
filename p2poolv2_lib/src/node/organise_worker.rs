@@ -241,7 +241,7 @@ impl OrganiseWorker {
         // Resume any blocks stranded across a restart (body stored, still only
         // HeaderValid): nothing has arrived on top to trigger the inline
         // re-drive yet, so seed the cascade from the confirmed tip.
-        self.seed_revalidation();
+        self.seed_revalidation()?;
 
         while let Some(event) = self.organise_rx.recv().await {
             match event {
@@ -414,25 +414,33 @@ impl OrganiseWorker {
     /// and bounded by `REVALIDATION_WINDOW` so it cannot itself overflow the
     /// pending buffer; validating the seeded run promotes it and the inline path
     /// carries any blocks beyond the window as the confirmed tip climbs.
-    fn seed_revalidation(&self) {
-        let confirmed = self
-            .chain_store_handle
-            .get_tip_height()
-            .ok()
-            .flatten()
-            .unwrap_or(0);
-        let stranded = match self
-            .chain_store_handle
-            .get_candidate_blocks_needing_validation(confirmed + 1, REVALIDATION_WINDOW)
-        {
-            Ok(hashes) => hashes,
+    ///
+    /// A store read failure (the confirmed tip or the stranded scan) is fatal:
+    /// it must not be mistaken for an empty chain, which would run a full-history
+    /// recovery scan and continue past a real store fault. `Ok(None)` for the
+    /// tip is the genuine empty case and scans from the first height.
+    fn seed_revalidation(&self) -> Result<(), OrganiseError> {
+        let confirmed = match self.chain_store_handle.get_tip_height() {
+            Ok(Some(height)) => height,
+            // No confirmed tip yet (empty or genesis-only chain): scan from the
+            // first height above genesis.
+            Ok(None) => 0,
             Err(error) => {
-                error!("Failed to scan for stranded blocks at startup: {error}");
-                return;
+                return Err(OrganiseError {
+                    message: format!(
+                        "Failed to read confirmed tip for startup re-validation: {error}"
+                    ),
+                });
             }
         };
+        let stranded = self
+            .chain_store_handle
+            .get_candidate_blocks_needing_validation(confirmed + 1, REVALIDATION_WINDOW)
+            .map_err(|error| OrganiseError {
+                message: format!("Failed to scan for stranded blocks at startup: {error}"),
+            })?;
         if stranded.is_empty() {
-            return;
+            return Ok(());
         }
         info!(
             "Re-driving validation of {} stranded block(s) above confirmed height {confirmed} at startup",
@@ -443,12 +451,13 @@ impl OrganiseWorker {
                 .validation_tx
                 .try_send(ValidationEvent::ValidateBlockHash(blockhash))
             {
-                // A full or closed channel ends the seed: the inline re-drive
-                // picks up the remainder as descendants arrive.
+                // A full or closed channel ends the seed but is not fatal: the
+                // inline re-drive picks up the remainder as descendants arrive.
                 debug!("Stopping startup re-validation seed at {blockhash}: {send_error}");
-                return;
+                return Ok(());
             }
         }
+        Ok(())
     }
 
     /// Re-drive validation of a stranded parent -- a block whose body is stored
@@ -3552,6 +3561,37 @@ mod tests {
         assert!(
             validation_rx.try_recv().is_err(),
             "seed must emit exactly the stranded run"
+        );
+    }
+
+    /// A store read failure while reading the confirmed tip at startup is fatal:
+    /// it must not be silently treated as an empty chain, which would run a
+    /// full-history recovery scan and continue past a real store fault.
+    #[tokio::test]
+    async fn test_startup_seed_is_fatal_on_confirmed_tip_read_error() {
+        let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_get_tip_height()
+            .returning(|| Err(StoreError::Database("simulated read failure".to_string())));
+
+        let (_organise_tx, organise_rx) = create_organise_channel();
+        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let (notify_tx, _notify_rx) = create_test_notify_channel();
+        let worker = OrganiseWorker::new(
+            organise_rx,
+            create_validation_channel().0,
+            mock_chain_handle,
+            monitoring_tx,
+            notify_tx,
+            create_test_metrics_handle(),
+            create_test_pplns_window(),
+            stub_share_validator_with_success(),
+        );
+
+        let result = worker.run().await;
+        assert!(
+            result.is_err(),
+            "a confirmed-tip read error at startup must be fatal, not a full-history scan"
         );
     }
 }
