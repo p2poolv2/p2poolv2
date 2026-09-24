@@ -63,6 +63,14 @@ const ORGANISE_CHANNEL_CAPACITY: usize = 512;
 /// overflow drops a block that is already stored, which nothing re-fetches.
 const PENDING_BLOCKS_CAPACITY: usize = 2 * ORGANISE_CHANNEL_CAPACITY;
 
+/// Upper bound on how many stranded blocks the startup re-validation seed
+/// emits at once.
+///
+/// Kept below `PENDING_BLOCKS_CAPACITY` so the seed alone cannot overflow the
+/// pending buffer; the inline re-drive (`redrive_stranded_parent`) carries any
+/// blocks beyond the window as promotion advances.
+const REVALIDATION_WINDOW: usize = 512;
+
 /// Events for the organise worker.
 // Block dominates the traffic and InvalidBlock is rare, so allow variant.
 #[allow(clippy::large_enum_variant)]
@@ -230,6 +238,11 @@ impl OrganiseWorker {
         // Make sure pplns window is warmed up with current chain state in store
         self.update_pplns_window();
 
+        // Resume any blocks stranded across a restart (body stored, still only
+        // HeaderValid): nothing has arrived on top to trigger the inline
+        // re-drive yet, so seed the cascade from the confirmed tip.
+        self.seed_revalidation();
+
         while let Some(event) = self.organise_rx.recv().await {
             match event {
                 OrganiseEvent::Block {
@@ -387,6 +400,53 @@ impl OrganiseWorker {
             ParentState::Valid(parent_height) => {
                 self.validate_mark_promote(share_block, parent_height, content_validated)
                     .await
+            }
+        }
+    }
+
+    /// At startup, re-drive validation of the stranded run above the confirmed
+    /// tip -- blocks whose bodies are stored but which were left `HeaderValid`
+    /// when their validation events were lost on restart.
+    ///
+    /// The inline re-drive (`redrive_stranded_parent`) only fires when a
+    /// descendant arrives on top of a stranded block; on a fresh restart nothing
+    /// has arrived yet, so this seeds the cascade. Best-effort via `try_send`
+    /// and bounded by `REVALIDATION_WINDOW` so it cannot itself overflow the
+    /// pending buffer; validating the seeded run promotes it and the inline path
+    /// carries any blocks beyond the window as the confirmed tip climbs.
+    fn seed_revalidation(&self) {
+        let confirmed = self
+            .chain_store_handle
+            .get_tip_height()
+            .ok()
+            .flatten()
+            .unwrap_or(0);
+        let stranded = match self
+            .chain_store_handle
+            .get_candidate_blocks_needing_validation(confirmed + 1, REVALIDATION_WINDOW)
+        {
+            Ok(hashes) => hashes,
+            Err(error) => {
+                error!("Failed to scan for stranded blocks at startup: {error}");
+                return;
+            }
+        };
+        if stranded.is_empty() {
+            return;
+        }
+        info!(
+            "Re-driving validation of {} stranded block(s) above confirmed height {confirmed} at startup",
+            stranded.len()
+        );
+        for blockhash in stranded {
+            if let Err(send_error) = self
+                .validation_tx
+                .try_send(ValidationEvent::ValidateBlockHash(blockhash))
+            {
+                // A full or closed channel ends the seed: the inline re-drive
+                // picks up the remainder as descendants arrive.
+                debug!("Stopping startup re-validation seed at {blockhash}: {send_error}");
+                return;
             }
         }
     }
@@ -913,6 +973,9 @@ mod tests {
         body_exists: bool,
     ) -> OrganiseWorker {
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_get_candidate_blocks_needing_validation()
+            .returning(|_, _| Ok(Vec::new()));
         // The confirmed-block follow-up reads each newly confirmed block
         // back; this test is not about the share feed, so let it find
         // nothing and skip.
@@ -1029,6 +1092,9 @@ mod tests {
     async fn test_organise_worker_stops_on_channel_close() {
         let (_organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_get_candidate_blocks_needing_validation()
+            .returning(|_, _| Ok(Vec::new()));
         // The confirmed-block follow-up reads each newly confirmed block
         // back; this test is not about the share feed, so let it find
         // nothing and skip.
@@ -1068,6 +1134,9 @@ mod tests {
     async fn test_organise_worker_calls_organise_block() {
         let (organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_get_candidate_blocks_needing_validation()
+            .returning(|_, _| Ok(Vec::new()));
         // The confirmed-block follow-up reads each newly confirmed block
         // back; this test is not about the share feed, so let it find
         // nothing and skip.
@@ -1139,6 +1208,9 @@ mod tests {
     async fn test_organise_worker_marks_prune_window_block_block_valid() {
         let (organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_get_candidate_blocks_needing_validation()
+            .returning(|_, _| Ok(Vec::new()));
         // The confirmed-block follow-up reads each newly confirmed block
         // back; this test is not about the share feed, so let it find
         // nothing and skip.
@@ -1218,6 +1290,9 @@ mod tests {
     async fn test_block_not_marked_valid_when_parent_unvalidated() {
         let (organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_get_candidate_blocks_needing_validation()
+            .returning(|_, _| Ok(Vec::new()));
         // The confirmed-block follow-up reads each newly confirmed block
         // back; this test is not about the share feed, so let it find
         // nothing and skip.
@@ -1292,6 +1367,9 @@ mod tests {
     async fn test_organise_worker_advances_confirmed_after_consensus_invalidation() {
         let (organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_get_candidate_blocks_needing_validation()
+            .returning(|_, _| Ok(Vec::new()));
         // The confirmed-block follow-up reads the block back; this test is
         // not about the share feed, so let it find nothing and skip.
         mock_chain_handle
@@ -1379,6 +1457,9 @@ mod tests {
     async fn test_organise_worker_marks_invalid_block_event() {
         let (organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_get_candidate_blocks_needing_validation()
+            .returning(|_, _| Ok(Vec::new()));
         // The confirmed-block follow-up reads each newly confirmed block
         // back; this test is not about the share feed, so let it find
         // nothing and skip.
@@ -1434,6 +1515,9 @@ mod tests {
     async fn test_organise_worker_fatal_on_channel_closed() {
         let (organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_get_candidate_blocks_needing_validation()
+            .returning(|_, _| Ok(Vec::new()));
         // The confirmed-block follow-up reads each newly confirmed block
         // back; this test is not about the share feed, so let it find
         // nothing and skip.
@@ -1497,6 +1581,9 @@ mod tests {
     async fn test_organise_worker_continues_on_non_fatal_error() {
         let (tx, rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_get_candidate_blocks_needing_validation()
+            .returning(|_, _| Ok(Vec::new()));
         // The confirmed-block follow-up reads each newly confirmed block
         // back; this test is not about the share feed, so let it find
         // nothing and skip.
@@ -1560,6 +1647,9 @@ mod tests {
     async fn test_organise_worker_sends_new_notify_when_confirmed_catches_up() {
         let (organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_get_candidate_blocks_needing_validation()
+            .returning(|_, _| Ok(Vec::new()));
         // The confirmed-block follow-up reads each newly confirmed block
         // back; this test is not about the share feed, so let it find
         // nothing and skip.
@@ -1632,6 +1722,9 @@ mod tests {
     async fn test_organise_worker_no_new_notify_when_confirmed_below_candidate() {
         let (organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_get_candidate_blocks_needing_validation()
+            .returning(|_, _| Ok(Vec::new()));
         // The confirmed-block follow-up reads each newly confirmed block
         // back; this test is not about the share feed, so let it find
         // nothing and skip.
@@ -1703,6 +1796,9 @@ mod tests {
     async fn test_organise_worker_buffers_block_when_parent_above_confirmed_tip() {
         let (organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_get_candidate_blocks_needing_validation()
+            .returning(|_, _| Ok(Vec::new()));
         // The confirmed-block follow-up reads each newly confirmed block
         // back; this test is not about the share feed, so let it find
         // nothing and skip.
@@ -1767,6 +1863,9 @@ mod tests {
     async fn test_organise_worker_does_not_buffer_when_parent_at_confirmed_tip() {
         let (organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_get_candidate_blocks_needing_validation()
+            .returning(|_, _| Ok(Vec::new()));
         // The confirmed-block follow-up reads the block back; this test is
         // not about the share feed, so let it find nothing and skip.
         mock_chain_handle
@@ -1843,6 +1942,9 @@ mod tests {
     async fn test_confirming_a_prefix_reports_every_block_at_its_own_height() {
         let (_organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_get_candidate_blocks_needing_validation()
+            .returning(|_, _| Ok(Vec::new()));
 
         // Blocks 5, 6 and 7 all confirm in the promotion triggered by block 5.
         let confirmed: Vec<ShareBlock> = (5..=7u32)
@@ -1934,6 +2036,9 @@ mod tests {
     async fn test_confirmed_block_skips_effort_while_syncing() {
         let (organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_get_candidate_blocks_needing_validation()
+            .returning(|_, _| Ok(Vec::new()));
         let share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
 
         // This test is about the follow-up, so the newly confirmed block has
@@ -2014,6 +2119,9 @@ mod tests {
     async fn test_confirmed_block_records_pool_block_find() {
         let (organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_get_candidate_blocks_needing_validation()
+            .returning(|_, _| Ok(Vec::new()));
         let mut share = TestShareBlockBuilder::new().nonce(0xe9695791).build();
         share.header.bitcoin_header =
             bitcoin::blockdata::constants::genesis_block(bitcoin::Network::Regtest).header;
@@ -2098,6 +2206,9 @@ mod tests {
     async fn test_organise_worker_drains_buffered_block_after_promotion() {
         let (organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_get_candidate_blocks_needing_validation()
+            .returning(|_, _| Ok(Vec::new()));
         // The confirmed-block follow-up reads the block back; this test is
         // not about the share feed, so let it find nothing and skip.
         mock_chain_handle
@@ -2210,6 +2321,9 @@ mod tests {
     async fn test_stalled_confirmation_retries_the_block_wedging_it() {
         let (_organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_get_candidate_blocks_needing_validation()
+            .returning(|_, _| Ok(Vec::new()));
         // The confirmed-block follow-up reads each newly confirmed block
         // back; this test is not about the share feed, so let it find
         // nothing and skip.
@@ -2309,6 +2423,9 @@ mod tests {
 
         let (_organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_get_candidate_blocks_needing_validation()
+            .returning(|_, _| Ok(Vec::new()));
         // The confirmed-block follow-up reads each newly confirmed block
         // back; this test is not about the share feed, so let it find
         // nothing and skip.
@@ -2371,6 +2488,9 @@ mod tests {
     async fn test_transient_promote_failure_rebuffers_the_block() {
         let (_organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_get_candidate_blocks_needing_validation()
+            .returning(|_, _| Ok(Vec::new()));
         // The confirmed-block follow-up reads each newly confirmed block
         // back; this test is not about the share feed, so let it find
         // nothing and skip.
@@ -2437,6 +2557,9 @@ mod tests {
         share_validator: Arc<dyn ShareValidator + Send + Sync>,
     ) -> OrganiseWorker {
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_get_candidate_blocks_needing_validation()
+            .returning(|_, _| Ok(Vec::new()));
         mock_chain_handle
             .expect_get_tip_height()
             .returning(|| Ok(None));
@@ -2537,6 +2660,9 @@ mod tests {
     async fn test_failed_mark_invalid_rebuffers_instead_of_reporting_invalidated() {
         let (_organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_get_candidate_blocks_needing_validation()
+            .returning(|_, _| Ok(Vec::new()));
         // The confirmed-block follow-up reads each newly confirmed block
         // back; this test is not about the share feed, so let it find
         // nothing and skip.
@@ -2606,6 +2732,9 @@ mod tests {
     async fn test_failed_mark_invalid_event_does_not_advance_confirmed() {
         let (_organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_get_candidate_blocks_needing_validation()
+            .returning(|_, _| Ok(Vec::new()));
         // The confirmed-block follow-up reads each newly confirmed block
         // back; this test is not about the share feed, so let it find
         // nothing and skip.
@@ -2646,6 +2775,9 @@ mod tests {
     async fn test_mark_invalid_channel_closed_is_fatal() {
         let (_organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_get_candidate_blocks_needing_validation()
+            .returning(|_, _| Ok(Vec::new()));
         // The confirmed-block follow-up reads each newly confirmed block
         // back; this test is not about the share feed, so let it find
         // nothing and skip.
@@ -2693,6 +2825,9 @@ mod tests {
     async fn test_unresolvable_validation_error_drops_without_buffering() {
         let (_organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_get_candidate_blocks_needing_validation()
+            .returning(|_, _| Ok(Vec::new()));
         // The confirmed-block follow-up reads each newly confirmed block
         // back; this test is not about the share feed, so let it find
         // nothing and skip.
@@ -2760,6 +2895,9 @@ mod tests {
     async fn test_invalid_status_transition_does_not_rebuffer() {
         let (_organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_get_candidate_blocks_needing_validation()
+            .returning(|_, _| Ok(Vec::new()));
         // The confirmed-block follow-up reads each newly confirmed block
         // back; this test is not about the share feed, so let it find
         // nothing and skip.
@@ -2820,6 +2958,9 @@ mod tests {
         // height, not a single block.
         let (_organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_get_candidate_blocks_needing_validation()
+            .returning(|_, _| Ok(Vec::new()));
         mock_chain_handle
             .expect_get_tip_height()
             .returning(|| Ok(None));
@@ -2910,6 +3051,9 @@ mod tests {
 
         let (organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_get_candidate_blocks_needing_validation()
+            .returning(|_, _| Ok(Vec::new()));
         // The confirmed-block follow-up reads each newly confirmed block
         // back; this test is not about the share feed, so let it find
         // nothing and skip.
@@ -3047,6 +3191,9 @@ mod tests {
     async fn test_buffered_follow_up_drains_intermediate_confirmed_heights() {
         let (_organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_get_candidate_blocks_needing_validation()
+            .returning(|_, _| Ok(Vec::new()));
         // The confirmed-block follow-up reads the block back; this test is
         // not about the share feed, so let it find nothing and skip.
         mock_chain_handle
@@ -3149,6 +3296,9 @@ mod tests {
     async fn test_organise_worker_fatal_on_store_access_validation_error() {
         let (organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_get_candidate_blocks_needing_validation()
+            .returning(|_, _| Ok(Vec::new()));
         // The confirmed-block follow-up reads each newly confirmed block
         // back; this test is not about the share feed, so let it find
         // nothing and skip.
@@ -3231,6 +3381,9 @@ mod tests {
 
         let mut mock_chain_handle = MockChainStoreHandle::new();
         mock_chain_handle
+            .expect_get_candidate_blocks_needing_validation()
+            .returning(|_, _| Ok(Vec::new()));
+        mock_chain_handle
             .expect_get_block_metadata()
             .returning(|_| {
                 Ok(BlockMetadata {
@@ -3293,6 +3446,9 @@ mod tests {
 
         let mut mock_chain_handle = MockChainStoreHandle::new();
         mock_chain_handle
+            .expect_get_candidate_blocks_needing_validation()
+            .returning(|_, _| Ok(Vec::new()));
+        mock_chain_handle
             .expect_get_block_metadata()
             .returning(|_| {
                 Ok(BlockMetadata {
@@ -3331,5 +3487,71 @@ mod tests {
             "a waiting parent must not be re-driven"
         );
         assert_eq!(worker.pending_blocks.get(&7).map(Vec::len), Some(1));
+    }
+
+    /// At startup the worker re-drives validation for the stranded run above the
+    /// confirmed tip, so a restart resumes promotion with no peer re-send.
+    #[tokio::test]
+    async fn test_startup_seed_redrives_stranded_run() {
+        let stranded: Vec<BlockHash> = vec![
+            TestShareBlockBuilder::new()
+                .nonce(0x55555555)
+                .build()
+                .block_hash(),
+            TestShareBlockBuilder::new()
+                .nonce(0x66666666)
+                .build()
+                .block_hash(),
+            TestShareBlockBuilder::new()
+                .nonce(0x77777777)
+                .build()
+                .block_hash(),
+        ];
+
+        let mut mock_chain_handle = MockChainStoreHandle::new();
+        mock_chain_handle
+            .expect_get_tip_height()
+            .returning(|| Ok(Some(10)));
+        let seed = stranded.clone();
+        mock_chain_handle
+            .expect_get_candidate_blocks_needing_validation()
+            .returning(move |from_height, limit| {
+                assert_eq!(from_height, 11, "seed scans from confirmed tip + 1");
+                assert_eq!(limit, REVALIDATION_WINDOW);
+                Ok(seed.clone())
+            });
+
+        let (organise_tx, organise_rx) = create_organise_channel();
+        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let (notify_tx, _notify_rx) = create_test_notify_channel();
+        let (validation_tx, mut validation_rx) = create_validation_channel();
+        let worker = OrganiseWorker::new(
+            organise_rx,
+            validation_tx,
+            mock_chain_handle,
+            monitoring_tx,
+            notify_tx,
+            create_test_metrics_handle(),
+            create_test_pplns_window(),
+            stub_share_validator_with_success(),
+        );
+
+        // Close the organise channel so run() exits once the seed has fired.
+        drop(organise_tx);
+        worker.run().await.expect("run");
+
+        for expected in stranded {
+            match validation_rx.try_recv() {
+                Ok(ValidationEvent::ValidateBlockHash(hash)) => assert_eq!(hash, expected),
+                Ok(ValidationEvent::ValidateShareBlock(_)) => {
+                    panic!("expected ValidateBlockHash, got ValidateShareBlock")
+                }
+                Err(error) => panic!("expected a seeded re-drive event, got {error:?}"),
+            }
+        }
+        assert!(
+            validation_rx.try_recv().is_err(),
+            "seed must emit exactly the stranded run"
+        );
     }
 }

@@ -628,6 +628,19 @@ impl ChainStoreHandle {
             .get_candidate_blocks_missing_data(fork_height)
     }
 
+    /// Returns candidate-chain blocks from `from_height` upward whose body is
+    /// stored but which are still only `HeaderValid` (stranded), at most
+    /// `limit`, height-ascending. See `Store::get_candidate_blocks_needing_validation`.
+    pub fn get_candidate_blocks_needing_validation(
+        &self,
+        from_height: u32,
+        limit: usize,
+    ) -> Result<Vec<BlockHash>, StoreError> {
+        self.store_handle
+            .store()
+            .get_candidate_blocks_needing_validation(from_height, limit)
+    }
+
     /// Check if a blockhash has Candidate status in its metadata.
     pub fn is_candidate(&self, blockhash: &BlockHash) -> bool {
         self.store_handle.store().is_candidate(blockhash)
@@ -886,6 +899,7 @@ mockall::mock! {
         pub fn get_share_dag(&self, from_height: u32, to_height: u32) -> Result<ShareDag, StoreError>;
         pub fn get_missing_blockhashes(&self, blockhashes: &[BlockHash]) -> Vec<BlockHash>;
         pub fn get_candidate_blocks_missing_data(&self, fork_height: Option<u32>) -> Result<Vec<BlockHash>, StoreError>;
+        pub fn get_candidate_blocks_needing_validation(&self, from_height: u32, limit: usize) -> Result<Vec<BlockHash>, StoreError>;
         pub fn find_fork_point_height(&self, blockhash: &BlockHash) -> Result<Option<u32>, StoreError>;
         pub fn get_depth(&self, blockhash: &BlockHash) -> Option<usize>;
         pub fn get_pplns_shares_filtered(&self, limit: Option<usize>, start_time: Option<u64>, end_time: Option<u64>) -> Vec<SimplePplnsShare>;
