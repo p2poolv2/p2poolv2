@@ -381,6 +381,16 @@ impl ChainStoreHandle {
         self.store_handle.get_confirmed_at_height(height)
     }
 
+    /// Get the candidate-chain blockhash at the height.
+    ///
+    /// The candidate counterpart of `get_confirmed_at_height`. Note that
+    /// genesis is registered on the confirmed chain only, so height 0 is
+    /// `NotFound` here -- callers walking down to genesis must fall back to
+    /// the confirmed index.
+    pub fn get_candidate_at_height(&self, height: u32) -> Result<BlockHash, StoreError> {
+        self.store_handle.store().get_candidate_at_height(height)
+    }
+
     /// Get blockhashes for a specific height.
     pub fn get_blockhashes_for_height(&self, height: u32) -> Vec<BlockHash> {
         self.store_handle.get_blockhashes_for_height(height)
@@ -466,35 +476,55 @@ impl ChainStoreHandle {
         })
     }
 
-    /// Build a locator for the chain using only confirmed chain blocks.
+    /// Build a locator for the chain from the candidate (header) chain.
     ///
     /// Returns blockhashes at exponentially spaced heights from the
-    /// starting height back to genesis. Only confirmed blocks are
-    /// included so that the peer can match against its own chain.
+    /// starting height back to genesis. The locator advertises what we
+    /// already hold so the peer can serve only the gap, and headers are what
+    /// getheaders fetches -- so it walks the candidate chain, which includes
+    /// every header we have, rather than the confirmed chain, which lags it by
+    /// however far bodies lag headers. Anchoring on the confirmed tip made a
+    /// restart re-request every header above it.
     ///
-    /// When depth is 0, starts from the confirmed tip (normal
-    /// behavior). When depth > 0, starts from confirmed_tip - depth,
-    /// providing a deeper locator to cover fork block parents that
-    /// the receiver may not have.
+    /// Each height falls back to the confirmed index when the candidate index
+    /// has no entry. That is required, not merely defensive: genesis is
+    /// registered on the confirmed chain only, and a candidate reorg can drop
+    /// entries. Without the fallback the locator could lose its genesis anchor,
+    /// match nothing at the peer, and be answered with genesis -- the very
+    /// full refetch this avoids.
+    ///
+    /// Responders accept this: `first_known_for_locator` matches any block that
+    /// is not Pending or Invalid, HeaderValid included.
+    ///
+    /// When depth is 0, starts from the candidate tip (normal behavior). When
+    /// depth > 0, starts from candidate_tip - depth, providing a deeper locator
+    /// to cover fork block parents that the receiver may not have.
     pub fn build_locator(&self, depth: u32) -> Result<Vec<BlockHash>, StoreError> {
-        let tip_height = self.get_tip_height()?;
-        match tip_height {
-            Some(tip_height) => {
-                if tip_height == 0 {
-                    let Some(genesis) = self.get_genesis_blockhash() else {
-                        return Err(StoreError::NotFound(
-                            "No genesis found when building locator for empty chain".into(),
-                        ));
-                    };
-                    return Ok(vec![genesis]);
-                }
+        // Start from the highest block we hold. Normally that is the candidate
+        // tip, which covers every header we have. Take the higher of the two so
+        // the locator is never weaker than the confirmed chain alone would make
+        // it: a genesis-only store has no candidate entry at all, and a
+        // transient candidate/confirmed inconsistency must not lose the top.
+        let tip_height = match (self.get_candidate_tip_height()?, self.get_tip_height()?) {
+            (Some(candidate_height), Some(confirmed_height)) => {
+                Some(candidate_height.max(confirmed_height))
             }
-            None => {
-                return Ok(vec![]);
-            }
+            (candidate_height, confirmed_height) => candidate_height.or(confirmed_height),
+        };
+
+        let Some(tip_height) = tip_height else {
+            return Ok(vec![]);
+        };
+        if tip_height == 0 {
+            let Some(genesis) = self.get_genesis_blockhash() else {
+                return Err(StoreError::NotFound(
+                    "No genesis found when building locator for empty chain".into(),
+                ));
+            };
+            return Ok(vec![genesis]);
         }
 
-        let start_height = tip_height.unwrap().saturating_sub(depth);
+        let start_height = tip_height.saturating_sub(depth);
 
         let mut indexes = Vec::new();
         let mut step = 1;
@@ -512,8 +542,11 @@ impl ChainStoreHandle {
 
         let mut locator = Vec::with_capacity(indexes.len());
         for height in indexes {
-            if let Ok(confirmed_hash) = self.store_handle.get_confirmed_at_height(height) {
-                locator.push(confirmed_hash);
+            let blockhash = self
+                .get_candidate_at_height(height)
+                .or_else(|_| self.store_handle.get_confirmed_at_height(height));
+            if let Ok(blockhash) = blockhash {
+                locator.push(blockhash);
             }
         }
 
@@ -900,6 +933,7 @@ mockall::mock! {
         pub fn get_missing_blockhashes(&self, blockhashes: &[BlockHash]) -> Vec<BlockHash>;
         pub fn get_candidate_blocks_missing_data(&self, fork_height: Option<u32>) -> Result<Vec<BlockHash>, StoreError>;
         pub fn get_candidate_blocks_needing_validation(&self, from_height: u32, limit: usize) -> Result<Vec<BlockHash>, StoreError>;
+        pub fn get_candidate_at_height(&self, height: u32) -> Result<BlockHash, StoreError>;
         pub fn find_fork_point_height(&self, blockhash: &BlockHash) -> Result<Option<u32>, StoreError>;
         pub fn get_depth(&self, blockhash: &BlockHash) -> Option<usize>;
         pub fn get_pplns_shares_filtered(&self, limit: Option<usize>, start_time: Option<u64>, end_time: Option<u64>) -> Vec<SimplePplnsShare>;
@@ -1584,11 +1618,12 @@ mod tests {
         );
     }
 
-    /// When a non-confirmed block (uncle) exists at the same height as
-    /// a confirmed block, the locator must only contain the confirmed
-    /// block.
+    /// When an off-chain block (uncle) exists at the same height as a
+    /// chain block, the locator must contain only the chain block. The
+    /// locator walks the candidate chain, which has one entry per height,
+    /// so siblings sitting at that height are never picked up.
     #[tokio::test]
-    async fn test_build_locator_excludes_non_confirmed_blocks() {
+    async fn test_build_locator_excludes_blocks_not_on_chain() {
         let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
         let genesis = genesis_for_tests();
 
@@ -1673,6 +1708,123 @@ mod tests {
         // Heights 2, 1, 0 -- all confirmed
         assert_eq!(locator.len(), 3);
         assert_eq!(locator[1], share_a.block_hash());
+    }
+
+    /// The locator anchors on the candidate tip, not the confirmed tip.
+    ///
+    /// Confirmed lags candidate whenever bodies lag headers, so anchoring on
+    /// the confirmed tip made a restarting node re-request every header above
+    /// it.
+    #[tokio::test]
+    async fn test_build_locator_anchors_on_candidate_tip() {
+        let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let genesis = genesis_for_tests();
+        chain_handle
+            .init_or_setup_genesis(genesis.clone())
+            .await
+            .unwrap();
+
+        // Confirmed chain reaches height 1.
+        let confirmed_share = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .work(2)
+            .build();
+        chain_handle
+            .add_share_block(confirmed_share.clone())
+            .await
+            .unwrap();
+        chain_handle
+            .organise_header(confirmed_share.header.clone())
+            .await
+            .unwrap();
+        chain_handle
+            .mark_block_valid(confirmed_share.block_hash())
+            .await
+            .unwrap();
+        chain_handle.organise_block().await.unwrap();
+
+        // Height 2 is header-only: on the candidate chain, never confirmed.
+        let candidate_share = TestShareBlockBuilder::new()
+            .prev_share_blockhash(confirmed_share.block_hash().to_string())
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .work(2)
+            .build();
+        chain_handle
+            .add_share_block(candidate_share.clone())
+            .await
+            .unwrap();
+        chain_handle
+            .organise_header(candidate_share.header.clone())
+            .await
+            .unwrap();
+
+        let locator = chain_handle.build_locator(0).unwrap();
+        assert_eq!(
+            locator[0],
+            candidate_share.block_hash(),
+            "locator must anchor on the candidate tip, not the confirmed tip"
+        );
+    }
+
+    /// The candidate walk keeps its genesis anchor.
+    ///
+    /// Genesis is registered on the confirmed chain only, so resolving each
+    /// height must fall back to the confirmed index. Without that fallback the
+    /// locator loses genesis, the peer matches nothing, and it answers with
+    /// genesis -- a full header refetch.
+    #[tokio::test]
+    async fn test_build_locator_keeps_genesis_anchor_above_confirmed() {
+        let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let genesis = genesis_for_tests();
+        chain_handle
+            .init_or_setup_genesis(genesis.clone())
+            .await
+            .unwrap();
+
+        let confirmed_share = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .work(2)
+            .build();
+        chain_handle
+            .add_share_block(confirmed_share.clone())
+            .await
+            .unwrap();
+        chain_handle
+            .organise_header(confirmed_share.header.clone())
+            .await
+            .unwrap();
+        chain_handle
+            .mark_block_valid(confirmed_share.block_hash())
+            .await
+            .unwrap();
+        chain_handle.organise_block().await.unwrap();
+
+        let candidate_share = TestShareBlockBuilder::new()
+            .prev_share_blockhash(confirmed_share.block_hash().to_string())
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .work(2)
+            .build();
+        chain_handle
+            .add_share_block(candidate_share.clone())
+            .await
+            .unwrap();
+        chain_handle
+            .organise_header(candidate_share.header.clone())
+            .await
+            .unwrap();
+
+        let locator = chain_handle.build_locator(0).unwrap();
+        assert_eq!(
+            locator[locator.len() - 1],
+            genesis.block_hash(),
+            "locator must still end at genesis"
+        );
+        assert!(
+            locator.contains(&confirmed_share.block_hash()),
+            "locator must still cover the confirmed chain below the candidate tip"
+        );
     }
 
     /// find_fork_point_height walks from a fork block back to the
