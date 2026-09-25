@@ -6,6 +6,7 @@
 use bitcoindrpc::test_utils::{mock_method, setup_mock_bitcoin_rpc};
 #[cfg(test)]
 use p2poolv2_lib::accounting::stats::metrics;
+use p2poolv2_lib::config::DEFAULT_VERSION_MASK;
 #[cfg(test)]
 use p2poolv2_lib::stratum::{
     self, client_connections,
@@ -72,7 +73,7 @@ async fn test_stratum_server_subscribe() {
         .maximum_difficulty(Some(1))
         .zmqpubhashblock("tcp://127.0.0.1:28332".to_string())
         .network(bitcoin::network::Network::Regtest)
-        .version_mask(0x1fffe000)
+        .version_mask(DEFAULT_VERSION_MASK)
         .chain_store_handle(chain_store_handle)
         .build()
         .await

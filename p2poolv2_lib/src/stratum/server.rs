@@ -686,6 +686,7 @@ mod stratum_server_tests {
     use crate::test_utils::{TestShareBlockBuilder, setup_test_chain_store_handle};
     use crate::utils::time_provider::TestTimeProvider;
     use bitcoindrpc::test_utils::setup_mock_bitcoin_rpc;
+    use p2poolv2_config::DEFAULT_VERSION_MASK;
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
     use std::sync::Arc;
     use tokio::sync::mpsc;
@@ -720,7 +721,7 @@ mod stratum_server_tests {
             .minimum_difficulty(1)
             .maximum_difficulty(Some(2))
             .network(bitcoin::network::Network::Regtest)
-            .version_mask(0x1fffe000)
+            .version_mask(DEFAULT_VERSION_MASK)
             .shutdown_rx(shutdown_rx)
             .connections_handle(connections_handle)
             .emissions_tx(shares_tx)
@@ -815,7 +816,7 @@ mod stratum_server_tests {
             addr,
             message_rx,
             shutdown_rx,
-            0x1fffe000,
+            DEFAULT_VERSION_MASK,
             ctx,
             &SystemTimeProvider {},
             template_rx,
@@ -937,7 +938,7 @@ mod stratum_server_tests {
             addr,
             message_rx,
             shutdown_rx,
-            0x1fffe000,
+            DEFAULT_VERSION_MASK,
             ctx,
             &SystemTimeProvider {},
             template_rx,
@@ -1020,7 +1021,7 @@ mod stratum_server_tests {
             addr,
             message_rx,
             shutdown_rx,
-            0x1fffe000,
+            DEFAULT_VERSION_MASK,
             ctx,
             &SystemTimeProvider {},
             template_rx,
@@ -1101,7 +1102,7 @@ mod stratum_server_tests {
             addr,
             message_rx,
             shutdown_rx,
-            0x1fffe000,
+            DEFAULT_VERSION_MASK,
             ctx,
             &SystemTimeProvider {},
             template_rx,
@@ -1204,7 +1205,7 @@ mod stratum_server_tests {
                 addr,
                 message_rx,
                 shutdown_rx,
-                0x1fffe000,
+                DEFAULT_VERSION_MASK,
                 ctx,
                 &SystemTimeProvider {},
                 template_rx,
@@ -1324,7 +1325,7 @@ mod stratum_server_tests {
                 addr,
                 message_rx,
                 shutdown_rx,
-                0x1fffe000,
+                DEFAULT_VERSION_MASK,
                 ctx,
                 &SystemTimeProvider {},
                 template_rx,
@@ -1440,7 +1441,7 @@ mod stratum_server_tests {
                     addr,
                     message_rx,
                     shutdown_rx,
-                    0x1fffe000,
+                    DEFAULT_VERSION_MASK,
                     ctx,
                     &time_provider,
                     template_rx,
@@ -1535,7 +1536,7 @@ mod stratum_server_tests {
                     addr,
                     message_rx,
                     shutdown_rx,
-                    0x1fffe000,
+                    DEFAULT_VERSION_MASK,
                     ctx,
                     &time_provider,
                     template_rx,
@@ -1655,7 +1656,7 @@ mod stratum_server_tests {
                 addr,
                 message_rx,
                 shutdown_rx,
-                0x1fffe000,
+                DEFAULT_VERSION_MASK,
                 ctx,
                 &SystemTimeProvider {},
                 template_rx,
@@ -1782,7 +1783,7 @@ mod stratum_server_tests {
                 addr,
                 message_rx,
                 shutdown_rx,
-                0x1fffe000,
+                DEFAULT_VERSION_MASK,
                 ctx,
                 &SystemTimeProvider {},
                 template_rx,
@@ -1919,7 +1920,7 @@ mod stratum_server_tests {
                 addr,
                 message_rx,
                 shutdown_rx,
-                0x1fffe000,
+                DEFAULT_VERSION_MASK,
                 ctx,
                 &SystemTimeProvider {},
                 template_rx,
@@ -2015,7 +2016,7 @@ mod stratum_server_tests {
             .minimum_difficulty(1)
             .maximum_difficulty(Some(2))
             .network(bitcoin::network::Network::Regtest)
-            .version_mask(0x1fffe000)
+            .version_mask(DEFAULT_VERSION_MASK)
             .max_connections(Some(1))
             .shutdown_rx(shutdown_rx)
             .connections_handle(connections_handle)

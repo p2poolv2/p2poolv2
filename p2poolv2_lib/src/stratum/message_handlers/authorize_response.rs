@@ -232,12 +232,13 @@ mod tests {
     use crate::test_utils::setup_test_chain_store_handle;
     use bitcoindrpc::BitcoindRpcClient;
     use bitcoindrpc::test_utils::setup_mock_bitcoin_rpc;
+    use p2poolv2_config::DEFAULT_VERSION_MASK;
     use tokio::sync::mpsc;
 
     #[tokio::test]
     async fn test_handle_authorize_first_time() {
         // Setup
-        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
         let request = SimpleRequest::new_authorize(
             12345,
             "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx".to_string(),
@@ -326,7 +327,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_authorize_already_authorized() {
         // Setup
-        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
         session.username = Some("tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx".to_string());
         let request = SimpleRequest::new_authorize(
             12345,
@@ -378,7 +379,7 @@ mod tests {
     #[tokio::test]
     async fn test_register_user() {
         let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
-        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
         let btcaddress = "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx";
 
         // Execute
@@ -403,8 +404,8 @@ mod tests {
     async fn test_register_same_user_twice() {
         let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
-        let mut session1 = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
-        let mut session2 = Session::<DifficultyAdjuster>::new(2, 2, None, 0x1fffe000);
+        let mut session1 = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
+        let mut session2 = Session::<DifficultyAdjuster>::new(2, 2, None, DEFAULT_VERSION_MASK);
         let btcaddress = "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx";
 
         // Execute - register the same user twice
@@ -426,8 +427,8 @@ mod tests {
     async fn test_register_user_multiple_users() {
         let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
-        let mut session1 = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
-        let mut session2 = Session::<DifficultyAdjuster>::new(2, 2, None, 0x1fffe000);
+        let mut session1 = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
+        let mut session2 = Session::<DifficultyAdjuster>::new(2, 2, None, DEFAULT_VERSION_MASK);
         let btcaddress1 = "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx";
         let btcaddress2 = "tb1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3q0sl5k7";
 
@@ -457,7 +458,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_authorize_invalid_username_first_attempt() {
         // Setup
-        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
         let request = SimpleRequest::new_authorize(
             12345,
             "invalid_address_format".to_string(),
@@ -554,7 +555,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_authorize_with_password_difficulty_override() {
-        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
         let request = SimpleRequest::new_authorize(
             12345,
             "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx".to_string(),
@@ -611,7 +612,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_authorize_password_difficulty_respects_minimum() {
-        let mut session = Session::<DifficultyAdjuster>::new(1, 100, None, 0x1fffe000);
+        let mut session = Session::<DifficultyAdjuster>::new(1, 100, None, DEFAULT_VERSION_MASK);
         let request = SimpleRequest::new_authorize(
             12345,
             "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx".to_string(),
@@ -668,7 +669,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_authorize_invalid_username_second_attempt() {
         // Setup - session with auth_failed_once already true
-        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
         session.auth_failed_once = true;
         let request = SimpleRequest::new_authorize(
             12345,
@@ -733,7 +734,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_authorize_empty_params_returns_error_not_panic() {
-        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
         let request = SimpleRequest {
             id: Some(Id::Number(1)),
             method: std::borrow::Cow::Owned("mining.authorize".to_string()),
@@ -794,6 +795,7 @@ mod p2p_miner_address_tests {
     use crate::test_utils::setup_test_chain_store_handle;
     use bitcoindrpc::BitcoindRpcClient;
     use bitcoindrpc::test_utils::setup_mock_bitcoin_rpc;
+    use p2poolv2_config::DEFAULT_VERSION_MASK;
     use tokio::sync::mpsc;
 
     /// BIP086 tweak of PUBKEY_G on testnet4.
@@ -803,7 +805,7 @@ mod p2p_miner_address_tests {
 
     #[tokio::test]
     async fn authorize_stores_the_share_address_from_the_password() {
-        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
         let request = SimpleRequest::new_authorize(
             12345,
             BITCOIN_ADDRESS.to_string(),
@@ -852,7 +854,7 @@ mod p2p_miner_address_tests {
 
     #[tokio::test]
     async fn authorize_without_a_p2p_option_uses_the_configured_share_address() {
-        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
         let request =
             SimpleRequest::new_authorize(12345, BITCOIN_ADDRESS.to_string(), Some("x".to_string()));
         let (emissions_tx, _emissions_rx) = mpsc::channel(10);
@@ -897,7 +899,7 @@ mod p2p_miner_address_tests {
 
     #[tokio::test]
     async fn hydrapool_authorize_with_no_password_leaves_the_share_address_unset() {
-        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
         let request = SimpleRequest::new_authorize(12345, BITCOIN_ADDRESS.to_string(), None);
         let (emissions_tx, _emissions_rx) = mpsc::channel(10);
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
@@ -941,7 +943,7 @@ mod p2p_miner_address_tests {
     /// would be worse than refusing the connection.
     #[tokio::test]
     async fn authorize_with_a_malformed_share_address_is_rejected() {
-        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
         let request = SimpleRequest::new_authorize(
             12345,
             BITCOIN_ADDRESS.to_string(),
@@ -1033,7 +1035,7 @@ mod p2p_miner_address_tests {
     /// guard for parsing the password once and using two of its fields.
     #[tokio::test]
     async fn share_address_and_difficulty_are_both_applied_from_one_password() {
-        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
         let request = SimpleRequest::new_authorize(
             12345,
             BITCOIN_ADDRESS.to_string(),
@@ -1087,7 +1089,7 @@ mod p2p_miner_address_tests {
     #[tokio::test]
     async fn authorize_with_a_conflicting_share_address_is_rejected() {
         let configured = make_test_share_address(2, bitcoin::Network::Testnet4);
-        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
         let request = SimpleRequest::new_authorize(
             12345,
             BITCOIN_ADDRESS.to_string(),
@@ -1158,7 +1160,7 @@ mod p2p_miner_address_tests {
     #[tokio::test]
     async fn a_repeated_conflicting_share_address_disconnects() {
         let configured = make_test_share_address(2, bitcoin::Network::Testnet4);
-        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
         let (emissions_tx, _emissions_rx) = mpsc::channel(10);
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let stats_dir = tempfile::tempdir().unwrap();

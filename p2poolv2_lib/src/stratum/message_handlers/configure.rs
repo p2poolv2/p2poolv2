@@ -45,6 +45,8 @@ fn handle_mining_configure<'a>(
 
 #[cfg(test)]
 mod mining_configure_response_tests {
+    use p2poolv2_config::DEFAULT_VERSION_MASK;
+
     use super::*;
     use crate::{
         stratum::difficulty_adjuster::DifficultyAdjuster,
@@ -60,7 +62,7 @@ mod mining_configure_response_tests {
             None,
         );
 
-        let session = Session::<DifficultyAdjuster>::new(1, 1, Some(1000), 0x1fffe000);
+        let session = Session::<DifficultyAdjuster>::new(1, 1, Some(1000), DEFAULT_VERSION_MASK);
 
         let result = handle_configure(message, &session).await;
         assert!(result.is_ok());
