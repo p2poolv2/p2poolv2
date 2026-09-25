@@ -16,7 +16,6 @@ use crate::node::Node;
 use crate::node::SwarmSend;
 use crate::node::emission_worker::EmissionWorker;
 use crate::node::messages::Message;
-use crate::node::organise_worker::OrganiseError;
 use crate::node::organise_worker::{OrganiseWorker, create_organise_channel};
 use crate::node::p2p_message_handlers::receivers::block_receiver::{
     BlockReceiver, create_block_receiver_channel,
@@ -25,10 +24,10 @@ use crate::node::p2p_message_handlers::senders::send_block_inventory;
 use crate::node::p2p_message_handlers::senders::send_getheaders;
 use crate::node::p2p_message_handlers::senders::send_share_block_broadcast;
 use crate::node::request_response_handler::block_fetcher::{
-    BlockFetcher, BlockFetcherError, create_block_fetcher_channel,
+    BlockFetcher, create_block_fetcher_channel,
 };
 use crate::node::validation_worker::{
-    ValidationSender, ValidationWorker, ValidationWorkerError, create_validation_channel,
+    ValidationSender, ValidationWorker, create_validation_channel,
 };
 #[cfg(test)]
 #[mockall_double::double]
@@ -45,10 +44,12 @@ use crate::stratum::emission::EmissionReceiver;
 use crate::stratum::work::notify::NotifySender;
 use libp2p::futures::StreamExt;
 use libp2p::request_response::ResponseChannel;
+use std::collections::HashMap;
 use std::error::Error;
 use std::ops::ControlFlow;
 use std::sync::{Arc, RwLock};
 use tokio::sync::{mpsc, oneshot};
+use tokio::task::JoinSet;
 use tracing::{debug, error, info};
 
 /// NodeHandle provides an interface to interact with a Node running in a separate task
@@ -295,10 +296,11 @@ struct NodeActor {
     #[allow(dead_code)]
     metrics: MetricsHandle,
     validation_tx: ValidationSender,
-    organise_handle: tokio::task::JoinHandle<Result<(), OrganiseError>>,
-    block_fetcher_handle: tokio::task::JoinHandle<Result<(), BlockFetcherError>>,
-    validation_handle: tokio::task::JoinHandle<Result<(), ValidationWorkerError>>,
-    block_receiver_handle: tokio::task::JoinHandle<()>,
+    /// All node workers, supervised as one set. Each task maps its own result to
+    /// `Result<(), String>` so they share a type; the id->name map recovers a
+    /// worker's name for logging, including on a panic (which yields no value).
+    workers: JoinSet<Result<(), String>>,
+    worker_names: HashMap<tokio::task::Id, &'static str>,
 }
 
 impl NodeActor {
@@ -374,7 +376,18 @@ impl NodeActor {
             pplns_window.clone(),
             share_validator.clone(),
         );
-        let organise_handle = tokio::spawn(organise_worker.run());
+        let mut workers: JoinSet<Result<(), String>> = JoinSet::new();
+        let mut worker_names: HashMap<tokio::task::Id, &'static str> = HashMap::with_capacity(4);
+
+        let organise_worker_id = workers
+            .spawn(async move {
+                organise_worker
+                    .run()
+                    .await
+                    .map_err(|error| error.to_string())
+            })
+            .id();
+        worker_names.insert(organise_worker_id, "Organise worker");
 
         // Spawn validation worker
         let validation_worker = ValidationWorker::new(
@@ -386,11 +399,22 @@ impl NodeActor {
             pool_signature,
             pool_difficulty,
         );
-        let validation_handle = tokio::spawn(validation_worker.run());
+        let validation_worker_id = workers
+            .spawn(async move {
+                validation_worker
+                    .run()
+                    .await
+                    .map_err(|error| error.to_string())
+            })
+            .id();
+        worker_names.insert(validation_worker_id, "Validation worker");
 
         // Spawn block fetcher
         let block_fetcher = BlockFetcher::new(block_fetcher_rx, node.swarm_tx.clone());
-        let block_fetcher_handle = tokio::spawn(block_fetcher.run());
+        let block_fetcher_id = workers
+            .spawn(async move { block_fetcher.run().await.map_err(|error| error.to_string()) })
+            .id();
+        worker_names.insert(block_fetcher_id, "Block fetcher");
 
         // Spawn block receiver
         let block_receiver = BlockReceiver::new(
@@ -400,7 +424,13 @@ impl NodeActor {
             block_fetcher_tx_for_receiver,
             validation_tx_for_worker.clone(),
         );
-        let block_receiver_join_handle = tokio::spawn(block_receiver.run());
+        let block_receiver_id = workers
+            .spawn(async move {
+                block_receiver.run().await;
+                Ok(())
+            })
+            .id();
+        worker_names.insert(block_receiver_id, "Block receiver");
 
         let (stopping_tx, stopping_rx) = oneshot::channel();
         Ok((
@@ -412,10 +442,8 @@ impl NodeActor {
                 chain_store_handle,
                 metrics,
                 validation_tx: validation_tx_for_emission,
-                organise_handle,
-                block_fetcher_handle,
-                validation_handle,
-                block_receiver_handle: block_receiver_join_handle,
+                workers,
+                worker_names,
             },
             stopping_rx,
         ))
@@ -489,23 +517,8 @@ impl NodeActor {
                         }
                     }
                 },
-                organise_result = &mut self.organise_handle => {
-                    if self.on_worker_result("Organise worker", organise_result).is_break() {
-                        return;
-                    }
-                }
-                block_fetcher_result = &mut self.block_fetcher_handle => {
-                    if self.on_worker_result("Block fetcher", block_fetcher_result).is_break() {
-                        return;
-                    }
-                }
-                validation_result = &mut self.validation_handle => {
-                    if self.on_worker_result("Validation worker", validation_result).is_break() {
-                        return;
-                    }
-                }
-                block_receiver_result = &mut self.block_receiver_handle => {
-                    if self.on_block_receiver_result(block_receiver_result).is_break() {
+                Some(joined) = self.workers.join_next_with_id() => {
+                    if self.on_worker_exit(joined).is_break() {
                         return;
                     }
                 }
@@ -686,48 +699,37 @@ impl NodeActor {
         ControlFlow::Continue(())
     }
 
-    /// Handle the exit of a worker whose task returns `Result<(), E>`. A clean
-    /// exit is logged and the loop continues; a fatal error or panic signals the
-    /// stop. (Stage 2 replaces this and the join arms with a `JoinSet`.)
-    fn on_worker_result<E: std::fmt::Display>(
+    /// Handle a worker task exiting. A clean exit is logged and the loop
+    /// continues on the remaining workers; a fatal error or a panic signals the
+    /// stop.
+    fn on_worker_exit(
         &mut self,
-        name: &str,
-        result: Result<Result<(), E>, tokio::task::JoinError>,
+        joined: Result<(tokio::task::Id, Result<(), String>), tokio::task::JoinError>,
     ) -> ControlFlow<()> {
-        match result {
-            Ok(Ok(())) => {
-                info!("{name} stopped cleanly");
+        match joined {
+            Ok((id, Ok(()))) => {
+                info!("{} stopped cleanly", self.worker_name(id));
                 ControlFlow::Continue(())
             }
-            Ok(Err(e)) => {
-                error!("{name} fatal error: {e}");
+            Ok((id, Err(message))) => {
+                error!("{} fatal error: {message}", self.worker_name(id));
                 self.signal_stopping();
                 ControlFlow::Break(())
             }
-            Err(e) => {
-                error!("{name} panicked: {e}");
+            Err(join_error) => {
+                error!(
+                    "{} panicked: {join_error}",
+                    self.worker_name(join_error.id())
+                );
                 self.signal_stopping();
                 ControlFlow::Break(())
             }
         }
     }
 
-    /// Handle the exit of the block receiver, whose task returns `()`.
-    fn on_block_receiver_result(
-        &mut self,
-        result: Result<(), tokio::task::JoinError>,
-    ) -> ControlFlow<()> {
-        match result {
-            Ok(()) => {
-                info!("Block receiver stopped cleanly");
-                ControlFlow::Continue(())
-            }
-            Err(e) => {
-                error!("Block receiver panicked: {e}");
-                self.signal_stopping();
-                ControlFlow::Break(())
-            }
-        }
+    /// The registered name of a worker task, for logging.
+    fn worker_name(&self, id: tokio::task::Id) -> &'static str {
+        self.worker_names.get(&id).copied().unwrap_or("Worker")
     }
 }
 
