@@ -39,6 +39,8 @@ pub async fn handle_suggest_difficulty<'a, D: DifficultyAdjusterTrait>(
 
 #[cfg(test)]
 mod tests {
+    use p2poolv2_config::DEFAULT_VERSION_MASK;
+
     use super::*;
     use crate::stratum::difficulty_adjuster::DifficultyAdjuster;
     use crate::stratum::messages::Id;
@@ -46,7 +48,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_suggest_difficulty_valid_param() {
-        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
         let request = SuggestDifficulty {
             id: Some(Id::Number(1)),
             method: "mining.suggest_difficulty".into(),
@@ -68,7 +70,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_suggest_difficulty_should_respect_pool_max_difficulty() {
-        let mut session = Session::<DifficultyAdjuster>::new(1, 1, Some(100), 0x1fffe000);
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, Some(100), DEFAULT_VERSION_MASK);
         let request = SuggestDifficulty {
             id: Some(Id::Number(1)),
             method: "mining.suggest_difficulty".into(),

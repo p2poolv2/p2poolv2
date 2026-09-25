@@ -10,6 +10,9 @@ use serde::Deserialize;
 use std::marker::PhantomData;
 use std::str::FromStr;
 
+/// Default version mask for BIP 323 version rolling.
+pub const DEFAULT_VERSION_MASK: i32 = 0x1fffe000;
+
 /// Error type for configuration parsing and validation.
 #[derive(Debug, Clone)]
 pub struct ConfigError {
@@ -308,7 +311,7 @@ impl StratumConfig<Raw> {
             fee: None,
             miner_address: None,
             network: bitcoin::Network::Signet,
-            version_mask: 0x1fffe000,
+            version_mask: DEFAULT_VERSION_MASK,
             difficulty_multiplier: 1.0,
             ignore_difficulty: None,
             pool_signature: None,

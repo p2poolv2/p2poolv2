@@ -295,6 +295,7 @@ mod handle_submit_tests {
     };
     use bitcoin::BlockHash;
     use bitcoindrpc::test_utils::{mock_submit_block_with_any_body, setup_mock_bitcoin_rpc};
+    use p2poolv2_config::DEFAULT_VERSION_MASK;
     use std::sync::Arc;
     use tokio::sync::mpsc;
 
@@ -309,7 +310,7 @@ mod handle_submit_tests {
 
     #[tokio::test]
     async fn test_handle_submit_meets_difficulty_should_submit() {
-        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
         session.subscribed = true;
         let tracker_handle = start_tracker_actor();
 
@@ -405,7 +406,7 @@ mod handle_submit_tests {
 
     #[tokio::test]
     async fn test_handle_submit_a_meets_difficulty_should_submit() {
-        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
         session.subscribed = true;
         let tracker_handle = start_tracker_actor();
 
@@ -498,7 +499,7 @@ mod handle_submit_tests {
 
     #[tokio::test]
     async fn test_handle_submit_with_version_rolling_meets_difficulty_should_submit() {
-        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
         session.subscribed = true;
         let tracker_handle = start_tracker_actor();
 
@@ -589,7 +590,8 @@ mod handle_submit_tests {
             mock
         });
 
-        let mut session = Session::<MockDifficultyAdjusterTrait>::new(1, 1, None, 0x1fffe000);
+        let mut session =
+            Session::<MockDifficultyAdjusterTrait>::new(1, 1, None, DEFAULT_VERSION_MASK);
         session.subscribed = true;
         let tracker_handle = start_tracker_actor();
 
@@ -670,7 +672,7 @@ mod handle_submit_tests {
 
     #[tokio::test]
     async fn test_handle_submit_with_stale_job_returns_error() {
-        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
         session.subscribed = true;
         let tracker_handle = start_tracker_actor();
 
@@ -732,7 +734,8 @@ mod handle_submit_tests {
     #[tokio::test]
     async fn test_handle_submit_with_less_difficulty_than_session_even_if_we_meet_bitcoin_diff_should_increment_rejected()
      {
-        let mut session = Session::<DifficultyAdjuster>::new(10_000, 10_000, None, 0x1fffe000);
+        let mut session =
+            Session::<DifficultyAdjuster>::new(10_000, 10_000, None, DEFAULT_VERSION_MASK);
         session.subscribed = true;
         let tracker_handle = start_tracker_actor();
 
@@ -822,7 +825,7 @@ mod handle_submit_tests {
 
     #[tokio::test]
     async fn test_handle_submit_duplicate_share_is_rejected() {
-        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
         session.subscribed = true;
         let tracker_handle = start_tracker_actor();
 
@@ -941,7 +944,8 @@ mod handle_submit_tests {
     #[tokio::test]
     async fn test_handle_submit_accepts_low_difficulty_share_when_ignore_difficulty_is_true() {
         // Set high session difficulty (10_000) so the share won't meet it normally
-        let mut session = Session::<DifficultyAdjuster>::new(10_000, 10_000, None, 0x1fffe000);
+        let mut session =
+            Session::<DifficultyAdjuster>::new(10_000, 10_000, None, DEFAULT_VERSION_MASK);
         session.subscribed = true;
         let tracker_handle = start_tracker_actor();
 
@@ -1027,7 +1031,7 @@ mod handle_submit_tests {
 
     #[tokio::test]
     async fn test_handle_submit_not_subscribed_returns_error() {
-        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
         // session.subscribed is false by default
         let submit = SimpleRequest::new_submit(
             1,
@@ -1080,7 +1084,7 @@ mod handle_submit_tests {
 
     #[tokio::test]
     async fn test_handle_submit_unknown_job_id_returns_invalid_jobid() {
-        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
         session.subscribed = true;
         let tracker_handle = start_tracker_actor();
 
@@ -1162,7 +1166,7 @@ mod handle_submit_tests {
 
     #[tokio::test]
     async fn test_handle_submit_validation_failure_returns_other_unknown_with_message() {
-        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
         session.subscribed = true;
         session.enonce1_hex = "deadbeef".to_string();
         session.user_id = Some(1);
@@ -1260,7 +1264,7 @@ mod handle_submit_tests {
 
     #[tokio::test]
     async fn test_handle_submit_bad_nonce_returns_error_not_panic() {
-        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
         session.subscribed = true;
         let tracker_handle = start_tracker_actor();
 
@@ -1337,7 +1341,7 @@ mod handle_submit_tests {
 
     #[tokio::test]
     async fn test_handle_submit_none_version_bits_returns_error_not_panic() {
-        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
         session.subscribed = true;
         let tracker_handle = start_tracker_actor();
 
@@ -1422,7 +1426,7 @@ mod handle_submit_tests {
 
     #[tokio::test]
     async fn test_handle_submit_unauthorized_returns_error() {
-        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
         session.subscribed = true;
         // user_id is None -- simulates a session where authorize partially
         // failed (username set but register_user errored)
@@ -1494,7 +1498,7 @@ mod handle_submit_tests {
     #[tokio::test]
     async fn test_p2poolv2_mode_accepts_and_accounts_share_below_pool_difficulty_without_emitting()
     {
-        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
         session.subscribed = true;
         let tracker_handle = start_tracker_actor();
 
@@ -1577,7 +1581,7 @@ mod handle_submit_tests {
 
     #[tokio::test]
     async fn test_hydrapool_mode_accepts_share_despite_hard_pool_difficulty() {
-        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
         session.subscribed = true;
         let tracker_handle = start_tracker_actor();
 
