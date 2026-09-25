@@ -44,7 +44,9 @@ use crate::shares::validation::{DefaultShareValidator, ShareValidator};
 use crate::stratum::emission::EmissionReceiver;
 use crate::stratum::work::notify::NotifySender;
 use libp2p::futures::StreamExt;
+use libp2p::request_response::ResponseChannel;
 use std::error::Error;
+use std::ops::ControlFlow;
 use std::sync::{Arc, RwLock};
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info};
@@ -283,8 +285,12 @@ mock! {
 struct NodeActor {
     node: Node,
     command_rx: mpsc::Receiver<Command>,
-    stopping_tx: oneshot::Sender<()>,
-    emissions_rx: EmissionReceiver,
+    /// `Option` so `signal_stopping` can `take` the oneshot from `&mut self`
+    /// (a oneshot send consumes the sender). `None` once the stop is signalled.
+    stopping_tx: Option<oneshot::Sender<()>>,
+    /// `Option` so `run` can `take` the receiver for the emission worker without
+    /// partially moving `self`, which the extracted `&mut self` handlers need.
+    emissions_rx: Option<EmissionReceiver>,
     chain_store_handle: ChainStoreHandle,
     #[allow(dead_code)]
     metrics: MetricsHandle,
@@ -401,8 +407,8 @@ impl NodeActor {
             Self {
                 node,
                 command_rx,
-                stopping_tx,
-                emissions_rx,
+                stopping_tx: Some(stopping_tx),
+                emissions_rx: Some(emissions_rx),
                 chain_store_handle,
                 metrics,
                 validation_tx: validation_tx_for_emission,
@@ -418,9 +424,11 @@ impl NodeActor {
     async fn run(mut self) {
         // Spawn emission worker - processes shares in a separate task.
         let emission_worker = EmissionWorker::new(
-            self.emissions_rx,
+            self.emissions_rx
+                .take()
+                .expect("emissions receiver present at startup"),
             self.chain_store_handle.clone(),
-            self.validation_tx,
+            self.validation_tx.clone(),
         );
         tokio::spawn(emission_worker.run());
 
@@ -447,232 +455,67 @@ impl NodeActor {
             tokio::select! {
                 buf = self.node.swarm_rx.recv() => {
                     match buf {
-                        Some(SwarmSend::Request(peer_id, msg)) => {
-                            if matches!(msg, Message::GetShareHeaders(_, _)) {
+                        Some(msg) => {
+                            // The sync-retry interval lives in this scope, so the
+                            // reset stays here rather than in the handler.
+                            if matches!(msg, SwarmSend::Request(_, Message::GetShareHeaders(_, _))) {
                                 sync_retry_interval.reset();
                             }
-                            let msg_type = msg.message_type();
-                            let request_id = self
-                                .node
-                                .swarm
-                                .behaviour_mut()
-                                .request_response
-                                .send_request(&peer_id, msg);
-                            debug!("Sent {msg_type} to peer: {peer_id}, request_id: {request_id}");
-                        }
-                        Some(SwarmSend::Response(response_channel, msg)) => {
-                            let request_id = self
-                                .node
-                                .swarm
-                                .behaviour_mut()
-                                .request_response
-                                .send_response(response_channel, msg);
-                            debug!("Sent message to response channel: {:?}", request_id);
-                        }
-                        Some(SwarmSend::Inv(block_hash)) => {
-                            let connected_peers = self.node.connected_peers();
-                            let peer_knowledge = self.node
-                                .request_response_handler
-                                .peer_block_knowledge();
-                            send_block_inventory(
-                                block_hash,
-                                None,
-                                &connected_peers,
-                                peer_knowledge,
-                                &mut self.node.swarm,
-                            );
-                        }
-                        Some(SwarmSend::BroadcastBlock(share_block)) => {
-                            let connected_peers = self.node.connected_peers();
-                            let peer_knowledge = self.node
-                                .request_response_handler
-                                .peer_block_knowledge_mut();
-                            send_share_block_broadcast(
-                                share_block,
-                                &connected_peers,
-                                peer_knowledge,
-                                &mut self.node.swarm,
-                            );
-                        }
-                        Some(SwarmSend::Disconnect(peer_id)) => {
-                            if let Err(_e) = self.node.swarm.disconnect_peer_id(peer_id) {
-                                error!("Error disconnecting peer {peer_id}");
-                            } else {
-                                debug!("Disconnected peer: {peer_id}");
-                            }
+                            self.on_swarm_send(msg);
                         }
                         None => {
                             info!("Stopping node actor on swarm channel close");
-                            if self.stopping_tx.send(()).is_err() {
-                                error!("Failed to send stopping signal - receiver dropped");
-                            }
+                            self.signal_stopping();
                             return;
                         }
                     }
                 },
                 event = self.node.swarm.select_next_some() => {
                     if let Err(e) = self.node.handle_swarm_event(event).await {
-                        error!("Error handling swarm event: {}", e);
+                        error!("Error handling swarm event: {e}");
                     }
                 },
                 command = self.command_rx.recv() => {
                     match command {
-                        Some(Command::GetPeers(tx)) => {
-                            let peers =
-                                self.node.swarm.connected_peers().cloned().collect::<Vec<_>>();
-                            if tx.send(peers).is_err() {
-                                error!("Failed to send GetPeers response - receiver dropped");
+                        Some(command) => {
+                            if self.on_command(command).is_break() {
+                                return;
                             }
-                        },
-                        Some(Command::SendToPeer(peer_id, message, tx)) => {
-                            match self.node.send_to_peer(&peer_id, message) {
-                                Ok(_) => {
-                                    if tx.send(Ok(())).is_err() {
-                                        error!(
-                                            "Failed to send SendToPeer response - receiver dropped"
-                                        );
-                                    }
-                                },
-                                Err(e) => {
-                                    error!("Error sending message to peer: {}", e);
-                                    if tx.send(Err("Error sending message to peer".into())).is_err()
-                                    {
-                                        error!(
-                                            "Failed to send SendToPeer error response - receiver dropped"
-                                        );
-                                    }
-                                },
-                            };
-                        },
-                        Some(Command::Shutdown(tx)) => {
-                            self.node.shutdown().unwrap();
-                            if tx.send(()).is_err() {
-                                error!("Failed to send Shutdown response - receiver dropped");
-                            }
-                            return;
-                        },
-                        Some(Command::GetPplnsShares(query, tx)) => {
-                            debug!(
-                                "Received GetPplnsShares command with limit: {}",
-                                query.limit
-                            );
-                            let result = self.node.handle_get_pplns_shares(query);
-                            if tx.send(result).is_err() {
-                                error!("Failed to send GetPplnsShares response - receiver dropped");
-                            }
-                        },
-                        Some(Command::GetPeerInfos(tx)) => {
-                            let infos = self.node.connection_tracker.get_peer_infos();
-                            if tx.send(infos).is_err() {
-                                error!("Failed to send GetPeerInfos response - receiver dropped");
-                            }
-                        },
-                        Some(Command::BlockIp(ip, tx)) => {
-                            info!("Blocking IP {ip} via runtime command");
-                            self.node.connection_tracker.block_ip(ip);
-                            let _ = tx.send(());
-                        },
-                        Some(Command::UnblockIp(ip, tx)) => {
-                            info!("Unblocking IP {ip} via runtime command");
-                            self.node.connection_tracker.unblock_ip(ip);
-                            let _ = tx.send(());
-                        },
-                        Some(Command::GetBlockedIps(tx)) => {
-                            let ips = self.node.connection_tracker.get_blocked_ips();
-                            if tx.send(ips).is_err() {
-                                error!("Failed to send GetBlockedIps response - receiver dropped");
-                            }
-                        },
+                        }
                         None => {
                             info!("Stopping node actor on channel close");
-                            if self.stopping_tx.send(()).is_err() {
-                                error!("Failed to send stopping signal - receiver dropped");
-                            }
+                            self.signal_stopping();
                             return;
                         }
                     }
                 },
                 organise_result = &mut self.organise_handle => {
-                    match organise_result {
-                        Ok(Err(e)) => {
-                            error!("Organise worker fatal error: {e}");
-                            if self.stopping_tx.send(()).is_err() {
-                                error!("Failed to send stopping signal - receiver dropped");
-                            }
-                            return;
-                        }
-                        Ok(Ok(())) => {
-                            info!("Organise worker stopped cleanly");
-                        }
-                        Err(e) => {
-                            error!("Organise worker panicked: {e}");
-                            if self.stopping_tx.send(()).is_err() {
-                                error!("Failed to send stopping signal - receiver dropped");
-                            }
-                            return;
-                        }
+                    if self.on_worker_result("Organise worker", organise_result).is_break() {
+                        return;
                     }
                 }
                 block_fetcher_result = &mut self.block_fetcher_handle => {
-                    match block_fetcher_result {
-                        Ok(Err(e)) => {
-                            error!("Block fetcher fatal error: {e}");
-                            if self.stopping_tx.send(()).is_err() {
-                                error!("Failed to send stopping signal - receiver dropped");
-                            }
-                            return;
-                        }
-                        Ok(Ok(())) => {
-                            info!("Block fetcher stopped cleanly");
-                        }
-                        Err(e) => {
-                            error!("Block fetcher panicked: {e}");
-                            if self.stopping_tx.send(()).is_err() {
-                                error!("Failed to send stopping signal - receiver dropped");
-                            }
-                            return;
-                        }
+                    if self.on_worker_result("Block fetcher", block_fetcher_result).is_break() {
+                        return;
                     }
                 }
                 validation_result = &mut self.validation_handle => {
-                    match validation_result {
-                        Ok(Err(e)) => {
-                            error!("Validation worker fatal error: {e}");
-                            if self.stopping_tx.send(()).is_err() {
-                                error!("Failed to send stopping signal - receiver dropped");
-                            }
-                            return;
-                        }
-                        Ok(Ok(())) => {
-                            info!("Validation worker stopped cleanly");
-                        }
-                        Err(e) => {
-                            error!("Validation worker panicked: {e}");
-                            if self.stopping_tx.send(()).is_err() {
-                                error!("Failed to send stopping signal - receiver dropped");
-                            }
-                            return;
-                        }
+                    if self.on_worker_result("Validation worker", validation_result).is_break() {
+                        return;
                     }
                 }
                 block_receiver_result = &mut self.block_receiver_handle => {
-                    match block_receiver_result {
-                        Ok(()) => {
-                            info!("Block receiver stopped cleanly");
-                        }
-                        Err(e) => {
-                            error!("Block receiver panicked: {e}");
-                            if self.stopping_tx.send(()).is_err() {
-                                error!("Failed to send stopping signal - receiver dropped");
-                            }
-                            return;
-                        }
+                    if self.on_block_receiver_result(block_receiver_result).is_break() {
+                        return;
                     }
                 }
                 _ = reconnect_interval.tick(), if self.node.peer_reconnector.has_peers() => {
                     self.node.attempt_reconnections();
                 }
                 _ = sync_retry_interval.tick(), if !self.chain_store_handle.is_current() => {
+                    // Kept inline: an async `&self` helper would hold a borrow of
+                    // the non-Sync swarm across the await. Stage 4 makes this a
+                    // direct synchronous swarm send.
                     let peers = self.node.connected_peers();
                     if !peers.is_empty() {
                         let now_secs = std::time::SystemTime::now()
@@ -686,7 +529,9 @@ impl NodeActor {
                             self.chain_store_handle.clone(),
                             self.node.swarm_tx.clone(),
                             0,
-                        ).await {
+                        )
+                        .await
+                        {
                             error!("Sync retry getheaders failed: {error}");
                         }
                     }
@@ -694,6 +539,193 @@ impl NodeActor {
                 _ = kademlia_bootstrap_interval.tick() => {
                     self.node.attempt_kademlia_bootstrap();
                 }
+            }
+        }
+    }
+
+    /// Signal the outer caller that the actor is stopping. The oneshot send
+    /// consumes the sender, so it is held in an `Option` and taken once.
+    fn signal_stopping(&mut self) {
+        if let Some(tx) = self.stopping_tx.take()
+            && tx.send(()).is_err()
+        {
+            error!("Failed to send stopping signal - receiver dropped");
+        }
+    }
+
+    /// Execute one outbound swarm operation. All calls are synchronous swarm
+    /// enqueues; the driver owns the swarm, so nothing here blocks.
+    fn on_swarm_send(&mut self, msg: SwarmSend<ResponseChannel<Message>>) {
+        match msg {
+            SwarmSend::Request(peer_id, msg) => {
+                let msg_type = msg.message_type();
+                let request_id = self
+                    .node
+                    .swarm
+                    .behaviour_mut()
+                    .request_response
+                    .send_request(&peer_id, msg);
+                debug!("Sent {msg_type} to peer: {peer_id}, request_id: {request_id}");
+            }
+            SwarmSend::Response(response_channel, msg) => {
+                let request_id = self
+                    .node
+                    .swarm
+                    .behaviour_mut()
+                    .request_response
+                    .send_response(response_channel, msg);
+                debug!("Sent message to response channel: {request_id:?}");
+            }
+            SwarmSend::Inv(block_hash) => {
+                let connected_peers = self.node.connected_peers();
+                let peer_knowledge = self.node.request_response_handler.peer_block_knowledge();
+                send_block_inventory(
+                    block_hash,
+                    None,
+                    &connected_peers,
+                    peer_knowledge,
+                    &mut self.node.swarm,
+                );
+            }
+            SwarmSend::BroadcastBlock(share_block) => {
+                let connected_peers = self.node.connected_peers();
+                let peer_knowledge = self
+                    .node
+                    .request_response_handler
+                    .peer_block_knowledge_mut();
+                send_share_block_broadcast(
+                    share_block,
+                    &connected_peers,
+                    peer_knowledge,
+                    &mut self.node.swarm,
+                );
+            }
+            SwarmSend::Disconnect(peer_id) => {
+                if self.node.swarm.disconnect_peer_id(peer_id).is_err() {
+                    error!("Error disconnecting peer {peer_id}");
+                } else {
+                    debug!("Disconnected peer: {peer_id}");
+                }
+            }
+        }
+    }
+
+    /// Handle one control-plane command. Returns `Break` when the command stops
+    /// the actor (`Shutdown`).
+    fn on_command(&mut self, command: Command) -> ControlFlow<()> {
+        match command {
+            Command::GetPeers(tx) => {
+                let peers = self
+                    .node
+                    .swarm
+                    .connected_peers()
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if tx.send(peers).is_err() {
+                    error!("Failed to send GetPeers response - receiver dropped");
+                }
+            }
+            Command::SendToPeer(peer_id, message, tx) => {
+                match self.node.send_to_peer(&peer_id, message) {
+                    Ok(_) => {
+                        if tx.send(Ok(())).is_err() {
+                            error!("Failed to send SendToPeer response - receiver dropped");
+                        }
+                    }
+                    Err(e) => {
+                        error!("Error sending message to peer: {e}");
+                        if tx
+                            .send(Err("Error sending message to peer".into()))
+                            .is_err()
+                        {
+                            error!("Failed to send SendToPeer error response - receiver dropped");
+                        }
+                    }
+                }
+            }
+            Command::Shutdown(tx) => {
+                self.node.shutdown().unwrap();
+                if tx.send(()).is_err() {
+                    error!("Failed to send Shutdown response - receiver dropped");
+                }
+                return ControlFlow::Break(());
+            }
+            Command::GetPplnsShares(query, tx) => {
+                debug!(
+                    "Received GetPplnsShares command with limit: {}",
+                    query.limit
+                );
+                let result = self.node.handle_get_pplns_shares(query);
+                if tx.send(result).is_err() {
+                    error!("Failed to send GetPplnsShares response - receiver dropped");
+                }
+            }
+            Command::GetPeerInfos(tx) => {
+                let infos = self.node.connection_tracker.get_peer_infos();
+                if tx.send(infos).is_err() {
+                    error!("Failed to send GetPeerInfos response - receiver dropped");
+                }
+            }
+            Command::BlockIp(ip, tx) => {
+                info!("Blocking IP {ip} via runtime command");
+                self.node.connection_tracker.block_ip(ip);
+                let _ = tx.send(());
+            }
+            Command::UnblockIp(ip, tx) => {
+                info!("Unblocking IP {ip} via runtime command");
+                self.node.connection_tracker.unblock_ip(ip);
+                let _ = tx.send(());
+            }
+            Command::GetBlockedIps(tx) => {
+                let ips = self.node.connection_tracker.get_blocked_ips();
+                if tx.send(ips).is_err() {
+                    error!("Failed to send GetBlockedIps response - receiver dropped");
+                }
+            }
+        }
+        ControlFlow::Continue(())
+    }
+
+    /// Handle the exit of a worker whose task returns `Result<(), E>`. A clean
+    /// exit is logged and the loop continues; a fatal error or panic signals the
+    /// stop. (Stage 2 replaces this and the join arms with a `JoinSet`.)
+    fn on_worker_result<E: std::fmt::Display>(
+        &mut self,
+        name: &str,
+        result: Result<Result<(), E>, tokio::task::JoinError>,
+    ) -> ControlFlow<()> {
+        match result {
+            Ok(Ok(())) => {
+                info!("{name} stopped cleanly");
+                ControlFlow::Continue(())
+            }
+            Ok(Err(e)) => {
+                error!("{name} fatal error: {e}");
+                self.signal_stopping();
+                ControlFlow::Break(())
+            }
+            Err(e) => {
+                error!("{name} panicked: {e}");
+                self.signal_stopping();
+                ControlFlow::Break(())
+            }
+        }
+    }
+
+    /// Handle the exit of the block receiver, whose task returns `()`.
+    fn on_block_receiver_result(
+        &mut self,
+        result: Result<(), tokio::task::JoinError>,
+    ) -> ControlFlow<()> {
+        match result {
+            Ok(()) => {
+                info!("Block receiver stopped cleanly");
+                ControlFlow::Continue(())
+            }
+            Err(e) => {
+                error!("Block receiver panicked: {e}");
+                self.signal_stopping();
+                ControlFlow::Break(())
             }
         }
     }
