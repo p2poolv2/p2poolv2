@@ -26,6 +26,7 @@ use crate::node::p2p_message_handlers::senders::send_share_block_broadcast;
 use crate::node::request_response_handler::block_fetcher::{
     BlockFetcher, create_block_fetcher_channel,
 };
+use crate::node::response_worker::{ResponseWorker, create_response_worker_channel};
 use crate::node::validation_worker::{
     ValidationSender, ValidationWorker, create_validation_channel,
 };
@@ -327,11 +328,17 @@ impl NodeActor {
         // Create block receiver channel
         let (block_receiver_tx, block_receiver_rx) = create_block_receiver_channel();
 
+        // Create response worker channel
+        let (response_worker_tx, response_worker_rx) = create_response_worker_channel();
+
         // Clone handles for workers before moving them into Node::new
         let validation_tx_for_worker = validation_tx.clone();
         let validation_tx_for_emission = validation_tx.clone();
         let validation_tx_for_organise = validation_tx.clone();
+        let validation_tx_for_response = validation_tx.clone();
         let block_fetcher_tx_for_receiver = block_fetcher_tx.clone();
+        let block_fetcher_tx_for_response = block_fetcher_tx.clone();
+        let block_receiver_tx_for_response = block_receiver_tx.clone();
         let difficulty_multiplier = config.stratum.difficulty_multiplier as u128;
         let pool_signature = config
             .stratum
@@ -363,6 +370,7 @@ impl NodeActor {
             block_receiver_tx,
             monitoring_event_sender.clone(),
             share_validator.clone(),
+            response_worker_tx,
         )?;
 
         // Spawn organise worker
@@ -419,7 +427,7 @@ impl NodeActor {
         // Spawn block receiver
         let block_receiver = BlockReceiver::new(
             block_receiver_rx,
-            share_validator,
+            share_validator.clone(),
             chain_store_handle.clone(),
             block_fetcher_tx_for_receiver,
             validation_tx_for_worker.clone(),
@@ -431,6 +439,26 @@ impl NodeActor {
             })
             .id();
         worker_names.insert(block_receiver_id, "Block receiver");
+
+        // Spawn response worker
+        let response_worker = ResponseWorker::new(
+            response_worker_rx,
+            chain_store_handle.clone(),
+            node.swarm_tx.clone(),
+            block_fetcher_tx_for_response,
+            validation_tx_for_response,
+            block_receiver_tx_for_response,
+            share_validator.clone(),
+        );
+        let response_id = workers
+            .spawn(async move {
+                response_worker
+                    .run()
+                    .await
+                    .map_err(|error| error.to_string())
+            })
+            .id();
+        worker_names.insert(response_id, "Response worker");
 
         let (stopping_tx, stopping_rx) = oneshot::channel();
         Ok((

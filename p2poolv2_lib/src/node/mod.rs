@@ -10,6 +10,7 @@ pub mod organise_worker;
 pub mod peer_reconnector;
 pub mod request_response_handler;
 pub mod request_sender;
+pub mod response_worker;
 pub mod validation_worker;
 pub use crate::config::Config;
 pub mod actor;
@@ -23,6 +24,7 @@ use crate::node::p2p_message_handlers::receivers::block_receiver::BlockReceiverH
 use crate::node::p2p_message_handlers::senders::send_handshake;
 use crate::node::request_response_handler::RequestResponseHandler;
 use crate::node::request_response_handler::block_fetcher::BlockFetcherHandle;
+use crate::node::response_worker::{ResponseWorkerSender, create_response_worker_channel};
 use crate::node::validation_worker::ValidationSender;
 #[cfg(test)]
 #[mockall_double::double]
@@ -110,6 +112,7 @@ struct Node {
 }
 
 impl Node {
+    #[allow(clippy::too_many_arguments)] // wiring constructor: each parameter is a distinct collaborator, a params struct would only move the list
     pub fn new(
         config: Config,
         chain_store_handle: ChainStoreHandle,
@@ -118,6 +121,7 @@ impl Node {
         block_receiver_handle: BlockReceiverHandle,
         monitoring_event_sender: MonitoringEventSender,
         share_validator: Arc<dyn ShareValidator + Send + Sync>,
+        response_worker_tx: ResponseWorkerSender,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let id_keys = libp2p::identity::Keypair::generate_ed25519();
 
@@ -241,6 +245,7 @@ impl Node {
             validation_tx,
             block_receiver_handle,
             share_validator,
+            response_worker_tx,
         );
 
         let peer_reconnector = peer_reconnector::PeerReconnector::new(&config.network.dial_peers);
@@ -682,6 +687,7 @@ mod tests {
         let (validation_tx, _validation_rx) = create_validation_channel();
         let (block_receiver_handle, _block_receiver_rx) = create_block_receiver_channel();
         let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let (response_worker_tx, _response_worker_rx) = create_response_worker_channel();
         let mut node = Node::new(
             config.clone(),
             chain_store_handle,
@@ -690,6 +696,7 @@ mod tests {
             block_receiver_handle,
             monitoring_tx,
             Arc::new(crate::shares::validation::MockDefaultShareValidator::default()),
+            response_worker_tx,
         )
         .expect("Node initialization failed");
 
@@ -793,6 +800,7 @@ mod tests {
         let (validation_tx, _validation_rx) = create_validation_channel();
         let (block_receiver_handle, _block_receiver_rx) = create_block_receiver_channel();
         let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let (response_worker_tx, _response_worker_rx) = create_response_worker_channel();
         Node::new(
             config,
             chain_store_handle,
@@ -801,6 +809,7 @@ mod tests {
             block_receiver_handle,
             monitoring_tx,
             Arc::new(crate::shares::validation::MockDefaultShareValidator::default()),
+            response_worker_tx,
         )
         .expect("Node initialization failed")
     }
