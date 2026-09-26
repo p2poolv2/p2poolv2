@@ -17,7 +17,7 @@
     "response": {
         "result": {
             "version-rolling": true,
-            "version-rolling.mask": "1fffe000"
+            "version-rolling.mask": "1fffffe0"
         },
         "id": 1,
         "error": null

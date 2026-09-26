@@ -57,7 +57,7 @@ p2poolv2_bootstrap_address: ""
 # ZMQ always binds to localhost -- never expose to the network
 p2poolv2_zmq_endpoint: "tcp://127.0.0.1:28332"
 p2poolv2_bitcoin_network: "main"
-p2poolv2_version_mask: "1fffe000"
+p2poolv2_version_mask: "1fffffe0"
 p2poolv2_difficulty_multiplier: 1.0
 # p2poolv2_pool_signature: "P2Poolv2"
 # p2poolv2_max_connections: 1000

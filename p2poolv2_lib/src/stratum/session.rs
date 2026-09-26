@@ -105,6 +105,8 @@ impl<D: DifficultyAdjusterTrait> Session<D> {
 
 #[cfg(test)]
 mod tests {
+    use p2poolv2_config::DEFAULT_VERSION_MASK;
+
     use super::*;
     use crate::stratum::difficulty_adjuster::DifficultyAdjuster;
 
@@ -116,7 +118,7 @@ mod tests {
             start_difficulty,
             min_difficulty,
             Some(2000),
-            0x1fffe000,
+            DEFAULT_VERSION_MASK,
         );
 
         assert_eq!(
@@ -164,7 +166,8 @@ mod tests {
 
     #[test]
     fn test_get_current_difficulty() {
-        let session = Session::<DifficultyAdjuster>::new(100, 2000, Some(3000), 0x1fffe000);
+        let session =
+            Session::<DifficultyAdjuster>::new(100, 2000, Some(3000), DEFAULT_VERSION_MASK);
 
         assert_eq!(session.difficulty_adjuster.current_difficulty, 100);
     }

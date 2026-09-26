@@ -57,7 +57,8 @@ bootstrap_address = "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk"
 zmqpubhashblock = "tcp://bitcoind:28332"
 # The network can be "main", "testnet4" or "signet"
 network = "signet"
-version_mask = "1fffe000"
+# Use BIP 323 mask for version rolling (see https://github.com/bitcoin/bips/blob/622e47722cd35514e96da37ae89f868e18d581e4/bip-0323.mediawiki#specification)
+version_mask = "1fffffe0"
 # The difficulty multiplier defines the window size for calculating payout proportions
 # See https://github.com/p2poolv2/p2poolv2/wiki/Difficult-Multiplier on how to choose this
 difficulty_multiplier = 1.0
