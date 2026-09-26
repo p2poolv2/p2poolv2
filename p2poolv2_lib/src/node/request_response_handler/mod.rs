@@ -11,8 +11,8 @@ use crate::config::NetworkConfig;
 use crate::node::SwarmSend;
 use crate::node::behaviour::request_response::RequestResponseEvent;
 use crate::node::messages::{InventoryMessage, Message};
-use crate::node::p2p_message_handlers::handle_response;
 use crate::node::p2p_message_handlers::receivers::block_receiver::BlockReceiverHandle;
+use crate::node::response_worker::{ResponseWorkerEvent, ResponseWorkerSender};
 use crate::node::validation_worker::ValidationSender;
 use crate::service::PeerHandle;
 use crate::service::p2p_service::RequestContext;
@@ -58,6 +58,9 @@ pub struct RequestResponseHandler<C: Send + Sync> {
     block_receiver_handle: BlockReceiverHandle,
     peer_block_knowledge: PeerBlockKnowledge,
     share_validator: Arc<dyn ShareValidator + Send + Sync>,
+    /// Inbound responses are handed to the response worker rather than processed
+    /// on the swarm-driver task, keeping the node actor loop free for other events.
+    response_worker_handle: ResponseWorkerSender,
 }
 
 /// Implementation of ResponseChannel<Message>, used in production.
@@ -65,6 +68,7 @@ pub struct RequestResponseHandler<C: Send + Sync> {
 /// dispatch.* functions are tested for the generic implementation.
 impl RequestResponseHandler<ResponseChannel<Message>> {
     /// Create a new RequestResponseHandler with per-peer service support.
+    #[allow(clippy::too_many_arguments)] // wiring constructor: each parameter is a distinct collaborator, a params struct would only move the list
     pub fn new(
         network_config: NetworkConfig,
         chain_store_handle: ChainStoreHandle,
@@ -73,6 +77,7 @@ impl RequestResponseHandler<ResponseChannel<Message>> {
         validation_tx: ValidationSender,
         block_receiver_handle: BlockReceiverHandle,
         share_validator: Arc<dyn ShareValidator + Send + Sync>,
+        response_worker_handle: ResponseWorkerSender,
     ) -> Self {
         Self {
             peer_handles: HashMap::new(),
@@ -84,6 +89,7 @@ impl RequestResponseHandler<ResponseChannel<Message>> {
             block_receiver_handle,
             peer_block_knowledge: PeerBlockKnowledge::default(),
             share_validator,
+            response_worker_handle,
         }
     }
 
@@ -316,22 +322,29 @@ impl<C: Send + Sync + 'static> RequestResponseHandler<C> {
     ) -> Result<(), Box<dyn Error>> {
         self.record_peer_knowledge(&peer, &response);
 
-        if let Err(err) = handle_response(
-            peer,
-            response,
-            self.chain_store_handle.clone(),
-            self.swarm_tx.clone(),
-            self.block_fetcher_handle.clone(),
-            self.validation_tx.clone(),
-            self.block_receiver_handle.clone(),
-            self.share_validator.clone(),
-        )
-        .await
+        // Hand the response to the response worker rather than processing it
+        // here: handle_response can be heavy (a ShareHeaders batch runs many
+        // organise_header calls) and this runs on the swarm-driver task. A full
+        // or closed channel drops the response; every response kind has a retry
+        // path (header sync re-requests, the fetcher's request timeout).
+        let message_type = response.message_type();
+        match self
+            .response_worker_handle
+            .try_send(ResponseWorkerEvent { peer, response })
         {
-            error!(
-                "Error handling response from peer {} on connection {}: {}",
-                peer, connection_id, err
-            );
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                warn!(
+                    "Response worker channel full on connection {}, dropping {} from peer {}",
+                    connection_id, message_type, peer
+                );
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                warn!(
+                    "Response worker channel closed on connection {}, dropping {} from peer {}",
+                    connection_id, message_type, peer
+                );
+            }
         }
         Ok(())
     }
@@ -375,11 +388,34 @@ mod tests {
         swarm_tx: mpsc::Sender<SwarmSend<TestChannel>>,
         share_validator: Arc<dyn ShareValidator + Send + Sync>,
     ) -> RequestResponseHandler<TestChannel> {
+        let (handler, response_worker_rx) =
+            build_test_handler_parts(chain_store_handle, swarm_tx, share_validator);
+        // Drain the response worker channel so dispatch_response's try_send
+        // succeeds in tests that only assert the dispatch result.
+        tokio::spawn(async move {
+            let mut response_worker_rx = response_worker_rx;
+            while response_worker_rx.recv().await.is_some() {}
+        });
+        handler
+    }
+
+    /// Build a handler and return the response worker receiver so a test can
+    /// assert what `dispatch_response` enqueues.
+    fn build_test_handler_parts(
+        chain_store_handle: ChainStoreHandle,
+        swarm_tx: mpsc::Sender<SwarmSend<TestChannel>>,
+        share_validator: Arc<dyn ShareValidator + Send + Sync>,
+    ) -> (
+        RequestResponseHandler<TestChannel>,
+        crate::node::response_worker::ResponseWorkerReceiver,
+    ) {
         let (block_fetcher_tx, _block_fetcher_rx) = block_fetcher::create_block_fetcher_channel();
         let (validation_tx, _validation_rx) =
             crate::node::validation_worker::create_validation_channel();
         let (block_receiver_handle, _block_receiver_rx) = create_block_receiver_channel();
-        RequestResponseHandler {
+        let (response_worker_handle, response_worker_rx) =
+            crate::node::response_worker::create_response_worker_channel();
+        let handler = RequestResponseHandler {
             peer_handles: HashMap::new(),
             max_requests_per_second: TEST_RATE_LIMIT,
             chain_store_handle,
@@ -389,7 +425,9 @@ mod tests {
             block_receiver_handle,
             peer_block_knowledge: PeerBlockKnowledge::default(),
             share_validator,
-        }
+            response_worker_handle,
+        };
+        (handler, response_worker_rx)
     }
 
     #[tokio::test]
@@ -524,6 +562,76 @@ mod tests {
             .await;
 
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_response_enqueues_to_worker() {
+        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
+        let mut chain_store_handle = ChainStoreHandle::default();
+        chain_store_handle
+            .expect_clone()
+            .returning(ChainStoreHandle::default);
+        let (mut handler, mut response_worker_rx) = build_test_handler_parts(
+            chain_store_handle,
+            swarm_tx,
+            Arc::new(MockDefaultShareValidator::default()),
+        );
+
+        let peer_id = libp2p::PeerId::random();
+        handler
+            .dispatch_response(
+                peer_id,
+                ConnectionId::new_unchecked(1),
+                Message::NotFound(GetData::Block(BlockHash::all_zeros())),
+            )
+            .await
+            .unwrap();
+
+        let event = response_worker_rx
+            .try_recv()
+            .expect("response handed to the worker, not processed on the driver");
+        assert_eq!(event.peer, peer_id);
+        assert!(matches!(event.response, Message::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_response_drops_when_worker_full() {
+        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
+        let mut chain_store_handle = ChainStoreHandle::default();
+        chain_store_handle
+            .expect_clone()
+            .returning(ChainStoreHandle::default);
+        let (mut handler, mut response_worker_rx) = build_test_handler_parts(
+            chain_store_handle,
+            swarm_tx,
+            Arc::new(MockDefaultShareValidator::default()),
+        );
+
+        // Dispatch far more than the worker channel can hold, without draining
+        // it. Every dispatch must return Ok without blocking (it is a try_send),
+        // and the overflow must be dropped rather than queued.
+        let peer_id = libp2p::PeerId::random();
+        let mut dispatched = 0;
+        while dispatched < 2000 {
+            handler
+                .dispatch_response(
+                    peer_id,
+                    ConnectionId::new_unchecked(1),
+                    Message::NotFound(GetData::Block(BlockHash::all_zeros())),
+                )
+                .await
+                .expect("dispatch never blocks or errors, even when the worker is full");
+            dispatched += 1;
+        }
+
+        let mut received = 0;
+        while response_worker_rx.try_recv().is_ok() {
+            received += 1;
+        }
+        assert!(
+            received < dispatched,
+            "some responses were dropped when the worker channel was full"
+        );
     }
 
     #[tokio::test]
