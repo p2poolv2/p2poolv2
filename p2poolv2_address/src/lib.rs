@@ -75,8 +75,11 @@
 //! This module never generates, stores or handles a private key. The node only
 //! needs the address to build a share coinbase output.
 
+pub mod networks;
 pub mod witness_program_codec;
 
+use crate::networks::P2PoolTestnetVersion::V4;
+use crate::networks::{InterNetwork, P2PoolNetwork, P2PoolSignetChain};
 use bitcoin::bech32::primitives::decode::{PaddingError, SegwitHrpstringError};
 use bitcoin::bech32::{Hrp, segwit};
 use bitcoin::key::{TweakedPublicKey, UntweakedPublicKey, XOnlyPublicKey};
@@ -96,7 +99,7 @@ const OUTPUT_KEY_LENGTH: usize = 32;
 /// rather than a change to the consensus encoding.
 const SUPPORTED_WITNESS_VERSION: WitnessVersion = WitnessVersion::V1;
 
-/// Human readable part for each supported network.
+/// Human-readable part for each supported network.
 const HRP_MAINNET: &str = "p2pool";
 const HRP_TESTNET4: &str = "tp2pool";
 const HRP_SIGNET: &str = "sp2pool";
@@ -109,7 +112,7 @@ pub enum AddressError {
     #[error(
         "No share chain address prefix for network {0}, expected mainnet, testnet4, signet or regtest"
     )]
-    UnsupportedNetwork(Network),
+    UnsupportedNetwork(InterNetwork),
     /// The prefix before the bech32 separator is not one of the known HRPs.
     #[error("Unknown share chain address prefix '{0}'")]
     UnknownPrefix(String),
@@ -155,41 +158,54 @@ pub enum AddressError {
     },
 }
 
-/// The human readable part every share chain address on `network` must carry.
+/// The human-readable part every share chain address on `network` must carry.
 ///
 /// This is the rule a share address is checked against: an address belongs to
 /// a network exactly when its prefix is this one, which is what
 /// [`Address::require_network`] enforces. Exposed so a caller can say what it
 /// expected rather than only that something did not match, and so a
 /// configuration can be checked before any address exists to compare.
-pub fn expected_hrp(network: Network) -> Result<&'static str, AddressError> {
+pub fn expected_hrp(network: InterNetwork) -> Result<&'static str, AddressError> {
     match network {
-        Network::Bitcoin => Ok(HRP_MAINNET),
-        Network::Testnet4 => Ok(HRP_TESTNET4),
-        Network::Signet => Ok(HRP_SIGNET),
-        Network::Regtest => Ok(HRP_REGTEST),
-        other => Err(AddressError::UnsupportedNetwork(other)),
+        InterNetwork::Bitcoin(bitcoin_net) => match bitcoin_net {
+            Network::Bitcoin => Ok(HRP_MAINNET),
+            Network::Testnet4 => Ok(HRP_TESTNET4),
+            Network::Signet => Ok(HRP_SIGNET),
+            Network::Regtest => Ok(HRP_REGTEST),
+            _other => Err(AddressError::UnsupportedNetwork(network)),
+        },
+        InterNetwork::P2Pool(p2pool_net) => match p2pool_net {
+            P2PoolNetwork::P2Pool => Ok(HRP_MAINNET),
+            P2PoolNetwork::P2PoolTestnet(_) => Ok(HRP_TESTNET4),
+            P2PoolNetwork::P2PoolSignet(_) => Ok(HRP_SIGNET),
+            P2PoolNetwork::P2PoolRegtest => Ok(HRP_REGTEST),
+        },
     }
 }
 
-/// Return the human readable part for a network.
-fn hrp_for(network: Network) -> Result<Hrp, AddressError> {
+/// Return the human-readable part for a network.
+fn hrp_for(network: InterNetwork) -> Result<Hrp, AddressError> {
     let prefix = expected_hrp(network)?;
     Ok(Hrp::parse(prefix).expect("share chain HRP constants are valid bech32 HRPs"))
 }
 
-/// Return the network that the human readable part belongs to.
+/// Return the network that the human-readable part belongs to.
 ///
 /// The comparison is between two `Hrp` values, and `Hrp` implements `PartialEq`
 /// case insensitively, so an all uppercase address resolves to the same network
 /// as its lowercase form.
-fn network_for_hrp(hrp: Hrp) -> Result<Network, AddressError> {
-    for network in [
-        Network::Bitcoin,
-        Network::Testnet4,
-        Network::Signet,
-        Network::Regtest,
-    ] {
+fn network_for_hrp(hrp: Hrp) -> Result<InterNetwork, AddressError> {
+    let networks = [
+        InterNetwork::Bitcoin(Network::Bitcoin),
+        InterNetwork::Bitcoin(Network::Testnet4),
+        InterNetwork::Bitcoin(Network::Signet),
+        InterNetwork::Bitcoin(Network::Regtest),
+        InterNetwork::P2Pool(P2PoolNetwork::P2Pool),
+        InterNetwork::P2Pool(P2PoolNetwork::P2PoolTestnet(V4)),
+        InterNetwork::P2Pool(P2PoolNetwork::P2PoolSignet(P2PoolSignetChain::Default)),
+        InterNetwork::P2Pool(P2PoolNetwork::P2PoolRegtest),
+    ];
+    for network in networks {
         if hrp_for(network)? == hrp {
             return Ok(network);
         }
@@ -226,7 +242,7 @@ impl Address {
         witness_program: WitnessProgram,
         network: Network,
     ) -> Result<Self, AddressError> {
-        hrp_for(network)?;
+        hrp_for(InterNetwork::Bitcoin(network))?;
         if witness_program.version() != SUPPORTED_WITNESS_VERSION {
             return Err(AddressError::UnsupportedWitnessVersion(
                 witness_program.version().to_num(),
@@ -316,7 +332,7 @@ impl Address {
 
 impl fmt::Display for Address {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let hrp = hrp_for(self.network).map_err(|_| fmt::Error)?;
+        let hrp = hrp_for(InterNetwork::Bitcoin(self.network)).map_err(|_| fmt::Error)?;
         //* The "unchecked" encoder skips the version and length checks that
         //* `segwit::encode` repeats. Every constructor goes through
         //* `from_witness_program`, so an `Address` that exists has already
@@ -355,13 +371,16 @@ impl FromStr for Address {
                 other => AddressError::Encoding(other),
             })?;
 
-        let network = network_for_hrp(hrp)?;
+        let network = match network_for_hrp(hrp)? {
+            InterNetwork::Bitcoin(_) => panic!("string must be p2pool address"),
+            InterNetwork::P2Pool(p2p_net) => p2p_net,
+        };
         //* segwit::decode already rejected anything above 16, so this only
         //* converts the field element into the typed version.
         let witness_version = WitnessVersion::try_from(version_field)
             .map_err(|_| AddressError::InvalidWitnessVersion(version_field.to_char()))?;
         let witness_program = WitnessProgram::new(witness_version, &program_bytes)?;
-        Self::from_witness_program(witness_program, network)
+        Self::from_witness_program(witness_program, network.to_mined())
     }
 }
 
@@ -661,7 +680,7 @@ mod tests {
     fn unsupported_network_has_no_prefix() {
         assert_eq!(
             Address::from_output_key(output_key(), Network::Testnet).unwrap_err(),
-            AddressError::UnsupportedNetwork(Network::Testnet)
+            AddressError::UnsupportedNetwork(InterNetwork::Bitcoin(Network::Testnet))
         );
     }
 
@@ -774,28 +793,40 @@ mod tests {
     /// a time so a regression names the network it broke.
     #[test]
     fn expected_hrp_pins_the_mainnet_prefix() {
-        assert_eq!(expected_hrp(Network::Bitcoin).unwrap(), "p2pool");
+        assert_eq!(
+            expected_hrp(InterNetwork::Bitcoin(Network::Bitcoin)).unwrap(),
+            "p2pool"
+        );
     }
 
     #[test]
     fn expected_hrp_pins_the_testnet4_prefix() {
-        assert_eq!(expected_hrp(Network::Testnet4).unwrap(), "tp2pool");
+        assert_eq!(
+            expected_hrp(InterNetwork::Bitcoin(Network::Testnet4)).unwrap(),
+            "tp2pool"
+        );
     }
 
     #[test]
     fn expected_hrp_pins_the_signet_prefix() {
-        assert_eq!(expected_hrp(Network::Signet).unwrap(), "sp2pool");
+        assert_eq!(
+            expected_hrp(InterNetwork::Bitcoin(Network::Signet)).unwrap(),
+            "sp2pool"
+        );
     }
 
     #[test]
     fn expected_hrp_pins_the_regtest_prefix() {
-        assert_eq!(expected_hrp(Network::Regtest).unwrap(), "rp2pool");
+        assert_eq!(
+            expected_hrp(InterNetwork::Bitcoin(Network::Regtest)).unwrap(),
+            "rp2pool"
+        );
     }
 
     /// A network with no prefix can accept no share address at all, so callers
     /// get an error they can refuse to start on rather than a usable default.
     #[test]
     fn expected_hrp_rejects_a_network_with_no_prefix() {
-        assert!(expected_hrp(Network::Testnet).is_err());
+        assert!(expected_hrp(InterNetwork::Bitcoin(Network::Testnet)).is_err());
     }
 }
