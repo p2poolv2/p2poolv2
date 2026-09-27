@@ -3,4 +3,4 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 pub mod api;
-pub use api::server::start_api_server;
+pub use api::{server::start_api_server, start_bitcoin_rpc_server};
