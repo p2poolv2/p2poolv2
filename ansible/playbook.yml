@@ -11,6 +11,7 @@
 # To deploy only a specific role:
 #   ansible-playbook -i inventory/hosts.yml playbook.yml --tags p2poolv2
 #   ansible-playbook -i inventory/hosts.yml playbook.yml --tags nginx
+#   ansible-playbook -i inventory/hosts.yml playbook.yml --tags grafana
 
 - name: Deploy P2Poolv2
   hosts: p2poolv2_nodes
@@ -58,3 +59,7 @@
       ansible.builtin.include_role:
         name: nginx_p2poolv2
       tags: [nginx]
+    - name: Deploy Grafana and Prometheus
+      ansible.builtin.include_role:
+        name: grafana_p2poolv2
+      tags: [grafana]
