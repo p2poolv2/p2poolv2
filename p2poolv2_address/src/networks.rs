@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+use crate::{HRP_MAINNET, HRP_REGTEST, HRP_SIGNET, HRP_TESTNET4};
 use bitcoin::Network;
 use bitcoin::constants::ChainHash;
 use std::fmt;
@@ -21,6 +22,23 @@ pub enum InterNetwork {
     P2Pool(P2PoolNetwork),
 }
 
+pub trait HrpProvider {
+    fn hrp(&self) -> &'static str;
+}
+
+impl HrpProvider for Network {
+    fn hrp(&self) -> &'static str {
+        match self {
+            // TODO: These should be the Bitcoin strings, not P2Pool!
+            Network::Bitcoin => HRP_MAINNET,
+            Network::Testnet => HRP_TESTNET4,
+            Network::Testnet4 => HRP_TESTNET4,
+            Network::Signet => HRP_SIGNET,
+            Network::Regtest => HRP_REGTEST,
+        }
+    }
+}
+
 impl InterNetwork {
     const fn as_display_str(self) -> &'static str {
         match self {
@@ -37,6 +55,15 @@ impl InterNetwork {
                 P2PoolNetwork::P2PoolSignet(_) => "p2pool-signet",
                 P2PoolNetwork::P2PoolRegtest => "p2pool-regtest",
             },
+        }
+    }
+}
+
+impl HrpProvider for InterNetwork {
+    fn hrp(&self) -> &'static str {
+        match self {
+            InterNetwork::Bitcoin(b) => b.hrp(),
+            InterNetwork::P2Pool(p) => p.hrp(),
         }
     }
 }
@@ -84,6 +111,17 @@ impl P2PoolNetwork {
             _ => {
                 panic!("unsupported/unmapped network")
             }
+        }
+    }
+}
+
+impl HrpProvider for P2PoolNetwork {
+    fn hrp(&self) -> &'static str {
+        match self {
+            P2PoolNetwork::P2Pool => HRP_MAINNET,
+            P2PoolNetwork::P2PoolTestnet(_) => HRP_TESTNET4,
+            P2PoolNetwork::P2PoolSignet(_) => HRP_SIGNET,
+            P2PoolNetwork::P2PoolRegtest => HRP_REGTEST,
         }
     }
 }

@@ -79,7 +79,7 @@ pub mod networks;
 pub mod witness_program_codec;
 
 use crate::networks::P2PoolTestnetVersion::V4;
-use crate::networks::{InterNetwork, P2PoolNetwork, P2PoolSignetChain};
+use crate::networks::{HrpProvider, InterNetwork, P2PoolNetwork, P2PoolSignetChain};
 use bitcoin::bech32::primitives::decode::{PaddingError, SegwitHrpstringError};
 use bitcoin::bech32::{Hrp, segwit};
 use bitcoin::key::{TweakedPublicKey, UntweakedPublicKey, XOnlyPublicKey};
@@ -168,17 +168,17 @@ pub enum AddressError {
 pub fn expected_hrp(network: InterNetwork) -> Result<&'static str, AddressError> {
     match network {
         InterNetwork::Bitcoin(bitcoin_net) => match bitcoin_net {
-            Network::Bitcoin => Ok(HRP_MAINNET),
-            Network::Testnet4 => Ok(HRP_TESTNET4),
-            Network::Signet => Ok(HRP_SIGNET),
-            Network::Regtest => Ok(HRP_REGTEST),
-            _other => Err(AddressError::UnsupportedNetwork(network)),
+            Network::Bitcoin => Ok(bitcoin_net.hrp()),
+            Network::Testnet4 => Ok(bitcoin_net.hrp()),
+            Network::Signet => Ok(bitcoin_net.hrp()),
+            Network::Regtest => Ok(bitcoin_net.hrp()),
+            Network::Testnet => Err(AddressError::UnsupportedNetwork(network)),
         },
         InterNetwork::P2Pool(p2pool_net) => match p2pool_net {
-            P2PoolNetwork::P2Pool => Ok(HRP_MAINNET),
-            P2PoolNetwork::P2PoolTestnet(_) => Ok(HRP_TESTNET4),
-            P2PoolNetwork::P2PoolSignet(_) => Ok(HRP_SIGNET),
-            P2PoolNetwork::P2PoolRegtest => Ok(HRP_REGTEST),
+            P2PoolNetwork::P2Pool => Ok(p2pool_net.hrp()),
+            P2PoolNetwork::P2PoolTestnet(_) => Ok(p2pool_net.hrp()),
+            P2PoolNetwork::P2PoolSignet(_) => Ok(p2pool_net.hrp()),
+            P2PoolNetwork::P2PoolRegtest => Ok(p2pool_net.hrp()),
         },
     }
 }
