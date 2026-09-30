@@ -21,7 +21,7 @@
 //! [`consensus_decode`] refuses a longer length before it reads any program
 //! bytes. Nothing an untrusted peer sends can make a header allocate.
 
-use crate::Address;
+use crate::address::Address;
 use bitcoin::consensus::encode;
 use bitcoin::consensus::{Decodable, Encodable};
 use bitcoin::hex::DisplayHex;
@@ -170,7 +170,7 @@ pub mod serde_hex_option {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Address;
+    use crate::address::Address;
     use bitcoin::Network;
     use serde::{Deserialize, Serialize};
 

@@ -17,7 +17,7 @@
 //! We manually parse the key value pairs. If we add more params we can switch
 //! to regex when needed.
 
-use crate::address::{Address, AddressError};
+use crate::address::address::{Address, AddressError};
 use crate::stratum::difficulty_adjuster::TARGET_DRR;
 use std::str::FromStr;
 

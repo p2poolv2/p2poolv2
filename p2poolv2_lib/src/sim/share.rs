@@ -14,7 +14,7 @@
 //! reconstructs. See `docs/simulation/load-test-plan.md`.
 
 use crate::accounting::payout::simple_pplns::SimplePplnsShare;
-use crate::address::Address as P2PoolAddress;
+use crate::address::address::Address as P2PoolAddress;
 use crate::shares::extranonce::Extranonce;
 use crate::stratum::emission::Emission;
 use crate::stratum::work::difficulty::validate::build_coinbase_from_components;

@@ -5,7 +5,7 @@
 use bitcoin::address::NetworkChecked;
 use bitcoin::{Address, Network};
 use bitcoindrpc::BitcoinRpcConfig;
-use p2poolv2_address::Address as ShareAddress;
+use p2poolv2_address::address::Address as ShareAddress;
 use serde::Deserialize;
 use std::marker::PhantomData;
 use std::str::FromStr;
@@ -202,7 +202,7 @@ impl StratumConfig<Raw> {
 
         // The network should be one we support an hrp for.
         if self.mode == PoolMode::P2poolv2 {
-            p2poolv2_address::expected_hrp(self.network).map_err(|error| ConfigError {
+            p2poolv2_address::address::expected_hrp(self.network).map_err(|error| ConfigError {
                 message: format!(
                     "Network {} cannot be used for a share chain: {error}",
                     self.network

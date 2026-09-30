@@ -8,7 +8,7 @@ use super::error::WorkError;
 use super::gbt::build_merkle_branches_for_template;
 use super::tracker::JobTracker;
 use crate::accounting::OutputPair;
-use crate::address::Address as P2PoolAddress;
+use crate::address::address::Address as P2PoolAddress;
 use crate::shares::share_commitment::{
     ShareCommitment, build_commitment_prefix, build_commitment_suffix, commitment_digest,
 };
