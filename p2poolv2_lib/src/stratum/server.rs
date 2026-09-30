@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use crate::accounting::stats::metrics;
-use crate::address::address::Address as P2PoolAddress;
+use crate::address::address::P2PoolAddress;
 pub use crate::config::PoolMode;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]

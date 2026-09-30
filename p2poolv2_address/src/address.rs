@@ -36,7 +36,7 @@
 //!   shares that need HTLCs, and every downstream tool would carry both paths.
 //! * Ark is taproot only.
 //!
-//! That restriction lives in [`Address::from_witness_program`], not in the
+//! That restriction lives in [`P2PoolAddress::from_witness_program`], not in the
 //! consensus encoding. A `ShareHeader` stores the [`WitnessProgram`] whole,
 //! version included, so accepting a further version later is a change to this
 //! boundary rather than to the wire format, and a node that predates the
@@ -53,7 +53,7 @@
 //!
 //! The encoded key is the taproot *output* key, matching BIP086 and matching
 //! what lands in the `scriptPubKey`. Whether that key commits a script tree is
-//! not visible in the address and is not restricted; [`Address::from_internal_key`]
+//! not visible in the address and is not restricted; [`P2PoolAddress::from_internal_key`]
 //! applies the BIP086 key path only tweak, which is what the tooling produces.
 //! Nothing here decompresses the program to a curve point. A miner may name
 //! any P2TR output, exactly as bitcoin lets anyone pay to one; a program that
@@ -157,7 +157,7 @@ pub enum AddressError {
 ///
 /// This is the rule a share address is checked against: an address belongs to
 /// a network exactly when its prefix is this one, which is what
-/// [`Address::require_network`] enforces. Exposed so a caller can say what it
+/// [`P2PoolAddress::require_network`] enforces. Exposed so a caller can say what it
 /// expected rather than only that something did not match, and so a
 /// configuration can be checked before any address exists to compare.
 pub fn expected_hrp(network: Network) -> Result<&'static str, AddressError> {
@@ -208,12 +208,12 @@ fn network_for_hrp(hrp: Hrp) -> Result<Network, AddressError> {
 /// a bitcoin payout address is a receive only identity or watch only
 /// script whose owner can never sign a share chain spend.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct Address {
+pub struct P2PoolAddress {
     network: Network,
     witness_program: WitnessProgram,
 }
 
-impl Address {
+impl P2PoolAddress {
     /// Build a share chain address from a witness program.
     ///
     /// Rejects any version this boundary does not accept yet, and any version
@@ -243,7 +243,7 @@ impl Address {
 
     /// Build a share chain address from a taproot output key.
     ///
-    /// The key must already be tweaked. Use [`Address::from_internal_key`] to
+    /// The key must already be tweaked. Use [`P2PoolAddress::from_internal_key`] to
     /// apply the BIP086 tweak to an internal key.
     pub fn from_output_key(
         output_key: XOnlyPublicKey,
@@ -312,7 +312,7 @@ impl Address {
     }
 }
 
-impl fmt::Display for Address {
+impl fmt::Display for P2PoolAddress {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let hrp = hrp_for(self.network).map_err(|_| fmt::Error)?;
         //* The "unchecked" encoder skips the version and length checks that
@@ -329,7 +329,7 @@ impl fmt::Display for Address {
     }
 }
 
-impl FromStr for Address {
+impl FromStr for P2PoolAddress {
     type Err = AddressError;
 
     fn from_str(address: &str) -> Result<Self, Self::Err> {
@@ -363,13 +363,13 @@ impl FromStr for Address {
     }
 }
 
-impl serde::Serialize for Address {
+impl serde::Serialize for P2PoolAddress {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.collect_str(self)
     }
 }
 
-impl<'de> serde::Deserialize<'de> for Address {
+impl<'de> serde::Deserialize<'de> for P2PoolAddress {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let address: String = serde::Deserialize::deserialize(deserializer)?;
         address.parse().map_err(serde::de::Error::custom)
@@ -406,31 +406,31 @@ mod tests {
 
     #[test]
     fn display_encodes_mainnet_address() {
-        let address = Address::from_output_key(output_key(), Network::Bitcoin).unwrap();
+        let address = P2PoolAddress::from_output_key(output_key(), Network::Bitcoin).unwrap();
         assert_eq!(address.to_string(), MAINNET_ADDRESS);
     }
 
     #[test]
     fn display_encodes_testnet4_address() {
-        let address = Address::from_output_key(output_key(), Network::Testnet4).unwrap();
+        let address = P2PoolAddress::from_output_key(output_key(), Network::Testnet4).unwrap();
         assert_eq!(address.to_string(), TESTNET4_ADDRESS);
     }
 
     #[test]
     fn display_encodes_signet_address() {
-        let address = Address::from_output_key(output_key(), Network::Signet).unwrap();
+        let address = P2PoolAddress::from_output_key(output_key(), Network::Signet).unwrap();
         assert_eq!(address.to_string(), SIGNET_ADDRESS);
     }
 
     #[test]
     fn display_encodes_regtest_address() {
-        let address = Address::from_output_key(output_key(), Network::Regtest).unwrap();
+        let address = P2PoolAddress::from_output_key(output_key(), Network::Regtest).unwrap();
         assert_eq!(address.to_string(), REGTEST_ADDRESS);
     }
 
     #[test]
     fn parse_round_trips_mainnet_address() {
-        let address: Address = MAINNET_ADDRESS.parse().unwrap();
+        let address: P2PoolAddress = MAINNET_ADDRESS.parse().unwrap();
         assert_eq!(address.network(), Network::Bitcoin);
         assert_eq!(address.witness_program(), witness_program());
         assert_eq!(address.to_string(), MAINNET_ADDRESS);
@@ -438,7 +438,7 @@ mod tests {
 
     #[test]
     fn parse_round_trips_testnet4_address() {
-        let address: Address = TESTNET4_ADDRESS.parse().unwrap();
+        let address: P2PoolAddress = TESTNET4_ADDRESS.parse().unwrap();
         assert_eq!(address.network(), Network::Testnet4);
         assert_eq!(address.witness_program(), witness_program());
         assert_eq!(address.to_string(), TESTNET4_ADDRESS);
@@ -446,7 +446,7 @@ mod tests {
 
     #[test]
     fn parse_round_trips_signet_address() {
-        let address: Address = SIGNET_ADDRESS.parse().unwrap();
+        let address: P2PoolAddress = SIGNET_ADDRESS.parse().unwrap();
         assert_eq!(address.network(), Network::Signet);
         assert_eq!(address.witness_program(), witness_program());
         assert_eq!(address.to_string(), SIGNET_ADDRESS);
@@ -454,7 +454,7 @@ mod tests {
 
     #[test]
     fn parse_round_trips_regtest_address() {
-        let address: Address = REGTEST_ADDRESS.parse().unwrap();
+        let address: P2PoolAddress = REGTEST_ADDRESS.parse().unwrap();
         assert_eq!(address.network(), Network::Regtest);
         assert_eq!(address.witness_program(), witness_program());
         assert_eq!(address.to_string(), REGTEST_ADDRESS);
@@ -462,7 +462,7 @@ mod tests {
 
     #[test]
     fn mainnet_address_is_rejected_for_every_other_network() {
-        let address: Address = MAINNET_ADDRESS.parse().unwrap();
+        let address: P2PoolAddress = MAINNET_ADDRESS.parse().unwrap();
         assert!(address.require_network(Network::Testnet4).is_err());
         assert!(address.require_network(Network::Signet).is_err());
         assert!(address.require_network(Network::Regtest).is_err());
@@ -470,7 +470,7 @@ mod tests {
 
     #[test]
     fn testnet4_address_is_rejected_for_every_other_network() {
-        let address: Address = TESTNET4_ADDRESS.parse().unwrap();
+        let address: P2PoolAddress = TESTNET4_ADDRESS.parse().unwrap();
         assert!(address.require_network(Network::Bitcoin).is_err());
         assert!(address.require_network(Network::Signet).is_err());
         assert!(address.require_network(Network::Regtest).is_err());
@@ -478,7 +478,7 @@ mod tests {
 
     #[test]
     fn signet_address_is_rejected_for_every_other_network() {
-        let address: Address = SIGNET_ADDRESS.parse().unwrap();
+        let address: P2PoolAddress = SIGNET_ADDRESS.parse().unwrap();
         assert!(address.require_network(Network::Bitcoin).is_err());
         assert!(address.require_network(Network::Testnet4).is_err());
         assert!(address.require_network(Network::Regtest).is_err());
@@ -486,7 +486,7 @@ mod tests {
 
     #[test]
     fn regtest_address_is_rejected_for_every_other_network() {
-        let address: Address = REGTEST_ADDRESS.parse().unwrap();
+        let address: P2PoolAddress = REGTEST_ADDRESS.parse().unwrap();
         assert!(address.require_network(Network::Bitcoin).is_err());
         assert!(address.require_network(Network::Testnet4).is_err());
         assert!(address.require_network(Network::Signet).is_err());
@@ -494,13 +494,13 @@ mod tests {
 
     #[test]
     fn require_network_returns_address_on_match() {
-        let address: Address = SIGNET_ADDRESS.parse().unwrap();
+        let address: P2PoolAddress = SIGNET_ADDRESS.parse().unwrap();
         assert!(address.require_network(Network::Signet).is_ok());
     }
 
     #[test]
     fn require_network_reports_both_networks() {
-        let address: Address = SIGNET_ADDRESS.parse().unwrap();
+        let address: P2PoolAddress = SIGNET_ADDRESS.parse().unwrap();
         assert_eq!(
             address.require_network(Network::Bitcoin).unwrap_err(),
             AddressError::NetworkMismatch {
@@ -523,7 +523,7 @@ mod tests {
     fn witness_version_0_is_rejected() {
         let version_zero = segwit::encode_v0(Hrp::parse(HRP_SIGNET).unwrap(), &[0x42; 20]).unwrap();
         assert_eq!(
-            version_zero.parse::<Address>().unwrap_err(),
+            version_zero.parse::<P2PoolAddress>().unwrap_err(),
             AddressError::UnsupportedWitnessVersion(0)
         );
     }
@@ -536,7 +536,7 @@ mod tests {
     fn witness_version_0_under_bech32m_checksum_is_rejected() {
         let bech32m_version_zero = "sp2pool1qx6e0gj7q7xurl08cwnpmeve6w6zf4tw6aujzp6";
         assert!(matches!(
-            bech32m_version_zero.parse::<Address>(),
+            bech32m_version_zero.parse::<P2PoolAddress>(),
             Err(AddressError::Encoding(_))
         ));
     }
@@ -545,7 +545,7 @@ mod tests {
     fn witness_version_2_is_rejected() {
         let version_two = "sp2pool1z43yn7gfseftvkhp62kvxpnhe4p8epddgthlya3hxqelwactlf5ks82qwy4";
         assert_eq!(
-            version_two.parse::<Address>().unwrap_err(),
+            version_two.parse::<P2PoolAddress>().unwrap_err(),
             AddressError::UnsupportedWitnessVersion(2)
         );
     }
@@ -557,7 +557,7 @@ mod tests {
         let symbol_seventeen =
             "sp2pool1343yn7gfseftvkhp62kvxpnhe4p8epddgthlya3hxqelwactlf5ksnrrrlj";
         assert_eq!(
-            symbol_seventeen.parse::<Address>().unwrap_err(),
+            symbol_seventeen.parse::<P2PoolAddress>().unwrap_err(),
             AddressError::InvalidWitnessVersion('3')
         );
     }
@@ -568,7 +568,7 @@ mod tests {
     fn empty_data_part_is_missing_a_witness_version() {
         let empty_data_part = "sp2pool1pyhy6a";
         assert_eq!(
-            empty_data_part.parse::<Address>().unwrap_err(),
+            empty_data_part.parse::<P2PoolAddress>().unwrap_err(),
             AddressError::MissingWitnessVersion
         );
     }
@@ -577,7 +577,7 @@ mod tests {
     fn twenty_byte_program_is_rejected() {
         let twenty_bytes = "sp2pool1px6e0gj7q7xurl08cwnpmeve6w6zf4tw6kz9fv3";
         assert_eq!(
-            twenty_bytes.parse::<Address>().unwrap_err(),
+            twenty_bytes.parse::<P2PoolAddress>().unwrap_err(),
             AddressError::InvalidOutputKeyLength(20)
         );
     }
@@ -590,7 +590,7 @@ mod tests {
     #[test]
     fn program_that_is_not_a_curve_point_is_accepted() {
         let not_a_point = "sp2pool1plllllllllllllllllllllllllllllllllllllllllllllllllllskmdz0g";
-        let address: Address = not_a_point.parse().unwrap();
+        let address: P2PoolAddress = not_a_point.parse().unwrap();
         assert!(address.script_pubkey().is_p2tr());
         assert_eq!(address.to_string(), not_a_point);
     }
@@ -601,7 +601,7 @@ mod tests {
     fn bech32_checksum_is_rejected() {
         let bech32_encoded = "sp2pool1p43yn7gfseftvkhp62kvxpnhe4p8epddgthlya3hxqelwactlf5ks6tfd0u";
         assert!(matches!(
-            bech32_encoded.parse::<Address>(),
+            bech32_encoded.parse::<P2PoolAddress>(),
             Err(AddressError::Encoding(_))
         ));
     }
@@ -612,7 +612,7 @@ mod tests {
     fn unknown_prefix_is_rejected() {
         let unknown = "p2p1p43yn7gfseftvkhp62kvxpnhe4p8epddgthlya3hxqelwactlf5ks3cfkdm";
         assert_eq!(
-            unknown.parse::<Address>().unwrap_err(),
+            unknown.parse::<P2PoolAddress>().unwrap_err(),
             AddressError::UnknownPrefix("p2p".to_string())
         );
     }
@@ -620,19 +620,19 @@ mod tests {
     #[test]
     fn bitcoin_taproot_address_is_rejected() {
         let bitcoin_address = "tb1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqhqjek6";
-        assert!(bitcoin_address.parse::<Address>().is_err());
+        assert!(bitcoin_address.parse::<P2PoolAddress>().is_err());
     }
 
     #[test]
     fn bitcoin_testnet_bech32_address_is_rejected() {
         let bitcoin_address = "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx";
-        assert!(bitcoin_address.parse::<Address>().is_err());
+        assert!(bitcoin_address.parse::<P2PoolAddress>().is_err());
     }
 
     #[test]
     fn bitcoin_legacy_base58_address_is_rejected() {
         let bitcoin_address = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa";
-        assert!(bitcoin_address.parse::<Address>().is_err());
+        assert!(bitcoin_address.parse::<P2PoolAddress>().is_err());
     }
 
     /// BIP173 permits an all uppercase encoding, and `Hrp` compares case
@@ -641,8 +641,8 @@ mod tests {
     fn uppercase_address_parses_to_same_address() {
         let uppercase = "SP2POOL1P43YN7GFSEFTVKHP62KVXPNHE4P8EPDDGTHLYA3HXQELWACTLF5KS0HEP27";
         assert_eq!(
-            uppercase.parse::<Address>().unwrap(),
-            SIGNET_ADDRESS.parse::<Address>().unwrap()
+            uppercase.parse::<P2PoolAddress>().unwrap(),
+            SIGNET_ADDRESS.parse::<P2PoolAddress>().unwrap()
         );
     }
 
@@ -650,7 +650,7 @@ mod tests {
     fn mixed_case_address_is_rejected() {
         let mixed_case = "sP2pool1p43yn7gfseftvkhp62kvxpnhe4p8epddgthlya3hxqelwactlf5ks0hep27";
         assert!(matches!(
-            mixed_case.parse::<Address>(),
+            mixed_case.parse::<P2PoolAddress>(),
             Err(AddressError::Encoding(_))
         ));
     }
@@ -658,7 +658,7 @@ mod tests {
     #[test]
     fn unsupported_network_has_no_prefix() {
         assert_eq!(
-            Address::from_output_key(output_key(), Network::Testnet).unwrap_err(),
+            P2PoolAddress::from_output_key(output_key(), Network::Testnet).unwrap_err(),
             AddressError::UnsupportedNetwork(Network::Testnet)
         );
     }
@@ -677,7 +677,7 @@ mod tests {
             .0;
 
         let address =
-            Address::from_internal_key(internal_key, None, Network::Signet, &secp).unwrap();
+            P2PoolAddress::from_internal_key(internal_key, None, Network::Signet, &secp).unwrap();
         let bitcoin_address = bitcoin::Address::p2tr(&secp, internal_key, None, Network::Signet);
 
         assert_eq!(address.script_pubkey(), bitcoin_address.script_pubkey());
@@ -697,11 +697,15 @@ mod tests {
             .0;
         let merkle_root = TapNodeHash::assume_hidden([0x42; 32]);
 
-        let with_tree =
-            Address::from_internal_key(internal_key, Some(merkle_root), Network::Signet, &secp)
-                .unwrap();
+        let with_tree = P2PoolAddress::from_internal_key(
+            internal_key,
+            Some(merkle_root),
+            Network::Signet,
+            &secp,
+        )
+        .unwrap();
         let key_path_only =
-            Address::from_internal_key(internal_key, None, Network::Signet, &secp).unwrap();
+            P2PoolAddress::from_internal_key(internal_key, None, Network::Signet, &secp).unwrap();
 
         assert_ne!(with_tree.witness_program(), key_path_only.witness_program());
         assert_eq!(
@@ -715,7 +719,7 @@ mod tests {
     /// compares against it, so it must be the standard P2TR script.
     #[test]
     fn script_pubkey_is_p2tr_for_the_output_key() {
-        let address: Address = SIGNET_ADDRESS.parse().unwrap();
+        let address: P2PoolAddress = SIGNET_ADDRESS.parse().unwrap();
         let expected =
             ScriptBuf::new_p2tr_tweaked(TweakedPublicKey::dangerous_assume_tweaked(output_key()));
         assert_eq!(address.script_pubkey(), expected);
@@ -741,7 +745,7 @@ mod tests {
     /// entirely distinct strings.
     #[test]
     fn share_and_bitcoin_taproot_addresses_differ_only_by_prefix() {
-        let share: Address = SIGNET_ADDRESS.parse().unwrap();
+        let share: P2PoolAddress = SIGNET_ADDRESS.parse().unwrap();
         let bitcoin_address = bitcoin::Address::p2tr_tweaked(
             TweakedPublicKey::dangerous_assume_tweaked(output_key()),
             Network::Signet,
@@ -755,16 +759,19 @@ mod tests {
 
     #[test]
     fn serde_round_trips_through_string() {
-        let address: Address = SIGNET_ADDRESS.parse().unwrap();
+        let address: P2PoolAddress = SIGNET_ADDRESS.parse().unwrap();
         let json = serde_json::to_string(&address).unwrap();
         assert_eq!(json, format!("\"{SIGNET_ADDRESS}\""));
-        assert_eq!(serde_json::from_str::<Address>(&json).unwrap(), address);
+        assert_eq!(
+            serde_json::from_str::<P2PoolAddress>(&json).unwrap(),
+            address
+        );
     }
 
     #[test]
     fn serde_rejects_a_bitcoin_address() {
         let json = "\"tb1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqhqjek6\"";
-        assert!(serde_json::from_str::<Address>(json).is_err());
+        assert!(serde_json::from_str::<P2PoolAddress>(json).is_err());
     }
 
     /// These prefixes are consensus: they are what a peer's address must carry

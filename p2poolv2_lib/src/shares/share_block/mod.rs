@@ -6,7 +6,7 @@ pub mod share_transaction;
 pub mod short_ids;
 
 use super::transactions;
-use crate::address::address::Address as P2PoolAddress;
+use crate::address::address::P2PoolAddress;
 use crate::shares::coinbaseaux_flags::CoinbaseAuxFlags;
 use crate::shares::extranonce::Extranonce;
 use crate::shares::genesis;

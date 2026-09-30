@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! The `p2poolv2_address` crate is a core library module of P2Pool, containing key types like [`address::Address`],
+//! The `p2poolv2_address` crate is a core library module of P2Pool, containing key types like [`address::P2PoolAddress`],
 //! network, etc. It is the rough equivalent of the `rust-bitcoin` crate in the BDK stack. The crate name of "address" will
 //! be changed in the future.
 

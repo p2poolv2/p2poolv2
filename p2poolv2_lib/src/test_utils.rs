@@ -36,7 +36,7 @@ use std::str::FromStr;
 #[cfg(any(test, feature = "test-utils"))]
 use crate::accounting::OutputPair;
 #[cfg(any(test, feature = "test-utils"))]
-use crate::address::address::Address as P2PoolAddress;
+use crate::address::address::P2PoolAddress;
 #[cfg(test)]
 use crate::pool_difficulty::MockPoolDifficulty;
 #[cfg(test)]

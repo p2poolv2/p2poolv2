@@ -5,7 +5,7 @@
 use bitcoin::address::NetworkChecked;
 use bitcoin::{Address, Network};
 use bitcoindrpc::BitcoinRpcConfig;
-use p2poolv2_address::address::Address as P2PoolAddress;
+use p2poolv2_address::address::P2PoolAddress;
 use serde::Deserialize;
 use std::marker::PhantomData;
 use std::str::FromStr;

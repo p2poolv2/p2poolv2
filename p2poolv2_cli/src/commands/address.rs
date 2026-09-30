@@ -14,7 +14,7 @@
 use bitcoin::Network;
 use bitcoin::hex::FromHex;
 use bitcoin::secp256k1::XOnlyPublicKey;
-use p2poolv2_address::address::Address;
+use p2poolv2_address::address::P2PoolAddress;
 use std::error::Error;
 use std::io::Read;
 
@@ -35,7 +35,7 @@ pub fn parse_network(value: &str) -> Result<Network, String> {
 ///
 /// Rejects a key that is not a curve point. Those 32 bytes would encode an
 /// output nobody can ever spend, so a share paid to it would be lost.
-fn encode(output_key_hex: &str, network: Network) -> Result<Address, Box<dyn Error>> {
+fn encode(output_key_hex: &str, network: Network) -> Result<P2PoolAddress, Box<dyn Error>> {
     let output_key_bytes = Vec::from_hex(output_key_hex)
         .map_err(|error| format!("witness program is not hex: {error}"))?;
 
@@ -51,7 +51,7 @@ fn encode(output_key_hex: &str, network: Network) -> Result<Address, Box<dyn Err
     let output_key = XOnlyPublicKey::from_slice(&output_key_bytes)
         .map_err(|error| format!("witness program is not a valid taproot output key: {error}"))?;
 
-    Ok(Address::from_output_key(output_key, network)?)
+    Ok(P2PoolAddress::from_output_key(output_key, network)?)
 }
 
 /// Read the output key from the argument, or from stdin when none was given.
