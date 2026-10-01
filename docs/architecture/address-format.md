@@ -105,7 +105,7 @@ script tree is invisible in the address and is not restricted.
 ## Parsing rules
 
 A conforming parser must reject all of the following. Each maps to a
-variant of `AddressError` in `p2poolv2_address/src/lib.rs:98`.
+variant of `AddressError` in `p2poolv2_wallet/src/lib.rs:98`.
 
 | Input | Error |
 |---|---|

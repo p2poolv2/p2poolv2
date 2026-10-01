@@ -55,7 +55,7 @@ Never infer architecture from filenames alone. Read the relevant architecture do
 | `p2poolv2_cli` | CLI utilities: share queries, address generation, auth signing |
 | `p2poolv2_api` | REST API + WebSocket server (axum) |
 | `p2poolv2_config` | TOML config parsing with phantom-type state machine (Raw -> Parsed) |
-| `p2poolv2_address` | Share chain address type: bech32m over a witness v1 (P2TR) output key, HRP `p2pool`/`tp2pool`/`sp2pool`/`rp2pool` |
+| `p2poolv2_wallet` | Share chain address type: bech32m over a witness v1 (P2TR) output key, HRP `p2pool`/`tp2pool`/`sp2pool`/`rp2pool` |
 | `p2poolv2_tests` | Integration tests (multi-node P2P, stratum, API) |
 | `p2poolv2_sim` | No-PoW load-test simulation binary (feature-gated with `sim`) |
 | `bitcoindrpc` | JSON-RPC 1.0 client for Bitcoin Core |
