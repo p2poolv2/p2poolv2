@@ -9,27 +9,41 @@ use crate::node::SwarmSend;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
+use crate::store::writer::StoreError;
 use bitcoin::BlockHash;
 use bitcoin::hashes::Hash;
 use std::error::Error;
 use tokio::sync::mpsc;
 use tracing::{debug, error};
 
-/// Send a getheaders request to the peer.
+/// Build a getheaders request from the store.
 ///
-/// When depth is 0, the locator starts from the confirmed tip
-/// (normal behavior). When depth > 0, the locator starts from
-/// confirmed_tip - depth, providing overlap to cover fork block
-/// parents that the receiver may not have.
+/// When depth is 0, the locator starts from the candidate tip (normal
+/// behavior). When depth > 0, the locator starts from candidate_tip - depth,
+/// providing overlap to cover fork block parents that the receiver may not have.
+///
+/// Synchronous so the node's event loop can build and send a getheaders request
+/// directly on the swarm, without awaiting a send on `swarm_tx`.
+pub fn build_getheaders_message(
+    chain_store_handle: &ChainStoreHandle,
+    depth: u32,
+) -> Result<Message, StoreError> {
+    let locator = chain_store_handle.build_locator(depth)?;
+    let stop_block_hash: BlockHash = BlockHash::all_zeros();
+    Ok(Message::GetShareHeaders(locator, stop_block_hash))
+}
+
+/// Send a getheaders request to the peer over `swarm_tx`.
+///
+/// Used by off-loop callers (peer service tasks). The node event loop builds the
+/// message with `build_getheaders_message` and sends it on the swarm directly.
 pub async fn send_getheaders<C>(
     peer_id: libp2p::PeerId,
     chain_store_handle: ChainStoreHandle,
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
     depth: u32,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let locator = chain_store_handle.build_locator(depth)?;
-    let stop_block_hash: BlockHash = BlockHash::all_zeros();
-    let getheaders_request = Message::GetShareHeaders(locator.clone(), stop_block_hash);
+    let getheaders_request = build_getheaders_message(&chain_store_handle, depth)?;
     debug!("Sending GetHeaders to peer {peer_id}: {getheaders_request:?}");
     if let Err(e) = swarm_tx
         .send(SwarmSend::Request(peer_id, getheaders_request))
