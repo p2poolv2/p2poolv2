@@ -20,12 +20,12 @@ use crate::node::organise_worker::{OrganiseWorker, create_organise_channel};
 use crate::node::p2p_message_handlers::receivers::block_receiver::{
     BlockReceiver, create_block_receiver_channel,
 };
-use crate::node::p2p_message_handlers::senders::send_block_inventory;
-use crate::node::p2p_message_handlers::senders::send_getheaders;
+use crate::node::p2p_message_handlers::senders::build_getheaders_message;
 use crate::node::p2p_message_handlers::senders::send_share_block_broadcast;
 use crate::node::request_response_handler::block_fetcher::{
     BlockFetcher, create_block_fetcher_channel,
 };
+use crate::node::request_sender::RequestSender;
 use crate::node::response_worker::{ResponseWorker, create_response_worker_channel};
 use crate::node::validation_worker::{
     ValidationSender, ValidationWorker, create_validation_channel,
@@ -49,6 +49,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::ops::ControlFlow;
 use std::sync::{Arc, RwLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
 use tracing::{debug, error, info};
@@ -527,7 +528,7 @@ impl NodeActor {
                     }
                 },
                 event = self.node.swarm.select_next_some() => {
-                    if let Err(e) = self.node.handle_swarm_event(event).await {
+                    if let Err(e) = self.node.handle_swarm_event(event) {
                         error!("Error handling swarm event: {e}");
                     }
                 },
@@ -554,28 +555,7 @@ impl NodeActor {
                     self.node.attempt_reconnections();
                 }
                 _ = sync_retry_interval.tick(), if !self.chain_store_handle.is_current() => {
-                    // Kept inline: an async `&self` helper would hold a borrow of
-                    // the non-Sync swarm across the await. Stage 4 makes this a
-                    // direct synchronous swarm send.
-                    let peers = self.node.connected_peers();
-                    if !peers.is_empty() {
-                        let now_secs = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs() as usize;
-                        let peer_id = peers[now_secs % peers.len()];
-                        info!("Chain tip stale, sending getheaders to peer {peer_id}");
-                        if let Err(error) = send_getheaders(
-                            peer_id,
-                            self.chain_store_handle.clone(),
-                            self.node.swarm_tx.clone(),
-                            0,
-                        )
-                        .await
-                        {
-                            error!("Sync retry getheaders failed: {error}");
-                        }
-                    }
+                    self.on_sync_retry_tick();
                 }
                 _ = kademlia_bootstrap_interval.tick() => {
                     self.node.attempt_kademlia_bootstrap();
@@ -616,17 +596,6 @@ impl NodeActor {
                     .request_response
                     .send_response(response_channel, msg);
                 debug!("Sent message to response channel: {request_id:?}");
-            }
-            SwarmSend::Inv(block_hash) => {
-                let connected_peers = self.node.connected_peers();
-                let peer_knowledge = self.node.request_response_handler.peer_block_knowledge();
-                send_block_inventory(
-                    block_hash,
-                    None,
-                    &connected_peers,
-                    peer_knowledge,
-                    &mut self.node.swarm,
-                );
             }
             SwarmSend::BroadcastBlock(share_block) => {
                 let connected_peers = self.node.connected_peers();
@@ -758,6 +727,27 @@ impl NodeActor {
     /// The registered name of a worker task, for logging.
     fn worker_name(&self, id: tokio::task::Id) -> &'static str {
         self.worker_names.get(&id).copied().unwrap_or("Worker")
+    }
+
+    /// The chain tip is stale: ask a connected peer for more headers. Builds the
+    /// request from the store and sends it on the swarm directly (synchronous, so
+    /// the loop never awaits a send on `swarm_tx`).
+    fn on_sync_retry_tick(&mut self) {
+        let peers = self.node.connected_peers();
+        if !peers.is_empty() {
+            let now_secs = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as usize;
+            let peer_id = peers[now_secs % peers.len()];
+            info!("Chain tip stale, sending getheaders to peer {peer_id}");
+            match build_getheaders_message(&self.chain_store_handle, 0) {
+                Ok(getheaders_request) => {
+                    self.node.swarm.send_request(&peer_id, getheaders_request);
+                }
+                Err(error) => error!("Sync retry: failed to build getheaders: {error}"),
+            }
+        }
     }
 }
 
