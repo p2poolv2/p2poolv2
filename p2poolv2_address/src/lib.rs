@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Share chain addresses.
+//! Sharechain addresses.
 //!
 //! A share chain address identifies the owner of a share coinbase output. It
 //! is deliberately not a bitcoin address: shares are traded for bitcoin UTXOs,
