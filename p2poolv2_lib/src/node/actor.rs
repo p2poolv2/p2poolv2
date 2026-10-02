@@ -27,9 +27,7 @@ use crate::node::request_response_handler::block_fetcher::{
 };
 use crate::node::request_sender::RequestSender;
 use crate::node::response_worker::{ResponseWorker, create_response_worker_channel};
-use crate::node::validation_worker::{
-    ValidationSender, ValidationWorker, create_validation_channel,
-};
+use crate::node::validation_worker::{ValidationWorker, create_validation_channel};
 #[cfg(test)]
 #[mockall_double::double]
 use crate::pool_difficulty::PoolDifficulty;
@@ -284,20 +282,25 @@ mock! {
     }
 }
 
+/// Why the node actor loop stopped.
+enum StopReason {
+    /// A `Command::Shutdown`; acknowledged on its reply channel after teardown.
+    Requested(oneshot::Sender<()>),
+    /// The actor stopped on its own: a worker failed or a channel closed.
+    Fatal,
+}
+
 /// NodeActor runs the Node in a separate task and handles all its events
 struct NodeActor {
     node: Node,
     command_rx: mpsc::Receiver<Command>,
-    /// `Option` so `signal_stopping` can `take` the oneshot from `&mut self`
-    /// (a oneshot send consumes the sender). `None` once the stop is signalled.
-    stopping_tx: Option<oneshot::Sender<()>>,
-    /// `Option` so `run` can `take` the receiver for the emission worker without
-    /// partially moving `self`, which the extracted `&mut self` handlers need.
-    emissions_rx: Option<EmissionReceiver>,
+    /// Signalled only when the actor stops on its own (a fatal worker exit or a
+    /// closed channel), telling the node binary to shut down with an error. A
+    /// requested `Command::Shutdown` is acknowledged on its own reply channel.
+    stopping_tx: oneshot::Sender<()>,
     chain_store_handle: ChainStoreHandle,
     #[allow(dead_code)]
     metrics: MetricsHandle,
-    validation_tx: ValidationSender,
     /// All node workers, supervised as one set. Each task maps its own result to
     /// `Result<(), String>` so they share a type; the id->name map recovers a
     /// worker's name for logging, including on a panic (which yields no value).
@@ -461,16 +464,28 @@ impl NodeActor {
             .id();
         worker_names.insert(response_id, "Response worker");
 
+        // Spawn emission worker - turns stratum shares into share blocks
+        let emission_worker = EmissionWorker::new(
+            emissions_rx,
+            chain_store_handle.clone(),
+            validation_tx_for_emission,
+        );
+        let emission_worker_id = workers
+            .spawn(async move {
+                emission_worker.run().await;
+                Ok(())
+            })
+            .id();
+        worker_names.insert(emission_worker_id, "Emission worker");
+
         let (stopping_tx, stopping_rx) = oneshot::channel();
         Ok((
             Self {
                 node,
                 command_rx,
-                stopping_tx: Some(stopping_tx),
-                emissions_rx: Some(emissions_rx),
+                stopping_tx,
                 chain_store_handle,
                 metrics,
-                validation_tx: validation_tx_for_emission,
                 workers,
                 worker_names,
             },
@@ -479,16 +494,6 @@ impl NodeActor {
     }
 
     async fn run(mut self) {
-        // Spawn emission worker - processes shares in a separate task.
-        let emission_worker = EmissionWorker::new(
-            self.emissions_rx
-                .take()
-                .expect("emissions receiver present at startup"),
-            self.chain_store_handle.clone(),
-            self.validation_tx.clone(),
-        );
-        tokio::spawn(emission_worker.run());
-
         let mut reconnect_interval =
             tokio::time::interval(crate::node::peer_reconnector::PeerReconnector::check_interval());
         reconnect_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -508,7 +513,7 @@ impl NodeActor {
         kademlia_bootstrap_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         kademlia_bootstrap_interval.tick().await;
 
-        loop {
+        let stop_reason = loop {
             tokio::select! {
                 buf = self.node.swarm_rx.recv() => {
                     match buf {
@@ -522,8 +527,7 @@ impl NodeActor {
                         }
                         None => {
                             info!("Stopping node actor on swarm channel close");
-                            self.signal_stopping();
-                            return;
+                            break StopReason::Fatal;
                         }
                     }
                 },
@@ -535,20 +539,19 @@ impl NodeActor {
                 command = self.command_rx.recv() => {
                     match command {
                         Some(command) => {
-                            if self.on_command(command).is_break() {
-                                return;
+                            if let ControlFlow::Break(reason) = self.on_command(command) {
+                                break reason;
                             }
                         }
                         None => {
                             info!("Stopping node actor on channel close");
-                            self.signal_stopping();
-                            return;
+                            break StopReason::Fatal;
                         }
                     }
                 },
                 Some(joined) = self.workers.join_next_with_id() => {
-                    if self.on_worker_exit(joined).is_break() {
-                        return;
+                    if let ControlFlow::Break(reason) = self.on_worker_exit(joined) {
+                        break reason;
                     }
                 }
                 _ = reconnect_interval.tick(), if self.node.peer_reconnector.has_peers() => {
@@ -561,16 +564,31 @@ impl NodeActor {
                     self.node.attempt_kademlia_bootstrap();
                 }
             }
-        }
+        };
+
+        self.shut_down(stop_reason).await;
     }
 
-    /// Signal the outer caller that the actor is stopping. The oneshot send
-    /// consumes the sender, so it is held in an `Option` and taken once.
-    fn signal_stopping(&mut self) {
-        if let Some(tx) = self.stopping_tx.take()
-            && tx.send(()).is_err()
-        {
-            error!("Failed to send stopping signal - receiver dropped");
+    /// The single teardown path for every way the loop can end.
+    ///
+    /// Stops all workers and waits for them to finish before reporting, so the
+    /// caller never sees the node as stopped while a worker is still running.
+    /// Workers are aborted at their current await point; their durable effects
+    /// go through the store writer's atomic batches, so nothing is left half
+    /// written, and in-memory state is rebuilt on the next start.
+    async fn shut_down(mut self, reason: StopReason) {
+        self.workers.shutdown().await;
+        match reason {
+            StopReason::Requested(reply) => {
+                if reply.send(()).is_err() {
+                    error!("Failed to send Shutdown response - receiver dropped");
+                }
+            }
+            StopReason::Fatal => {
+                if self.stopping_tx.send(()).is_err() {
+                    error!("Failed to send stopping signal - receiver dropped");
+                }
+            }
         }
     }
 
@@ -622,7 +640,7 @@ impl NodeActor {
 
     /// Handle one control-plane command. Returns `Break` when the command stops
     /// the actor (`Shutdown`).
-    fn on_command(&mut self, command: Command) -> ControlFlow<()> {
+    fn on_command(&mut self, command: Command) -> ControlFlow<StopReason> {
         match command {
             Command::GetPeers(tx) => {
                 let peers = self
@@ -653,12 +671,9 @@ impl NodeActor {
                     }
                 }
             }
-            Command::Shutdown(tx) => {
+            Command::Shutdown(reply) => {
                 self.node.shutdown().unwrap();
-                if tx.send(()).is_err() {
-                    error!("Failed to send Shutdown response - receiver dropped");
-                }
-                return ControlFlow::Break(());
+                return ControlFlow::Break(StopReason::Requested(reply));
             }
             Command::GetPplnsShares(query, tx) => {
                 debug!(
@@ -702,7 +717,7 @@ impl NodeActor {
     fn on_worker_exit(
         &mut self,
         joined: Result<(tokio::task::Id, Result<(), String>), tokio::task::JoinError>,
-    ) -> ControlFlow<()> {
+    ) -> ControlFlow<StopReason> {
         match joined {
             Ok((id, Ok(()))) => {
                 info!("{} stopped cleanly", self.worker_name(id));
@@ -710,16 +725,14 @@ impl NodeActor {
             }
             Ok((id, Err(message))) => {
                 error!("{} fatal error: {message}", self.worker_name(id));
-                self.signal_stopping();
-                ControlFlow::Break(())
+                ControlFlow::Break(StopReason::Fatal)
             }
             Err(join_error) => {
                 error!(
                     "{} panicked: {join_error}",
                     self.worker_name(join_error.id())
                 );
-                self.signal_stopping();
-                ControlFlow::Break(())
+                ControlFlow::Break(StopReason::Fatal)
             }
         }
     }
