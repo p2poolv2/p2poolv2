@@ -80,6 +80,12 @@ pub(crate) struct ConnectionTracker {
     /// Consecutive reported ping failures per connection; cleared on a
     /// successful ping and when the connection closes.
     ping_failures: HashMap<ConnectionId, u32>,
+    /// Connections accepted since start, for P2P health metrics.
+    connections_total: u64,
+    /// Ping failures reported since start, for P2P health metrics.
+    ping_failures_total: u64,
+    /// Connections closed for failing ping, for P2P health metrics.
+    connections_closed_unresponsive_total: u64,
 }
 
 impl ConnectionTracker {
@@ -89,6 +95,9 @@ impl ConnectionTracker {
             dial_peer_ids: HashMap::new(),
             blocked_ips,
             ping_failures: HashMap::new(),
+            connections_total: 0,
+            ping_failures_total: 0,
+            connections_closed_unresponsive_total: 0,
         }
     }
 
@@ -134,6 +143,7 @@ impl ConnectionTracker {
         self.connected_peers
             .entry(peer_id)
             .or_insert_with(|| peer_info.clone());
+        self.connections_total += 1;
         ConnectionAction::Accept(peer_info)
     }
 
@@ -160,9 +170,35 @@ impl ConnectionTracker {
     /// Record a reported ping failure on a connection and return the number of
     /// consecutive failures so far.
     pub(crate) fn record_ping_failure(&mut self, connection_id: ConnectionId) -> u32 {
+        self.ping_failures_total += 1;
         let failures = self.ping_failures.entry(connection_id).or_insert(0);
         *failures += 1;
         *failures
+    }
+
+    /// Count a connection closed for failing ping.
+    pub(crate) fn record_unresponsive_close(&mut self) {
+        self.connections_closed_unresponsive_total += 1;
+    }
+
+    /// Number of peers with at least one open connection.
+    pub(crate) fn connected_peer_count(&self) -> u64 {
+        self.connected_peers.len() as u64
+    }
+
+    /// Connections accepted since start.
+    pub(crate) fn connections_total(&self) -> u64 {
+        self.connections_total
+    }
+
+    /// Ping failures reported since start.
+    pub(crate) fn ping_failures_total(&self) -> u64 {
+        self.ping_failures_total
+    }
+
+    /// Connections closed for failing ping since start.
+    pub(crate) fn connections_closed_unresponsive_total(&self) -> u64 {
+        self.connections_closed_unresponsive_total
     }
 
     /// Clear a connection's ping failure count, after a successful ping or when
@@ -490,5 +526,25 @@ mod tests {
         tracker.clear_ping_failures(connection);
 
         assert_eq!(tracker.record_ping_failure(connection), 1);
+    }
+
+    #[test]
+    fn test_connections_total_counts_accepted_connections_only() {
+        let blocked: HashSet<IpAddr> = ["5.6.7.8"]
+            .iter()
+            .filter_map(|ip| ip.parse().ok())
+            .collect();
+        let mut tracker = ConnectionTracker::new(blocked);
+        let peer_id = PeerId::random();
+
+        tracker.handle_established(peer_id, &make_dialer_endpoint("/ip4/1.2.3.4/tcp/46884"));
+        tracker.handle_established(peer_id, &make_dialer_endpoint("/ip4/1.2.3.4/tcp/46884"));
+        tracker.handle_established(
+            PeerId::random(),
+            &make_dialer_endpoint("/ip4/5.6.7.8/tcp/46884"),
+        );
+
+        assert_eq!(tracker.connections_total(), 2);
+        assert_eq!(tracker.connected_peer_count(), 1);
     }
 }

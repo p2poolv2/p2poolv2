@@ -29,7 +29,8 @@ The response is assembled from two kinds of source:
    pull from other subsystems that already hold the data, so nothing
    needs to be duplicated into the metrics actor. Currently the coinbase
    reward distribution and the network difficulty are read live from the
-   `JobTracker` (latest job template).
+   `JobTracker` (latest job template), and the P2P health counters are read
+   from the node actor (`NodeHandle::get_p2p_health`).
 
 ```
 mining.submit ---> MetricsActor (accumulated counters/gauges) --.
@@ -37,6 +38,7 @@ organise/confirm -> MetricsActor (effort accumulator) ----------|
                                                                  |
 JobTracker (latest job template) --- live read at scrape -------+--> GET /metrics
 confirmed chain work (get_total_work) --- live read at scrape --|
+node actor (Command::GetP2pHealth) --- live read at scrape -----|
                                                                  |
 PplnsWindow (planned) --- live read at scrape ------------------'
 ```
@@ -198,6 +200,44 @@ real-time confirmed shares count.
 `work_since_last_block / network_difficulty`. Values around 1.0 (100%)
 are expected luck; higher means the pool is running "unlucky" on the
 current block.
+
+### P2P health
+
+| Metric | Type | Source |
+|---|---|---|
+| `p2p_connected_peers` | gauge | live read of node connection tracker |
+| `p2p_connections_total` | counter | node connection tracker |
+| `p2p_ping_failures_total` | counter | node connection tracker |
+| `p2p_connections_closed_unresponsive_total` | counter | node connection tracker |
+| `p2p_outbound_failures_total` | counter | node request-response handler |
+| `p2p_inbound_failures_total` | counter | node request-response handler |
+| `p2p_responses_dropped_total` | counter | node request-response handler |
+| `p2p_response_queue_depth` | gauge | live read of response worker queue |
+
+The counters are plain integers kept where their events happen and updated
+on the node actor loop. They are **not** sent to the `MetricsActor`: every
+`MetricsHandle` call awaits a reply, and the node actor loop must never await
+(see `async-flow.md`). The `/metrics` handler asks the node for a
+`P2pHealth` snapshot (`node/p2p_health.rs`) with a 1 s timeout and appends
+its exposition; if the node does not answer, the P2P series are omitted from
+that scrape. The counters are runtime-only and reset on restart, which
+`rate()` and `increase()` handle. There are no labels: peer ids are
+unbounded and churn.
+
+`p2p_connections_closed_unresponsive_total` counts connections closed after
+`PING_FAILURE_THRESHOLD` consecutive ping failures -- a connection that
+negotiated but could not exchange messages (the 2026-09-17 fork).
+
+**Grafana / alerting:**
+- *P2P is up but broken* -- the signature of the 2026-09-17 incident:
+  `rate(p2p_outbound_failures_total[5m]) > 0 and p2p_connected_peers > 0`
+  sustained for 10 minutes.
+- *Unresponsive connections*: `increase(p2p_connections_closed_unresponsive_total[1h])`
+  as a stat; occasional closes are recovery working, a steady rate means a
+  flaky link.
+- *Response backlog*: `p2p_response_queue_depth` and
+  `rate(p2p_responses_dropped_total[5m])`; drops during catch-up mean the
+  response worker is falling behind.
 
 ## Planned metrics (later releases)
 

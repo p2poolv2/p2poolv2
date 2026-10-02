@@ -5,6 +5,7 @@
 use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::node::connection_tracker::PeerInfoResponse;
 use crate::node::messages::Message;
+use crate::node::p2p_health::P2pHealth;
 use std::error::Error;
 use std::net::IpAddr;
 use tokio::sync::oneshot;
@@ -47,4 +48,6 @@ pub enum Command {
     UnblockIp(IpAddr, oneshot::Sender<()>),
     /// List all blocked IPs
     GetBlockedIps(oneshot::Sender<Vec<IpAddr>>),
+    /// Snapshot of P2P health counters, read at `/metrics` scrape time
+    GetP2pHealth(oneshot::Sender<P2pHealth>),
 }

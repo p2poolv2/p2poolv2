@@ -62,6 +62,12 @@ pub struct RequestResponseHandler<C: Send + Sync> {
     /// Inbound responses are handed to the response worker rather than processed
     /// on the swarm-driver task, keeping the node actor loop free for other events.
     response_worker_handle: ResponseWorkerSender,
+    /// Requests sent by this node that failed, for P2P health metrics.
+    outbound_failures_total: u64,
+    /// Peer requests this node failed to answer, for P2P health metrics.
+    inbound_failures_total: u64,
+    /// Responses dropped on a full or closed worker queue, for P2P health metrics.
+    responses_dropped_total: u64,
 }
 
 /// Implementation of ResponseChannel<Message>, used in production.
@@ -91,6 +97,9 @@ impl RequestResponseHandler<ResponseChannel<Message>> {
             peer_block_knowledge: PeerBlockKnowledge::default(),
             share_validator,
             response_worker_handle,
+            outbound_failures_total: 0,
+            inbound_failures_total: 0,
+            responses_dropped_total: 0,
         }
     }
 
@@ -139,6 +148,7 @@ impl RequestResponseHandler<ResponseChannel<Message>> {
                 request_id,
                 error: failure_error,
             } => {
+                self.outbound_failures_total += 1;
                 warn!(
                     "Outbound failure from peer {} on connection {}, request_id: {}, error: {:?}",
                     peer, connection_id, request_id, failure_error
@@ -151,6 +161,7 @@ impl RequestResponseHandler<ResponseChannel<Message>> {
                 request_id,
                 error: failure_error,
             } => {
+                self.inbound_failures_total += 1;
                 warn!(
                     "Inbound failure from peer {} on connection {}, request_id: {}, error: {:?}",
                     peer, connection_id, request_id, failure_error
@@ -197,6 +208,26 @@ impl<C: Send + Sync + 'static> RequestResponseHandler<C> {
         let handle =
             spawn_peer_service(peer_id, self.max_requests_per_second, self.swarm_tx.clone());
         self.peer_handles.insert(peer_id, handle);
+    }
+
+    /// Requests sent by this node that failed, since start.
+    pub fn outbound_failures_total(&self) -> u64 {
+        self.outbound_failures_total
+    }
+
+    /// Peer requests this node failed to answer, since start.
+    pub fn inbound_failures_total(&self) -> u64 {
+        self.inbound_failures_total
+    }
+
+    /// Responses dropped on a full or closed worker queue, since start.
+    pub fn responses_dropped_total(&self) -> u64 {
+        self.responses_dropped_total
+    }
+
+    /// Responses waiting in the response worker queue.
+    pub fn response_queue_depth(&self) -> u64 {
+        (self.response_worker_handle.max_capacity() - self.response_worker_handle.capacity()) as u64
     }
 
     /// Whether the peer has a request service.
@@ -343,12 +374,14 @@ impl<C: Send + Sync + 'static> RequestResponseHandler<C> {
         {
             Ok(()) => {}
             Err(mpsc::error::TrySendError::Full(_)) => {
+                self.responses_dropped_total += 1;
                 warn!(
                     "Response worker channel full on connection {}, dropping {} from peer {}",
                     connection_id, message_type, peer
                 );
             }
             Err(mpsc::error::TrySendError::Closed(_)) => {
+                self.responses_dropped_total += 1;
                 warn!(
                     "Response worker channel closed on connection {}, dropping {} from peer {}",
                     connection_id, message_type, peer
@@ -436,6 +469,9 @@ mod tests {
             peer_block_knowledge: PeerBlockKnowledge::default(),
             share_validator,
             response_worker_handle,
+            outbound_failures_total: 0,
+            inbound_failures_total: 0,
+            responses_dropped_total: 0,
         };
         (handler, response_worker_rx)
     }
@@ -631,6 +667,11 @@ mod tests {
         assert!(
             received < dispatched,
             "some responses were dropped when the worker channel was full"
+        );
+        assert_eq!(
+            handler.responses_dropped_total(),
+            (dispatched - received) as u64,
+            "every dropped response is counted"
         );
     }
 
