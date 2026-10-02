@@ -15,7 +15,7 @@
 //!
 //! Only compiled under the `sim` feature. See docs/simulation/load-test-plan.md.
 
-use crate::address::Address as P2PoolAddress;
+use crate::address::address::P2PoolAddress;
 use crate::config::SimConfig;
 use crate::sim::blockfind::submit_sim_block;
 use crate::sim::share::{SimShareParams, build_sim_emission};

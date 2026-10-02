@@ -21,7 +21,7 @@
 //! [`consensus_decode`] refuses a longer length before it reads any program
 //! bytes. Nothing an untrusted peer sends can make a header allocate.
 
-use crate::Address;
+use crate::address::P2PoolAddress;
 use bitcoin::consensus::encode;
 use bitcoin::consensus::{Decodable, Encodable};
 use bitcoin::hex::DisplayHex;
@@ -99,7 +99,7 @@ pub fn to_hex(witness_program: &WitnessProgram) -> String {
 /// a diagnostic view should render it rather than fail; the hex is the same
 /// encoding the header uses, so it stays comparable with a raw header dump.
 pub fn to_address_string(witness_program: &WitnessProgram, network: Network) -> String {
-    Address::from_witness_program(*witness_program, network)
+    P2PoolAddress::from_witness_program(*witness_program, network)
         .map(|address| address.to_string())
         .unwrap_or_else(|_| to_hex(witness_program))
 }
@@ -170,7 +170,7 @@ pub mod serde_hex_option {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Address;
+    use crate::address::P2PoolAddress;
     use bitcoin::Network;
     use serde::{Deserialize, Serialize};
 
@@ -186,7 +186,10 @@ mod tests {
         "sp2pool1p43yn7gfseftvkhp62kvxpnhe4p8epddgthlya3hxqelwactlf5ks0hep27";
 
     fn witness_program() -> WitnessProgram {
-        SIGNET_ADDRESS.parse::<Address>().unwrap().witness_program()
+        SIGNET_ADDRESS
+            .parse::<P2PoolAddress>()
+            .unwrap()
+            .witness_program()
     }
 
     #[test]
@@ -217,9 +220,10 @@ mod tests {
     /// networks, one encoding, so one share cannot be spelled four ways.
     #[test]
     fn networks_that_differ_encode_identically() {
-        let signet: Address = SIGNET_ADDRESS.parse().unwrap();
+        let signet: P2PoolAddress = SIGNET_ADDRESS.parse().unwrap();
         let mainnet =
-            Address::from_witness_program(signet.witness_program(), Network::Bitcoin).unwrap();
+            P2PoolAddress::from_witness_program(signet.witness_program(), Network::Bitcoin)
+                .unwrap();
 
         let mut signet_encoded = Vec::new();
         consensus_encode(&signet.witness_program(), &mut signet_encoded).unwrap();
@@ -315,7 +319,7 @@ mod tests {
         assert_eq!(encoded[0], 0);
         assert_eq!(encoded[1], 20);
         assert_eq!(consensus_decode(&mut encoded.as_slice()).unwrap(), p2wpkh);
-        assert!(Address::from_witness_program(p2wpkh, Network::Signet).is_err());
+        assert!(P2PoolAddress::from_witness_program(p2wpkh, Network::Signet).is_err());
     }
 
     #[test]

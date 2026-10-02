@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use crate::address::{Address as P2PoolAddress, AddressError};
+use crate::address::address::{AddressError, P2PoolAddress};
 use crate::config::PoolMode;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::stratum::{

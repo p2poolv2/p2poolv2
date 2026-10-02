@@ -17,7 +17,7 @@
 //! We manually parse the key value pairs. If we add more params we can switch
 //! to regex when needed.
 
-use crate::address::{Address, AddressError};
+use crate::address::address::{AddressError, P2PoolAddress};
 use crate::stratum::difficulty_adjuster::TARGET_DRR;
 use std::str::FromStr;
 
@@ -34,7 +34,7 @@ pub struct ParsedPassword {
     /// The distinction matters because authorize rejects a P2Poolv2 mode miner
     /// without an address, and telling someone who typoed their address that
     /// they supplied none would send them looking in the wrong place.
-    pub miner_address: Option<Result<Address, AddressError>>,
+    pub miner_address: Option<Result<P2PoolAddress, AddressError>>,
 }
 
 /// Parse the password string for `d=`, `th=` and `p2p=` options.
@@ -45,7 +45,7 @@ pub struct ParsedPassword {
 pub fn parse_password(password: &str) -> ParsedPassword {
     ParsedPassword {
         difficulty: parse_difficulty(password),
-        miner_address: extract_string_value(password, "p2p=").map(Address::from_str),
+        miner_address: extract_string_value(password, "p2p=").map(P2PoolAddress::from_str),
     }
 }
 

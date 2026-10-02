@@ -5,7 +5,7 @@
 use bitcoin::address::NetworkChecked;
 use bitcoin::{Address, Network};
 use bitcoindrpc::BitcoinRpcConfig;
-use p2poolv2_address::Address as ShareAddress;
+use p2poolv2_address::address::P2PoolAddress;
 use serde::Deserialize;
 use std::marker::PhantomData;
 use std::str::FromStr;
@@ -44,8 +44,8 @@ pub fn parse_address(address: &str, network: Network) -> Result<Address, ConfigE
 ///
 /// Kept separate from [`parse_address`] because the two live on different
 /// chains: this one owns share coinbase outputs, that one receives bitcoin.
-pub fn parse_share_address(address: &str, network: Network) -> Result<ShareAddress, ConfigError> {
-    ShareAddress::from_str(address)
+pub fn parse_share_address(address: &str, network: Network) -> Result<P2PoolAddress, ConfigError> {
+    P2PoolAddress::from_str(address)
         .map_err(|error| ConfigError {
             message: format!("Invalid share chain address: {error}"),
         })?
@@ -146,7 +146,7 @@ pub struct StratumConfig<State = Raw> {
     #[serde(skip)]
     pub fee_address_parsed: Option<Address<NetworkChecked>>,
     #[serde(skip)]
-    pub miner_address_parsed: Option<ShareAddress>,
+    pub miner_address_parsed: Option<P2PoolAddress>,
 
     #[serde(skip)]
     #[serde(default)]
@@ -205,7 +205,7 @@ impl StratumConfig<Raw> {
 
         // The network should be one we support an hrp for.
         if self.mode == PoolMode::P2poolv2 {
-            p2poolv2_address::expected_hrp(self.network).map_err(|error| ConfigError {
+            p2poolv2_address::address::expected_hrp(self.network).map_err(|error| ConfigError {
                 message: format!(
                     "Network {} cannot be used for a share chain: {error}",
                     self.network
@@ -286,7 +286,7 @@ impl StratumConfig<Parsed> {
     ///
     /// When present every share this pool mines is owned by this address, and a
     /// miner supplying a different one in `p2p=` is rejected at authorize.
-    pub fn miner_address(&self) -> Option<ShareAddress> {
+    pub fn miner_address(&self) -> Option<P2PoolAddress> {
         self.miner_address_parsed
     }
 }

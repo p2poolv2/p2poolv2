@@ -96,7 +96,7 @@ async fn main() -> ExitCode {
                     .as_ref()
                     .map(|address| {
                         address
-                            .parse::<p2poolv2_lib::address::Address>()
+                            .parse::<p2poolv2_lib::address::address::P2PoolAddress>()
                             .map_err(|error| error.to_string())
                             .and_then(|parsed| {
                                 parsed
@@ -111,7 +111,11 @@ async fn main() -> ExitCode {
                         .stratum
                         .miner_address
                         .as_ref()
-                        .and_then(|address| address.parse::<p2poolv2_lib::address::Address>().ok()),
+                        .and_then(|address| {
+                            address
+                                .parse::<p2poolv2_lib::address::address::P2PoolAddress>()
+                                .ok()
+                        }),
                     Err(error) => {
                         error!("Invalid sim share_address, not starting sim emitter: {error}");
                         None
