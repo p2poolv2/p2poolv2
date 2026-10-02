@@ -16,6 +16,7 @@ tools/log_dashboard/last_processed.txt
 
 config.toml
 config-dev.toml
+config-*-copy.toml
 
 
 spec/**/*pdf
