@@ -3,12 +3,21 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use libp2p::core::ConnectedPoint;
+use libp2p::swarm::ConnectionId;
 use libp2p::{Multiaddr, PeerId};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::time::Instant;
 use tracing::warn;
+
+/// Ping failures, as reported by libp2p, after which a connection is treated as
+/// unresponsive and closed.
+///
+/// libp2p's ping handler stays silent on the first real failure and reports from
+/// the second on, so 3 reported failures are 4 real ones -- roughly two to three
+/// minutes of a connection that negotiated but cannot exchange messages.
+pub(crate) const PING_FAILURE_THRESHOLD: u32 = 3;
 
 /// Direction of a peer connection.
 #[derive(Debug, Clone, Serialize)]
@@ -64,6 +73,9 @@ pub(crate) struct ConnectionTracker {
     pub(crate) connected_dial_addresses: Vec<Multiaddr>,
     /// IP addresses blocked from connecting
     blocked_ips: HashSet<IpAddr>,
+    /// Consecutive reported ping failures per connection; cleared on a
+    /// successful ping and when the connection closes.
+    ping_failures: HashMap<ConnectionId, u32>,
 }
 
 impl ConnectionTracker {
@@ -72,6 +84,7 @@ impl ConnectionTracker {
             connected_peers: HashMap::new(),
             connected_dial_addresses: Vec::new(),
             blocked_ips,
+            ping_failures: HashMap::new(),
         }
     }
 
@@ -126,6 +139,26 @@ impl ConnectionTracker {
             self.connected_dial_addresses.retain(|addr| addr != address);
         }
         self.connected_peers.remove(peer_id);
+    }
+
+    /// Record a reported ping failure on a connection and return the number of
+    /// consecutive failures so far.
+    pub(crate) fn record_ping_failure(&mut self, connection_id: ConnectionId) -> u32 {
+        let failures = self.ping_failures.entry(connection_id).or_insert(0);
+        *failures += 1;
+        *failures
+    }
+
+    /// Clear a connection's ping failure count, after a successful ping or when
+    /// the connection is closed.
+    pub(crate) fn clear_ping_failures(&mut self, connection_id: ConnectionId) {
+        self.ping_failures.remove(&connection_id);
+    }
+
+    /// Consecutive reported ping failures on a connection.
+    #[cfg(test)]
+    pub(crate) fn ping_failures(&self, connection_id: ConnectionId) -> u32 {
+        self.ping_failures.get(&connection_id).copied().unwrap_or(0)
     }
 
     /// Add an IP to the blocklist.
@@ -361,5 +394,42 @@ mod tests {
             1,
             "same address should not be added twice"
         );
+    }
+
+    #[test]
+    fn test_ping_failures_count_consecutively_per_connection() {
+        let mut tracker = ConnectionTracker::new(HashSet::new());
+        let connection = ConnectionId::new_unchecked(1);
+
+        assert_eq!(tracker.record_ping_failure(connection), 1);
+        assert_eq!(tracker.record_ping_failure(connection), 2);
+        assert_eq!(
+            tracker.record_ping_failure(connection),
+            PING_FAILURE_THRESHOLD
+        );
+    }
+
+    #[test]
+    fn test_ping_failures_are_tracked_independently_per_connection() {
+        let mut tracker = ConnectionTracker::new(HashSet::new());
+        let failing = ConnectionId::new_unchecked(1);
+        let sibling = ConnectionId::new_unchecked(2);
+
+        tracker.record_ping_failure(failing);
+        tracker.record_ping_failure(failing);
+
+        assert_eq!(tracker.record_ping_failure(sibling), 1);
+    }
+
+    #[test]
+    fn test_clearing_ping_failures_restarts_the_count() {
+        let mut tracker = ConnectionTracker::new(HashSet::new());
+        let connection = ConnectionId::new_unchecked(1);
+        tracker.record_ping_failure(connection);
+        tracker.record_ping_failure(connection);
+
+        tracker.clear_ping_failures(connection);
+
+        assert_eq!(tracker.record_ping_failure(connection), 1);
     }
 }

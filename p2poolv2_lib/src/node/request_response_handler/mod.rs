@@ -139,7 +139,7 @@ impl RequestResponseHandler<ResponseChannel<Message>> {
                 request_id,
                 error: failure_error,
             } => {
-                debug!(
+                warn!(
                     "Outbound failure from peer {} on connection {}, request_id: {}, error: {:?}",
                     peer, connection_id, request_id, failure_error
                 );
@@ -151,7 +151,7 @@ impl RequestResponseHandler<ResponseChannel<Message>> {
                 request_id,
                 error: failure_error,
             } => {
-                debug!(
+                warn!(
                     "Inbound failure from peer {} on connection {}, request_id: {}, error: {:?}",
                     peer, connection_id, request_id, failure_error
                 );
