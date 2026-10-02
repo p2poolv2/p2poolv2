@@ -199,6 +199,12 @@ impl<C: Send + Sync + 'static> RequestResponseHandler<C> {
         self.peer_handles.insert(peer_id, handle);
     }
 
+    /// Whether the peer has a request service.
+    #[cfg(test)]
+    pub(crate) fn has_peer(&self, peer_id: &PeerId) -> bool {
+        self.peer_handles.contains_key(peer_id)
+    }
+
     /// Remove all state for a disconnected peer.
     ///
     /// Drops the peer handle, which closes the channel and causes

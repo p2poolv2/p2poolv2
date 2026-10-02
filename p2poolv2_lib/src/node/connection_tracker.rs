@@ -67,10 +67,14 @@ fn extract_ip_from_multiaddr(address: &Multiaddr) -> Option<IpAddr> {
 
 /// Tracks connected peers, their metadata, and the IP blocklist.
 pub(crate) struct ConnectionTracker {
-    /// Metadata for currently connected peers
+    /// Metadata for currently connected peers, from each peer's first
+    /// connection. A peer stays here until its last connection closes.
     connected_peers: HashMap<PeerId, PeerInfo>,
-    /// Tracks Multiaddrs of currently connected outbound peers for reconnection logic
-    pub(crate) connected_dial_addresses: Vec<Multiaddr>,
+    /// The peer last reached at each address we dialed. Configured dial peers
+    /// are bare addresses, so a peer's id is only known after a successful dial;
+    /// this lets the reconnector see a dial peer as connected however it is
+    /// connected, including over an inbound connection it opened to us.
+    dial_peer_ids: HashMap<Multiaddr, PeerId>,
     /// IP addresses blocked from connecting
     blocked_ips: HashSet<IpAddr>,
     /// Consecutive reported ping failures per connection; cleared on a
@@ -82,7 +86,7 @@ impl ConnectionTracker {
     pub(crate) fn new(blocked_ips: HashSet<IpAddr>) -> Self {
         Self {
             connected_peers: HashMap::new(),
-            connected_dial_addresses: Vec::new(),
+            dial_peer_ids: HashMap::new(),
             blocked_ips,
             ping_failures: HashMap::new(),
         }
@@ -117,10 +121,8 @@ impl ConnectionTracker {
             return ConnectionAction::Block;
         }
 
-        if let ConnectedPoint::Dialer { address, .. } = endpoint
-            && !self.connected_dial_addresses.contains(address)
-        {
-            self.connected_dial_addresses.push(address.clone());
+        if let ConnectedPoint::Dialer { address, .. } = endpoint {
+            self.dial_peer_ids.insert(address.clone(), peer_id);
         }
 
         let peer_info = PeerInfo {
@@ -129,16 +131,30 @@ impl ConnectionTracker {
             connected_at: Instant::now(),
             direction,
         };
-        self.connected_peers.insert(peer_id, peer_info.clone());
+        self.connected_peers
+            .entry(peer_id)
+            .or_insert_with(|| peer_info.clone());
         ConnectionAction::Accept(peer_info)
     }
 
-    /// Remove a peer from the tracker when the connection closes.
-    pub(crate) fn handle_closed(&mut self, peer_id: &PeerId, endpoint: &ConnectedPoint) {
-        if let ConnectedPoint::Dialer { address, .. } = endpoint {
-            self.connected_dial_addresses.retain(|addr| addr != address);
+    /// Record a closed connection. `remaining_connections` is libp2p's count of
+    /// connections still open to the peer; the peer is forgotten only when it
+    /// reaches zero, so closing one of several connections does not make a
+    /// still-connected peer look disconnected (which made the reconnector dial
+    /// it again on every close).
+    pub(crate) fn handle_closed(&mut self, peer_id: &PeerId, remaining_connections: u32) {
+        if remaining_connections == 0 {
+            self.connected_peers.remove(peer_id);
         }
-        self.connected_peers.remove(peer_id);
+    }
+
+    /// Dial addresses whose peer is currently connected, in either direction.
+    pub(crate) fn connected_dial_addresses(&self) -> Vec<Multiaddr> {
+        self.dial_peer_ids
+            .iter()
+            .filter(|(_, peer_id)| self.connected_peers.contains_key(*peer_id))
+            .map(|(address, _)| address.clone())
+            .collect()
     }
 
     /// Record a reported ping failure on a connection and return the number of
@@ -225,7 +241,7 @@ mod tests {
         let action = tracker.handle_established(peer_id, &endpoint);
         assert!(matches!(action, ConnectionAction::Accept(_)));
         assert_eq!(tracker.connected_peers.len(), 1);
-        assert_eq!(tracker.connected_dial_addresses.len(), 1);
+        assert_eq!(tracker.connected_dial_addresses().len(), 1);
 
         let info = &tracker.connected_peers[&peer_id];
         assert_eq!(info.ip, Some("1.2.3.4".parse().unwrap()));
@@ -242,7 +258,7 @@ mod tests {
         assert!(matches!(action, ConnectionAction::Accept(_)));
         assert_eq!(tracker.connected_peers.len(), 1);
         assert_eq!(
-            tracker.connected_dial_addresses.len(),
+            tracker.connected_dial_addresses().len(),
             0,
             "inbound connections should not be added to dial addresses"
         );
@@ -287,18 +303,61 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_closed_removes_peer() {
+    fn test_handle_closed_removes_peer_when_last_connection_closes() {
         let mut tracker = ConnectionTracker::new(HashSet::new());
         let peer_id = PeerId::random();
         let endpoint = make_dialer_endpoint("/ip4/1.2.3.4/tcp/46884");
 
         tracker.handle_established(peer_id, &endpoint);
         assert_eq!(tracker.connected_peers.len(), 1);
-        assert_eq!(tracker.connected_dial_addresses.len(), 1);
+        assert_eq!(tracker.connected_dial_addresses().len(), 1);
 
-        tracker.handle_closed(&peer_id, &endpoint);
+        tracker.handle_closed(&peer_id, 0);
         assert_eq!(tracker.connected_peers.len(), 0);
-        assert_eq!(tracker.connected_dial_addresses.len(), 0);
+        assert_eq!(tracker.connected_dial_addresses().len(), 0);
+    }
+
+    /// Closing one of two connections to a peer released its dial
+    /// address, so the reconnector dialed the still connected peer
+    /// again on every close.
+    #[test]
+    fn test_closing_one_of_two_connections_keeps_peer_connected() {
+        let mut tracker = ConnectionTracker::new(HashSet::new());
+        let peer_id = PeerId::random();
+        let endpoint = make_dialer_endpoint("/ip4/1.2.3.4/tcp/46884");
+        tracker.handle_established(peer_id, &endpoint);
+        tracker.handle_established(peer_id, &endpoint);
+
+        tracker.handle_closed(&peer_id, 1);
+
+        assert_eq!(tracker.connected_peers.len(), 1);
+        assert_eq!(
+            tracker.connected_dial_addresses(),
+            vec!["/ip4/1.2.3.4/tcp/46884".parse::<Multiaddr>().unwrap()],
+            "a dial peer with a connection still open must not be redialed"
+        );
+    }
+
+    /// A dial peer that is connected to us inbound is connected: the reconnector
+    /// must not open a second, outbound connection to it.
+    #[test]
+    fn test_dial_peer_connected_inbound_counts_as_connected() {
+        let mut tracker = ConnectionTracker::new(HashSet::new());
+        let peer_id = PeerId::random();
+        let dial_endpoint = make_dialer_endpoint("/ip4/1.2.3.4/tcp/46884");
+
+        // Learn the dial address's peer from an earlier outbound connection.
+        tracker.handle_established(peer_id, &dial_endpoint);
+        tracker.handle_closed(&peer_id, 0);
+        assert!(tracker.connected_dial_addresses().is_empty());
+
+        // The peer now connects to us instead.
+        tracker.handle_established(peer_id, &make_listener_endpoint("/ip4/1.2.3.4/tcp/51234"));
+
+        assert_eq!(
+            tracker.connected_dial_addresses(),
+            vec!["/ip4/1.2.3.4/tcp/46884".parse::<Multiaddr>().unwrap()]
+        );
     }
 
     #[test]
@@ -314,12 +373,12 @@ mod tests {
         tracker.handle_established(inbound_peer, &inbound_endpoint);
 
         assert_eq!(tracker.connected_peers.len(), 2);
-        assert_eq!(tracker.connected_dial_addresses.len(), 1);
+        assert_eq!(tracker.connected_dial_addresses().len(), 1);
 
-        tracker.handle_closed(&inbound_peer, &inbound_endpoint);
+        tracker.handle_closed(&inbound_peer, 0);
         assert_eq!(tracker.connected_peers.len(), 1);
         assert_eq!(
-            tracker.connected_dial_addresses.len(),
+            tracker.connected_dial_addresses().len(),
             1,
             "closing inbound should not remove outbound dial address"
         );
@@ -373,7 +432,7 @@ mod tests {
         let action = tracker.handle_established(peer_id, &endpoint);
         assert!(matches!(action, ConnectionAction::Block));
         assert_eq!(
-            tracker.connected_dial_addresses.len(),
+            tracker.connected_dial_addresses().len(),
             0,
             "blocked outbound should not leave a stale dial address"
         );
@@ -390,7 +449,7 @@ mod tests {
         tracker.handle_established(peer_b, &endpoint);
 
         assert_eq!(
-            tracker.connected_dial_addresses.len(),
+            tracker.connected_dial_addresses().len(),
             1,
             "same address should not be added twice"
         );
