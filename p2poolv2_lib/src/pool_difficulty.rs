@@ -15,8 +15,10 @@ use std::fmt;
 // The generated arithmetic trips these lints inside the external macro body,
 // where they cannot be fixed. An outer #[allow] on the macro invocation is
 // ignored, so the allow has to be an inner attribute on a wrapping module.
+// `deprecated`: uint 0.10's expansion calls `max_value()` and `std::isize::MAX`,
+// which Rust 1.99 reports as deprecated.
 mod u512 {
-    #![allow(clippy::manual_div_ceil, clippy::assign_op_pattern)]
+    #![allow(clippy::manual_div_ceil, clippy::assign_op_pattern, deprecated)]
 
     uint::construct_uint! {
         /// 512-bit unsigned integer used as an intermediate type for ASERT target
