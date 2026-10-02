@@ -7,6 +7,7 @@ pub mod behaviour;
 pub mod connection_tracker;
 pub mod emission_worker;
 pub mod organise_worker;
+pub mod p2p_health;
 pub mod peer_reconnector;
 pub mod request_response_handler;
 pub mod request_sender;
@@ -20,6 +21,7 @@ pub mod p2p_message_handlers;
 use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::monitoring_events::{MonitoringEvent, MonitoringEventSender, PeerResponse, PeerStatus};
 use crate::node::messages::Message;
+use crate::node::p2p_health::P2pHealth;
 use crate::node::p2p_message_handlers::receivers::block_receiver::BlockReceiverHandle;
 use crate::node::p2p_message_handlers::senders::build_handshake_message;
 use crate::node::request_response_handler::RequestResponseHandler;
@@ -303,6 +305,22 @@ impl Node {
             self.swarm.disconnect_peer_id(peer_id).unwrap_or_default();
         }
         Ok(())
+    }
+
+    /// Snapshot of P2P health counters for `/metrics`.
+    pub(crate) fn p2p_health(&self) -> P2pHealth {
+        P2pHealth {
+            connected_peers: self.connection_tracker.connected_peer_count(),
+            connections_total: self.connection_tracker.connections_total(),
+            ping_failures_total: self.connection_tracker.ping_failures_total(),
+            connections_closed_unresponsive_total: self
+                .connection_tracker
+                .connections_closed_unresponsive_total(),
+            outbound_failures_total: self.request_response_handler.outbound_failures_total(),
+            inbound_failures_total: self.request_response_handler.inbound_failures_total(),
+            responses_dropped_total: self.request_response_handler.responses_dropped_total(),
+            response_queue_depth: self.request_response_handler.response_queue_depth(),
+        }
     }
 
     /// Attempt to reconnect to any configured dial_peers that are not currently connected.
@@ -598,6 +616,7 @@ impl Node {
                     );
                     self.connection_tracker
                         .clear_ping_failures(event.connection);
+                    self.connection_tracker.record_unresponsive_close();
                     self.swarm.close_connection(event.connection);
                 }
             }
@@ -1009,6 +1028,10 @@ mod tests {
         // closed and its count reset.
         node.handle_ping_event(ping_failure(peer, connection));
         assert_eq!(node.connection_tracker.ping_failures(connection), 0);
+
+        let health = node.p2p_health();
+        assert_eq!(health.ping_failures_total, 3);
+        assert_eq!(health.connections_closed_unresponsive_total, 1);
     }
 
     #[tokio::test]

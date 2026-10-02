@@ -24,11 +24,12 @@ use p2poolv2_lib::{
 };
 use serde::Deserialize;
 use std::path::PathBuf;
+use std::time::Duration;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::oneshot;
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
-use tracing::{info, trace};
+use tracing::{info, trace, warn};
 
 #[derive(Clone)]
 pub(crate) struct AppState {
@@ -209,6 +210,11 @@ async fn health_check() -> String {
 ///
 /// The exposition also includes parsed coinbase outputs for showing
 /// the current coinbase payout distribution
+/// How long `/metrics` waits for the node's P2P health snapshot. The node
+/// answers from its event loop, which never blocks, so this only trips if the
+/// node has stopped; the scrape then omits the P2P series rather than hang.
+const P2P_HEALTH_TIMEOUT: Duration = Duration::from_secs(1);
+
 async fn metrics(State(state): State<Arc<AppState>>) -> String {
     //  Get base metrics
     let pool_metrics = state.metrics_handle.get_metrics().await;
@@ -250,6 +256,12 @@ async fn metrics(State(state): State<Arc<AppState>>) -> String {
             "sharechain_work_total {}\n",
             work_to_f64(total_work)
         ));
+    }
+
+    match tokio::time::timeout(P2P_HEALTH_TIMEOUT, state.node_handle.get_p2p_health()).await {
+        Ok(Ok(p2p_health)) => exposition.push_str(&p2p_health.exposition()),
+        Ok(Err(error)) => warn!("Failed to read P2P health for /metrics: {error}"),
+        Err(_) => warn!("Timed out reading P2P health for /metrics"),
     }
 
     exposition
@@ -448,6 +460,17 @@ mod tests {
             auth_token: None,
         });
         (state, temp_dir)
+    }
+
+    #[tokio::test]
+    async fn test_metrics_endpoint_includes_p2p_health() {
+        let node_handle = NodeHandle::new_for_test();
+        let (state, _temp_dir) = build_test_state(node_handle).await;
+
+        let exposition = metrics(State(state)).await;
+
+        assert!(exposition.contains("# TYPE p2p_connected_peers gauge\np2p_connected_peers 0\n"));
+        assert!(exposition.contains("p2p_connections_closed_unresponsive_total 0\n"));
     }
 
     #[tokio::test]

@@ -17,6 +17,7 @@ use crate::node::SwarmSend;
 use crate::node::emission_worker::EmissionWorker;
 use crate::node::messages::Message;
 use crate::node::organise_worker::{OrganiseWorker, create_organise_channel};
+use crate::node::p2p_health::P2pHealth;
 use crate::node::p2p_message_handlers::receivers::block_receiver::{
     BlockReceiver, create_block_receiver_channel,
 };
@@ -152,6 +153,13 @@ impl NodeHandle {
         Ok(rx.await?)
     }
 
+    /// Snapshot of P2P health counters.
+    pub async fn get_p2p_health(&self) -> Result<P2pHealth, Box<dyn Error + Send + Sync>> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx.send(Command::GetP2pHealth(tx)).await?;
+        Ok(rx.await?)
+    }
+
     /// List all blocked IPs.
     pub async fn get_blocked_ips(
         &self,
@@ -194,6 +202,9 @@ impl NodeHandle {
                     }
                     Command::GetBlockedIps(reply) => {
                         let _ = reply.send(Vec::new());
+                    }
+                    Command::GetP2pHealth(reply) => {
+                        let _ = reply.send(P2pHealth::default());
                     }
                 }
             }
@@ -254,6 +265,9 @@ impl NodeHandle {
                     }
                     Command::GetBlockedIps(reply) => {
                         let _ = reply.send(Vec::new());
+                    }
+                    Command::GetP2pHealth(reply) => {
+                        let _ = reply.send(P2pHealth::default());
                     }
                 }
             }
@@ -700,6 +714,11 @@ impl NodeActor {
                 info!("Unblocking IP {ip} via runtime command");
                 self.node.connection_tracker.unblock_ip(ip);
                 let _ = tx.send(());
+            }
+            Command::GetP2pHealth(tx) => {
+                if tx.send(self.node.p2p_health()).is_err() {
+                    error!("Failed to send GetP2pHealth response - receiver dropped");
+                }
             }
             Command::GetBlockedIps(tx) => {
                 let ips = self.node.connection_tracker.get_blocked_ips();
