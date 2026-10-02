@@ -455,9 +455,14 @@ Within a single `WriteBatch`, reads from the DB return pre-batch (committed) sta
      tiering"), then calls `validate_share_block()` or
      `validate_below_pplns_depth()`. Both return Ok early if the block already
      has `BlockValid` status
-  3. On success: sends `OrganiseEvent::Block` always; sends
-     `SwarmSend::BroadcastBlock` only when `is_current()` is true
-     (suppresses relay of historic blocks during initial sync)
+  3. On success: sends `OrganiseEvent::Block` always. Sends
+     `SwarmSend::BroadcastBlock` for locally mined blocks always, and for
+     blocks from peers only when `is_current()` is true (suppresses relay of
+     historic blocks during initial sync). The task holds its semaphore
+     permit through the broadcast, so the permits also bound how many
+     validated blocks can wait on `swarm_tx`; the node actor loop always
+     drains `swarm_tx` without blocking, so that wait is ordinary
+     backpressure and always completes
   4. On failure, branches on `FailureKind` (see the error-handling list under
      the Two-Event Model)
 
