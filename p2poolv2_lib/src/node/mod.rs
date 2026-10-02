@@ -296,9 +296,10 @@ impl Node {
 
     /// Attempt to reconnect to any configured dial_peers that are not currently connected.
     fn attempt_reconnections(&mut self) {
+        let connected_dial_addresses = self.connection_tracker.connected_dial_addresses();
         let addresses = self
             .peer_reconnector
-            .addresses_to_reconnect(&self.connection_tracker.connected_dial_addresses);
+            .addresses_to_reconnect(&connected_dial_addresses);
         for address in addresses {
             match self.swarm.dial(address.clone()) {
                 Ok(_) => {
@@ -365,6 +366,7 @@ impl Node {
                 peer_id,
                 connection_id,
                 endpoint,
+                num_established,
                 ..
             } => {
                 if let libp2p::core::ConnectedPoint::Dialer { ref address, .. } = endpoint {
@@ -377,6 +379,16 @@ impl Node {
                 {
                     ConnectionAction::Block => {
                         let _ = self.swarm.disconnect_peer_id(peer_id);
+                        return Ok(());
+                    }
+                    // A further connection to an already connected peer needs
+                    // none of the per-peer setup: re-running add_peer would
+                    // replace the peer's request service and drop its queue.
+                    ConnectionAction::Accept(ref peer_info) if num_established.get() > 1 => {
+                        info!(
+                            "{:?} connection {} to already connected peer {} ({} open)",
+                            peer_info.direction, connection_id, peer_id, num_established
+                        );
                         return Ok(());
                     }
                     ConnectionAction::Accept(ref peer_info) => {
@@ -410,12 +422,19 @@ impl Node {
             SwarmEvent::ConnectionClosed {
                 peer_id,
                 connection_id,
-                endpoint,
+                num_established,
                 ..
             } => {
-                info!("Disconnected from peer: {peer_id} on connection {connection_id}");
                 self.connection_tracker.clear_ping_failures(connection_id);
-                self.connection_tracker.handle_closed(&peer_id, &endpoint);
+                self.connection_tracker
+                    .handle_closed(&peer_id, num_established);
+                if num_established > 0 {
+                    info!(
+                        "Closed connection {connection_id} to peer {peer_id}, {num_established} still open"
+                    );
+                    return Ok(());
+                }
+                info!("Disconnected from peer: {peer_id} on connection {connection_id}");
                 self.swarm.behaviour_mut().remove_peer(&peer_id);
                 self.request_response_handler.remove_peer(&peer_id);
                 let _ = self
@@ -630,6 +649,7 @@ impl Node {
 #[cfg(test)]
 mod tests {
     use super::ChainStoreHandle;
+    use super::P2PoolBehaviourEvent;
     use crate::config::{
         ApiConfig, Config, LoggingConfig, NetworkConfig, StoreConfig, StratumConfig,
     };
@@ -1013,5 +1033,41 @@ mod tests {
 
         node.handle_ping_event(ping_failure(peer, connection));
         assert_eq!(node.connection_tracker.ping_failures(connection), 1);
+    }
+
+    fn connection_closed(
+        peer_id: PeerId,
+        connection: u64,
+        remaining: u32,
+    ) -> SwarmEvent<P2PoolBehaviourEvent> {
+        SwarmEvent::ConnectionClosed {
+            peer_id,
+            connection_id: ConnectionId::new_unchecked(connection as usize),
+            endpoint: libp2p::core::ConnectedPoint::Dialer {
+                address: "/ip4/1.2.3.4/tcp/46884".parse().unwrap(),
+                role_override: libp2p::core::Endpoint::Dialer,
+                port_use: libp2p::core::transport::PortUse::New,
+            },
+            num_established: remaining,
+            cause: None,
+        }
+    }
+
+    /// Closing one of two connections to a peer must keep its request service:
+    /// removing it would drop the peer's queued requests while it is still
+    /// connected. Only the last close tears the peer down.
+    #[tokio::test]
+    async fn test_peer_torn_down_only_when_last_connection_closes() {
+        let mut node = build_test_node(build_test_config("/ip4/127.0.0.1/tcp/0", None));
+        let peer = PeerId::random();
+        node.request_response_handler.add_peer(peer);
+
+        node.handle_swarm_event(connection_closed(peer, 1, 1))
+            .unwrap();
+        assert!(node.request_response_handler.has_peer(&peer));
+
+        node.handle_swarm_event(connection_closed(peer, 2, 0))
+            .unwrap();
+        assert!(!node.request_response_handler.has_peer(&peer));
     }
 }
