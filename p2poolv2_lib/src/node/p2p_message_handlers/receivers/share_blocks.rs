@@ -425,8 +425,10 @@ mod tests {
         );
     }
 
-    /// MAX_MSG_SIZE, so a single minimum-difficulty share could otherwise pin
-    /// megabytes in the pending set.
+    /// An oversized block is rejected before it is buffered. Without that check
+    /// the only bound on a received block is the transport's
+    /// `MAX_P2P_MESSAGE_SIZE`, so a single minimum-difficulty share could
+    /// otherwise pin up to a megabyte in the pending set.
     #[tokio::test]
     async fn test_handle_share_block_oversized_rejected_before_buffering() {
         let mut chain_store_handle = ChainStoreHandle::default();

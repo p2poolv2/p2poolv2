@@ -342,7 +342,7 @@ pub trait ShareValidator {
     /// Part of the ddos prevention gate alongside `validate_header_minimum_difficulty`:
     /// it reads only the block's own transactions, so it can run before the
     /// block is buffered or stored. Without it the only size bound on an
-    /// incoming block is the transport's `MAX_MSG_SIZE`, letting one
+    /// incoming block is the transport's `MAX_P2P_MESSAGE_SIZE`, letting one
     /// minimum-difficulty share pin far more memory than it costs to produce.
     fn validate_block_size(&self, share: &ShareBlock) -> Result<(), ValidationError>;
 

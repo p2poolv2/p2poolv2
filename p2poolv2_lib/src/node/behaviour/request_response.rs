@@ -5,12 +5,11 @@
 use async_trait::async_trait;
 use bitcoin::consensus::{Decodable, Encodable};
 use bitcoin::hashes::{Hash, sha256d};
-use bitcoin::p2p::message::MAX_MSG_SIZE;
 use libp2p::futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use libp2p::request_response::{Codec, OutboundFailure};
 use std::io;
 
-use crate::node::messages::{Message, RawMessage};
+use crate::node::messages::{MAX_P2P_MESSAGE_SIZE, Message, RawMessage};
 use bitcoin::BlockHash;
 
 /// Hex characters of the share chain genesis hash carried in the protocol
@@ -104,7 +103,7 @@ impl ConsensusCodec {
         // Reject an oversized advertised length before allocating, so a
         // malicious peer cannot trigger a multi-gigabyte allocation / OOM.
         let payload_len = payload_len as usize;
-        if payload_len > MAX_MSG_SIZE {
+        if payload_len > MAX_P2P_MESSAGE_SIZE {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "Payload length exceeds maximum message size",

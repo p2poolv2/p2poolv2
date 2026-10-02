@@ -6,10 +6,21 @@ use crate::shares::share_block::{ShareBlock, ShareHeader, Txids};
 use bitcoin::consensus::{Decodable, Encodable, encode};
 use bitcoin::hashes::{Hash, sha256d};
 use bitcoin::io::{Read, Write};
-use bitcoin::p2p::message::MAX_MSG_SIZE;
 use bitcoin::{BlockHash, Txid, VarInt};
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
+
+/// Largest P2P message payload this node will decode, in bytes.
+///
+/// The codec rejects a larger advertised length before allocating, so this
+/// bounds the memory one peer message can pin -- including responses queued for
+/// the response worker. Sized for P2Pool's own messages rather than bitcoin's
+/// 5 MB block-relay limit: the largest legitimate message is a `ShareHeaders`
+/// batch of `MAX_HEADERS_IN_RESPONSE` plus up to one height of overshoot
+/// (~760 KB of worst-case headers); a `ShareBlock` is bounded by its 200 KB
+/// transaction limit. `test_full_share_headers_response_fits_max_message_size`
+/// guards the margin.
+pub const MAX_P2P_MESSAGE_SIZE: usize = 1024 * 1024;
 
 /// Message type discriminants for determining the message type
 /// We use a single byte integer instead of bitcoin's 12 byte string
@@ -187,7 +198,7 @@ impl Decodable for ShareHeaderDeserializationWrapper {
 
     #[inline]
     fn consensus_decode<R: Read + ?Sized>(r: &mut R) -> Result<Self, encode::Error> {
-        Self::consensus_decode_from_finite_reader(&mut r.take(MAX_MSG_SIZE as u64))
+        Self::consensus_decode_from_finite_reader(&mut r.take(MAX_P2P_MESSAGE_SIZE as u64))
     }
 }
 
@@ -302,7 +313,7 @@ impl Decodable for RawMessage {
 
         // Reject an oversized advertised length before allocating, so a
         // malicious peer cannot trigger a multi-gigabyte allocation / OOM.
-        if payload_len as usize > MAX_MSG_SIZE {
+        if payload_len as usize > MAX_P2P_MESSAGE_SIZE {
             return Err(encode::Error::ParseFailed(
                 "Payload length exceeds maximum message size",
             ));
@@ -413,6 +424,10 @@ impl Decodable for GetData {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::node::p2p_message_handlers::MAX_HEADERS_IN_RESPONSE;
+    use crate::shares::validation::MAX_UNCLES;
+    use crate::store::dag_store::MAX_BLOCKS_PER_HEIGHT;
+    use crate::test_utils::TestShareBlockBuilder;
     use bitcoin::consensus::encode;
     use std::str::FromStr;
 
@@ -454,11 +469,43 @@ mod tests {
         assert!(result.is_err());
     }
 
+    /// The largest legitimate message -- a full `ShareHeaders` response of
+    /// worst-case headers -- must fit under `MAX_P2P_MESSAGE_SIZE`, or header
+    /// sync would be rejected by our own codec. Worst case per header: the
+    /// maximum uncles, and the longest address string (regtest P2WSH) in every
+    /// address field. The sender completes whole heights, so a response can
+    /// overshoot `MAX_HEADERS_IN_RESPONSE` by up to one dense height.
+    #[test]
+    fn test_full_share_headers_response_fits_max_message_size() {
+        let longest_address =
+            bitcoin::Address::p2wsh(&bitcoin::ScriptBuf::new(), bitcoin::Network::Regtest);
+        let mut header = TestShareBlockBuilder::new()
+            .uncles(vec![BlockHash::all_zeros(); MAX_UNCLES])
+            .build()
+            .header;
+        header.miner_bitcoin_address = longest_address.clone();
+        header.donation_address = Some(longest_address.clone());
+        header.donation = Some(u16::MAX);
+        header.fee_address = Some(longest_address);
+        header.fee = Some(u16::MAX);
+
+        let header_count = MAX_HEADERS_IN_RESPONSE + MAX_BLOCKS_PER_HEIGHT;
+        let message = Message::ShareHeaders(vec![header; header_count]);
+        let encoded = encode::serialize(&message);
+
+        assert!(
+            encoded.len() < MAX_P2P_MESSAGE_SIZE,
+            "a full ShareHeaders response is {} bytes, over the {} byte cap",
+            encoded.len(),
+            MAX_P2P_MESSAGE_SIZE
+        );
+    }
+
     #[test]
     fn test_raw_message_rejects_oversized_payload_len() {
         // A malicious peer advertises a payload length larger than the maximum
         // message size. Decoding must reject it without allocating the buffer.
-        let payload_len = (MAX_MSG_SIZE as u32) + 1;
+        let payload_len = (MAX_P2P_MESSAGE_SIZE as u32) + 1;
         let mut encoded = Vec::new();
         encoded.extend_from_slice(&payload_len.to_le_bytes());
         encoded.extend_from_slice(&[0u8; 4]); // checksum placeholder
