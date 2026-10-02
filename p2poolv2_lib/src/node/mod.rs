@@ -90,6 +90,17 @@ pub enum SwarmSend<C> {
 
 use connection_tracker::{ConnectionAction, ConnectionTracker, PING_FAILURE_THRESHOLD};
 
+/// Close a connection after this long with no streams in use and no protocol
+/// asking to keep it alive.
+///
+/// A backstop only. Identify exchanges every 5 minutes, which counts as
+/// activity, so a healthy but quiet connection is never reaped -- the timeout
+/// must stay above that interval. For the same reason it does not catch a
+/// connection that negotiated but cannot carry p2pool messages (identify
+/// keeps working there); closing on repeated ping failures handles that. This
+/// only reaps connections where everything, identify included, has gone quiet.
+const IDLE_CONNECTION_TIMEOUT_SECS: u64 = 600;
+
 /// Node is the main struct that represents the node
 struct Node {
     swarm: Swarm<P2PoolBehaviour>,
@@ -158,7 +169,7 @@ impl Node {
             .with_other_transport(|_| transport)?
             .with_behaviour(|_| behavior)?
             .with_swarm_config(|cfg| {
-                cfg.with_idle_connection_timeout(Duration::from_secs(u64::MAX))
+                cfg.with_idle_connection_timeout(Duration::from_secs(IDLE_CONNECTION_TIMEOUT_SECS))
             })
             .build();
 

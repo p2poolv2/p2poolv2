@@ -381,7 +381,12 @@ impl Default for NetworkConfig {
             max_pending_outgoing: 10,
             max_established_incoming: 50,
             max_established_outgoing: 50,
-            max_established_per_peer: 1,
+            // Two, not one: when two nodes dial each other at the same moment
+            // each can keep its own outbound connection and refuse the other's
+            // inbound one, so with a limit of one both connections close and
+            // they retry. A second slot lets both survive. More only duplicates
+            // traffic, as libp2p multiplexes every protocol over one connection.
+            max_established_per_peer: 2,
             max_workbase_per_second: 10,
             max_userworkbase_per_second: 10,
             max_miningshare_per_second: 100,
