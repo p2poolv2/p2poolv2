@@ -40,6 +40,7 @@ use libp2p::PeerId;
 use libp2p::SwarmBuilder;
 use libp2p::core::transport::Transport;
 use libp2p::identify;
+use libp2p::ping::Failure;
 use libp2p::request_response::ResponseChannel;
 use libp2p::tcp::Config as TcpConfig;
 use libp2p::{
@@ -87,7 +88,7 @@ pub enum SwarmSend<C> {
     Disconnect(PeerId),
 }
 
-use connection_tracker::{ConnectionAction, ConnectionTracker};
+use connection_tracker::{ConnectionAction, ConnectionTracker, PING_FAILURE_THRESHOLD};
 
 /// Node is the main struct that represents the node
 struct Node {
@@ -413,6 +414,7 @@ impl Node {
                 ..
             } => {
                 info!("Disconnected from peer: {peer_id} on connection {connection_id}");
+                self.connection_tracker.clear_ping_failures(connection_id);
                 self.connection_tracker.handle_closed(&peer_id, &endpoint);
                 self.swarm.behaviour_mut().remove_peer(&peer_id);
                 self.request_response_handler.remove_peer(&peer_id);
@@ -536,9 +538,38 @@ impl Node {
         match event.result {
             Ok(rtt) => {
                 debug!("Ping to {} succeeded, rtt: {:?}", event.peer, rtt);
+                self.connection_tracker
+                    .clear_ping_failures(event.connection);
             }
-            Err(ref error) => {
-                warn!("Ping to {} failed: {}", event.peer, error);
+            // The handler reports this once and then stops pinging; it says the
+            // peer lacks the protocol, not that the connection is dead, so it is
+            // not counted towards closing the connection.
+            Err(Failure::Unsupported) => {
+                warn!(
+                    "Peer {} on connection {} does not support ping",
+                    event.peer, event.connection
+                );
+            }
+            Err(error) => {
+                let failures = self
+                    .connection_tracker
+                    .record_ping_failure(event.connection);
+                warn!(
+                    "Ping to {} on connection {} failed ({failures} consecutive): {error}",
+                    event.peer, event.connection
+                );
+                // A connection can negotiate yet fail to exchange messages
+                // Close it so the reconnector dials a fresh one; only this connection,
+                // not a healthy sibling to the peer.
+                if failures >= PING_FAILURE_THRESHOLD {
+                    warn!(
+                        "Closing unresponsive connection {} to {} after {failures} ping failures",
+                        event.connection, event.peer
+                    );
+                    self.connection_tracker
+                        .clear_ping_failures(event.connection);
+                    self.swarm.close_connection(event.connection);
+                }
             }
         }
     }
@@ -610,7 +641,9 @@ mod tests {
     use crate::node::validation_worker::create_validation_channel;
     use bitcoindrpc::BitcoinRpcConfig;
     use futures::StreamExt;
-    use libp2p::swarm::SwarmEvent;
+    use libp2p::PeerId;
+    use libp2p::ping::Failure;
+    use libp2p::swarm::{ConnectionId, SwarmEvent};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
 
@@ -921,5 +954,64 @@ mod tests {
         node.handle_swarm_event(event).unwrap();
 
         assert_eq!(node.listen_port, Some(45678));
+    }
+
+    fn ping_failure(peer: PeerId, connection: ConnectionId) -> libp2p::ping::Event {
+        libp2p::ping::Event {
+            peer,
+            connection,
+            result: Err(Failure::Timeout),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_ping_threshold_closes_connection_and_clears_count() {
+        let mut node = build_test_node(build_test_config("/ip4/127.0.0.1/tcp/0", None));
+        let peer = PeerId::random();
+        let connection = ConnectionId::new_unchecked(7);
+
+        node.handle_ping_event(ping_failure(peer, connection));
+        node.handle_ping_event(ping_failure(peer, connection));
+        assert_eq!(node.connection_tracker.ping_failures(connection), 2);
+
+        // The third reported failure reaches the threshold: the connection is
+        // closed and its count reset.
+        node.handle_ping_event(ping_failure(peer, connection));
+        assert_eq!(node.connection_tracker.ping_failures(connection), 0);
+    }
+
+    #[tokio::test]
+    async fn test_ping_success_resets_failure_count() {
+        let mut node = build_test_node(build_test_config("/ip4/127.0.0.1/tcp/0", None));
+        let peer = PeerId::random();
+        let connection = ConnectionId::new_unchecked(7);
+
+        node.handle_ping_event(ping_failure(peer, connection));
+        node.handle_ping_event(ping_failure(peer, connection));
+        assert_eq!(node.connection_tracker.ping_failures(connection), 2);
+
+        node.handle_ping_event(libp2p::ping::Event {
+            peer,
+            connection,
+            result: Ok(Duration::from_millis(20)),
+        });
+        assert_eq!(node.connection_tracker.ping_failures(connection), 0);
+    }
+
+    #[tokio::test]
+    async fn test_ping_unsupported_is_not_counted() {
+        let mut node = build_test_node(build_test_config("/ip4/127.0.0.1/tcp/0", None));
+        let peer = PeerId::random();
+        let connection = ConnectionId::new_unchecked(7);
+
+        node.handle_ping_event(libp2p::ping::Event {
+            peer,
+            connection,
+            result: Err(Failure::Unsupported),
+        });
+        assert_eq!(node.connection_tracker.ping_failures(connection), 0);
+
+        node.handle_ping_event(ping_failure(peer, connection));
+        assert_eq!(node.connection_tracker.ping_failures(connection), 1);
     }
 }
