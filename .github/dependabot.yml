@@ -8,6 +8,14 @@ updates:
       day: "monday"
       time: "06:08"
     open-pull-requests-limit: 5
+    # Wait before proposing a release: most churn (follow-up patches, yanks,
+    # compromised publishes) happens in its first days. Security updates are
+    # not subject to cooldown, so advisories still arrive immediately.
+    cooldown:
+      default-days: 7
+      semver-major-days: 30
+      semver-minor-days: 7
+      semver-patch-days: 3
     commit-message:
       prefix: "deps"
     groups:
@@ -49,6 +57,8 @@ updates:
       interval: "weekly"
       day: "monday"
       time: "06:16"
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: "ci"
     groups:
@@ -61,5 +71,7 @@ updates:
       interval: "weekly"
       day: "monday"
       time: "06:22"
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: "docker"
