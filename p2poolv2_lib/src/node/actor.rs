@@ -42,6 +42,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::validation::{DefaultShareValidator, ShareValidator};
 use crate::stratum::emission::EmissionReceiver;
 use crate::stratum::work::notify::NotifySender;
+use bitcoin::BlockHash;
 use libp2p::futures::StreamExt;
 use libp2p::request_response::ResponseChannel;
 use std::collections::HashMap;
@@ -320,6 +321,9 @@ struct NodeActor {
     /// worker's name for logging, including on a panic (which yields no value).
     workers: JoinSet<Result<(), String>>,
     worker_names: HashMap<tokio::task::Id, &'static str>,
+    /// Confirmed tip seen at the last sync-retry tick (seeded when the loop
+    /// starts). The retry is skipped while the confirmed tip keeps moving.
+    last_retry_confirmed_tip: Option<BlockHash>,
 }
 
 impl NodeActor {
@@ -502,6 +506,7 @@ impl NodeActor {
                 metrics,
                 workers,
                 worker_names,
+                last_retry_confirmed_tip: None,
             },
             stopping_rx,
         ))
@@ -519,6 +524,7 @@ impl NodeActor {
             tokio::time::interval(std::time::Duration::from_secs(SYNC_RETRY_INTERVAL));
         sync_retry_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         sync_retry_interval.tick().await;
+        self.last_retry_confirmed_tip = self.chain_store_handle.get_chain_tip().ok();
 
         const KADEMLIA_BOOTSTRAP_INTERVAL_SECS: u64 = 300;
         let mut kademlia_bootstrap_interval = tokio::time::interval(
@@ -761,10 +767,22 @@ impl NodeActor {
         self.worker_names.get(&id).copied().unwrap_or("Worker")
     }
 
-    /// The chain tip is stale: ask a connected peer for more headers. Builds the
-    /// request from the store and sends it on the swarm directly (synchronous, so
-    /// the loop never awaits a send on `swarm_tx`).
+    /// The chain tip is stale: ask a connected peer for more headers, unless the
+    /// confirmed tip moved since the last tick. Builds the request from the store
+    /// and sends it on the swarm directly (synchronous, so the loop never awaits a
+    /// send on `swarm_tx`).
     fn on_sync_retry_tick(&mut self) {
+        let current_tip = self.chain_store_handle.get_chain_tip().ok();
+        let progressed = current_tip
+            .is_some_and(|tip| confirmed_tip_progressed(self.last_retry_confirmed_tip, tip));
+        if current_tip.is_some() {
+            self.last_retry_confirmed_tip = current_tip;
+        }
+        if progressed {
+            debug!("Confirmed tip advanced since last sync retry tick, skipping sync retry");
+            return;
+        }
+
         let peers = self.node.connected_peers();
         if !peers.is_empty() {
             let now_secs = SystemTime::now()
@@ -783,11 +801,19 @@ impl NodeActor {
     }
 }
 
+/// True when the confirmed tip changed since `last_seen`. A reorg changes the tip
+/// hash, so it counts as progress. Without a baseline (`None`) there is nothing
+/// to compare against, so it is not progress and the sync retry still fires.
+fn confirmed_tip_progressed(last_seen: Option<BlockHash>, current: BlockHash) -> bool {
+    last_seen.is_some_and(|seen| seen != current)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::accounting::payout::simple_pplns::SimplePplnsShare;
     use crate::command::GetPplnsShareQuery;
+    use std::str::FromStr;
     use tokio::sync::mpsc;
 
     #[tokio::test]
@@ -849,5 +875,32 @@ mod tests {
 
         let result = node_handle.get_pplns_shares(query).await;
         assert_eq!(result.len(), 0);
+    }
+
+    #[test]
+    fn test_confirmed_tip_progressed_when_tip_changed() {
+        let previous_tip =
+            BlockHash::from_str("00000000a3bbe4fd1da16a29dbdaba01cc35d6fc74ee17f794cf3aab94f7aaa0")
+                .unwrap();
+        let current_tip =
+            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+                .unwrap();
+        assert!(confirmed_tip_progressed(Some(previous_tip), current_tip));
+    }
+
+    #[test]
+    fn test_confirmed_tip_not_progressed_when_tip_unchanged() {
+        let tip =
+            BlockHash::from_str("00000000a3bbe4fd1da16a29dbdaba01cc35d6fc74ee17f794cf3aab94f7aaa0")
+                .unwrap();
+        assert!(!confirmed_tip_progressed(Some(tip), tip));
+    }
+
+    #[test]
+    fn test_confirmed_tip_not_progressed_without_baseline() {
+        let tip =
+            BlockHash::from_str("00000000a3bbe4fd1da16a29dbdaba01cc35d6fc74ee17f794cf3aab94f7aaa0")
+                .unwrap();
+        assert!(!confirmed_tip_progressed(None, tip));
     }
 }

@@ -21,7 +21,7 @@ The arms:
 | `swarm_rx` (outbound ops) | `on_swarm_send` | Executes `SwarmSend` from workers: `send_request`, `send_response`, block broadcast, disconnect |
 | `command_rx` (control plane) | `on_command` | `GetPeers`, `SendToPeer`, `BlockIp`, `Shutdown`, ... answered on oneshot replies |
 | `workers.join_next_with_id()` | `on_worker_exit` | Supervision: a fatal error or panic in any worker stops the node |
-| reconnect / sync-retry / kademlia intervals | inline / `on_sync_retry_tick` | Periodic swarm maintenance |
+| reconnect / sync-retry / kademlia intervals | inline / `on_sync_retry_tick` | Periodic swarm maintenance. The sync retry (60s, only while not current) is skipped while the confirmed tip keeps moving: during body sync each retry reply re-runs the missing-block scan on the ResponseWorker and stalls block responses, and every case the retry rescues (rejected batch, dead peer, dropped body, drained fetcher) stops the confirmed tip anyway |
 
 The invariant is enforced by types: `handle_swarm_event` and the
 request-response handlers are plain `fn`s, so an `.await` on a channel send
