@@ -1,0 +1,9 @@
+# GitHub Linguist: .rs is ambiguous between Rust and RenderScript.
+*.rs linguist-language=Rust
+
+# Genesis bitcoin blocks as hex string literals, pulled in via include!.
+# Data, not code: keep them out of language stats and collapse them in diffs.
+p2poolv2_lib/src/shares/genesis/main.rs linguist-generated=true
+p2poolv2_lib/src/shares/genesis/testnet4.rs linguist-generated=true
+p2poolv2_lib/src/shares/genesis/signet.rs linguist-generated=true
+p2poolv2_lib/src/shares/genesis/regtest.rs linguist-generated=true
