@@ -553,15 +553,17 @@ impl ChainStoreHandle {
         Ok(locator)
     }
 
-    /// The block to mine the next share on: the higher-work of the confirmed
-    /// tip and the highest-work `BlockValid` block, ties broken by the
-    /// lexicographically smallest hash.
+    /// The block to mine the next share on: the highest-work `BlockValid`
+    /// descendant of the confirmed tip, ties broken by the lexicographically
+    /// smallest hash, or the confirmed tip itself when nothing above it is
+    /// validated.
     ///
-    /// Mining on the highest-work validated block -- which may lead or fork
-    /// off the confirmed chain -- keeps honest miners building on validated
-    /// work even when an attacker's unvalidatable high-work chain stalls
-    /// confirmation. When no block is `BlockValid` yet (or the confirmed tip
-    /// out-works it) the confirmed tip is used.
+    /// Mining on the highest-work validated block -- which may sit off the
+    /// candidate chain -- keeps honest miners building on validated work even
+    /// when an attacker's unvalidatable high-work chain stalls confirmation.
+    /// Each share then adds work to the validated branch, so once that branch
+    /// out-works the candidate tip, the candidate chain reorgs onto it and
+    /// confirmation follows.
     pub fn get_mining_base(&self) -> Result<BlockHash, StoreError> {
         let store = self.store_handle.store();
         let top_confirmed = store.get_top_confirmed()?;
@@ -573,27 +575,6 @@ impl ChainStoreHandle {
             BlockValidSearch::NotFound { visited } => {
                 warn!(
                     "Mining on confirmed tip {}: none of the {visited} blocks above it is BlockValid",
-                    top_confirmed.hash
-                );
-                Ok(top_confirmed.hash)
-            }
-            // The bound caps the work the search does; it does not discard an
-            // answer already found. Falling back to the confirmed tip here
-            // would strand miners on it in exactly the case the search exists
-            // for -- a large unvalidatable subtree above the tip.
-            BlockValidSearch::BoundReached {
-                visited,
-                best: Some(blockhash),
-            } => {
-                warn!("Mining on {blockhash}: search truncated after {visited} blocks");
-                Ok(blockhash)
-            }
-            BlockValidSearch::BoundReached {
-                visited,
-                best: None,
-            } => {
-                warn!(
-                    "Mining on confirmed tip {}: gave up searching for a validated block after {visited} blocks",
                     top_confirmed.hash
                 );
                 Ok(top_confirmed.hash)
