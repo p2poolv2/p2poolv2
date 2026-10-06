@@ -120,6 +120,20 @@ impl Store {
         Ok(())
     }
 
+    /// Store the coinbase merkle branches of headers received without their
+    /// bodies, so the node can serve those headers on: a header is only
+    /// accepted with the branch its coinbase proof is checked against.
+    pub(crate) fn add_header_template_merkle_branches(
+        &self,
+        entries: &[(BlockHash, Vec<TxMerkleNode>)],
+        batch: &mut rocksdb::WriteBatch,
+    ) -> Result<(), StoreError> {
+        for (blockhash, branches) in entries {
+            self.add_template_merkle_branches(blockhash, &MerkleBranches(branches.clone()), batch)?;
+        }
+        Ok(())
+    }
+
     /// Store template merkle branches for a share block.
     ///
     /// Key is the consensus-serialized blockhash, value is the

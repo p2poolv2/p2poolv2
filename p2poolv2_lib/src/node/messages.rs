@@ -2,12 +2,14 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+use crate::shares::coinbase_proof::MAX_COINBASE_MERKLE_BRANCH_LENGTH;
 use crate::shares::share_block::{ShareBlock, ShareHeader, Txids};
 use bitcoin::consensus::{Decodable, Encodable, encode};
 use bitcoin::hashes::{Hash, sha256d};
 use bitcoin::io::{Read, Write};
-use bitcoin::{BlockHash, Txid, VarInt};
+use bitcoin::{BlockHash, TxMerkleNode, Txid, VarInt};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt::Display;
 
 /// Largest P2P message payload this node will decode, in bytes.
@@ -59,7 +61,7 @@ pub enum Message {
     NotFound(GetData),
     GetShareHeaders(Vec<BlockHash>, BlockHash),
     GetShareBlocks(Vec<BlockHash>, BlockHash),
-    ShareHeaders(Vec<ShareHeader>),
+    ShareHeaders(ShareHeaderBatch),
     ShareBlock(ShareBlock),
     GetData(GetData),
     Transaction(bitcoin::Transaction),
@@ -159,41 +161,145 @@ impl Display for Message {
     }
 }
 
-struct ShareHeaderSerializationWrapper<'a>(&'a Vec<ShareHeader>);
+/// A `ShareHeaders` response: headers, each with the coinbase merkle branch
+/// its `CoinbaseProof` is checked against.
+///
+/// Shares mined on one block template share a branch, so each distinct branch
+/// is sent once in `branches` and every header names its branch by index. The
+/// table belongs to this message alone: a header never refers to another
+/// message's table, so dropped, reordered or retried responses cannot leave a
+/// header without its branch. Decoding rejects an index outside the table, so
+/// `branch` never fails on a decoded batch.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ShareHeaderBatch {
+    headers: Vec<ShareHeader>,
+    /// Index into `branches` for the header at the same position.
+    branch_indexes: Vec<u16>,
+    branches: Vec<Vec<TxMerkleNode>>,
+}
 
-impl<'a> Encodable for ShareHeaderSerializationWrapper<'a> {
+impl ShareHeaderBatch {
+    /// Build a batch from headers and their coinbase merkle branches,
+    /// storing each distinct branch once.
+    pub fn from_headers_with_branches(entries: Vec<(ShareHeader, Vec<TxMerkleNode>)>) -> Self {
+        let mut headers = Vec::with_capacity(entries.len());
+        let mut branch_indexes = Vec::with_capacity(entries.len());
+        let mut branches: Vec<Vec<TxMerkleNode>> = Vec::new();
+        let mut index_of_branch: HashMap<Vec<TxMerkleNode>, u16> =
+            HashMap::with_capacity(entries.len());
+        for (header, branch) in entries {
+            let index = match index_of_branch.get(&branch) {
+                Some(index) => *index,
+                None => {
+                    let index = branches.len() as u16;
+                    index_of_branch.insert(branch.clone(), index);
+                    branches.push(branch);
+                    index
+                }
+            };
+            headers.push(header);
+            branch_indexes.push(index);
+        }
+        Self {
+            headers,
+            branch_indexes,
+            branches,
+        }
+    }
+
+    /// The headers, in message order.
+    pub fn headers(&self) -> &[ShareHeader] {
+        &self.headers
+    }
+
+    /// The coinbase merkle branch of the header at `position`.
+    pub fn branch(&self, position: usize) -> &[TxMerkleNode] {
+        &self.branches[self.branch_indexes[position] as usize]
+    }
+
+    /// Number of distinct branches carried.
+    pub fn branch_count(&self) -> usize {
+        self.branches.len()
+    }
+
+    /// Each header's hash with its branch, for storing the branches of
+    /// headers held without their bodies.
+    pub fn blockhashes_with_branches(&self) -> Vec<(BlockHash, Vec<TxMerkleNode>)> {
+        self.headers
+            .iter()
+            .enumerate()
+            .map(|(position, header)| (header.block_hash(), self.branch(position).to_vec()))
+            .collect()
+    }
+
+    pub fn len(&self) -> usize {
+        self.headers.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.headers.is_empty()
+    }
+}
+
+impl Encodable for ShareHeaderBatch {
     #[inline]
     fn consensus_encode<W: Write + ?Sized>(&self, w: &mut W) -> Result<usize, bitcoin::io::Error> {
-        let mut len = 0;
-        len += VarInt::from(self.0.len()).consensus_encode(w)?;
-        for share_header in self.0.iter() {
-            len += share_header.consensus_encode(w)?;
-            len += 0u8.consensus_encode(w)?;
+        let mut len = VarInt::from(self.branches.len()).consensus_encode(w)?;
+        for branch in &self.branches {
+            len += VarInt::from(branch.len()).consensus_encode(w)?;
+            for node in branch {
+                len += node.consensus_encode(w)?;
+            }
+        }
+        len += VarInt::from(self.headers.len()).consensus_encode(w)?;
+        for (header, branch_index) in self.headers.iter().zip(&self.branch_indexes) {
+            len += header.consensus_encode(w)?;
+            len += branch_index.consensus_encode(w)?;
         }
         Ok(len)
     }
 }
 
-struct ShareHeaderDeserializationWrapper(Vec<ShareHeader>);
-
-impl Decodable for ShareHeaderDeserializationWrapper {
+impl Decodable for ShareHeaderBatch {
     #[inline]
     fn consensus_decode_from_finite_reader<R: Read + ?Sized>(
         r: &mut R,
     ) -> Result<Self, encode::Error> {
-        let len = VarInt::consensus_decode(r)?.0;
-        // should be above usual number of items to avoid
-        // allocation
-        let mut ret = Vec::with_capacity(core::cmp::min(1024 * 16, len as usize));
-        for _ in 0..len {
-            ret.push(Decodable::consensus_decode(r)?);
-            if u8::consensus_decode(r)? != 0u8 {
+        // The reader is bounded by MAX_P2P_MESSAGE_SIZE, so the counts only
+        // need capping for the initial allocations.
+        let branch_count = VarInt::consensus_decode(r)?.0 as usize;
+        let mut branches = Vec::with_capacity(core::cmp::min(branch_count, 1024 * 16));
+        for _ in 0..branch_count {
+            let node_count = VarInt::consensus_decode(r)?.0 as usize;
+            if node_count > MAX_COINBASE_MERKLE_BRANCH_LENGTH {
                 return Err(encode::Error::ParseFailed(
-                    "Headers message should not contain transactions",
+                    "Coinbase merkle branch too long",
                 ));
             }
+            let mut branch = Vec::with_capacity(node_count);
+            for _ in 0..node_count {
+                branch.push(TxMerkleNode::consensus_decode(r)?);
+            }
+            branches.push(branch);
         }
-        Ok(ShareHeaderDeserializationWrapper(ret))
+        let header_count = VarInt::consensus_decode(r)?.0 as usize;
+        let mut headers = Vec::with_capacity(core::cmp::min(header_count, 1024 * 16));
+        let mut branch_indexes = Vec::with_capacity(core::cmp::min(header_count, 1024 * 16));
+        for _ in 0..header_count {
+            headers.push(ShareHeader::consensus_decode(r)?);
+            let branch_index = u16::consensus_decode(r)?;
+            if branch_index as usize >= branches.len() {
+                return Err(encode::Error::ParseFailed(
+                    "Share header names a branch outside the batch",
+                ));
+            }
+            branch_indexes.push(branch_index);
+        }
+        Ok(Self {
+            headers,
+            branch_indexes,
+            branches,
+        })
     }
 
     #[inline]
@@ -230,7 +336,7 @@ impl Encodable for Message {
             }
             Message::ShareHeaders(headers) => {
                 let mut len = SHARE_HEADERS.consensus_encode(w)?;
-                len += ShareHeaderSerializationWrapper(headers).consensus_encode(w)?;
+                len += headers.consensus_encode(w)?;
                 Ok(len)
             }
             Message::ShareBlock(block) => {
@@ -277,9 +383,9 @@ impl Decodable for Message {
                 Vec::<BlockHash>::consensus_decode(r)?,
                 BlockHash::consensus_decode(r)?,
             )),
-            SHARE_HEADERS => Ok(Message::ShareHeaders(
-                ShareHeaderDeserializationWrapper::consensus_decode(r)?.0,
-            )),
+            SHARE_HEADERS => Ok(Message::ShareHeaders(ShareHeaderBatch::consensus_decode(
+                r,
+            )?)),
             SHARE_BLOCK => Ok(Message::ShareBlock(ShareBlock::consensus_decode(r)?)),
             GET_DATA => Ok(Message::GetData(GetData::consensus_decode(r)?)),
             TRANSACTION => Ok(Message::Transaction(
@@ -427,7 +533,7 @@ mod tests {
     use crate::node::p2p_message_handlers::MAX_HEADERS_IN_RESPONSE;
     use crate::shares::validation::MAX_UNCLES;
     use crate::store::dag_store::MAX_BLOCKS_PER_HEIGHT;
-    use crate::test_utils::TestShareBlockBuilder;
+    use crate::test_utils::{TestShareBlockBuilder, share_header_batch_with_empty_branches};
     use bitcoin::consensus::encode;
     use std::str::FromStr;
 
@@ -490,7 +596,10 @@ mod tests {
         header.fee = Some(u16::MAX);
 
         let header_count = MAX_HEADERS_IN_RESPONSE + MAX_BLOCKS_PER_HEIGHT;
-        let message = Message::ShareHeaders(vec![header; header_count]);
+        let message = Message::ShareHeaders(share_header_batch_with_empty_branches(vec![
+                header;
+                header_count
+            ]));
         let encoded = encode::serialize(&message);
 
         assert!(
@@ -784,5 +893,75 @@ mod tests {
 
         let decoded = Message::consensus_decode(&mut &encoded[..]).unwrap();
         assert_eq!(decoded, Message::Ack);
+    }
+
+    /// Shares mined on one template share a coinbase branch, so the batch
+    /// carries it once.
+    #[test]
+    fn test_share_header_batch_stores_shared_branch_once() {
+        let first = TestShareBlockBuilder::new().nonce(1).build().header;
+        let second = TestShareBlockBuilder::new().nonce(2).build().header;
+        let branch = vec![bitcoin::TxMerkleNode::from_byte_array([0x42; 32])];
+
+        let batch = ShareHeaderBatch::from_headers_with_branches(vec![
+            (first, branch.clone()),
+            (second, branch.clone()),
+        ]);
+
+        assert_eq!(batch.len(), 2);
+        assert_eq!(batch.branch_count(), 1);
+        assert_eq!(batch.branch(0), branch.as_slice());
+        assert_eq!(batch.branch(1), branch.as_slice());
+    }
+
+    #[test]
+    fn test_share_header_batch_keeps_distinct_branches_apart() {
+        let first = TestShareBlockBuilder::new().nonce(1).build().header;
+        let second = TestShareBlockBuilder::new().nonce(2).build().header;
+        let first_branch = vec![bitcoin::TxMerkleNode::from_byte_array([0x42; 32])];
+        let second_branch = vec![bitcoin::TxMerkleNode::from_byte_array([0x43; 32])];
+
+        let batch = ShareHeaderBatch::from_headers_with_branches(vec![
+            (first, first_branch.clone()),
+            (second, second_branch.clone()),
+        ]);
+
+        assert_eq!(batch.branch_count(), 2);
+        assert_eq!(batch.branch(0), first_branch.as_slice());
+        assert_eq!(batch.branch(1), second_branch.as_slice());
+    }
+
+    #[test]
+    fn test_share_headers_message_round_trips_with_branches() {
+        let first = TestShareBlockBuilder::new().nonce(1).build().header;
+        let second = TestShareBlockBuilder::new().nonce(2).build().header;
+        let branch = vec![
+            bitcoin::TxMerkleNode::from_byte_array([0x42; 32]),
+            bitcoin::TxMerkleNode::from_byte_array([0x43; 32]),
+        ];
+        let message = Message::ShareHeaders(ShareHeaderBatch::from_headers_with_branches(vec![
+            (first, branch.clone()),
+            (second, Vec::new()),
+        ]));
+
+        let decoded: Message = encode::deserialize(&encode::serialize(&message)).unwrap();
+
+        assert_eq!(decoded, message);
+    }
+
+    /// A header naming a branch the batch does not carry is a malformed
+    /// message, rejected at decode so a decoded batch always resolves.
+    #[test]
+    fn test_share_header_batch_decode_rejects_branch_index_outside_table() {
+        let header = TestShareBlockBuilder::new().build().header;
+        let mut bytes = Vec::new();
+        VarInt::from(0usize).consensus_encode(&mut bytes).unwrap();
+        VarInt::from(1usize).consensus_encode(&mut bytes).unwrap();
+        header.consensus_encode(&mut bytes).unwrap();
+        0u16.consensus_encode(&mut bytes).unwrap();
+
+        let result: Result<ShareHeaderBatch, _> = encode::deserialize(&bytes);
+
+        assert!(result.is_err());
     }
 }

@@ -654,6 +654,21 @@ pub fn load_share_headers_test_data() -> serde_json::Value {
     serde_json::from_str(&json_string).unwrap()
 }
 
+/// Wrap headers in a `ShareHeaderBatch` where every header has an empty
+/// coinbase merkle branch: the branch of a block template holding only the
+/// coinbase, as every `TestShareBlockBuilder` block is.
+#[cfg(test)]
+pub fn share_header_batch_with_empty_branches(
+    headers: Vec<ShareHeader>,
+) -> crate::node::messages::ShareHeaderBatch {
+    crate::node::messages::ShareHeaderBatch::from_headers_with_branches(
+        headers
+            .into_iter()
+            .map(|header| (header, Vec::new()))
+            .collect(),
+    )
+}
+
 /// Build a ShareBlock from a header with empty transactions.
 #[cfg(test)]
 pub fn empty_share_block_from_header(header: ShareHeader) -> ShareBlock {

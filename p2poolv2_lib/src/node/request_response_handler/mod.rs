@@ -405,7 +405,10 @@ mod tests {
     #[mockall_double::double]
     use crate::shares::chain::chain_store_handle::ChainStoreHandle;
     use crate::shares::validation::MockDefaultShareValidator;
-    use crate::test_utils::{TestShareBlockBuilder, valid_share_block_from_fixture};
+    use crate::test_utils::{
+        TestShareBlockBuilder, share_header_batch_with_empty_branches,
+        valid_share_block_from_fixture,
+    };
     use bitcoin::hashes::Hash as _;
     use bitcoin::{BlockHash, CompactTarget};
     use tokio::sync::mpsc;
@@ -528,7 +531,7 @@ mod tests {
         let result = handler.dispatch_response(
             peer_id,
             ConnectionId::new_unchecked(1),
-            Message::ShareHeaders(share_headers),
+            Message::ShareHeaders(share_header_batch_with_empty_branches(share_headers)),
         );
 
         assert!(result.is_ok());
@@ -765,6 +768,8 @@ mod tests {
             ];
             mock.expect_get_headers_for_locator()
                 .returning(move |_, _, _| Ok(headers.clone()));
+            mock.expect_get_template_merkle_branches()
+                .returning(|_| Ok(Vec::new()));
             mock
         });
 

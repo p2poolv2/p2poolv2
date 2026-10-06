@@ -14,7 +14,7 @@ use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::store::Store;
 use crate::store::stored_user::StoredUser;
 use crate::store::transaction_store::PrevoutCheck;
-use bitcoin::{BlockHash, Work};
+use bitcoin::{BlockHash, TxMerkleNode, Work};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::oneshot;
@@ -333,6 +333,21 @@ impl StoreHandle {
         reply_rx.await.map_err(|_| StoreError::ChannelClosed)?
     }
 
+    /// Store the coinbase merkle branches of a batch of synced headers.
+    pub async fn add_header_template_merkle_branches(
+        &self,
+        entries: Vec<(BlockHash, Vec<TxMerkleNode>)>,
+    ) -> Result<(), StoreError> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.write_tx
+            .send(WriteCommand::AddHeaderTemplateMerkleBranches {
+                entries,
+                reply: reply_tx,
+            })
+            .map_err(|_| StoreError::ChannelClosed)?;
+        reply_rx.await.map_err(|_| StoreError::ChannelClosed)?
+    }
+
     /// Mark a block BlockValid after it passes chain-context validation.
     pub async fn mark_block_valid(&self, blockhash: BlockHash) -> Result<(), StoreError> {
         let (reply_tx, reply_rx) = oneshot::channel();
@@ -401,6 +416,7 @@ mockall::mock! {
         pub async fn organise_block(&self) -> Result<Option<u32>, StoreError>;
         pub async fn mark_invalid(&self, blockhash: BlockHash) -> Result<(), StoreError>;
         pub async fn mark_block_valid(&self, blockhash: BlockHash) -> Result<(), StoreError>;
+        pub async fn add_header_template_merkle_branches(&self, entries: Vec<(BlockHash, Vec<TxMerkleNode>)>) -> Result<(), StoreError>;
         pub async fn add_share_block(&self, share: ShareBlock) -> Result<(), StoreError>;
         pub async fn add_share_block_and_organise_header(&self, share: ShareBlock) -> Result<Option<u32>, StoreError>;
         pub async fn setup_genesis(&self, genesis: ShareBlock) -> Result<(), StoreError>;
