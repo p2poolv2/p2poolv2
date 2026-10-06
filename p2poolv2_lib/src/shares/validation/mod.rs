@@ -27,13 +27,16 @@ use crate::pool_difficulty::PoolDifficulty;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
+use crate::shares::coinbase_proof::CoinbaseProof;
 use crate::shares::share_block::{
     ShareBlock, ShareTransaction, SpendingPrevouts, extract_spending_prevouts,
     is_terminal_blockhash,
 };
 use crate::shares::share_commitment::ShareCommitment;
 use crate::shares::transactions::coinbase::build_sharechain_coinbase_transaction;
-use crate::shares::transactions::coinbase::{compute_commitment_hash, compute_witness_root};
+use crate::shares::transactions::coinbase::{
+    compute_commitment_hash, compute_non_coinbase_root, compute_witness_root,
+};
 use crate::shares::witness_commitment::WITNESS_COMMITMENT_LENGTH;
 use crate::sim_overrides;
 use crate::store::block_tx_metadata::{BlockMetadata, Status};
@@ -252,10 +255,11 @@ pub trait ShareValidator {
     ) -> Result<(), ValidationError>;
 
     /// Validate a share block that is below the PPLNS depth (in the
-    /// prune zone). Only checks PoW, uncles, block size, and
-    /// transaction count.  Skips coinbase, merkle root, witness
-    /// commitment, transaction structure, and script validation since
-    /// these blocks will not participate in PPLNS accounting.
+    /// prune zone). Only checks the coinbase proof and its non-coinbase
+    /// root, PoW, uncles, block size, and transaction count. Skips
+    /// coinbase, merkle root, witness commitment, transaction structure,
+    /// and script validation since these blocks will not participate in
+    /// PPLNS accounting.
     fn validate_below_pplns_depth(
         &self,
         share: &ShareBlock,
@@ -322,6 +326,21 @@ pub trait ShareValidator {
     fn validate_header_minimum_difficulty(
         &self,
         share_header: &ShareHeader,
+    ) -> Result<(), ValidationError>;
+
+    /// Validate that the header's share commitment ends the coinbase of its
+    /// bitcoin block, using the header's `CoinbaseProof` and `branch`, the
+    /// coinbase merkle branch.
+    ///
+    /// This is what binds a header to its proof of work: without it one
+    /// bitcoin header replays under unlimited share fields. It needs no store,
+    /// body or PPLNS read, so it runs at the DoS gates beside
+    /// `validate_header_minimum_difficulty` -- header sync and block receipt
+    /// -- as well as in block validation.
+    fn validate_coinbase_proof(
+        &self,
+        share_header: &ShareHeader,
+        branch: &[TxMerkleNode],
     ) -> Result<(), ValidationError>;
 
     /// Validate that the header's merkle root matches the transactions carried
@@ -797,6 +816,24 @@ impl DefaultShareValidator {
         Ok(())
     }
 
+    /// Validate that the `non_coinbase_root` the header's `CoinbaseProof`
+    /// carries is the root of the block's non-coinbase transactions.
+    ///
+    /// Header sync takes the root on trust from the proof; this is where the
+    /// body holds it to account, so a header and its body cannot disagree on
+    /// which transactions the commitment covers.
+    fn validate_coinbase_proof_root(&self, share: &ShareBlock) -> Result<(), ValidationError> {
+        let computed_root =
+            compute_non_coinbase_root(share.transactions.get(1..).unwrap_or_default());
+        if share.header.coinbase_proof.non_coinbase_root != computed_root {
+            return Err(ValidationError::consensus(format!(
+                "Coinbase proof non-coinbase root {} does not match transactions root {computed_root}",
+                share.header.coinbase_proof.non_coinbase_root
+            )));
+        }
+        Ok(())
+    }
+
     /// Validate the miner address is a P2TR witness program.
     ///
     /// `ShareHeader` stores a bare `WitnessProgram`, and its decode enforces
@@ -1053,6 +1090,15 @@ impl ShareValidator for DefaultShareValidator {
         self.validate_header_minimum_difficulty(share_header)
     }
 
+    fn validate_coinbase_proof(
+        &self,
+        share_header: &ShareHeader,
+        branch: &[TxMerkleNode],
+    ) -> Result<(), ValidationError> {
+        CoinbaseProof::verify(share_header, branch)
+            .map_err(|error| ValidationError::consensus(format!("Invalid coinbase proof: {error}")))
+    }
+
     fn validate_merkle_root(&self, share: &ShareBlock) -> Result<(), ValidationError> {
         let computed_root: TxMerkleNode = bitcoin::merkle_tree::calculate_root(
             share.transactions.iter().map(|tx| tx.compute_txid()),
@@ -1187,6 +1233,8 @@ impl ShareValidator for DefaultShareValidator {
         if chain_store_handle.has_status(&share.block_hash(), Status::BlockValid) {
             return Ok(());
         }
+        self.validate_coinbase_proof(&share.header, &share.template_merkle_branches)?;
+        self.validate_coinbase_proof_root(share)?;
         self.validate_with_pool_difficulty(&share.header, chain_store_handle)?;
         self.validate_uncles(share, chain_store_handle)?;
         self.validate_uncle_bodies_present(share, chain_store_handle)?;
@@ -1208,6 +1256,8 @@ impl ShareValidator for DefaultShareValidator {
         if chain_store_handle.has_status(&share.block_hash(), Status::BlockValid) {
             return Ok(());
         }
+        self.validate_coinbase_proof(&share.header, &share.template_merkle_branches)?;
+        self.validate_coinbase_proof_root(share)?;
         self.validate_with_pool_difficulty(&share.header, chain_store_handle)?;
         self.validate_uncles(share, chain_store_handle)?;
         self.validate_block_size(share)?;
@@ -1439,6 +1489,12 @@ mockall::mock! {
             share_header: &ShareHeader,
         ) -> Result<(), ValidationError>;
 
+        fn validate_coinbase_proof(
+            &self,
+            share_header: &ShareHeader,
+            branch: &[TxMerkleNode],
+        ) -> Result<(), ValidationError>;
+
         fn validate_merkle_root(&self, share: &ShareBlock) -> Result<(), ValidationError>;
 
         fn validate_block_size(&self, share: &ShareBlock) -> Result<(), ValidationError>;
@@ -1463,7 +1519,7 @@ mod tests {
     use crate::test_utils::{
         TEST_COINBASE_NSECS, TestShareBlockBuilder, build_block_from_work_components,
         genesis_for_tests, load_share_headers_test_data, make_test_address,
-        setup_pool_difficulty_mocks,
+        setup_pool_difficulty_mocks, test_coinbase_transaction,
     };
     use crate::utils::time_provider::TestTimeProvider;
     use bitcoin::pow::Work;
@@ -2153,55 +2209,99 @@ mod tests {
         assert!(result.is_ok(), "Expected Ok, got: {:?}", result.err());
     }
 
-    /// TODO: The admission gate cannot distinguish a share header from one that
-    /// differs only in `prev_share_blockhash`, though the two are distinct
-    /// blocks to everything downstream.
-    ///
-    /// `validate_header_minimum_difficulty` reads the uncle count, the declared
-    /// bits, and `bitcoin_header.block_hash()` -- the proof of work is over the
-    /// bitcoin header alone. A block's identity is `ShareHeader::block_hash()`,
-    /// which covers the whole share header. The sharechain fields are bound to
-    /// the bitcoin header only through the `ShareCommitment` in the coinbase,
-    /// and verifying that binding means rebuilding the coinbase from the PPLNS
-    /// payout -- a store read under the window lock, far too expensive to run
-    /// on unauthenticated input.
-    ///
-    /// So one observed bitcoin header can be replayed into unlimited distinct
-    /// blocks at no proof-of-work cost, and this gate admits every one. Nothing
-    /// downstream currently bounds that -- see "August 22nd -- Pending block
-    /// buffer is an unbounded remote DoS" in SYNC_ISSUES.md, and the companion
-    /// test `test_replayed_header_under_distinct_parents_fills_pending`. This
-    /// test pins the gate's half of the mechanism.
+    /// Below the PPLNS depth the body is still checked against the
+    /// `non_coinbase_root` its proof commits to: a block whose header proof
+    /// verifies but whose body carries other transactions is rejected.
     #[test]
-    fn test_minimum_difficulty_gate_is_blind_to_sharechain_fields() {
-        let test_data = load_share_headers_test_data();
-        let original: ShareHeader =
-            serde_json::from_value(test_data["valid_header"].clone()).unwrap();
+    fn test_validate_below_pplns_depth_rejects_body_not_matching_proof_root() {
+        let mut chain_store_handle = ChainStoreHandle::default();
+        let mut share_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(
+                "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5".to_string(),
+            )
+            .build();
+        share_block
+            .transactions
+            .push(ShareTransaction(test_coinbase_transaction(1)));
 
-        let mut replayed = original.clone();
+        chain_store_handle
+            .expect_has_status()
+            .returning(|_, _| false);
+
+        let error = validator()
+            .validate_below_pplns_depth(&share_block, &chain_store_handle)
+            .unwrap_err();
+        assert_eq!(error.kind(), FailureKind::Consensus);
+        assert!(
+            error
+                .to_string()
+                .contains("does not match transactions root"),
+            "unexpected error: {error}"
+        );
+    }
+
+    /// The coinbase proof binds every share field to the bitcoin header's proof
+    /// of work, so a bitcoin header replayed under another parent is rejected
+    /// at the gate.
+    ///
+    /// `validate_header_minimum_difficulty` reads only the uncle count, the
+    /// declared bits and `bitcoin_header.block_hash()`, so it cannot tell the
+    /// two apart. `validate_coinbase_proof` rebuilds the commitment from the
+    /// share fields and checks it ends the coinbase the bitcoin header commits
+    /// to -- needing neither the body nor the PPLNS window.
+    #[test]
+    fn test_coinbase_proof_rejects_replayed_bitcoin_header_under_other_share_fields() {
+        let original = TestShareBlockBuilder::new()
+            .prev_share_blockhash(
+                "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5".to_string(),
+            )
+            .build();
+
+        let mut replayed = original.header.clone();
         replayed.prev_share_blockhash = BlockHash::from_byte_array([0x7a; 32]);
 
         assert_ne!(
-            original.block_hash(),
+            original.header.block_hash(),
             replayed.block_hash(),
             "the replay is a distinct block to every dedupe in the pipeline"
         );
         assert_eq!(
-            original.bitcoin_header.block_hash(),
+            original.header.bitcoin_header.block_hash(),
             replayed.bitcoin_header.block_hash(),
-            "yet it carries the same proof of work"
+            "carrying the same proof of work"
         );
 
         let validator = validator();
-        assert_eq!(
+        assert!(
             validator
-                .validate_header_minimum_difficulty(&original)
-                .map_err(|error| error.to_string()),
-            validator
-                .validate_header_minimum_difficulty(&replayed)
-                .map_err(|error| error.to_string()),
-            "the gate reads no field the replay changed, so it returns the same verdict"
+                .validate_coinbase_proof(&original.header, &original.template_merkle_branches)
+                .is_ok()
         );
+        let error = validator
+            .validate_coinbase_proof(&replayed, &original.template_merkle_branches)
+            .unwrap_err();
+        assert_eq!(error.kind(), FailureKind::Consensus);
+        assert!(error.to_string().contains("Invalid coinbase proof"));
+    }
+
+    /// The `non_coinbase_root` a header's proof carries must be the root of
+    /// the block's own non-coinbase transactions.
+    #[test]
+    fn test_validate_coinbase_proof_root_rejects_root_not_matching_transactions() {
+        let mut share_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(
+                "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5".to_string(),
+            )
+            .build();
+        let validator = validator();
+        assert!(validator.validate_coinbase_proof_root(&share_block).is_ok());
+
+        share_block.header.coinbase_proof.non_coinbase_root =
+            TxMerkleNode::from_byte_array([0x11; 32]);
+        let error = validator
+            .validate_coinbase_proof_root(&share_block)
+            .unwrap_err();
+        assert_eq!(error.kind(), FailureKind::Consensus);
     }
 
     #[test]

@@ -4,7 +4,7 @@
 
 use super::address_serde;
 use super::option_address_serde;
-use super::share_block::ShareBlock;
+use super::share_block::{ShareBlock, ShareHeader};
 use super::transactions::coinbase::compute_non_coinbase_root;
 use bitcoin::WitnessProgram;
 use bitcoin::consensus::Encodable;
@@ -242,15 +242,28 @@ impl ShareCommitment {
     /// anchor older than the retained entries, so body and window expire
     /// together.
     pub fn from_share_block(share: &ShareBlock) -> Self {
-        let header = &share.header;
+        Self::from_share_header_and_root(
+            &share.header,
+            compute_non_coinbase_root(share.transactions.get(1..).unwrap_or_default()),
+        )
+    }
+
+    /// Reconstruct a ShareCommitment from a share header and the root of its
+    /// non-coinbase transactions, the one commitment input the header does
+    /// not carry.
+    ///
+    /// Header sync uses the root from the header's `CoinbaseProof`, so it can
+    /// check the commitment without the block body.
+    pub fn from_share_header_and_root(
+        header: &ShareHeader,
+        non_coinbase_root: TxMerkleNode,
+    ) -> Self {
         Self {
             prev_share_blockhash: header.prev_share_blockhash,
             uncles: header.uncles.clone(),
             miner_bitcoin_address: header.miner_bitcoin_address.clone(),
             miner_address: header.miner_address,
-            non_coinbase_root: compute_non_coinbase_root(
-                share.transactions.get(1..).unwrap_or_default(),
-            ),
+            non_coinbase_root,
             bits: header.bits,
             time: header.time,
             donation_address: header.donation_address.clone(),
@@ -283,6 +296,7 @@ pub(crate) fn encode_optional_address<W: Write + ?Sized>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shares::coinbase_proof::CoinbaseProof;
     use crate::shares::coinbaseaux_flags::CoinbaseAuxFlags;
     use crate::shares::extranonce::Extranonce;
     use crate::shares::share_block::{ShareHeader, ShareTransaction};
@@ -476,6 +490,7 @@ mod tests {
             template.height as u64,
             0,
             Extranonce::default(),
+            CoinbaseProof::default(),
         );
 
         ShareBlock {

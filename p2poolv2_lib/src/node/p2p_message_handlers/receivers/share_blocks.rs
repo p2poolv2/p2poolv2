@@ -74,6 +74,16 @@ pub async fn handle_share_block(
         return Err(format!("Invalid share header: {validation_error}").into());
     }
 
+    // Bind the header to its proof of work before buffering: a bitcoin
+    // header replayed under other share fields fails here, so it can never
+    // fill the pending buffer. The block carries its own coinbase branch.
+    if let Err(validation_error) = share_validator
+        .validate_coinbase_proof(&share_block.header, &share_block.template_merkle_branches)
+    {
+        warn!("Rejecting share block {block_hash} with invalid coinbase proof: {validation_error}");
+        return Err(format!("Invalid coinbase proof: {validation_error}").into());
+    }
+
     // Bound the block's size before the BlockReceiver buffers it.
     if let Err(validation_error) = share_validator.validate_block_size(&share_block) {
         warn!("Rejecting oversized share block {block_hash}: {validation_error}");
@@ -166,6 +176,9 @@ mod tests {
         mock_validator
             .expect_validate_share_header()
             .returning(|_| Ok(()));
+        mock_validator
+            .expect_validate_coinbase_proof()
+            .returning(|_, _| Ok(()));
         mock_validator
             .expect_validate_block_size()
             .returning(|_| Ok(()));
@@ -392,6 +405,9 @@ mod tests {
             .expect_validate_share_header()
             .returning(|_| Ok(()));
         mock_validator
+            .expect_validate_coinbase_proof()
+            .returning(|_, _| Ok(()));
+        mock_validator
             .expect_validate_block_size()
             .returning(|_| Ok(()));
         mock_validator.expect_validate_merkle_root().returning(|_| {
@@ -425,6 +441,61 @@ mod tests {
         );
     }
 
+    /// A block whose coinbase proof fails is rejected before it is buffered.
+    /// The proof is what binds the share fields to the bitcoin header's proof
+    /// of work; without this gate one bitcoin header replays under unlimited
+    /// parents, each taking a pending slot it never releases.
+    #[tokio::test]
+    async fn test_handle_share_block_invalid_coinbase_proof_rejected_before_buffering() {
+        let mut chain_store_handle = ChainStoreHandle::default();
+        let test_data = load_share_headers_test_data();
+        let header: ShareHeader =
+            serde_json::from_value(test_data["valid_header"].clone()).unwrap();
+        let share_block = empty_share_block_from_header(header);
+        let block_hash = share_block.block_hash();
+
+        chain_store_handle
+            .expect_share_block_exists()
+            .with(eq(block_hash))
+            .returning(|_| false);
+
+        let mut mock_validator = MockDefaultShareValidator::default();
+        mock_validator
+            .expect_validate_share_header()
+            .returning(|_| Ok(()));
+        mock_validator
+            .expect_validate_coinbase_proof()
+            .returning(|_, _| {
+                Err(ValidationError::consensus(
+                    "Invalid coinbase proof: proof gives merkle root a, bitcoin header has b",
+                ))
+            });
+
+        let (validation_tx, _validation_rx) = validation_worker::create_validation_channel();
+        let (block_receiver_handle, mut block_receiver_rx) = create_block_receiver_channel();
+        let (block_fetcher_handle, _block_fetcher_rx) = create_block_fetcher_channel();
+
+        let result = handle_share_block(
+            share_block,
+            &chain_store_handle,
+            validation_tx,
+            &block_receiver_handle,
+            &block_fetcher_handle,
+            &mock_validator,
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().to_string().contains("coinbase proof"),
+            "expected a coinbase proof rejection"
+        );
+        assert!(
+            block_receiver_rx.try_recv().is_err(),
+            "a block not bound to its proof of work must not be buffered"
+        );
+    }
+
     /// An oversized block is rejected before it is buffered. Without that check
     /// the only bound on a received block is the transport's
     /// `MAX_P2P_MESSAGE_SIZE`, so a single minimum-difficulty share could
@@ -447,6 +518,9 @@ mod tests {
         mock_validator
             .expect_validate_share_header()
             .returning(|_| Ok(()));
+        mock_validator
+            .expect_validate_coinbase_proof()
+            .returning(|_, _| Ok(()));
         mock_validator.expect_validate_block_size().returning(|_| {
             Err(ValidationError::consensus(
                 "Block transactions size 5000000 exceeds limit of 204800",

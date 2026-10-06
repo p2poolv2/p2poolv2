@@ -81,6 +81,7 @@ mod tests {
     use super::*;
     use crate::accounting::payout::simple_pplns::SimplePplnsShare;
     use crate::node::validation_worker::create_validation_channel;
+    use crate::shares::coinbase_proof::CoinbaseProof;
     use crate::shares::extranonce::Extranonce;
     use crate::store::writer::StoreError;
     use crate::stratum::emission::Emission;
@@ -149,6 +150,7 @@ mod tests {
             coinbase_nsecs: TEST_COINBASE_NSECS,
             template_merkle_branches: vec![],
             extranonce: Extranonce::default(),
+            coinbase_proof: None,
         }
     }
 
@@ -183,6 +185,7 @@ mod tests {
             coinbase_nsecs: TEST_COINBASE_NSECS,
             template_merkle_branches: vec![],
             extranonce: Extranonce::default(),
+            coinbase_proof: Some(CoinbaseProof::default()),
         }
     }
 

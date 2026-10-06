@@ -33,10 +33,13 @@ pub async fn handle_stratum_share(
         coinbase_nsecs,
         template_merkle_branches,
         extranonce,
+        coinbase_proof,
     } = emission;
 
     // Send share to peers only in p2p mode, i.e. if the pool is run with a miner address that results in a commitment
     if let Some(share_commitment) = share_commitment {
+        let coinbase_proof =
+            coinbase_proof.ok_or("Share commitment emitted without a coinbase proof")?;
         // TODO: Get share chain transactions and use them here. When
         // non-coinbase share transactions are added, pass them to
         // build_sharechain_coinbase_transaction so the BIP141 witness
@@ -81,6 +84,7 @@ pub async fn handle_stratum_share(
             blocktemplate.height as u64,
             coinbase_nsecs,
             extranonce,
+            coinbase_proof,
         );
 
         let share_block = ShareBlock {
@@ -118,6 +122,7 @@ pub async fn handle_stratum_share(
 mod tests {
     use super::*;
     use crate::accounting::payout::simple_pplns::SimplePplnsShare;
+    use crate::shares::coinbase_proof::CoinbaseProof;
     use crate::shares::extranonce::Extranonce;
     use crate::store::writer::StoreError;
     use crate::stratum::work::block_template::BlockTemplate;
@@ -186,6 +191,7 @@ mod tests {
             coinbase_nsecs: TEST_COINBASE_NSECS,
             template_merkle_branches: vec![],
             extranonce: Extranonce::default(),
+            coinbase_proof: None,
         }
     }
 
@@ -221,6 +227,7 @@ mod tests {
             coinbase_nsecs: TEST_COINBASE_NSECS,
             template_merkle_branches: vec![],
             extranonce: Extranonce::default(),
+            coinbase_proof: Some(CoinbaseProof::default()),
         }
     }
 
@@ -415,6 +422,7 @@ mod tests {
                 bitcoin::TxMerkleNode::all_zeros(),
             ],
             extranonce: Extranonce::default(),
+            coinbase_proof: Some(CoinbaseProof::default()),
         };
 
         let result = handle_stratum_share(emission, &mock_chain_store).await;

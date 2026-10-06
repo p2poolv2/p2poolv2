@@ -4,6 +4,7 @@
 
 use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::config::PoolMode;
+use crate::shares::coinbase_proof::CoinbaseProof;
 use crate::shares::extranonce::Extranonce;
 use crate::stratum::{
     difficulty_adjuster::DifficultyAdjusterTrait,
@@ -187,6 +188,17 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
             Extranonce::from_enonce_hex(&session.enonce1_hex, extranonce2).map_err(|error| {
                 Error::SubmitFailure(format!("Failed to build extranonce: {error}"))
             })?;
+        // The full coinbase exists only here, so the proof is built now. Every
+        // coinbase this pool builds ends with the commitment, so a failure is
+        // a malformed job, not the miner's fault: log it and emit without a
+        // proof, which keeps the share off the share chain
+        // (`handle_stratum_share` refuses a commitment without a proof) while
+        // still accounting it.
+        let coinbase_proof = job.share_commitment.as_ref().and_then(|commitment| {
+            CoinbaseProof::from_coinbase(&validation_result.coinbase, commitment.non_coinbase_root)
+                .map_err(|error| error!("Failed to build coinbase proof for job {job_id}: {error}"))
+                .ok()
+        });
         stratum_context
             .emissions_tx
             .send(Emission {
@@ -197,6 +209,7 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
                 coinbase_nsecs: job.coinbase_nsecs,
                 template_merkle_branches: job.template_merkle_branches.clone(),
                 extranonce,
+                coinbase_proof,
             })
             .await
             .map_err(|e| Error::SubmitFailure(format!("Failed to send share to store: {e}")))?;
