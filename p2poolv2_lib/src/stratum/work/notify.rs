@@ -641,7 +641,7 @@ mod tests {
 
         // Extract outputs from coinbase2 and verify they match the original
         let extracted_txouts =
-            extract_outputs_from_coinbase2(coinbase2_hex, 33, pool_signature.len()).unwrap();
+            extract_outputs_from_coinbase2(coinbase2_hex, pool_signature.len()).unwrap();
 
         let expected_txout_1 = TxOut {
             value: original_output_pairs[0].amount,
@@ -658,9 +658,12 @@ mod tests {
             script_pubkey: witness_script,
         };
 
-        assert_eq!(extracted_txouts.len(), 3); // 2 payments + 1 witness
+        // 2 payments + witness commitment + padding + share commitment
+        assert_eq!(extracted_txouts.len(), 5);
         assert_eq!(extracted_txouts[0], expected_txout_1);
         assert_eq!(extracted_txouts[1], expected_txout_2);
         assert_eq!(extracted_txouts[2], expected_txout_3);
+        assert_eq!(extracted_txouts[3].value, Amount::ZERO);
+        assert_eq!(extracted_txouts[4].value, Amount::ZERO);
     }
 }

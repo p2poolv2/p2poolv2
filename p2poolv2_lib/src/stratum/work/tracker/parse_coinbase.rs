@@ -2,9 +2,7 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use crate::stratum::work::coinbase::{
-    detect_commitment_hash_len_from_coinbase2, extract_outputs_from_coinbase2,
-};
+use crate::stratum::work::coinbase::extract_outputs_from_coinbase2;
 use crate::stratum::work::tracker::JobTracker;
 use bitcoin::Amount;
 use std::sync::Arc;
@@ -18,12 +16,7 @@ pub fn get_distribution(
     let job_id = tracker.get_latest_job_id();
     let job_details = tracker.get_job(job_id)?;
 
-    let commitment_hash_len = detect_commitment_hash_len_from_coinbase2(&job_details.coinbase2);
-    match extract_outputs_from_coinbase2(
-        &job_details.coinbase2,
-        commitment_hash_len,
-        pool_signature_length,
-    ) {
+    match extract_outputs_from_coinbase2(&job_details.coinbase2, pool_signature_length) {
         Ok(outputs) => {
             let total_value = job_details.blocktemplate.coinbasevalue;
             let mut exposition = String::new();
