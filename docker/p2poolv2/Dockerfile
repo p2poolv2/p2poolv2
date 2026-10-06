@@ -40,7 +40,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 # Every workspace crate in the p2poolv2_node dependency graph.
 COPY --parents bitcoindrpc/ .
-COPY --parents p2poolv2_address/ .
+COPY --parents p2poolv2_wallet/ .
 COPY --parents p2poolv2_api/ .
 COPY --parents p2poolv2_cli/ .
 COPY --parents p2poolv2_config/ .
