@@ -65,6 +65,17 @@ Stores share headers independently, enabling header-first sync before full block
 |------------------------|------------------------------|--------------------------------------|
 | `blockhash` (32 bytes) | `ShareHeader` (serialized)   | Written during header sync and block storage |
 
+The serialized header carries its `CoinbaseProof` and encodes each address as a
+one-byte network class (main, test, regtest) followed by its script pubkey.
+
+### 1c. `TemplateMerkleBranches` - Coinbase Merkle Branches
+
+The coinbase merkle branch a header's `CoinbaseProof` is checked against.
+
+| Key                    | Value                                  | Notes |
+|------------------------|----------------------------------------|-------|
+| `blockhash` (32 bytes) | `MerkleBranches` (count + 32-byte nodes) | Written with a full block, and during header sync for headers held without their body, so they can be served on |
+
 ---
 
 ### 2. `BlockIndex` - Parent->Children Index
