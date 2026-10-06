@@ -525,9 +525,8 @@ impl Store {
     /// a block is validated only once its parent is `BlockValid` or confirmed
     /// -- so no block below a non-`BlockValid` one is validated, and skipping
     /// its subtree loses no answer. In particular an `Invalid` block hides its
-    /// whole subtree, and header-only blocks, which header sync stores up to
-    /// 1500 at a time and a peer can fabricate cheaply, cost the search one
-    /// metadata read each.
+    /// whole subtree, and header-only blocks, which header sync stores a full
+    /// response at a time, cost the search one metadata read each.
     ///
     /// The walk is not bounded. What remains is the validated, unconfirmed
     /// subtree, which grows only at real hashrate and only while confirmation
@@ -3231,7 +3230,7 @@ mod tests {
     ///
     /// Validation is parent-gated, so no block below a header-only one is
     /// validated and the search does not walk into it. A batch of synced
-    /// headers above the confirmed tip (up to 1500 per response) must not
+    /// headers above the confirmed tip (a full response at a time) must not
     /// stop the search from reaching our own validated chain.
     #[test]
     fn test_find_best_block_valid_descendant_skips_header_only_subtree() {

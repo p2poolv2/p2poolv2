@@ -31,7 +31,16 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{debug, error};
 
-pub(crate) const MAX_HEADERS_IN_RESPONSE: usize = 1500;
+/// Most headers a `ShareHeaders` response carries (before completing the
+/// last height).
+///
+/// Sized so the worst case fits `MAX_P2P_MESSAGE_SIZE`: every header with
+/// worst-case fields, its bitcoin merkle root included, and its own coinbase
+/// branch of `MAX_COINBASE_MERKLE_BRANCH_LENGTH` entries -- about 1.1 KB a
+/// header. Real batches omit the root and share a branch per block template,
+/// at well under 1 KB a header.
+/// `test_full_share_headers_response_fits_max_message_size` guards it.
+pub(crate) const MAX_HEADERS_IN_RESPONSE: usize = 900;
 
 /// The Tower service that processes inbound P2P requests.
 pub async fn handle_request<C: Send + Sync, T: TimeProvider + Send + Sync>(
