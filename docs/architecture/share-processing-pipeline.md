@@ -238,10 +238,11 @@ never derived from one another, and every stage below treats them separately:
 - The PPLNS window, `append_proportional_distribution` and
   `validate_bitcoin_payout` use `miner_bitcoin_address` only.
 
-`ShareCommitment::hash()` binds `merkle_root` rather than `miner_address`
-directly. The share coinbase pays the address and the root commits to that
-coinbase, so binding the root covers the whole transaction set rather than
-just the coinbase payee. See `docs/architecture/address-format.md`.
+`ShareCommitment::hash()` digests `miner_address` directly, together with
+`non_coinbase_root`, the root of the share's non-coinbase transactions. The
+share coinbase carries the bitcoin weak block hash, so it is unique per share
+and cannot be in the commitment; it is bound by being rebuilt during
+validation. See `docs/architecture/address-format.md`.
 
 ### OrganiseWorker (`node/organise_worker.rs`)
 - Runs in dedicated tokio task, spawned by NodeActor
@@ -556,6 +557,59 @@ Resolving the window walks parent pointers back to a confirmed ancestor and:
   store failure or an unresolvable anchor, so a transient read error cannot
   silently misdirect the reward. The producer pays the bootstrap address only
   for the explicit empty/genesis case (`PplnsWindow::is_empty`).
+
+### Header proof-of-work binding
+
+A share header's proof of work is over its `bitcoin_header` alone. The share
+fields are bound to it only through the `ShareCommitment` hash in the bitcoin
+coinbase. Without checking that binding, one bitcoin header -- and any real
+bitcoin block header meets every share target -- replays under unlimited share
+fields, each credited the work its declared `bits` claim.
+
+The binding is checkable from the header alone because of where the
+commitment sits. The bitcoin coinbase ends with
+`[padding output][OP_RETURN OP_PUSHBYTES_32 <commitment> output][locktime]`
+(`stratum/work/coinbase.rs`). The commitment output comes after the BIP141
+witness commitment, whose pattern it does not match. The zero-padding output
+makes everything before the commitment output a whole number of SHA256 blocks.
+
+`ShareHeader.coinbase_proof` (`shares/coinbase_proof.rs`) carries the SHA256
+midstate of that prefix, its length, and `non_coinbase_root`. A verifier:
+
+1. rebuilds the commitment from the header fields and `non_coinbase_root`;
+2. resumes SHA256 from the midstate over the commitment output and locktime,
+   and hashes again, giving the coinbase txid;
+3. folds the coinbase merkle branch, giving the bitcoin merkle root, and
+   requires it to match the bitcoin header.
+
+No body, store or PPLNS read is needed. The merkle root is fixed by the proof
+of work, so a forged proof would need a SHA256 collision. The genesis share is
+exempt, because its coinbase predates the share chain.
+
+`validate_coinbase_proof` runs:
+
+- at header sync, per header, before anything is stored;
+- at the block admission gate in `handle_share_block`, before buffering;
+- in `validate_share_block` and `validate_below_pplns_depth`.
+
+Both `validate_share_block` and `validate_below_pplns_depth` also check the
+proof's `non_coinbase_root` against the block's own transactions.
+
+The coinbase merkle branch travels separately from the header, because shares
+mined on one template share a branch:
+
+- in a `ShareBlock` body as `template_merkle_branches`;
+- in a `ShareHeaders` response (`ShareHeaderBatch`) as a per-message table of
+  distinct branches, with each header naming its branch by index. The table
+  never spans messages, so dropped or retried responses cannot strand a
+  header.
+
+Header sync stores each header's branch, so a node can serve headers it holds
+without bodies. A batch also leaves out each header's bitcoin merkle root when
+the proof and branch give it back; the receiver derives it, and a forged proof
+derives a root whose header fails proof of work. `MAX_HEADERS_IN_RESPONSE`
+(900) is sized so the worst case still fits `MAX_P2P_MESSAGE_SIZE`: a distinct
+16-deep branch per header with its root included.
 
 ### Uncle selection vs uncle acceptance
 

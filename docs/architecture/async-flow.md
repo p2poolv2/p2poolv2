@@ -58,8 +58,9 @@ Heavy work runs on dedicated tasks, all spawned into the actor's `JoinSet`
 except the per-peer services and the StoreWriter thread:
 
 - **ResponseWorker** -- runs `handle_response` for inbound responses
-  (`ShareHeaders` can mean up to 1500 `organise_header` calls). One task, FIFO,
-  so each peer's header batches stay in order.
+  (`ShareHeaders` can mean up to `MAX_HEADERS_IN_RESPONSE` (900)
+  `organise_header` calls). One task, FIFO, so each peer's header batches
+  stay in order.
 - **Per-peer service tasks** -- Tower stack (rate limit, inactivity) running
   inbound request handlers; one per connected peer.
 - **BlockReceiver** -- persists received share blocks, resolves dependencies,
