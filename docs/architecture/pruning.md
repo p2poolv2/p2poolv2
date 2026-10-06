@@ -224,7 +224,7 @@ After Task 1 (two-zone validation + output spendability):
 1. Pruning task: periodic every 360 blocks after is_current
 2. Atomic batch deletion of block body CFs (BlockTxids, TxidsBlocks,
    BitcoinTxids, Inputs, Outputs, Tx, TemplateMerkleBranches,
-   SpendsIndex). Headers and BlockMetadata retained.
+   SpendsIndex). Headers, BlockMetadata and FoundBlocks retained.
 3. Candidate chain pruning below prune boundary
 4. Startup pruning + compaction
 5. CLI manual prune command

@@ -330,7 +330,8 @@ impl Store {
     }
 
     /// Confirm `blocks` in order: write each confirmed index entry, mark its
-    /// metadata Confirmed, and advance the top confirmed height to the last of
+    /// metadata Confirmed, record any bitcoin blocks it or its uncles
+    /// carry, and advance the top confirmed height to the last of
     /// them. Returns the new top confirmed height, or None when `blocks` is
     /// empty (nothing was confirmed, so the top is left alone).
     ///
@@ -347,6 +348,7 @@ impl Store {
             let mut metadata = self.get_block_metadata(blockhash)?;
             metadata.chain = ChainMembership::Confirmed;
             self.update_block_metadata(blockhash, &metadata, batch)?;
+            self.record_found_blocks(blockhash, batch)?;
             new_top_height = Some(*height);
         }
         if let Some(top_height) = new_top_height {

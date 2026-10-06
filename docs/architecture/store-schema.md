@@ -256,6 +256,22 @@ Reserved for general metadata storage.
 
 ---
 
+### 15. `FoundBlocks` - Bitcoin Blocks Found by the Pool
+
+One entry per bitcoin block carried by a confirmed share or by an uncle
+of a confirmed share (a share header whose bitcoin header meets the
+bitcoin network target). Written in `confirm_blocks`, in the same batch
+as the confirmation, from header data only, so prune-zone header-only
+confirmation during sync rebuilds the list. Entries are never deleted:
+a share chain reorg does not undo the bitcoin block, and re-confirmation
+rewrites identical bytes. Never pruned. Read by the `/metrics` handler.
+
+| Key                                                     | Value                                                                                      |
+|---------------------------------------------------------|--------------------------------------------------------------------------------------------|
+| `bitcoin_height` (8 bytes BE) + `bitcoin_blockhash` (32 bytes) | consensus-encoded `share_blockhash` (32 bytes), `bitcoin_time` (u32), `miner_bitcoin_address` (string) |
+
+---
+
 ## Key Constants
 
 ```rust
