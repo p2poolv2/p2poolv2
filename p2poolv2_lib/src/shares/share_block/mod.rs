@@ -115,36 +115,70 @@ pub struct ShareHeader {
     pub coinbase_proof: CoinbaseProof,
 }
 
-/// Encode an optional address as a bool flag followed by the address string when present.
-fn encode_optional_address_string<W: bitcoin::io::Write + ?Sized>(
-    address: &Option<Address>,
+/// Network class an encoded address is rebuilt for: the part of an
+/// `Address` its script does not carry. Segwit addresses carry an HRP and
+/// legacy ones a network kind; these three classes cover both.
+const ADDRESS_NETWORK_MAIN: u8 = 0;
+const ADDRESS_NETWORK_TEST: u8 = 1;
+const ADDRESS_NETWORK_REGTEST: u8 = 2;
+
+/// Encode an address as its network class and script pubkey.
+///
+/// Shorter than the address string (a P2TR script is 34 bytes against 62
+/// characters), and exact: decoding rebuilds the same `Address`.
+fn encode_address<W: bitcoin::io::Write + ?Sized>(
+    address: &Address,
     writer: &mut W,
 ) -> Result<usize, bitcoin::io::Error> {
-    let mut len = 0;
-    match address {
-        Some(addr) => {
-            len += true.consensus_encode(writer)?;
-            len += addr.to_string().consensus_encode(writer)?;
-        }
-        None => {
-            len += false.consensus_encode(writer)?;
-        }
-    }
+    let network_class = if address
+        .as_unchecked()
+        .is_valid_for_network(bitcoin::Network::Bitcoin)
+    {
+        ADDRESS_NETWORK_MAIN
+    } else if address
+        .as_unchecked()
+        .is_valid_for_network(bitcoin::Network::Testnet)
+    {
+        ADDRESS_NETWORK_TEST
+    } else {
+        ADDRESS_NETWORK_REGTEST
+    };
+    let mut len = network_class.consensus_encode(writer)?;
+    len += address.script_pubkey().consensus_encode(writer)?;
     Ok(len)
 }
 
-/// Decode an optional address from a bool flag followed by the address string.
+/// Decode an address written by `encode_address`.
+fn decode_address<R: bitcoin::io::Read + ?Sized>(
+    reader: &mut R,
+) -> Result<Address, bitcoin::consensus::encode::Error> {
+    let network = match u8::consensus_decode(reader)? {
+        ADDRESS_NETWORK_MAIN => bitcoin::Network::Bitcoin,
+        ADDRESS_NETWORK_TEST => bitcoin::Network::Testnet,
+        ADDRESS_NETWORK_REGTEST => bitcoin::Network::Regtest,
+        _ => return Err(ParseFailed("unknown address network class")),
+    };
+    let script = bitcoin::ScriptBuf::consensus_decode(reader)?;
+    Address::from_script(&script, network).map_err(|_| ParseFailed("invalid address script"))
+}
+
+/// Encode an optional address as a bool flag followed by the address when present.
+fn encode_optional_address<W: bitcoin::io::Write + ?Sized>(
+    address: &Option<Address>,
+    writer: &mut W,
+) -> Result<usize, bitcoin::io::Error> {
+    match address {
+        Some(address) => Ok(true.consensus_encode(writer)? + encode_address(address, writer)?),
+        None => false.consensus_encode(writer),
+    }
+}
+
+/// Decode an optional address from a bool flag followed by the address.
 fn decode_optional_address<R: bitcoin::io::Read + ?Sized>(
     reader: &mut R,
 ) -> Result<Option<Address>, bitcoin::consensus::encode::Error> {
-    let has_address = bool::consensus_decode(reader)?;
-    if has_address {
-        let addr_str = String::consensus_decode(reader)?;
-        let address = addr_str
-            .parse::<Address<_>>()
-            .map_err(|_| ParseFailed("invalid bitcoin address"))?
-            .assume_checked();
-        Ok(Some(address))
+    if bool::consensus_decode(reader)? {
+        Ok(Some(decode_address(reader)?))
     } else {
         Ok(None)
     }
@@ -224,25 +258,38 @@ impl ShareHeader {
     }
 }
 
-impl Encodable for ShareHeader {
-    #[inline]
-    fn consensus_encode<W: bitcoin::io::Write + ?Sized>(
+impl ShareHeader {
+    /// Encode the header, optionally leaving out `bitcoin_header.merkle_root`.
+    ///
+    /// The canonical encoding -- the block hash, the store, a `ShareBlock` --
+    /// includes the root. A `ShareHeaderBatch` leaves it out where the
+    /// header's coinbase proof and branch give it back: the receiver derives
+    /// the root, and a header whose proof derives the wrong root fails its
+    /// proof-of-work check.
+    pub(crate) fn consensus_encode_with<W: bitcoin::io::Write + ?Sized>(
         &self,
         w: &mut W,
+        include_bitcoin_merkle_root: bool,
     ) -> Result<usize, bitcoin::io::Error> {
         let mut len = 0;
         len += self.prev_share_blockhash.consensus_encode(w)?;
         len += self.uncles.consensus_encode(w)?;
-        let addr_str = self.miner_bitcoin_address.to_string();
-        len += addr_str.consensus_encode(w)?;
+        len += encode_address(&self.miner_bitcoin_address, w)?;
         len += witness_program_codec::consensus_encode(&self.miner_address, w)?;
         len += self.merkle_root.consensus_encode(w)?;
-        len += self.bitcoin_header.consensus_encode(w)?;
+        len += self.bitcoin_header.version.consensus_encode(w)?;
+        len += self.bitcoin_header.prev_blockhash.consensus_encode(w)?;
+        if include_bitcoin_merkle_root {
+            len += self.bitcoin_header.merkle_root.consensus_encode(w)?;
+        }
+        len += self.bitcoin_header.time.consensus_encode(w)?;
+        len += self.bitcoin_header.bits.consensus_encode(w)?;
+        len += self.bitcoin_header.nonce.consensus_encode(w)?;
         len += self.bits.consensus_encode(w)?;
         len += self.time.consensus_encode(w)?;
-        len += encode_optional_address_string(&self.donation_address, w)?;
+        len += encode_optional_address(&self.donation_address, w)?;
         len += self.donation.unwrap_or(0).consensus_encode(w)?;
-        len += encode_optional_address_string(&self.fee_address, w)?;
+        len += encode_optional_address(&self.fee_address, w)?;
         len += self.fee.unwrap_or(0).consensus_encode(w)?;
         len += self.coinbase_value.consensus_encode(w)?;
         match &self.coinbaseaux_flags {
@@ -265,23 +312,33 @@ impl Encodable for ShareHeader {
         len += self.coinbase_proof.consensus_encode(w)?;
         Ok(len)
     }
-}
 
-impl Decodable for ShareHeader {
-    #[inline]
-    fn consensus_decode<R: bitcoin::io::Read + ?Sized>(
+    /// Decode a header written by `consensus_encode_with`. Without the root,
+    /// `bitcoin_header.merkle_root` is all zeros until the caller derives it.
+    pub(crate) fn consensus_decode_with<R: bitcoin::io::Read + ?Sized>(
         r: &mut R,
+        include_bitcoin_merkle_root: bool,
     ) -> Result<Self, bitcoin::consensus::encode::Error> {
         let prev_share_blockhash = BlockHash::consensus_decode(r)?;
         let uncles = Vec::<BlockHash>::consensus_decode(r)?;
-        let addr_str = String::consensus_decode(r)?;
-        let btcaddress = addr_str
-            .parse::<Address<_>>()
-            .map_err(|_| ParseFailed("invalid bitcoin address"))?
-            .assume_checked();
+        let miner_bitcoin_address = decode_address(r)?;
         let miner_address = witness_program_codec::consensus_decode(r)?;
         let merkle_root = TxMerkleNode::consensus_decode(r)?;
-        let bitcoin_header = Header::consensus_decode(r)?;
+        let bitcoin_version = bitcoin::block::Version::consensus_decode(r)?;
+        let bitcoin_prev_blockhash = BlockHash::consensus_decode(r)?;
+        let bitcoin_merkle_root = if include_bitcoin_merkle_root {
+            TxMerkleNode::consensus_decode(r)?
+        } else {
+            TxMerkleNode::all_zeros()
+        };
+        let bitcoin_header = Header {
+            version: bitcoin_version,
+            prev_blockhash: bitcoin_prev_blockhash,
+            merkle_root: bitcoin_merkle_root,
+            time: u32::consensus_decode(r)?,
+            bits: CompactTarget::consensus_decode(r)?,
+            nonce: u32::consensus_decode(r)?,
+        };
         let bits = CompactTarget::consensus_decode(r)?;
         let time = u32::consensus_decode(r)?;
         let donation_address = decode_optional_address(r)?;
@@ -314,7 +371,7 @@ impl Decodable for ShareHeader {
         Ok(ShareHeader {
             prev_share_blockhash,
             uncles,
-            miner_bitcoin_address: btcaddress,
+            miner_bitcoin_address,
             miner_address,
             merkle_root,
             bitcoin_header,
@@ -332,6 +389,25 @@ impl Decodable for ShareHeader {
             extranonce,
             coinbase_proof,
         })
+    }
+}
+
+impl Encodable for ShareHeader {
+    #[inline]
+    fn consensus_encode<W: bitcoin::io::Write + ?Sized>(
+        &self,
+        w: &mut W,
+    ) -> Result<usize, bitcoin::io::Error> {
+        self.consensus_encode_with(w, true)
+    }
+}
+
+impl Decodable for ShareHeader {
+    #[inline]
+    fn consensus_decode<R: bitcoin::io::Read + ?Sized>(
+        r: &mut R,
+    ) -> Result<Self, bitcoin::consensus::encode::Error> {
+        Self::consensus_decode_with(r, true)
     }
 }
 
@@ -827,6 +903,64 @@ mod tests {
             assert_eq!(orig_tx.compute_txid(), decoded_tx.compute_txid());
             assert_eq!(orig_tx.0, decoded_tx.0);
         }
+    }
+
+    /// Addresses encode as a network class and script and decode to the same
+    /// `Address`, so the header and its hash round-trip.
+    #[test]
+    fn test_share_header_round_trips_mainnet_segwit_address() {
+        let mut header = TestShareBlockBuilder::new().build().header;
+        header.miner_bitcoin_address =
+            Address::from_str("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4")
+                .unwrap()
+                .assume_checked();
+        let decoded: ShareHeader = deserialize(&serialize(&header)).unwrap();
+        assert_eq!(decoded, header);
+        assert_eq!(decoded.block_hash(), header.block_hash());
+    }
+
+    #[test]
+    fn test_share_header_round_trips_testnet_segwit_address() {
+        let mut header = TestShareBlockBuilder::new().build().header;
+        header.miner_bitcoin_address =
+            Address::from_str("tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx")
+                .unwrap()
+                .assume_checked();
+        let decoded: ShareHeader = deserialize(&serialize(&header)).unwrap();
+        assert_eq!(decoded, header);
+    }
+
+    #[test]
+    fn test_share_header_round_trips_regtest_segwit_address() {
+        let mut header = TestShareBlockBuilder::new().build().header;
+        header.miner_bitcoin_address = Address::p2wsh(&ScriptBuf::new(), bitcoin::Network::Regtest);
+        let decoded: ShareHeader = deserialize(&serialize(&header)).unwrap();
+        assert_eq!(decoded, header);
+    }
+
+    #[test]
+    fn test_share_header_round_trips_mainnet_legacy_address() {
+        let mut header = TestShareBlockBuilder::new().build().header;
+        header.miner_bitcoin_address = Address::from_str("1HpRF3JgafxaqjhMEjLNbevpRVvAp15t3A")
+            .unwrap()
+            .assume_checked();
+        let decoded: ShareHeader = deserialize(&serialize(&header)).unwrap();
+        assert_eq!(decoded, header);
+    }
+
+    #[test]
+    fn test_share_header_round_trips_donation_and_fee_addresses() {
+        let mut header = TestShareBlockBuilder::new().build().header;
+        header.donation_address = Some(
+            Address::from_str("tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx")
+                .unwrap()
+                .assume_checked(),
+        );
+        header.donation = Some(200);
+        header.fee_address = Some(Address::p2wsh(&ScriptBuf::new(), bitcoin::Network::Regtest));
+        header.fee = Some(100);
+        let decoded: ShareHeader = deserialize(&serialize(&header)).unwrap();
+        assert_eq!(decoded, header);
     }
 
     #[test]
