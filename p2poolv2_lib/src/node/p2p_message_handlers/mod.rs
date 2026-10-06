@@ -228,6 +228,7 @@ mod tests {
     use crate::shares::share_block::Txids;
     use crate::shares::validation::MockDefaultShareValidator;
     use crate::test_utils::setup_header_chain_validation_mocks;
+    use crate::test_utils::share_header_batch_with_empty_branches;
     use crate::test_utils::{
         TestShareBlockBuilder, test_coinbase_transaction, valid_share_block_from_fixture,
     };
@@ -270,6 +271,10 @@ mod tests {
             .expect_get_headers_for_locator()
             .returning(move |_, _, _| Ok(response_headers.clone()));
 
+        chain_store_handle
+            .expect_get_template_merkle_branches()
+            .returning(|_| Ok(Vec::new()));
+
         let ctx = RequestContext {
             peer: peer_id,
             request: Message::GetShareHeaders(block_hashes, stop_block_hash),
@@ -291,7 +296,10 @@ mod tests {
             swarm_rx.recv().await
         {
             assert_eq!(channel, response_channel);
-            assert_eq!(headers, vec![block1.header, block2.header]);
+            assert_eq!(
+                headers.headers().to_vec(),
+                vec![block1.header, block2.header]
+            );
         } else {
             panic!("Expected SwarmSend::Response with ShareHeaders message");
         }
@@ -657,10 +665,13 @@ mod tests {
         chain_store_handle
             .expect_get_headers_for_locator()
             .returning(|_, _, _| Ok(vec![]));
+        chain_store_handle
+            .expect_get_template_merkle_branches()
+            .returning(|_| Ok(Vec::new()));
 
         let ctx = RequestContext {
             peer: peer_id,
-            request: Message::ShareHeaders(share_headers),
+            request: Message::ShareHeaders(share_header_batch_with_empty_branches(share_headers)),
             chain_store_handle,
             response_channel: response_channel_tx,
             swarm_tx,
@@ -807,6 +818,9 @@ mod tests {
         mock_validator
             .expect_validate_header_minimum_difficulty()
             .returning(|_| Ok(()));
+        mock_validator
+            .expect_validate_coinbase_proof()
+            .returning(|_, _| Ok(()));
         let mut pool_difficulty = PoolDifficulty::default();
         pool_difficulty
             .expect_calculate_target_clamped()
@@ -820,6 +834,10 @@ mod tests {
         chain_store_handle
             .expect_organise_header()
             .returning(|_| Ok(None));
+
+        chain_store_handle
+            .expect_add_header_template_merkle_branches()
+            .returning(|_| Ok(()));
         chain_store_handle
             .expect_find_fork_point_height()
             .returning(|_| Ok(Some(0)));
@@ -843,7 +861,7 @@ mod tests {
         let (block_fetcher_handle, validation_tx, block_receiver_handle) = test_handles();
         let result = handle_response(
             peer_id,
-            Message::ShareHeaders(share_headers),
+            Message::ShareHeaders(share_header_batch_with_empty_branches(share_headers)),
             chain_store_handle,
             swarm_tx,
             block_fetcher_handle,

@@ -14,7 +14,7 @@ use crate::store::block_tx_metadata::{BlockMetadata, Status};
 use crate::store::dag_store::{BlockValidSearch, ShareDag, UncleInfo};
 use crate::store::transaction_store::PrevoutCheck;
 use crate::store::writer::{StoreError, StoreHandle};
-use bitcoin::{BlockHash, Work};
+use bitcoin::{BlockHash, TxMerkleNode, Work};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, info, warn};
@@ -810,6 +810,28 @@ impl ChainStoreHandle {
         self.store_handle.mark_block_valid(blockhash).await
     }
 
+    /// Store the coinbase merkle branches of a batch of synced headers, so
+    /// headers held without their bodies can be served on with their proofs.
+    pub async fn add_header_template_merkle_branches(
+        &self,
+        entries: Vec<(BlockHash, Vec<TxMerkleNode>)>,
+    ) -> Result<(), StoreError> {
+        self.store_handle
+            .add_header_template_merkle_branches(entries)
+            .await
+    }
+
+    /// The coinbase merkle branch stored for a share, empty when none is
+    /// stored.
+    pub fn get_template_merkle_branches(
+        &self,
+        blockhash: &BlockHash,
+    ) -> Result<Vec<TxMerkleNode>, StoreError> {
+        self.store_handle
+            .store()
+            .get_template_merkle_branches(blockhash)
+    }
+
     /// Add a block to the candidate chain and promote candidates to confirmed.
     ///
     /// Combines organise_header (which places the block on the candidate
@@ -928,6 +950,8 @@ mockall::mock! {
         pub async fn organise_block(&self) -> Result<Option<u32>, StoreError>;
         pub async fn mark_invalid(&self, blockhash: BlockHash) -> Result<(), StoreError>;
         pub async fn mark_block_valid(&self, blockhash: BlockHash) -> Result<(), StoreError>;
+        pub async fn add_header_template_merkle_branches(&self, entries: Vec<(BlockHash, Vec<TxMerkleNode>)>) -> Result<(), StoreError>;
+        pub fn get_template_merkle_branches(&self, blockhash: &BlockHash) -> Result<Vec<TxMerkleNode>, StoreError>;
         pub async fn promote_block(&self, header: ShareHeader) -> Result<Option<u32>, StoreError>;
         pub async fn add_share_block(&self, share: ShareBlock) -> Result<(), StoreError>;
         pub async fn add_share_block_and_organise_header(&self, share: ShareBlock) -> Result<Option<u32>, StoreError>;

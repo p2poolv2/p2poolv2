@@ -18,7 +18,7 @@ pub use handle::StoreHandle;
 use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::store::Store;
-use bitcoin::BlockHash;
+use bitcoin::{BlockHash, TxMerkleNode};
 use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
@@ -155,6 +155,13 @@ pub enum WriteCommand {
     /// Mark a block BlockValid after it passes chain-context validation.
     MarkBlockValid {
         blockhash: BlockHash,
+        reply: oneshot::Sender<Result<(), StoreError>>,
+    },
+
+    /// Store the coinbase merkle branches of a batch of synced headers, so
+    /// headers held without their bodies can be served on with their proofs.
+    AddHeaderTemplateMerkleBranches {
+        entries: Vec<(BlockHash, Vec<TxMerkleNode>)>,
         reply: oneshot::Sender<Result<(), StoreError>>,
     },
 }
@@ -304,6 +311,14 @@ impl StoreWriter {
                         self.store.commit_batch(batch).map_err(StoreError::from)?;
                         Ok(upgraded)
                     });
+                let _ = reply.send(result);
+            }
+            WriteCommand::AddHeaderTemplateMerkleBranches { entries, reply } => {
+                let mut batch = Store::get_write_batch();
+                let result = self
+                    .store
+                    .add_header_template_merkle_branches(&entries, &mut batch)
+                    .and_then(|()| self.store.commit_batch(batch).map_err(StoreError::from));
                 let _ = reply.send(result);
             }
         }
