@@ -15,6 +15,7 @@
 
 use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::address::Address as P2PoolAddress;
+use crate::shares::coinbase_proof::CoinbaseProof;
 use crate::shares::extranonce::Extranonce;
 use crate::stratum::emission::Emission;
 use crate::stratum::work::difficulty::validate::build_coinbase_from_components;
@@ -137,6 +138,13 @@ pub fn build_sim_emission(params: SimShareParams<'_>) -> Result<BuiltShare, SimS
         format!("{:08x}", params.nonce),
     );
 
+    let coinbase_proof = job
+        .share_commitment
+        .as_ref()
+        .map(|commitment| CoinbaseProof::from_coinbase(&coinbase, commitment.non_coinbase_root))
+        .transpose()
+        .map_err(|e| SimShareError(format!("build coinbase proof: {e}")))?;
+
     let emission = Emission {
         pplns,
         header,
@@ -145,6 +153,7 @@ pub fn build_sim_emission(params: SimShareParams<'_>) -> Result<BuiltShare, SimS
         coinbase_nsecs: job.coinbase_nsecs,
         template_merkle_branches: job.template_merkle_branches.clone(),
         extranonce,
+        coinbase_proof,
     };
 
     Ok(BuiltShare { emission, coinbase })

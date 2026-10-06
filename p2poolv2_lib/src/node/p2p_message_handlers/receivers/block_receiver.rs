@@ -870,20 +870,16 @@ mod tests {
         );
     }
 
-    /// TODO: Pins the unbounded-buffer vulnerability
+    /// The receiver itself does not bound the pending buffer: every block
+    /// naming a parent that never arrives takes a slot it never releases.
     ///
-    /// This asserts today's behaviour, which is the *vulnerable* behaviour: one
-    /// bitcoin header replayed under many different parent hashes takes a
-    /// pending slot each, and none of them can ever be released. It exists so
-    /// the mechanism is executable rather than only described, and so that
-    /// fixing the issue trips a test rather than passing silently.
-    ///
-    /// The admission gate (`validate_header_minimum_difficulty`) reads only the
-    /// bitcoin header, its declared bits and the uncle count, while a block's
-    /// identity is `ShareHeader::block_hash()` over the whole share header. So
-    /// `prev_share_blockhash` is a free mutation axis: every value is a distinct
-    /// block, at no proof-of-work cost, naming a parent that will never arrive,
-    /// so `remove_from_pending` is never reached for any of them.
+    /// That is safe only because the admission gate in `handle_share_block`
+    /// now runs `validate_coinbase_proof`, which binds the share fields --
+    /// `prev_share_blockhash` included -- to the bitcoin header's proof of
+    /// work. A bitcoin header replayed under another parent fails there, so
+    /// each block reaching this buffer costs a share's worth of real work.
+    /// This test drives the receiver directly, below that gate, to pin the
+    /// receiver's half: it buffers whatever it is given.
     #[tokio::test]
     async fn test_replayed_header_under_distinct_parents_fills_pending() {
         const REPLAYS: u8 = 32;

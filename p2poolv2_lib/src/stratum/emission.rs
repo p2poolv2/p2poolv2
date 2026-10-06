@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use crate::accounting::payout::simple_pplns::SimplePplnsShare;
+use crate::shares::coinbase_proof::CoinbaseProof;
 use crate::shares::extranonce::Extranonce;
 use crate::shares::share_commitment::ShareCommitment;
 use crate::stratum::work::block_template::BlockTemplate;
@@ -23,6 +24,10 @@ pub struct Emission {
     pub template_merkle_branches: Vec<bitcoin::TxMerkleNode>,
     /// Combined extranonce (enonce1 || enonce2) from the stratum submission.
     pub extranonce: Extranonce,
+    /// Midstate proof of the commitment in the bitcoin coinbase, present
+    /// exactly when `share_commitment` is: built where the full coinbase is
+    /// still in hand, at submission.
+    pub coinbase_proof: Option<CoinbaseProof>,
 }
 
 pub type EmissionSender = mpsc::Sender<Emission>;

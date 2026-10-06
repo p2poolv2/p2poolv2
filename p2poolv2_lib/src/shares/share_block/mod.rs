@@ -7,6 +7,7 @@ pub mod short_ids;
 
 use super::transactions;
 use crate::address::Address as P2PoolAddress;
+use crate::shares::coinbase_proof::{CoinbaseProof, MAX_COINBASE_MERKLE_BRANCH_LENGTH};
 use crate::shares::coinbaseaux_flags::CoinbaseAuxFlags;
 use crate::shares::extranonce::Extranonce;
 use crate::shares::genesis;
@@ -107,6 +108,11 @@ pub struct ShareHeader {
     /// Combined extranonce (enonce1 || enonce2) from the stratum submission
     #[serde(default)]
     pub extranonce: Extranonce,
+    /// Midstate proof that this header's commitment ends the coinbase of
+    /// `bitcoin_header`, checkable with the coinbase merkle branch alone.
+    /// See `CoinbaseProof`.
+    #[serde(default)]
+    pub coinbase_proof: CoinbaseProof,
 }
 
 /// Encode an optional address as a bool flag followed by the address string when present.
@@ -162,7 +168,8 @@ impl ShareHeader {
     /// which contains a coinbase matching the commitment.
     ///
     /// We do not validate the commitment is actually present in the
-    /// bitcoin header. That happens at the receiving node.
+    /// bitcoin header. That happens at the receiving node, through
+    /// `coinbase_proof`.
     #[allow(clippy::too_many_arguments)] // wiring constructor: each parameter is a distinct collaborator, a params struct would only move the list
     pub(crate) fn from_commitment_and_header(
         commitment: ShareCommitment,
@@ -173,6 +180,7 @@ impl ShareHeader {
         height: u64,
         coinbase_nsecs: u64,
         extranonce: Extranonce,
+        coinbase_proof: CoinbaseProof,
     ) -> Self {
         Self {
             prev_share_blockhash: commitment.prev_share_blockhash,
@@ -193,6 +201,7 @@ impl ShareHeader {
             bitcoin_height: height,
             coinbase_nsecs,
             extranonce,
+            coinbase_proof,
         }
     }
 
@@ -253,6 +262,7 @@ impl Encodable for ShareHeader {
         len += self.bitcoin_height.consensus_encode(w)?;
         len += self.coinbase_nsecs.consensus_encode(w)?;
         len += self.extranonce.consensus_encode(w)?;
+        len += self.coinbase_proof.consensus_encode(w)?;
         Ok(len)
     }
 }
@@ -299,6 +309,7 @@ impl Decodable for ShareHeader {
         let bitcoin_height = u64::consensus_decode(r)?;
         let coinbase_nsecs = u64::consensus_decode(r)?;
         let extranonce = Extranonce::consensus_decode(r)?;
+        let coinbase_proof = CoinbaseProof::consensus_decode(r)?;
 
         Ok(ShareHeader {
             prev_share_blockhash,
@@ -319,6 +330,7 @@ impl Decodable for ShareHeader {
             bitcoin_height,
             coinbase_nsecs,
             extranonce,
+            coinbase_proof,
         })
     }
 }
@@ -453,6 +465,9 @@ impl ShareBlock {
             bitcoin_height: genesis_data.bitcoin_height,
             coinbase_nsecs: 0,
             extranonce: Extranonce::default(),
+            // The genesis coinbase predates the share chain and carries no
+            // commitment; `CoinbaseProof::verify` exempts genesis.
+            coinbase_proof: CoinbaseProof::default(),
         };
         Ok(Self {
             header,
@@ -505,8 +520,7 @@ impl Decodable for ShareBlock {
         }
         // Decode template merkle path
         let path_count = VarInt::consensus_decode(r)?.0 as usize;
-        let max_path_capacity = 32; // merkle path depth is at most ~30 for any realistic block
-        if path_count > max_path_capacity {
+        if path_count > MAX_COINBASE_MERKLE_BRANCH_LENGTH {
             return Err(ParseFailed("template merkle path too long"));
         }
         let mut template_merkle_branches = Vec::with_capacity(path_count);
@@ -592,9 +606,7 @@ impl Decodable for MerkleBranches {
         r: &mut R,
     ) -> Result<Self, bitcoin::consensus::encode::Error> {
         let count = VarInt::consensus_decode_from_finite_reader(r)?.0 as usize;
-        // Merkle path depth is at most ~30 for any realistic block
-        let max_capacity = 32;
-        if count > max_capacity {
+        if count > MAX_COINBASE_MERKLE_BRANCH_LENGTH {
             return Err(bitcoin::consensus::encode::Error::ParseFailed(
                 "template merkle branches too long",
             ));
@@ -770,6 +782,7 @@ mod tests {
             1,
             0,
             Extranonce::default(),
+            CoinbaseProof::default(),
         );
 
         assert_eq!(header.prev_share_blockhash, cloned.prev_share_blockhash);

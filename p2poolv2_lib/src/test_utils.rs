@@ -18,6 +18,8 @@ use tempfile::{TempDir, tempdir};
 #[cfg(any(test, feature = "test-utils"))]
 use crate::pool_difficulty::PoolDifficulty;
 #[cfg(any(test, feature = "test-utils"))]
+use crate::shares::coinbase_proof::CoinbaseProof;
+#[cfg(any(test, feature = "test-utils"))]
 use crate::shares::extranonce::Extranonce;
 #[cfg(any(test, feature = "test-utils"))]
 use crate::shares::share_block::{ShareBlock, ShareHeader, ShareTransaction};
@@ -468,6 +470,9 @@ pub fn build_block_from_work_components(path: &str, nsecs: u64) -> ShareBlock {
         Some(Extranonce::default().as_bytes()),
     )
     .expect("Failed to build bitcoin coinbase for test");
+    let coinbase_proof =
+        CoinbaseProof::from_coinbase(&bitcoin_coinbase, compute_non_coinbase_root(&[]))
+            .expect("Failed to build coinbase proof for test");
 
     let mut bitcoin_transactions = Vec::with_capacity(template_transactions.len() + 1);
     bitcoin_transactions.push(bitcoin_coinbase);
@@ -514,6 +519,7 @@ pub fn build_block_from_work_components(path: &str, nsecs: u64) -> ShareBlock {
         bitcoin_height: template.height as u64,
         coinbase_nsecs: TEST_COINBASE_NSECS,
         extranonce: Extranonce::default(),
+        coinbase_proof,
     };
 
     let template_merkle_branches = build_merkle_branches_for_template(&template)
@@ -695,8 +701,10 @@ fn test_share_block(
     let share_time = time.unwrap_or(1700000000u32);
     let prev_blockhash = BlockHash::from_str(prev_share_blockhash).unwrap();
 
-    let (bitcoin_header, _bitcoin_transactions) = match bitcoin_block {
-        Some(block) => (block.header, block.txdata),
+    let (bitcoin_header, coinbase_proof) = match bitcoin_block {
+        // A caller-supplied bitcoin block has no share commitment in its
+        // coinbase, so there is nothing for a proof to show.
+        Some(block) => (block.header, CoinbaseProof::default()),
         None => {
             // Build a commitment matching the share header fields. Both the
             // owner and the non-coinbase root are taken from what this block
@@ -733,6 +741,11 @@ fn test_share_block(
                 None,
             )
             .expect("Failed to build bitcoin coinbase for test");
+            let coinbase_proof = CoinbaseProof::from_coinbase(
+                &bitcoin_coinbase,
+                compute_non_coinbase_root(&other_share_transactions),
+            )
+            .expect("Failed to build coinbase proof for test");
 
             let template_merkle_root = bitcoin::merkle_tree::calculate_root(
                 [bitcoin_coinbase.clone()]
@@ -751,7 +764,7 @@ fn test_share_block(
                     bits: share_bits,
                     nonce: nonce.unwrap_or(0xe9695791),
                 },
-                vec![bitcoin_coinbase],
+                coinbase_proof,
             )
         }
     };
@@ -790,6 +803,7 @@ fn test_share_block(
         bitcoin_height: 1,
         coinbase_nsecs: TEST_COINBASE_NSECS,
         extranonce: Extranonce::default(),
+        coinbase_proof,
     };
 
     ShareBlock {
@@ -883,6 +897,7 @@ impl TestShareHeaderBuilder {
             bitcoin_height: 1,
             coinbase_nsecs: TEST_COINBASE_NSECS,
             extranonce: Extranonce::default(),
+            coinbase_proof: CoinbaseProof::default(),
         }
     }
 }
