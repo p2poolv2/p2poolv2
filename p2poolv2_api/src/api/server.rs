@@ -21,6 +21,7 @@ use p2poolv2_lib::{
     accounting::{payout::simple_pplns::SimplePplnsShare, stats::metrics::MetricsHandle},
     config::ApiConfig,
     shares::chain::chain_store_handle::ChainStoreHandle,
+    store::found_block::FoundBlock,
 };
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -258,6 +259,15 @@ async fn metrics(State(state): State<Arc<AppState>>) -> String {
         ));
     }
 
+    // Found bitcoin blocks are read live from the store, where they are
+    // recorded on confirmation. Not gated on is_current: the list is derived
+    // from the share chain and timestamped with bitcoin header times, so it is
+    // correct during sync and the same on every node.
+    match state.chain_store_handle.get_found_blocks() {
+        Ok(found_blocks) => exposition.push_str(&found_blocks_exposition(&found_blocks)),
+        Err(error) => warn!("Failed to read found blocks for /metrics: {error}"),
+    }
+
     match tokio::time::timeout(P2P_HEALTH_TIMEOUT, state.node_handle.get_p2p_health()).await {
         Ok(Ok(p2p_health)) => exposition.push_str(&p2p_health.exposition()),
         Ok(Err(error)) => warn!("Failed to read P2P health for /metrics: {error}"),
@@ -265,6 +275,38 @@ async fn metrics(State(state): State<Arc<AppState>>) -> String {
     }
 
     exposition
+}
+
+/// Exposition for the bitcoin blocks found by the pool.
+///
+/// Emits a counter of all found blocks and one gauge line per block, set to
+/// its bitcoin header time and labeled with blockhash, height and miner so
+/// Grafana can list the blocks and link to a block explorer. Entries are
+/// never deleted from the store, so the counter is monotonic.
+fn found_blocks_exposition(found_blocks: &[FoundBlock]) -> String {
+    let mut output = String::with_capacity(256 + found_blocks.len() * 256);
+    output.push_str(
+        "# HELP bitcoin_blocks_found_total Total number of bitcoin blocks found by the pool\n",
+    );
+    output.push_str("# TYPE bitcoin_blocks_found_total counter\n");
+    output.push_str(&format!(
+        "bitcoin_blocks_found_total {}\n",
+        found_blocks.len()
+    ));
+    output.push_str(
+        "# HELP bitcoin_block_found_time_seconds Bitcoin header time of a block found by the pool, labeled with blockhash, height and miner\n",
+    );
+    output.push_str("# TYPE bitcoin_block_found_time_seconds gauge\n");
+    for found_block in found_blocks {
+        output.push_str(&format!(
+            "bitcoin_block_found_time_seconds{{blockhash=\"{}\",height=\"{}\",miner=\"{}\"}} {}\n",
+            found_block.bitcoin_blockhash,
+            found_block.bitcoin_height,
+            found_block.miner_bitcoin_address,
+            found_block.bitcoin_time
+        ));
+    }
+    output
 }
 
 /// Convert 256-bit chain work to an f64 for Prometheus exposition. Lossy in the
@@ -424,6 +466,7 @@ mod tests {
     }
 
     use base64::Engine;
+    use bitcoin::blockdata::constants::genesis_block;
     use bitcoin::{Amount, Network, TxOut};
     use p2poolv2_lib::accounting::stats::metrics;
     use p2poolv2_lib::monitoring_events::create_monitoring_event_channel;
@@ -431,7 +474,7 @@ mod tests {
     use p2poolv2_lib::stratum::work::block_template::BlockTemplate;
     use p2poolv2_lib::stratum::work::coinbase::parse_address;
     use p2poolv2_lib::stratum::work::tracker::start_tracker_actor;
-    use p2poolv2_lib::test_utils::setup_test_chain_store_handle;
+    use p2poolv2_lib::test_utils::{TestShareBlockBuilder, setup_test_chain_store_handle};
     use std::collections::HashMap;
     use std::str::FromStr;
     use std::sync::Arc;
@@ -471,6 +514,85 @@ mod tests {
 
         assert!(exposition.contains("# TYPE p2p_connected_peers gauge\np2p_connected_peers 0\n"));
         assert!(exposition.contains("p2p_connections_closed_unresponsive_total 0\n"));
+    }
+
+    #[test]
+    fn test_found_blocks_exposition_lists_each_block() {
+        let found_blocks = vec![FoundBlock {
+            bitcoin_height: 840000,
+            bitcoin_blockhash: bitcoin::BlockHash::from_str(
+                "0000000000000000000320283a032748cef8227873ff4872689bf23f1cda83a5",
+            )
+            .unwrap(),
+            share_blockhash: bitcoin::BlockHash::from_str(
+                "00000000000000000001b4e3a8b6c1d2e3f405162738495a6b7c8d9e0f1a2b3c",
+            )
+            .unwrap(),
+            bitcoin_time: 1713571767,
+            miner_bitcoin_address: "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh".to_string(),
+        }];
+
+        let exposition = found_blocks_exposition(&found_blocks);
+
+        assert!(
+            exposition.contains(
+                "# TYPE bitcoin_blocks_found_total counter\nbitcoin_blocks_found_total 1\n"
+            )
+        );
+        assert!(exposition.contains("# TYPE bitcoin_block_found_time_seconds gauge\n"));
+        assert!(exposition.contains(
+            "bitcoin_block_found_time_seconds{blockhash=\"0000000000000000000320283a032748cef8227873ff4872689bf23f1cda83a5\",height=\"840000\",miner=\"bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh\"} 1713571767\n"
+        ));
+    }
+
+    #[test]
+    fn test_found_blocks_exposition_with_no_blocks() {
+        let exposition = found_blocks_exposition(&[]);
+
+        assert!(exposition.contains("bitcoin_blocks_found_total 0\n"));
+        assert!(!exposition.contains("bitcoin_block_found_time_seconds{"));
+    }
+
+    #[tokio::test]
+    async fn test_metrics_endpoint_exposes_found_blocks() {
+        let node_handle = NodeHandle::new_for_test();
+        let (state, _temp_dir) = build_test_state(node_handle).await;
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        state
+            .chain_store_handle
+            .init_or_setup_genesis(genesis.clone())
+            .await
+            .unwrap();
+
+        // The regtest genesis header meets its own target, so confirming
+        // this share records a found bitcoin block.
+        let mut share = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        share.header.bitcoin_header = genesis_block(Network::Regtest).header;
+        state
+            .chain_store_handle
+            .add_share_block_and_organise_header(share.clone())
+            .await
+            .unwrap();
+        state
+            .chain_store_handle
+            .mark_block_valid(share.block_hash())
+            .await
+            .unwrap();
+        state.chain_store_handle.organise_block().await.unwrap();
+
+        let exposition = metrics(State(state)).await;
+
+        assert!(exposition.contains("bitcoin_blocks_found_total 1\n"));
+        assert!(exposition.contains(&format!(
+            "bitcoin_block_found_time_seconds{{blockhash=\"{}\",height=\"{}\",miner=\"{}\"}} {}\n",
+            share.header.bitcoin_header.block_hash(),
+            share.header.bitcoin_height,
+            share.header.miner_bitcoin_address,
+            share.header.bitcoin_header.time
+        )));
     }
 
     #[tokio::test]

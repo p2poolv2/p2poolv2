@@ -29,8 +29,9 @@ The response is assembled from two kinds of source:
    pull from other subsystems that already hold the data, so nothing
    needs to be duplicated into the metrics actor. Currently the coinbase
    reward distribution and the network difficulty are read live from the
-   `JobTracker` (latest job template), and the P2P health counters are read
-   from the node actor (`NodeHandle::get_p2p_health`).
+   `JobTracker` (latest job template), the found bitcoin blocks and
+   confirmed chain work are read from the store, and the P2P health
+   counters are read from the node actor (`NodeHandle::get_p2p_health`).
 
 ```
 mining.submit ---> MetricsActor (accumulated counters/gauges) --.
@@ -38,6 +39,7 @@ organise/confirm -> MetricsActor (effort accumulator) ----------|
                                                                  |
 JobTracker (latest job template) --- live read at scrape -------+--> GET /metrics
 confirmed chain work (get_total_work) --- live read at scrape --|
+FoundBlocks CF (get_found_blocks) --- live read at scrape ------|
 node actor (Command::GetP2pHealth) --- live read at scrape -----|
                                                                  |
 PplnsWindow (planned) --- live read at scrape ------------------'
@@ -55,9 +57,9 @@ series count bounded:
   `pplns_hashrate_distribution`) are bounded by the number of pool
   participants. Acceptable, but watch the active worker count.
 - Block hashes are exposed only through `bitcoin_block_found_time_seconds`,
-  whose series count is bounded by `MAX_BLOCKS_FOUND_TRACKED` (a ring of
-  the most recent finds). Blocks are rare, so this stays tiny while
-  still letting Grafana build explorer links.
+  one series per bitcoin block the pool has found. Blocks are rare, so
+  this stays small while letting Grafana list every block with explorer
+  links.
 
 ## Metric reference
 
@@ -95,34 +97,42 @@ contributed work.
 
 | Metric | Type | Source |
 |---|---|---|
-| `bitcoin_blocks_found_total` | counter | actor |
-| `bitcoin_block_found_time_seconds{blockhash,height}` | gauge | actor |
+| `bitcoin_blocks_found_total` | counter | live read of `FoundBlocks` CF |
+| `bitcoin_block_found_time_seconds{blockhash,height,miner}` | gauge | live read of `FoundBlocks` CF |
 
-Recorded **pool-wide** from the share chain: when the organise worker
-promotes a confirmed share whose bitcoin header meets the network target
-(`ShareBlock::is_bitcoin_block`), it records the find in `post_promote`.
-This counts blocks found by any node's miners, not just locally connected
-ones -- every node sees the block-finding share on the chain. (The stratum
-submit handler still submits the block to bitcoind on a local find, but no
-longer records the metric.) The counter is monotonic; the gauge holds the
-Unix time the block was found and carries `blockhash` and `height` labels.
-The set of gauge series is bounded by `MAX_BLOCKS_FOUND_TRACKED`
-(`accounting/stats/metrics.rs`) and persists across restarts. Recording is
-gated on `is_current` so sync replay does not backfill finds with a
-now() timestamp, and a blockhash already in the ring is ignored so a
-reorg re-promotion does not double-count.
+Derived from the share chain and persisted in the store
+(`store/found_block.rs`, see `store-schema.md`). When `confirm_blocks`
+confirms a share, it checks the share's header and the headers of its
+uncles; each one whose bitcoin header meets the bitcoin network target
+(`ShareHeader::meets_bitcoin_difficulty`) is written to the `FoundBlocks`
+column family in the same batch as the confirmation. This records blocks
+found by any node's miners, not just locally connected ones, including
+blocks carried by uncles.
+
+- **Restart-safe and node-consistent.** The list lives in RocksDB and is
+  derived from the chain, so every node reports the same blocks.
+- **Rebuilt on sync.** Only header data is read, so header-only
+  confirmation below the prune height records the same entries; a fresh
+  node rebuilds the list as it syncs. No `is_current` gate is needed
+  because the gauge value is the bitcoin header time, not now(). A node
+  upgraded in place only records blocks confirmed after the upgrade.
+- **Never deleted.** A share chain reorg does not undo a bitcoin block,
+  so entries are kept and the counter is monotonic. Whether a block
+  stayed on the bitcoin main chain is left to the block explorer.
+- **Not limited by Prometheus retention.** Every scrape carries the full
+  list, so an instant query always shows every found block.
+
+The stratum submit handler still submits the block to bitcoind on a local
+find; it records nothing.
 
 **Grafana:**
-- *Block-find timeline*: a Time series or State timeline of
-  `increase(bitcoin_blocks_found_total[$__interval])` to show when
-  blocks were found.
-- *Block table with links*: a Table panel over `bitcoin_block_found_time_seconds`
-  (Instant query, Format = Table). Add a data link on the `blockhash`
-  field pointing at a block explorer, e.g.
-  `https://mempool.space/block/${__data.fields.blockhash}` (use the
-  testnet/signet host for non-mainnet deployments). Because the series
-  count is bounded and blocks are rare, this carries links without a
-  cardinality problem.
+- *Blocks found*: Stat of `bitcoin_blocks_found_total` (instant).
+- *Found blocks table*: a Table panel over
+  `bitcoin_block_found_time_seconds * 1000` (Instant query, Format =
+  Table, value unit `dateTimeAsIso`). A data link on the `blockhash`
+  field points at `${explorer}/block/${__data.fields.blockhash}`, where
+  `explorer` is a dashboard variable choosing mempool.space for mainnet,
+  testnet4 or signet.
 
 ### Pool-wide sharechain hashrate (Release 2) -- pool item #2
 
@@ -175,10 +185,10 @@ periods.
 
 `work_since_last_block` accumulates the pool difficulty of each confirmed
 sharechain share (via `MetricsMessage::RecordConfirmedShare` from the
-organise worker's `post_promote`) and resets to zero when the **pool**
-finds a bitcoin block. The reset is driven by the same pool-wide
-share-chain signal as the block-found metric (a confirmed share that
-`is_bitcoin_block`), so it fires for a block found by any node's miners,
+organise worker's `record_confirmed_block`) and resets to zero
+(`MetricsMessage::ResetBlockEffort`) when the **pool** finds a bitcoin
+block. The reset is driven by a pool-wide share-chain signal (a confirmed
+share that meets the bitcoin target), so it fires for a block found by any node's miners,
 not just local ones -- this makes it a true pool "round luck" metric
 (>100% means the pool is overdue for a block). It is runtime-only (not
 persisted): a fresh or pruned node cannot reconstruct
@@ -191,7 +201,7 @@ numerator and denominator are emitted separately so the effort formula
 lives in Grafana.
 
 Accumulation is **skipped while syncing** (`is_current` is false): during
-sync `post_promote` replays the whole backlog and `work_since_last_block`
+sync `record_confirmed_block` replays the whole backlog and `work_since_last_block`
 never resets (no real bitcoin block is found during replay), so it would
 balloon to the entire chain's work and report an absurd effort. Only
 real-time confirmed shares count.
