@@ -58,8 +58,6 @@ impl PoolMetrics {
         ));
         output.push('\n');
 
-        output.push_str(&self.get_blocks_found_exposition());
-
         output.push_str(
             "# HELP work_since_last_block Confirmed sharechain pool difficulty since the last bitcoin block was found\n",
         );
@@ -71,38 +69,6 @@ impl PoolMetrics {
         output.push('\n');
 
         output.push_str(&self.get_worker_expositions());
-
-        output
-    }
-
-    /// Exposition for bitcoin blocks found by the pool.
-    ///
-    /// Emits a monotonic counter for the total and one info gauge line per
-    /// recently found block, carrying blockhash and height labels set to the
-    /// discovery timestamp. The bounded ring (MAX_BLOCKS_FOUND_TRACKED) keeps
-    /// label cardinality low while letting Grafana build block explorer links.
-    fn get_blocks_found_exposition(&self) -> String {
-        let mut output = String::new();
-
-        output.push_str("# HELP bitcoin_blocks_found_total Total number of bitcoin blocks found\n");
-        output.push_str("# TYPE bitcoin_blocks_found_total counter\n");
-        output.push_str(&format!(
-            "bitcoin_blocks_found_total {}\n",
-            self.blocks_found_total
-        ));
-        output.push('\n');
-
-        output.push_str(
-            "# HELP bitcoin_block_found_time_seconds Unix time a bitcoin block was found, labeled with blockhash and height\n",
-        );
-        output.push_str("# TYPE bitcoin_block_found_time_seconds gauge\n");
-        for block in &self.blocks_found {
-            output.push_str(&format!(
-                "bitcoin_block_found_time_seconds{{blockhash=\"{}\",height=\"{}\"}} {}\n",
-                block.blockhash, block.height, block.timestamp
-            ));
-        }
-        output.push('\n');
 
         output
     }
@@ -239,9 +205,8 @@ impl PoolMetrics {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::accounting::stats::metrics::BlockFound;
     use crate::accounting::stats::user::User;
-    use std::collections::{HashMap, VecDeque};
+    use std::collections::HashMap;
     use std::time::SystemTime;
 
     fn now() -> u64 {
@@ -283,31 +248,13 @@ mod tests {
     }
 
     #[test]
-    fn test_blocks_found_and_effort_exposition() {
-        let mut blocks_found = VecDeque::new();
-        blocks_found.push_back(BlockFound {
-            blockhash: "00000000000000000000abcdef0123456789abcdef0123456789abcdef012345"
-                .to_string(),
-            height: 840000,
-            timestamp: 1700000000,
-        });
-
+    fn test_effort_exposition() {
         let metrics = PoolMetrics {
-            blocks_found_total: 3,
-            blocks_found,
             work_since_last_block: 12345.0,
             ..Default::default()
         };
 
         let exposition = metrics.get_exposition();
-
-        assert!(exposition.contains("# TYPE bitcoin_blocks_found_total counter"));
-        assert!(exposition.contains("bitcoin_blocks_found_total 3"));
-
-        assert!(exposition.contains("# TYPE bitcoin_block_found_time_seconds gauge"));
-        assert!(exposition.contains(
-            "bitcoin_block_found_time_seconds{blockhash=\"00000000000000000000abcdef0123456789abcdef0123456789abcdef012345\",height=\"840000\"} 1700000000"
-        ));
 
         assert!(exposition.contains("# TYPE work_since_last_block gauge"));
         assert!(exposition.contains("work_since_last_block 12345"));

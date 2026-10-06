@@ -786,17 +786,11 @@ impl OrganiseWorker {
             let share_difficulty = bitcoin::Target::from_compact(header.bits).difficulty_float();
             let _ = self.metrics.record_confirmed_share(share_difficulty).await;
 
-            // If this confirmed share is itself a bitcoin block, record the
-            // find pool-wide (any node's miners) and reset the effort
-            // accumulator toward the next block.
+            // If this confirmed share is itself a bitcoin block (found by any
+            // node's miners), reset the effort accumulator toward the next
+            // block. The find itself is recorded in the store on confirmation.
             if header.meets_bitcoin_difficulty() {
-                let _ = self
-                    .metrics
-                    .record_block_found(
-                        header.bitcoin_header.block_hash().to_string(),
-                        header.bitcoin_height,
-                    )
-                    .await;
+                let _ = self.metrics.reset_block_effort().await;
             }
         }
 
@@ -2125,7 +2119,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_confirmed_block_records_pool_block_find() {
+    async fn test_confirmed_bitcoin_block_resets_block_effort() {
         let (organise_tx, organise_rx) = create_organise_channel();
         let mut mock_chain_handle = MockChainStoreHandle::new();
         mock_chain_handle
@@ -2203,11 +2197,9 @@ mod tests {
         let result = worker.run().await;
         assert!(result.is_ok());
 
-        // The block find is recorded pool-wide from the share chain, and the
-        // effort accumulator is reset by it.
+        // A pool-wide block find from the share chain resets the effort
+        // accumulator.
         let pool_metrics = metrics.get_metrics().await;
-        assert_eq!(pool_metrics.blocks_found_total, 1);
-        assert_eq!(pool_metrics.blocks_found.len(), 1);
         assert_eq!(pool_metrics.work_since_last_block, 0.0);
     }
 
