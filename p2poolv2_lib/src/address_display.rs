@@ -22,7 +22,7 @@
 
 use crate::store::dag_store::{DagEntry, ShareInfo, UncleInfo};
 use bitcoin::{BlockHash, CompactTarget, Network, WitnessProgram};
-use p2poolv2_address::witness_program_codec::{to_address_string, to_hex};
+use p2poolv2_wallet::witness_program_codec::{to_address_string, to_hex};
 use serde::Serialize;
 
 /// Render a miner address for `network`, or the witness program hex when

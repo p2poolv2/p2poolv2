@@ -11,7 +11,7 @@ use bitcoin::consensus::Encodable;
 use bitcoin::hashes::Hash;
 use bitcoin::io::Write;
 use bitcoin::{Address, BlockHash, CompactTarget, TxMerkleNode, hashes};
-use p2poolv2_address::witness_program_codec;
+use p2poolv2_wallet::witness_program_codec;
 use serde::Serialize;
 
 /// Share commitment created by miner and embedded in the bitcoin
@@ -44,7 +44,7 @@ pub struct ShareCommitment {
     /// Hashed directly. The coinbase is no longer in the commitment,
     /// as it carries the weak block hash, so this is now the only thing
     /// binding a miner to the proof of work produced.
-    #[serde(with = "p2poolv2_address::witness_program_codec::serde_hex")]
+    #[serde(with = "p2poolv2_wallet::witness_program_codec::serde_hex")]
     pub miner_address: WitnessProgram,
     /// Merkle root over this share's *non-coinbase* transactions.
     ///

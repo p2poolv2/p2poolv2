@@ -3010,17 +3010,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 
 [[package]]
-name = "p2poolv2_address"
-version = "0.15.3"
-dependencies = [
- "bitcoin",
- "hex",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
-]
-
-[[package]]
 name = "p2poolv2_api"
 version = "0.15.3"
 dependencies = [
@@ -3059,8 +3048,8 @@ dependencies = [
  "config",
  "hex",
  "hmac",
- "p2poolv2_address",
  "p2poolv2_lib",
+ "p2poolv2_wallet",
  "rand 0.10.3",
  "reqwest",
  "rpassword",
@@ -3081,7 +3070,7 @@ dependencies = [
  "bitcoin",
  "bitcoindrpc",
  "config",
- "p2poolv2_address",
+ "p2poolv2_wallet",
  "serde",
  "temp-env",
  "tokio-test",
@@ -3106,8 +3095,8 @@ dependencies = [
  "libp2p",
  "mockall",
  "mockall_double",
- "p2poolv2_address",
  "p2poolv2_config",
+ "p2poolv2_wallet",
  "rand 0.10.3",
  "rlimit",
  "rocksdb",
@@ -3192,6 +3181,17 @@ dependencies = [
  "tokio-test",
  "tracing",
  "zmq",
+]
+
+[[package]]
+name = "p2poolv2_wallet"
+version = "0.15.3"
+dependencies = [
+ "bitcoin",
+ "hex",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]

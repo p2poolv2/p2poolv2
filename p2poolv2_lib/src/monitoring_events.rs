@@ -76,7 +76,7 @@ mod tests {
     use crate::test_utils::make_test_share_program;
     use bitcoin::hashes::Hash;
     use bitcoin::{BlockHash, CompactTarget};
-    use p2poolv2_address::witness_program_codec::to_hex;
+    use p2poolv2_wallet::witness_program_codec::to_hex;
 
     #[test]
     fn test_share_event_serialization() {

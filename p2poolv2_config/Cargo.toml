@@ -18,7 +18,7 @@ test-utils = []
 
 [dependencies]
 bitcoin = { workspace = true }
-p2poolv2_address = { workspace = true }
+p2poolv2_wallet = { workspace = true }
 bitcoindrpc = { workspace = true }
 config = { workspace = true }
 serde = { workspace = true }
