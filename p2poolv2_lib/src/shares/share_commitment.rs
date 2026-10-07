@@ -71,8 +71,6 @@ pub struct ShareCommitment {
     pub fee_address: Option<Address>,
     /// Fee in basis points
     pub fee: Option<u16>,
-    /// Total bitcoin coinbase value
-    pub coinbase_value: u64,
 }
 
 /// Bytes the timestamp contributes to the commitment encoding.
@@ -128,21 +126,19 @@ pub(crate) fn build_commitment_prefix(
 }
 
 /// Serialize the commitment fields after time:
-/// donation_address + donation + fee_address + fee + share_witness_root +
-/// coinbase_value.
+/// donation_address + donation + fee_address + fee + share_witness_root.
 ///
 /// Shared across miners for a template. Worth pre-building: the addresses
 /// encode as their bech32 *strings*, so each one costs a checksum computation
 /// and an allocation that would otherwise repeat for every connected miner.
-/// `share_witness_root` and `coinbase_value` belong here for the same reason:
-/// they are properties of the template, not of any one miner.
+/// `share_witness_root` belongs here for the same reason: it is a property of
+/// the template's share transaction set, not of any one miner.
 pub(crate) fn build_commitment_suffix(
     donation_address: &Option<Address>,
     donation: Option<u16>,
     fee_address: &Option<Address>,
     fee: Option<u16>,
     share_witness_root: WitnessMerkleNode,
-    coinbase_value: u64,
 ) -> Vec<u8> {
     let mut suffix = Vec::with_capacity(128);
     encode_optional_address(donation_address, &mut suffix)
@@ -159,9 +155,6 @@ pub(crate) fn build_commitment_suffix(
     share_witness_root
         .consensus_encode(&mut suffix)
         .expect("encoding share witness root should never fail");
-    coinbase_value
-        .consensus_encode(&mut suffix)
-        .expect("encoding coinbase value should never fail");
     suffix
 }
 
@@ -225,9 +218,9 @@ impl ShareCommitment {
     /// share block. The share coinbase follows from the header, so it needs no
     /// commitment of its own.
     ///
-    /// Every field is digested, `coinbase_value` included: a field the header
-    /// carries but the digest leaves out could be changed without touching the
-    /// proof of work, giving one proof of work many share hashes.
+    /// Every field is digested: a field the header carries but the digest
+    /// leaves out could be changed without touching the proof of work, giving
+    /// one proof of work many share hashes.
     pub fn hash(&self) -> hashes::sha256::Hash {
         let prefix = build_commitment_prefix(self.prev_share_blockhash, &self.uncles, self.bits);
         let suffix = build_commitment_suffix(
@@ -236,7 +229,6 @@ impl ShareCommitment {
             &self.fee_address,
             self.fee,
             self.share_witness_root,
-            self.coinbase_value,
         );
         commitment_digest(
             &prefix,
@@ -289,7 +281,6 @@ impl ShareCommitment {
             donation: header.donation,
             fee_address: header.fee_address.clone(),
             fee: header.fee,
-            coinbase_value: header.coinbase_value,
         }
     }
 }
@@ -413,22 +404,6 @@ mod tests {
         assert_ne!(commitment1.hash(), commitment2.hash());
     }
 
-    /// `coinbase_value` is part of the share hash, so it must be part of the
-    /// commitment: otherwise one proof of work stands behind a share hash per
-    /// value.
-    #[test]
-    fn test_hash_changes_with_coinbase_value() {
-        let commitment1 = create_test_commitment();
-        let mut commitment2 = create_test_commitment();
-
-        commitment2.coinbase_value += 1;
-
-        assert_ne!(commitment1.hash(), commitment2.hash());
-    }
-
-    /// The bitcoin address is digested with its network class, as the header
-    /// encodes it. The same script on another network is a different address
-    /// and a different share hash, so it must be a different commitment.
     #[test]
     fn test_hash_changes_with_bitcoin_address_network() {
         let mut commitment1 = create_test_commitment();

@@ -349,13 +349,6 @@ mod tests {
         assert!(CoinbaseProof::verify(&header, &[]).is_err());
     }
 
-    #[test]
-    fn test_coinbase_proof_rejects_changed_coinbase_value() {
-        let mut header = non_genesis_share_header();
-        header.coinbase_value += 1;
-        assert!(CoinbaseProof::verify(&header, &[]).is_err());
-    }
-
     /// The locktime in the coinbase tail is the height less one, so the
     /// height is bound by the tail rather than the commitment.
     #[test]

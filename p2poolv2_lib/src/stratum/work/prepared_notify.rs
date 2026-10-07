@@ -382,7 +382,6 @@ impl PreparedNotifyParamsBuilder {
             &self.fee_address,
             self.fee,
             compute_witness_root(&[]),
-            self.template.coinbasevalue,
         );
 
         Ok(PreparedNotifyParams {
@@ -491,7 +490,6 @@ pub(crate) fn build_notify_from_prepared(
             donation: prepared.donation,
             fee_address: prepared.fee_address.clone(),
             fee: prepared.fee,
-            coinbase_value: prepared.template.coinbasevalue,
         }),
         _ => None,
     };
@@ -659,7 +657,6 @@ mod tests {
         let address = test_address();
         let bits = CompactTarget::from_consensus(0x1d00ffff);
         let tracker_handle = start_tracker_actor();
-        let coinbase_value = template.coinbasevalue;
 
         let prepared = test_notify_params_builder(template, false)
             .build()
@@ -694,7 +691,6 @@ mod tests {
             donation: None,
             fee_address: None,
             fee: None,
-            coinbase_value,
         };
 
         assert_eq!(commitment.hash(), direct_commitment.hash());
@@ -781,7 +777,6 @@ mod tests {
             donation: prepared.donation,
             fee_address: prepared.fee_address.clone(),
             fee: prepared.fee,
-            coinbase_value: prepared.template.coinbasevalue,
         };
         let from_struct = hex::encode(commitment.hash().as_byte_array());
 

@@ -571,13 +571,14 @@ fields, each credited the work its declared `bits` claim.
 The rule: every field of `ShareHeader` is fixed by the proof of work, because
 `block_hash` covers every field and a free field would give one proof of work
 many share hashes. Each field is the bitcoin header itself, digested into the
-`ShareCommitment` (`coinbase_value` and the bitcoin address's network class
-included), fixed by the coinbase tail (`bitcoin_height`, through the
-locktime), or the `coinbase_proof`, whose coinbase txid the bitcoin merkle
-root fixes. Data the proof of work fixes but a header cannot check -- the
-coinbase aux flags, extranonce, nanosecond timestamp and BIP141 witness
-commitment -- is not in the header: the `ShareBlock` carries the bitcoin
-coinbase itself. `coinbase_proof.rs` has one test per header field.
+`ShareCommitment` (the bitcoin address's network class included), fixed by the
+coinbase tail (`bitcoin_height`, through the locktime), or the
+`coinbase_proof`, whose coinbase txid the bitcoin merkle root fixes. Data the
+proof of work fixes but a header cannot check -- the coinbase value, aux
+flags, extranonce, nanosecond timestamp and BIP141 witness commitment -- is
+not in the header: the `ShareBlock` carries the bitcoin coinbase itself, and
+payout validation divides that coinbase's own output total.
+`coinbase_proof.rs` has one test per header field.
 
 The binding is checkable from the header alone because of where the
 commitment sits. The bitcoin coinbase ends with

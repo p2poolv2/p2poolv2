@@ -47,7 +47,8 @@ use crate::stratum::work::coinbase::{
 use crate::stratum::work::gbt::compute_merkle_root_from_branches;
 use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
 use bitcoin::{
-    Address, Amount, BlockHash, CompactTarget, Target, TxMerkleNode, transaction::Version,
+    Address, Amount, BlockHash, CompactTarget, Target, Transaction, TxMerkleNode,
+    transaction::Version,
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -171,6 +172,27 @@ pub const TXS_COUNT_LIMIT: u32 = 100;
 pub const COINBASE_MATURITY: usize = 6048;
 /// Maximum total sigop cost allowed in a share block (matches Bitcoin consensus).
 pub const MAX_BLOCK_SIGOPS_COST: usize = 80_000;
+
+/// Total value the bitcoin coinbase pays out, in satoshis.
+///
+/// This is the value payout validation divides among the PPLNS window. The
+/// coinbase is fixed by the proof of work.
+///
+/// A total above `Amount::MAX_MONEY`, or one that overflows, is
+/// a malformed coinbase.
+fn bitcoin_coinbase_value(coinbase: &Transaction) -> Result<u64, ValidationError> {
+    coinbase
+        .output
+        .iter()
+        .try_fold(Amount::ZERO, |total, output| {
+            total.checked_add(output.value)
+        })
+        .filter(|total| *total <= Amount::MAX_MONEY)
+        .map(Amount::to_sat)
+        .ok_or_else(|| {
+            ValidationError::consensus("Bitcoin coinbase output total exceeds the money supply")
+        })
+}
 
 /// Check whether a block is in the PPLNS zone (needing full
 /// validation) or the prune zone (PoW-only validation).
@@ -907,18 +929,22 @@ impl DefaultShareValidator {
                 )),
             })?;
 
-        let coinbase_value = share.header.coinbase_value;
+        // The total paid out is the bitcoin coinbase's own output total. The
+        // admission gate has matched the coinbase to the proof of work, so this
+        // is what the miner committed to; the rebuild below checks the payouts
+        // divide it as the PPLNS window says.
+        let coinbase_value = bitcoin_coinbase_value(&share.bitcoin_coinbase)?;
 
         let expected_outputs =
             Self::build_expected_outputs(&share.header, &address_difficulty_map, coinbase_value)?;
         let expected_commitment_hash = ShareCommitment::from_share_block(share).hash();
 
-        //* The aux flags, extranonce, nanosecond timestamp and witness
-        //* commitment are read back from the coinbase itself. The admission
-        //* gate has already matched its txid to the proof of work, so these
-        //* are the values the miner hashed; rebuilding with them and comparing
-        //* the whole coinbase leaves only the payouts, the height, the pool
-        //* signature and the commitment to disagree.
+        // The aux flags, extranonce, nanosecond timestamp and witness
+        // commitment are read back from the coinbase itself. The admission
+        // gate has already matched its txid to the proof of work, so these
+        // are the values the miner hashed; rebuilding with them and comparing
+        // the whole coinbase leaves only the payouts, the height, the pool
+        // signature and the commitment to disagree.
         let fields = parse_bitcoin_coinbase_fields(&share.bitcoin_coinbase).map_err(|error| {
             ValidationError::consensus(format!("Malformed bitcoin coinbase: {error}"))
         })?;
@@ -3636,7 +3662,6 @@ mod tests {
         let mut share_block = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
-        share_block.header.coinbase_value = 312_500_000;
         share_block.header.bitcoin_height = 840_000;
 
         let commitment_hash = ShareCommitment::from_share_block(&share_block).hash();
@@ -3711,7 +3736,6 @@ mod tests {
         let mut share_block = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
-        share_block.header.coinbase_value = 312_500_000;
         share_block.header.bitcoin_height = 840_000;
 
         let commitment_hash = ShareCommitment::from_share_block(&share_block).hash();
@@ -3779,7 +3803,6 @@ mod tests {
         let mut share_block = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
-        share_block.header.coinbase_value = 312_500_000;
         share_block.header.bitcoin_height = 840_000;
 
         // Mock PplnsWindow returning empty distribution
@@ -3826,7 +3849,6 @@ mod tests {
         let mut share_block = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
-        share_block.header.coinbase_value = 312_500_000;
         share_block.header.bitcoin_height = 840_000;
         share_block.header.bitcoin_header.merkle_root = coinbase_tx.compute_txid().into();
         share_block.bitcoin_coinbase = coinbase_tx;
@@ -3867,7 +3889,6 @@ mod tests {
         let mut share_block = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
-        share_block.header.coinbase_value = 312_500_000;
         share_block.header.bitcoin_height = 840_000;
 
         let anchor = share_block.header.prev_share_blockhash;
@@ -3899,22 +3920,60 @@ mod tests {
         );
     }
 
+    /// The value payout validation divides is the coinbase's own output
+    /// total, zero-valued commitment and padding outputs included.
     #[test]
-    fn test_validate_bitcoin_payout_with_wrong_coinbase_value_fails() {
+    fn test_bitcoin_coinbase_value_sums_outputs() {
+        let share_block = TestShareBlockBuilder::new().build();
+        let expected: u64 = share_block
+            .bitcoin_coinbase
+            .output
+            .iter()
+            .map(|output| output.value.to_sat())
+            .sum();
+
+        assert_eq!(
+            bitcoin_coinbase_value(&share_block.bitcoin_coinbase).unwrap(),
+            expected
+        );
+        assert_eq!(expected, 5_000_000_000);
+    }
+
+    #[test]
+    fn test_bitcoin_coinbase_value_rejects_total_above_money_supply() {
+        let mut coinbase = TestShareBlockBuilder::new().build().bitcoin_coinbase;
+        coinbase.output[0].value = Amount::MAX_MONEY + Amount::from_sat(1);
+
+        let error = bitcoin_coinbase_value(&coinbase).unwrap_err();
+
+        assert_eq!(error.kind(), FailureKind::Consensus);
+    }
+
+    #[test]
+    fn test_bitcoin_coinbase_value_rejects_overflowing_total() {
+        let mut coinbase = TestShareBlockBuilder::new().build().bitcoin_coinbase;
+        coinbase.output[0].value = Amount::from_sat(u64::MAX);
+        coinbase.output[1].value = Amount::from_sat(u64::MAX);
+
+        let error = bitcoin_coinbase_value(&coinbase).unwrap_err();
+
+        assert_eq!(error.kind(), FailureKind::Consensus);
+    }
+
+    #[test]
+    fn test_validate_bitcoin_payout_with_one_satoshi_coinbase() {
         let address_a = crate::test_utils::parse_address_from_string(
             "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
         );
 
-        // Build share block with coinbase_value=1 sat
         let mut share_block = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
-        share_block.header.coinbase_value = 1;
         share_block.header.bitcoin_height = 840_000;
 
         let commitment_hash = ShareCommitment::from_share_block(&share_block).hash();
 
-        // Build coinbase with 1 sat matching the header
+        // Build a coinbase paying out 1 sat in total
         let coinbase_tx = build_bitcoin_coinbase_transaction(
             Version::TWO,
             &[OutputPair {
@@ -4009,7 +4068,6 @@ mod tests {
         share_block.header.donation = Some(donation_bp);
         share_block.header.fee_address = Some(fee_address.clone());
         share_block.header.fee = Some(fee_bp);
-        share_block.header.coinbase_value = total_coinbase_sats;
         share_block.header.bitcoin_height = 840_000;
 
         let commitment_hash = ShareCommitment::from_share_block(&share_block).hash();
@@ -4108,7 +4166,6 @@ mod tests {
         let mut share_block = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
-        share_block.header.coinbase_value = template.coinbasevalue;
         share_block.header.bitcoin_height = template.height as u64;
         let aux_flags = template
             .coinbaseaux

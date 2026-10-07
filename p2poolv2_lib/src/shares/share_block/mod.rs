@@ -95,8 +95,6 @@ pub struct ShareHeader {
     /// Fee in basis points
     #[serde(default)]
     pub fee: Option<u16>,
-    /// Total bitcoin coinbase value - from blocktemplate
-    pub coinbase_value: u64,
     /// Next bitcoin block height - from blocktemplate
     #[serde(default)]
     pub bitcoin_height: u64,
@@ -214,7 +212,6 @@ impl ShareHeader {
             donation: commitment.donation,
             fee_address: commitment.fee_address,
             fee: commitment.fee,
-            coinbase_value: commitment.coinbase_value,
             bitcoin_height: height,
             coinbase_proof,
         }
@@ -271,7 +268,6 @@ impl ShareHeader {
         len += self.donation.unwrap_or(0).consensus_encode(w)?;
         len += encode_optional_address(&self.fee_address, w)?;
         len += self.fee.unwrap_or(0).consensus_encode(w)?;
-        len += self.coinbase_value.consensus_encode(w)?;
         len += self.bitcoin_height.consensus_encode(w)?;
         len += self.coinbase_proof.consensus_encode(w)?;
         Ok(len)
@@ -315,7 +311,6 @@ impl ShareHeader {
         let fee_raw = u16::consensus_decode(r)?;
         let fee = if fee_raw > 0 { Some(fee_raw) } else { None };
 
-        let coinbase_value = u64::consensus_decode(r)?;
         let bitcoin_height = u64::consensus_decode(r)?;
         let coinbase_proof = CoinbaseProof::consensus_decode(r)?;
 
@@ -331,7 +326,6 @@ impl ShareHeader {
             donation,
             fee_address,
             fee,
-            coinbase_value,
             bitcoin_height,
             coinbase_proof,
         })
@@ -490,11 +484,6 @@ impl ShareBlock {
             bitcoin_block.header.block_hash(),
             &[],
         );
-        let coinbase_value = coinbase
-            .output
-            .iter()
-            .fold(0, |memo, out| memo + out.value.to_sat());
-
         let transactions = vec![ShareTransaction(coinbase)];
 
         let genesis_time = sim_overrides::genesis_timestamp(genesis_data);
@@ -512,7 +501,6 @@ impl ShareBlock {
             donation: None,
             fee_address: None,
             fee: None,
-            coinbase_value,
             bitcoin_height: genesis_data.bitcoin_height,
             // The genesis coinbase predates the share chain and carries no
             // commitment. Genesis is built locally and never verified.
@@ -825,7 +813,6 @@ mod tests {
             donation: None,
             fee_address: None,
             fee: None,
-            coinbase_value: 100_000_000,
         };
 
         let cloned = commitment.clone();
@@ -938,7 +925,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "share_sync fixtures were built before share headers dropped merkle_root and the commitment bound coinbase_value and the share witness root; regenerate them"]
+    #[ignore = "share_sync fixtures were built before share headers dropped merkle_root, coinbase_value and the coinbase fields, and the commitment bound the share witness root; regenerate them"]
     fn test_fixture_coinbase_reconstruction_matches_bitcoin_merkle_root() {
         let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../p2poolv2_tests/test_data/share_sync/share_blocks.json");
@@ -980,7 +967,12 @@ mod tests {
             let mut outputs = Vec::with_capacity(address_difficulty_map.len() + 2);
             let remaining_after_donation = include_address_and_cut(
                 &mut outputs,
-                bitcoin::Amount::from_sat(header.coinbase_value),
+                block
+                    .bitcoin_coinbase
+                    .output
+                    .iter()
+                    .map(|output| output.value)
+                    .sum(),
                 &header.donation_address,
                 header.donation,
             );
