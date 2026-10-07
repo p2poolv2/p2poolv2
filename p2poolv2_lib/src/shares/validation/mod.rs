@@ -347,7 +347,8 @@ pub trait ShareValidator {
     /// non-coinbase transactions must have that witness root, and the share
     /// coinbase must be the one the header implies
     /// (`build_sharechain_coinbase_for_witness_root`). The bitcoin coinbase
-    /// must have the txid the header's proof gives.
+    /// must have the txid the header's proof gives and no witness, which the
+    /// txid does not cover.
     ///
     /// Part of the ddos prevention gate alongside
     /// `validate_header_minimum_difficulty` and `validate_block_size`: a block's
@@ -1026,13 +1027,13 @@ impl ShareValidator for DefaultShareValidator {
             )));
         }
 
-        //* Rebuild the coinbase this share must carry and compare, rather than
-        //* checking its fields one at a time. That proves it is the canonical
-        //* coinbase, not merely a well shaped one, which is what the share unit
-        //* accounting needs: its txid has to be a function of the share alone.
-        //* Every input is bound to the proof of work: `miner_address` and the
-        //* witness root through the share commitment, and the weak block hash
-        //* is the proof of work itself.
+        // Rebuild the coinbase this share must carry and compare, rather than
+        // checking its fields one at a time. That proves it is the canonical
+        // coinbase, not merely a well shaped one, which is what the share unit
+        // accounting needs: its txid has to be a function of the share alone.
+        // Every input is bound to the proof of work: `miner_address` and the
+        // witness root through the share commitment, and the weak block hash
+        // is the proof of work itself.
         let expected = build_sharechain_coinbase_for_witness_root(
             &share.header.miner_address,
             share.header.bitcoin_header.block_hash(),
@@ -1044,10 +1045,8 @@ impl ShareValidator for DefaultShareValidator {
             ));
         }
 
-        //* The bitcoin coinbase is not in the block hash. Its txid has to be the
-        //* one the header's proof gives, which the proof of work commits to;
-        //* that is what makes the extranonce and the other values read from it
-        //* the ones the miner hashed.
+        // The bitcoin coinbase is not in the block hash. Its txid has to be the
+        // one the header's proof gives, which the proof of work commits to
         let proof_txid = share
             .header
             .coinbase_proof
@@ -1060,6 +1059,19 @@ impl ShareValidator for DefaultShareValidator {
             return Err(ValidationError::consensus(format!(
                 "Bitcoin coinbase txid {coinbase_txid} is not the {proof_txid} its header's proof gives"
             )));
+        }
+        // A txid leaves out the witness, so the txid alone does not fix it.
+        // Validate the coinbase has no witness, else an attacker can send
+        // conflicting block txs with a coinbase that will make the block Invalid.
+        if share
+            .bitcoin_coinbase
+            .input
+            .iter()
+            .any(|input| !input.witness.is_empty())
+        {
+            return Err(ValidationError::consensus(
+                "Bitcoin coinbase carries a witness; it is carried as hashed, without one",
+            ));
         }
         Ok(())
     }
@@ -2489,6 +2501,30 @@ mod tests {
         assert_eq!(error.kind(), FailureKind::Consensus);
         assert!(
             error.to_string().contains("Bitcoin coinbase txid"),
+            "unexpected error: {error}"
+        );
+    }
+
+    /// A txid leaves out the witness, so the txid check alone would accept a
+    /// copy of the block whose bitcoin coinbase gained a witness. Payout
+    /// validation compares the whole coinbase and would then mark the real
+    /// block's hash Invalid; the copy has to be rejected before it is stored.
+    #[test]
+    fn test_validate_body_matches_header_fails_when_bitcoin_coinbase_has_witness() {
+        let mut share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+        let txid_before = share.bitcoin_coinbase.compute_txid();
+
+        share.bitcoin_coinbase.input[0].witness.push([0u8; 32]);
+
+        assert_eq!(share.bitcoin_coinbase.compute_txid(), txid_before);
+        let error = validator()
+            .validate_body_matches_header(&share)
+            .unwrap_err();
+        assert_eq!(error.kind(), FailureKind::Consensus);
+        assert!(
+            error.to_string().contains("witness"),
             "unexpected error: {error}"
         );
     }

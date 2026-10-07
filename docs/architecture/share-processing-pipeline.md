@@ -614,7 +614,8 @@ and again in both validation paths, reading only the block itself:
 2. the share coinbase is the one the header implies
    (`build_sharechain_coinbase_for_witness_root`);
 3. the bitcoin coinbase has the txid the proof gives
-   (`CoinbaseProof::coinbase_txid_for`).
+   (`CoinbaseProof::coinbase_txid_for`) and no witness, which a txid does not
+   cover.
 
 A failure at the gate is a bad copy of the block, not a bad block: it is never
 stored, so the hash stays fetchable. After the gate the body is the one the
