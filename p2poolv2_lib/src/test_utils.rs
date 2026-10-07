@@ -348,7 +348,6 @@ pub fn create_test_commitment() -> ShareCommitment {
         donation: None,
         fee_address: None,
         fee: None,
-        coinbase_value: 100_000_000,
     }
 }
 
@@ -440,7 +439,6 @@ pub fn build_block_from_work_components(path: &str, nsecs: u64) -> ShareBlock {
         donation: None,
         fee_address: None,
         fee: None,
-        coinbase_value: template.coinbasevalue,
     };
     let commitment_hash = share_commitment.hash();
 
@@ -498,7 +496,6 @@ pub fn build_block_from_work_components(path: &str, nsecs: u64) -> ShareBlock {
         donation: None,
         fee_address: None,
         fee: None,
-        coinbase_value: template.coinbasevalue,
         bitcoin_height: template.height as u64,
         coinbase_proof,
     };
@@ -729,7 +726,6 @@ fn test_share_block(
                 donation: None,
                 fee_address: None,
                 fee: None,
-                coinbase_value: 5_000_000_000,
             };
 
             let bitcoin_coinbase = build_bitcoin_coinbase_transaction(
@@ -799,7 +795,6 @@ fn test_share_block(
         donation: None,
         fee_address: None,
         fee: None,
-        coinbase_value: 5_000_000_000,
         bitcoin_height: 1,
         coinbase_proof,
     };
@@ -883,7 +878,6 @@ impl TestShareHeaderBuilder {
             donation: None,
             fee_address: None,
             fee: None,
-            coinbase_value: 100_000_000,
             bitcoin_height: 1,
             coinbase_proof: CoinbaseProof::default(),
         }

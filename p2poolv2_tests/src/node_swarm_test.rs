@@ -204,7 +204,7 @@ fn load_share_sync_blocks() -> Vec<ShareBlock> {
 /// the fixtures don't work out.
 #[cfg(not(feature = "sim"))]
 #[test_log::test(tokio::test)]
-#[ignore = "share_sync fixtures were built before share headers dropped merkle_root and the commitment bound coinbase_value and the share witness root; regenerate them"]
+#[ignore = "share_sync fixtures were built before share headers dropped merkle_root, coinbase_value and the coinbase fields, and the commitment bound the share witness root; regenerate them"]
 async fn test_three_nodes_share_sync() {
     let fixture_blocks = load_share_sync_blocks();
     let share_count = (fixture_blocks.len() - 1) as u32;
