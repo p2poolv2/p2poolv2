@@ -204,7 +204,6 @@ fn load_share_sync_blocks() -> Vec<ShareBlock> {
 /// the fixtures don't work out.
 #[cfg(not(feature = "sim"))]
 #[test_log::test(tokio::test)]
-#[ignore = "share_sync fixtures were built with the commitment in the coinbase scriptSig; regenerate them with the commitment at the coinbase tail"]
 async fn test_three_nodes_share_sync() {
     let fixture_blocks = load_share_sync_blocks();
     let share_count = (fixture_blocks.len() - 1) as u32;
