@@ -5,7 +5,6 @@
 use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::config::PoolMode;
 use crate::shares::coinbase_proof::CoinbaseProof;
-use crate::shares::extranonce::Extranonce;
 use crate::stratum::{
     difficulty_adjuster::DifficultyAdjusterTrait,
     emission::Emission,
@@ -181,13 +180,7 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
     // Only emit to the share chain when the share meets the pool difficulty
     // target. Shares below the pool target still count toward hashrate and
     // vardiff below, but are not part of the share chain / PPLNS accounting.
-    // The extranonce is only needed for the emission, so build it here to avoid
-    // wasted hex parsing when the share does not meet the pool target.
     if meets_pool_target {
-        let extranonce =
-            Extranonce::from_enonce_hex(&session.enonce1_hex, extranonce2).map_err(|error| {
-                Error::SubmitFailure(format!("Failed to build extranonce: {error}"))
-            })?;
         // The full coinbase exists only here, so the proof is built now. Every
         // coinbase this pool builds ends with the commitment, so a failure is
         // a malformed job, not the miner's fault: log it and emit without a
@@ -206,9 +199,8 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
                 header: validation_result.header,
                 blocktemplate: job.blocktemplate.clone(),
                 share_commitment: job.share_commitment.clone(),
-                coinbase_nsecs: job.coinbase_nsecs,
                 template_merkle_branches: job.template_merkle_branches.clone(),
-                extranonce,
+                bitcoin_coinbase: validation_result.coinbase.clone(),
                 coinbase_proof,
             })
             .await

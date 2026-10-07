@@ -7,10 +7,8 @@
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
-use crate::shares::coinbaseaux_flags::CoinbaseAuxFlags;
 use crate::shares::share_block::{ShareBlock, ShareHeader, ShareTransaction};
 use crate::shares::transactions::coinbase::build_sharechain_coinbase_transaction;
-use crate::shares::witness_commitment::WitnessCommitment;
 use crate::stratum::emission::Emission;
 use std::error::Error;
 use tracing::debug;
@@ -28,9 +26,8 @@ pub async fn handle_stratum_share(
         header,
         blocktemplate,
         share_commitment,
-        coinbase_nsecs,
         template_merkle_branches,
-        extranonce,
+        bitcoin_coinbase,
         coinbase_proof,
     } = emission;
 
@@ -58,18 +55,7 @@ pub async fn handle_stratum_share(
         let share_header = ShareHeader::from_commitment_and_header(
             share_commitment,
             header,
-            blocktemplate
-                .coinbaseaux
-                .get("flags")
-                .and_then(|flags| hex::decode(flags).ok())
-                .map(|bytes| CoinbaseAuxFlags::new(&bytes)),
-            blocktemplate
-                .default_witness_commitment
-                .as_deref()
-                .and_then(|hex_str| WitnessCommitment::from_hex(hex_str).ok()),
             blocktemplate.height as u64,
-            coinbase_nsecs,
-            extranonce,
             coinbase_proof,
         );
 
@@ -77,6 +63,7 @@ pub async fn handle_stratum_share(
             header: share_header,
             transactions: share_transactions,
             template_merkle_branches,
+            bitcoin_coinbase,
         };
 
         debug!(
@@ -109,10 +96,9 @@ mod tests {
     use super::*;
     use crate::accounting::payout::simple_pplns::SimplePplnsShare;
     use crate::shares::coinbase_proof::CoinbaseProof;
-    use crate::shares::extranonce::Extranonce;
     use crate::store::writer::StoreError;
     use crate::stratum::work::block_template::BlockTemplate;
-    use crate::test_utils::{TEST_COINBASE_NSECS, create_test_commitment};
+    use crate::test_utils::{create_test_commitment, test_coinbase_transaction};
     use bitcoin::block::Header;
     use bitcoin::hashes::Hash;
     use bitcoin::{BlockHash, CompactTarget};
@@ -174,9 +160,8 @@ mod tests {
             header: bitcoin_header,
             blocktemplate: Arc::new(create_test_blocktemplate()),
             share_commitment: None,
-            coinbase_nsecs: TEST_COINBASE_NSECS,
             template_merkle_branches: vec![],
-            extranonce: Extranonce::default(),
+            bitcoin_coinbase: test_coinbase_transaction(1),
             coinbase_proof: None,
         }
     }
@@ -210,9 +195,8 @@ mod tests {
             header: bitcoin_header,
             blocktemplate: Arc::new(create_test_blocktemplate()),
             share_commitment: Some(commitment),
-            coinbase_nsecs: TEST_COINBASE_NSECS,
             template_merkle_branches: vec![],
-            extranonce: Extranonce::default(),
+            bitcoin_coinbase: test_coinbase_transaction(1),
             coinbase_proof: Some(CoinbaseProof::default()),
         }
     }
@@ -402,12 +386,11 @@ mod tests {
             header: bitcoin_header,
             blocktemplate: Arc::new(blocktemplate),
             share_commitment: Some(commitment),
-            coinbase_nsecs: TEST_COINBASE_NSECS,
             template_merkle_branches: vec![
                 bitcoin::TxMerkleNode::all_zeros(),
                 bitcoin::TxMerkleNode::all_zeros(),
             ],
-            extranonce: Extranonce::default(),
+            bitcoin_coinbase: test_coinbase_transaction(1),
             coinbase_proof: Some(CoinbaseProof::default()),
         };
 

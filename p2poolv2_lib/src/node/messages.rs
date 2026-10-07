@@ -569,9 +569,7 @@ impl Decodable for GetData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shares::coinbaseaux_flags::CoinbaseAuxFlags;
     use crate::shares::validation::MAX_UNCLES;
-    use crate::shares::witness_commitment::WitnessCommitment;
     use crate::test_utils::TestShareBlockBuilder;
     use bitcoin::consensus::encode;
     use std::str::FromStr;
@@ -618,8 +616,7 @@ mod tests {
     /// worst-case headers -- must fit under `MAX_P2P_MESSAGE_SIZE`, or header
     /// sync would be rejected by our own codec. Worst case per header: the
     /// maximum uncles, the longest address script (P2WSH) in every address
-    /// field, the longest coinbaseaux flags, a witness commitment, the bitcoin
-    /// merkle root included, and a distinct coinbase branch of the maximum
+    /// field, the bitcoin merkle root included, and a distinct coinbase branch of the maximum
     /// length -- no two headers sharing a block template. The sender completes
     /// whole heights, so a response can overshoot `MAX_HEADERS_IN_RESPONSE` by
     /// up to one dense height.
@@ -638,13 +635,6 @@ mod tests {
         header.donation = Some(u16::MAX);
         header.fee_address = Some(longest_address);
         header.fee = Some(u16::MAX);
-        header.coinbaseaux_flags = Some(CoinbaseAuxFlags::new(&[0xff; 32]));
-        header.witness_commitment = Some(
-            WitnessCommitment::from_hex(
-                "6a24aa21a9ede2f61c3f71d1defd3fa999dfa36953755c690689799962b48bebd836974e8cf9",
-            )
-            .unwrap(),
-        );
 
         let header_count = MAX_SHARE_HEADER_BATCH_LENGTH;
         let mut entries = Vec::with_capacity(header_count);

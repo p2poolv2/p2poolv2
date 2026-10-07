@@ -151,10 +151,20 @@ impl CoinbaseProof {
                 branch.len()
             )));
         }
+        let coinbase_txid = self.coinbase_txid_for(header)?;
+        Ok(compute_merkle_root_from_branches(coinbase_txid, branch))
+    }
+
+    /// The txid of the bitcoin coinbase this proof shows ends with `header`'s
+    /// commitment.
+    ///
+    /// Once the proof verifies, this is the txid the proof of work commits
+    /// to, so a block's bitcoin coinbase is authentic exactly when its txid
+    /// is this one.
+    pub fn coinbase_txid_for(&self, header: &ShareHeader) -> Result<Txid, CoinbaseProofError> {
         let commitment_hash =
             ShareCommitment::from_share_header_and_root(header, self.share_witness_root).hash();
-        let coinbase_txid = self.coinbase_txid(&commitment_hash, header.bitcoin_height)?;
-        Ok(compute_merkle_root_from_branches(coinbase_txid, branch))
+        self.coinbase_txid(&commitment_hash, header.bitcoin_height)
     }
 
     /// The coinbase txid: resume SHA256 from the midstate, hash the
@@ -224,10 +234,12 @@ mod tests {
     use super::*;
     use crate::accounting::OutputPair;
     use crate::stratum::work::coinbase::build_bitcoin_coinbase_transaction;
-    use crate::test_utils::{TestShareBlockBuilder, create_test_commitment, make_test_address};
+    use crate::test_utils::{
+        TestShareBlockBuilder, create_test_commitment, make_test_address, make_test_share_program,
+    };
     use bitcoin::script::PushBytesBuf;
     use bitcoin::transaction::Version;
-    use bitcoin::{Amount, BlockHash};
+    use bitcoin::{Address, Amount, BlockHash, CompactTarget, Network};
 
     /// A share built the way a miner builds one: its bitcoin coinbase ends
     /// with its commitment, and the builder took the proof from that coinbase.
@@ -250,6 +262,141 @@ mod tests {
     fn test_coinbase_proof_rejects_changed_share_time() {
         let mut header = non_genesis_share_header();
         header.time += 1;
+        assert!(CoinbaseProof::verify(&header, &[]).is_err());
+    }
+
+    //* One test per share header field: every field `block_hash` covers must
+    //* be fixed by the proof of work, or one proof of work stands behind a
+    //* share hash per value of that field. Changing any field must make the
+    //* proof fail, or change the bitcoin header and so the proof of work
+    //* itself. A field added to `ShareHeader` without a binding has no test
+    //* here to pass.
+
+    #[test]
+    fn test_coinbase_proof_rejects_changed_prev_share_blockhash() {
+        let mut header = non_genesis_share_header();
+        header.prev_share_blockhash = BlockHash::from_byte_array([0x7a; 32]);
+        assert!(CoinbaseProof::verify(&header, &[]).is_err());
+    }
+
+    #[test]
+    fn test_coinbase_proof_rejects_changed_uncles() {
+        let mut header = non_genesis_share_header();
+        header.uncles.push(BlockHash::from_byte_array([0x7b; 32]));
+        assert!(CoinbaseProof::verify(&header, &[]).is_err());
+    }
+
+    #[test]
+    fn test_coinbase_proof_rejects_changed_miner_bitcoin_address() {
+        let mut header = non_genesis_share_header();
+        header.miner_bitcoin_address = make_test_address(2);
+        assert!(CoinbaseProof::verify(&header, &[]).is_err());
+    }
+
+    /// The same script under another network class is another `Address`, and
+    /// encodes to another share hash, so it must not keep the proof.
+    #[test]
+    fn test_coinbase_proof_rejects_changed_miner_bitcoin_address_network() {
+        let mut header = non_genesis_share_header();
+        let script = header.miner_bitcoin_address.script_pubkey();
+        header.miner_bitcoin_address = Address::from_script(&script, Network::Regtest).unwrap();
+        assert_ne!(
+            header.miner_bitcoin_address,
+            non_genesis_share_header().miner_bitcoin_address
+        );
+        assert!(CoinbaseProof::verify(&header, &[]).is_err());
+    }
+
+    #[test]
+    fn test_coinbase_proof_rejects_changed_miner_address() {
+        let mut header = non_genesis_share_header();
+        header.miner_address = make_test_share_program(2);
+        assert!(CoinbaseProof::verify(&header, &[]).is_err());
+    }
+
+    #[test]
+    fn test_coinbase_proof_rejects_changed_share_bits() {
+        let mut header = non_genesis_share_header();
+        header.bits = CompactTarget::from_consensus(header.bits.to_consensus() + 1);
+        assert!(CoinbaseProof::verify(&header, &[]).is_err());
+    }
+
+    #[test]
+    fn test_coinbase_proof_rejects_changed_donation_address() {
+        let mut header = non_genesis_share_header();
+        header.donation_address = Some(make_test_address(3));
+        assert!(CoinbaseProof::verify(&header, &[]).is_err());
+    }
+
+    #[test]
+    fn test_coinbase_proof_rejects_changed_donation() {
+        let mut header = non_genesis_share_header();
+        header.donation = Some(100);
+        assert!(CoinbaseProof::verify(&header, &[]).is_err());
+    }
+
+    #[test]
+    fn test_coinbase_proof_rejects_changed_fee_address() {
+        let mut header = non_genesis_share_header();
+        header.fee_address = Some(make_test_address(3));
+        assert!(CoinbaseProof::verify(&header, &[]).is_err());
+    }
+
+    #[test]
+    fn test_coinbase_proof_rejects_changed_fee() {
+        let mut header = non_genesis_share_header();
+        header.fee = Some(100);
+        assert!(CoinbaseProof::verify(&header, &[]).is_err());
+    }
+
+    #[test]
+    fn test_coinbase_proof_rejects_changed_coinbase_value() {
+        let mut header = non_genesis_share_header();
+        header.coinbase_value += 1;
+        assert!(CoinbaseProof::verify(&header, &[]).is_err());
+    }
+
+    /// The locktime in the coinbase tail is the height less one, so the
+    /// height is bound by the tail rather than the commitment.
+    #[test]
+    fn test_coinbase_proof_rejects_changed_bitcoin_height() {
+        let mut header = non_genesis_share_header();
+        header.bitcoin_height += 1;
+        assert!(CoinbaseProof::verify(&header, &[]).is_err());
+    }
+
+    #[test]
+    fn test_coinbase_proof_rejects_changed_share_witness_root() {
+        let mut header = non_genesis_share_header();
+        header.coinbase_proof.share_witness_root = WitnessMerkleNode::from_byte_array([0x11; 32]);
+        assert!(CoinbaseProof::verify(&header, &[]).is_err());
+    }
+
+    #[test]
+    fn test_coinbase_proof_rejects_changed_prefix_length() {
+        let mut header = non_genesis_share_header();
+        header.coinbase_proof.prefix_length += SHA256_BLOCK_SIZE as u32;
+        assert!(CoinbaseProof::verify(&header, &[]).is_err());
+    }
+
+    /// The proof fixes the bitcoin merkle root; the other bitcoin header
+    /// fields are the proof of work itself, so changing one is another proof
+    /// of work rather than another share for the same one.
+    #[test]
+    fn test_changed_bitcoin_header_field_changes_the_proof_of_work() {
+        let header = non_genesis_share_header();
+        let mut changed = header.clone();
+        changed.bitcoin_header.nonce = changed.bitcoin_header.nonce.wrapping_add(1);
+        assert_ne!(
+            changed.bitcoin_header.block_hash(),
+            header.bitcoin_header.block_hash()
+        );
+    }
+
+    #[test]
+    fn test_coinbase_proof_rejects_changed_bitcoin_merkle_root() {
+        let mut header = non_genesis_share_header();
+        header.bitcoin_header.merkle_root = TxMerkleNode::from_byte_array([0x22; 32]);
         assert!(CoinbaseProof::verify(&header, &[]).is_err());
     }
 

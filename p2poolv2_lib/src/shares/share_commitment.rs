@@ -316,12 +316,9 @@ pub(crate) fn encode_optional_address<W: Write + ?Sized>(
 mod tests {
     use super::*;
     use crate::shares::coinbase_proof::CoinbaseProof;
-    use crate::shares::coinbaseaux_flags::CoinbaseAuxFlags;
-    use crate::shares::extranonce::Extranonce;
     use crate::shares::share_block::{ShareHeader, ShareTransaction};
     use crate::shares::transactions::coinbase::build_sharechain_coinbase_transaction;
     use crate::shares::transactions::coinbase::compute_witness_root;
-    use crate::shares::witness_commitment::WitnessCommitment;
     use crate::stratum::work::block_template::BlockTemplate;
     use crate::test_utils::create_test_commitment;
     use crate::test_utils::make_test_share_program;
@@ -491,7 +488,7 @@ mod tests {
             .iter()
             .map(bitcoin::Transaction::from)
             .collect();
-        bitcoin_transactions.insert(0, coinbase);
+        bitcoin_transactions.insert(0, coinbase.clone());
 
         let template_merkle_root: TxMerkleNode = bitcoin::merkle_tree::calculate_root(
             bitcoin_transactions.iter().map(|tx| tx.compute_txid()),
@@ -520,18 +517,7 @@ mod tests {
         let header = ShareHeader::from_commitment_and_header(
             commitment,
             bitcoin_header,
-            template
-                .coinbaseaux
-                .get("flags")
-                .and_then(|flags| hex::decode(flags).ok())
-                .map(|bytes| CoinbaseAuxFlags::new(&bytes)),
-            template
-                .default_witness_commitment
-                .as_deref()
-                .and_then(|hex_str| WitnessCommitment::from_hex(hex_str).ok()),
             template.height as u64,
-            0,
-            Extranonce::default(),
             CoinbaseProof::default(),
         );
 
@@ -539,6 +525,7 @@ mod tests {
             header,
             transactions: share_transactions,
             template_merkle_branches: vec![],
+            bitcoin_coinbase: coinbase,
         }
     }
 

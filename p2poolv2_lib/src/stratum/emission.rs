@@ -4,9 +4,9 @@
 
 use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::shares::coinbase_proof::CoinbaseProof;
-use crate::shares::extranonce::Extranonce;
 use crate::shares::share_commitment::ShareCommitment;
 use crate::stratum::work::block_template::BlockTemplate;
+use bitcoin::Transaction;
 use bitcoin::block::Header;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -18,12 +18,13 @@ pub struct Emission {
     pub header: Header,
     pub blocktemplate: Arc<BlockTemplate>,
     pub share_commitment: Option<ShareCommitment>,
-    /// Nanosecond timestamp embedded in the coinbase scriptSig.
-    pub coinbase_nsecs: u64,
     /// Merkle branches for the template transactions (excluding coinbase).
     pub template_merkle_branches: Vec<bitcoin::TxMerkleNode>,
-    /// Combined extranonce (enonce1 || enonce2) from the stratum submission.
-    pub extranonce: Extranonce,
+    /// The bitcoin coinbase the miner hashed, rebuilt from the job and the
+    /// submitted extranonce2. Carried in the share block, where it holds the
+    /// aux flags, extranonce and nanosecond timestamp the header no longer
+    /// does.
+    pub bitcoin_coinbase: Transaction,
     /// Midstate proof of the commitment in the bitcoin coinbase, present
     /// exactly when `share_commitment` is: built where the full coinbase is
     /// still in hand, at submission.

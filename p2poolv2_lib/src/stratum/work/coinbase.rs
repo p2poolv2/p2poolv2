@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use crate::accounting::OutputPair;
-use crate::shares::witness_commitment::WitnessCommitment;
+use crate::shares::transactions::coinbase::BIP141_COMMITMENT_HEADER;
+use crate::shares::witness_commitment::{WITNESS_COMMITMENT_LENGTH, WitnessCommitment};
 use crate::stratum::session::{EXTRANONCE1_SIZE, EXTRANONCE2_SIZE};
 use crate::stratum::work::error::WorkError;
 use crate::utils::time_provider::TimeProvider;
@@ -13,7 +14,7 @@ use bitcoin::consensus::{deserialize, serialize};
 use bitcoin::hashes::{self, Hash, sha256d};
 use bitcoin::network::Network;
 use bitcoin::opcodes::all::{OP_PUSHBYTES_32, OP_RETURN};
-use bitcoin::script::PushBytesBuf;
+use bitcoin::script::{Instruction, PushBytesBuf};
 use bitcoin::transaction::{Sequence, Transaction, TxIn, TxOut, Version};
 use bitcoin::{Address, Amount};
 use hashes::sha256;
@@ -341,6 +342,85 @@ pub fn extract_commitment_hash_from_coinbase(
     let mut hash_bytes = [0u8; 32];
     hash_bytes.copy_from_slice(&script[2..]);
     Ok(sha256::Hash::from_byte_array(hash_bytes))
+}
+
+/// The values a bitcoin coinbase carries that its share header does not:
+/// what `build_bitcoin_coinbase_transaction` takes besides the payouts, the
+/// height, the pool signature and the commitment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CoinbaseFields {
+    /// The coinbaseaux flags push, the scriptSig's second item.
+    pub(crate) aux_flags: PushBytesBuf,
+    /// The extranonce push (enonce1 || enonce2), the scriptSig's third item.
+    pub(crate) extranonce: Vec<u8>,
+    /// The nanosecond timestamp push, the scriptSig's fourth item.
+    pub(crate) nsecs: u64,
+    /// The BIP141 witness commitment output, if the coinbase has one.
+    pub(crate) witness_commitment: Option<WitnessCommitment>,
+}
+
+/// Read the values `build_bitcoin_coinbase_transaction` put into a coinbase
+/// that a share header does not carry.
+///
+/// Validation rebuilds the expected coinbase with these and compares it whole
+/// with the coinbase, so this only has to find each value where the builder
+/// writes it: the scriptSig pushes in order, and the witness commitment as the
+/// output before the padding and commitment outputs.
+pub(crate) fn parse_bitcoin_coinbase_fields(
+    coinbase: &Transaction,
+) -> Result<CoinbaseFields, WorkError> {
+    let input = match coinbase.input.as_slice() {
+        [input] => input,
+        _ => {
+            return Err(WorkError {
+                message: "Bitcoin coinbase must have exactly one input".to_string(),
+            });
+        }
+    };
+    //* The first push is the height, which the header carries. The next three
+    //* are the aux flags, the extranonce and the nanosecond timestamp.
+    let mut pushes = input
+        .script_sig
+        .instructions()
+        .skip(1)
+        .map(|instruction| match instruction {
+            Ok(Instruction::PushBytes(bytes)) => Ok(bytes.as_bytes().to_vec()),
+            _ => Err(WorkError {
+                message: "Bitcoin coinbase scriptSig item is not a data push".to_string(),
+            }),
+        });
+    let mut next_push = |name: &str| {
+        pushes.next().unwrap_or_else(|| {
+            Err(WorkError {
+                message: format!("Bitcoin coinbase scriptSig has no {name}"),
+            })
+        })
+    };
+    let aux_flags = PushBytesBuf::try_from(next_push("aux flags")?).map_err(|_| WorkError {
+        message: "Bitcoin coinbase aux flags are too long".to_string(),
+    })?;
+    let extranonce = next_push("extranonce")?;
+    let nsecs_bytes: [u8; 8] =
+        next_push("nanosecond timestamp")?
+            .try_into()
+            .map_err(|_| WorkError {
+                message: "Bitcoin coinbase nanosecond timestamp is not 8 bytes".to_string(),
+            })?;
+
+    let witness_commitment = coinbase.output.iter().rev().skip(2).find_map(|output| {
+        let script: [u8; WITNESS_COMMITMENT_LENGTH] =
+            output.script_pubkey.as_bytes().try_into().ok()?;
+        script
+            .starts_with(&BIP141_COMMITMENT_HEADER)
+            .then(|| WitnessCommitment::new(script))
+    });
+
+    Ok(CoinbaseFields {
+        aux_flags,
+        extranonce,
+        nsecs: u64::from_le_bytes(nsecs_bytes),
+        witness_commitment,
+    })
 }
 
 #[cfg(test)]
@@ -853,6 +933,102 @@ mod tests {
 
         let extracted_hash = extract_commitment_hash_from_coinbase(&coinbase).unwrap();
         assert_eq!(extracted_hash, expected_hash);
+    }
+
+    /// The parser returns exactly what the builder was given, so a coinbase
+    /// rebuilt from the parsed values is the coinbase itself.
+    #[test]
+    fn test_parse_bitcoin_coinbase_fields_returns_builder_inputs() {
+        let address = parse_address(
+            "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr",
+            bitcoin::Network::Regtest,
+        )
+        .unwrap();
+        let witness_commitment = WitnessCommitment::from_hex(
+            "6a24aa21a9ede2f61c3f71d1defd3fa999dfa36953755c690689799962b48bebd836974e8cf9",
+        )
+        .unwrap();
+        let extranonce = [
+            0xaa, 0xbb, 0xcc, 0xdd, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88,
+        ];
+        let outputs = [OutputPair {
+            address,
+            amount: Amount::from_str("50 BTC").unwrap(),
+        }];
+        let commitment_hash = create_test_commitment().hash();
+
+        let coinbase = build_bitcoin_coinbase_transaction(
+            Version::TWO,
+            &outputs,
+            200,
+            PushBytesBuf::from(&[0x01, 0x02, 0x03]),
+            Some(&witness_commitment),
+            b"P2Poolv2",
+            Some(commitment_hash),
+            1_700_000_000_123_456_789,
+            Some(&extranonce),
+        )
+        .unwrap();
+
+        let fields = parse_bitcoin_coinbase_fields(&coinbase).unwrap();
+
+        assert_eq!(fields.aux_flags.as_bytes(), [0x01, 0x02, 0x03]);
+        assert_eq!(fields.extranonce, extranonce);
+        assert_eq!(fields.nsecs, 1_700_000_000_123_456_789);
+        assert_eq!(fields.witness_commitment, Some(witness_commitment));
+        let rebuilt = build_bitcoin_coinbase_transaction(
+            Version::TWO,
+            &outputs,
+            200,
+            fields.aux_flags,
+            fields.witness_commitment.as_ref(),
+            b"P2Poolv2",
+            Some(commitment_hash),
+            fields.nsecs,
+            Some(&fields.extranonce),
+        )
+        .unwrap();
+        assert_eq!(rebuilt, coinbase);
+    }
+
+    #[test]
+    fn test_parse_bitcoin_coinbase_fields_without_witness_commitment() {
+        let address = parse_address(
+            "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr",
+            bitcoin::Network::Regtest,
+        )
+        .unwrap();
+        let coinbase = build_bitcoin_coinbase_transaction(
+            Version::TWO,
+            &[OutputPair {
+                address,
+                amount: Amount::from_str("50 BTC").unwrap(),
+            }],
+            200,
+            PushBytesBuf::from(&[0u8]),
+            None,
+            b"P2Poolv2",
+            Some(create_test_commitment().hash()),
+            1,
+            None,
+        )
+        .unwrap();
+
+        let fields = parse_bitcoin_coinbase_fields(&coinbase).unwrap();
+
+        assert_eq!(fields.witness_commitment, None);
+    }
+
+    #[test]
+    fn test_parse_bitcoin_coinbase_fields_rejects_coinbase_without_inputs() {
+        let coinbase = Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![],
+            output: vec![],
+        };
+
+        assert!(parse_bitcoin_coinbase_fields(&coinbase).is_err());
     }
 
     #[test]
