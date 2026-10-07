@@ -260,8 +260,8 @@ mod tests {
         // ShareHeaderEntry flattens the header, so its fields sit at the top
         // level of the entry.
         assert_eq!(
-            response["headers"][0]["merkle_root"],
-            genesis.header.merkle_root.to_string()
+            response["headers"][0]["prev_share_blockhash"],
+            genesis.header.prev_share_blockhash.to_string()
         );
         assert_eq!(
             response["headers"][0]["miner_address"],
@@ -297,8 +297,8 @@ mod tests {
         assert_eq!(response["to_height"], 0);
         assert_eq!(response["headers"].as_array().unwrap().len(), 1);
         assert_eq!(
-            response["headers"][0]["merkle_root"],
-            genesis.header.merkle_root.to_string()
+            response["headers"][0]["prev_share_blockhash"],
+            genesis.header.prev_share_blockhash.to_string()
         );
         assert_eq!(
             response["headers"][0]["transactions"],

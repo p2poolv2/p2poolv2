@@ -12,8 +12,6 @@ use crate::shares::share_block::{ShareBlock, ShareHeader, ShareTransaction};
 use crate::shares::transactions::coinbase::build_sharechain_coinbase_transaction;
 use crate::shares::witness_commitment::WitnessCommitment;
 use crate::stratum::emission::Emission;
-use bitcoin::TxMerkleNode;
-use bitcoin::merkle_tree;
 use std::error::Error;
 use tracing::debug;
 
@@ -57,20 +55,8 @@ pub async fn handle_stratum_share(
         share_transactions.push(ShareTransaction(share_coinbase));
         share_transactions.extend(other_share_transactions);
 
-        // The header's merkle root is computed here, from the transactions we
-        // actually assembled, exactly as a bitcoin miner computes theirs once
-        // the coinbase is final.
-        let txids = share_transactions
-            .iter()
-            .map(|tx| tx.compute_txid().to_raw_hash());
-        let merkle_root: TxMerkleNode = match merkle_tree::calculate_root(txids) {
-            Some(merkle_root) => merkle_root.into(),
-            None => return Err("No coinbase found".into()),
-        };
-
         let share_header = ShareHeader::from_commitment_and_header(
             share_commitment,
-            merkle_root,
             header,
             blocktemplate
                 .coinbaseaux

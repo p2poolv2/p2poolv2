@@ -28,7 +28,7 @@ use crate::stratum::work::gbt::compute_merkle_root_from_branches;
 use bitcoin::absolute::LockTime;
 use bitcoin::consensus::{Decodable, Encodable, serialize};
 use bitcoin::hashes::{Hash, HashEngine, sha256};
-use bitcoin::{Transaction, TxMerkleNode, Txid};
+use bitcoin::{Transaction, TxMerkleNode, Txid, WitnessMerkleNode};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -66,14 +66,20 @@ pub struct CoinbaseProof {
     /// Length in bytes of the coinbase prefix, a multiple of
     /// `SHA256_BLOCK_SIZE`.
     pub prefix_length: u32,
-    /// Merkle root over the share's non-coinbase transactions, the one
-    /// commitment input not otherwise on the header.
+    /// Witness root over the share's non-coinbase transactions
+    /// (`compute_witness_root`), the one commitment input not otherwise on the
+    /// header.
     ///
     /// Carrying it unchecked is safe: it is part of the commitment preimage,
-    /// so reusing a bitcoin header under other share fields would need a
-    /// second preimage of the commitment hash. Body validation checks it
-    /// against the transactions.
-    pub non_coinbase_root: TxMerkleNode,
+    /// so reusing a bitcoin header under another root would need a second
+    /// preimage of the commitment hash. The admission gate checks it against
+    /// the block's transactions.
+    ///
+    /// Fixtures written before the rename carry it as `non_coinbase_root`;
+    /// for a block with no share transactions, the only kind there is, the
+    /// two roots are both all zeros.
+    #[serde(alias = "non_coinbase_root")]
+    pub share_witness_root: WitnessMerkleNode,
 }
 
 /// An empty proof: no prefix. It never verifies. The genesis share carries it,
@@ -83,7 +89,7 @@ impl Default for CoinbaseProof {
         Self {
             midstate: [0; 32],
             prefix_length: 0,
-            non_coinbase_root: TxMerkleNode::all_zeros(),
+            share_witness_root: WitnessMerkleNode::all_zeros(),
         }
     }
 }
@@ -93,7 +99,7 @@ impl CoinbaseProof {
     /// output, as built by `build_bitcoin_coinbase_transaction`.
     pub fn from_coinbase(
         coinbase: &Transaction,
-        non_coinbase_root: TxMerkleNode,
+        share_witness_root: WitnessMerkleNode,
     ) -> Result<Self, CoinbaseProofError> {
         let serialized = serialize(coinbase);
         let prefix_length = serialized
@@ -110,7 +116,7 @@ impl CoinbaseProof {
         Ok(Self {
             midstate: engine.midstate().to_byte_array(),
             prefix_length: prefix_length as u32,
-            non_coinbase_root,
+            share_witness_root,
         })
     }
 
@@ -146,7 +152,7 @@ impl CoinbaseProof {
             )));
         }
         let commitment_hash =
-            ShareCommitment::from_share_header_and_root(header, self.non_coinbase_root).hash();
+            ShareCommitment::from_share_header_and_root(header, self.share_witness_root).hash();
         let coinbase_txid = self.coinbase_txid(&commitment_hash, header.bitcoin_height)?;
         Ok(compute_merkle_root_from_branches(coinbase_txid, branch))
     }
@@ -196,7 +202,7 @@ impl Encodable for CoinbaseProof {
     ) -> Result<usize, bitcoin::io::Error> {
         let mut length = self.midstate.consensus_encode(writer)?;
         length += self.prefix_length.consensus_encode(writer)?;
-        length += self.non_coinbase_root.consensus_encode(writer)?;
+        length += self.share_witness_root.consensus_encode(writer)?;
         Ok(length)
     }
 }
@@ -208,7 +214,7 @@ impl Decodable for CoinbaseProof {
         Ok(Self {
             midstate: <[u8; 32]>::consensus_decode(reader)?,
             prefix_length: u32::consensus_decode(reader)?,
-            non_coinbase_root: TxMerkleNode::consensus_decode(reader)?,
+            share_witness_root: WitnessMerkleNode::consensus_decode(reader)?,
         })
     }
 }
@@ -324,7 +330,7 @@ mod tests {
             None,
         )
         .unwrap();
-        assert!(CoinbaseProof::from_coinbase(&coinbase, TxMerkleNode::all_zeros()).is_err());
+        assert!(CoinbaseProof::from_coinbase(&coinbase, WitnessMerkleNode::all_zeros()).is_err());
     }
 
     /// The proof built from a coinbase reproduces that coinbase's txid.
@@ -346,7 +352,8 @@ mod tests {
             None,
         )
         .unwrap();
-        let proof = CoinbaseProof::from_coinbase(&coinbase, TxMerkleNode::all_zeros()).unwrap();
+        let proof =
+            CoinbaseProof::from_coinbase(&coinbase, WitnessMerkleNode::all_zeros()).unwrap();
         assert_eq!(
             proof.coinbase_txid(&commitment_hash, 100).unwrap(),
             coinbase.compute_txid()

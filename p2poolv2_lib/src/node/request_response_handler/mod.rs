@@ -926,7 +926,7 @@ mod tests {
             .expect_validate_block_size()
             .returning(|_| Ok(()));
         mock_validator
-            .expect_validate_merkle_root()
+            .expect_validate_body_matches_header()
             .returning(|_| Ok(()));
         mock_validator
             .expect_validate_with_pool_difficulty()
