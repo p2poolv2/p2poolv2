@@ -14,7 +14,7 @@
 use bitcoin::Network;
 use bitcoin::hex::FromHex;
 use bitcoin::secp256k1::XOnlyPublicKey;
-use p2poolv2_address::Address;
+use p2poolv2_wallet::Address;
 use std::error::Error;
 use std::io::Read;
 

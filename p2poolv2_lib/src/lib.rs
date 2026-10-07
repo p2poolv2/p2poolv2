@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 pub mod accounting;
-pub use p2poolv2_address as address;
+pub use p2poolv2_wallet as address;
 pub mod auth;
 pub mod command;
 pub use p2poolv2_config as config;

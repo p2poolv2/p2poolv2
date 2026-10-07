@@ -1,10 +1,10 @@
 [package]
-name = "p2poolv2_address"
+name = "p2poolv2_wallet"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "P2Poolv2 share chain address type: bech32m encoded taproot output keys"
+description = "P2Poolv2 wallet support library and CLI wallet"
 readme.workspace = true
 homepage.workspace = true
 repository.workspace = true

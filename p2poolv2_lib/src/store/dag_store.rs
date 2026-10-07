@@ -56,7 +56,7 @@ pub struct ShareInfo {
     /// Not the bech32m form: rendering that needs a network, and the store is
     /// network agnostic by design. The API and CLI layers hold the configured
     /// network and render it there.
-    #[serde(with = "p2poolv2_address::witness_program_codec::serde_hex")]
+    #[serde(with = "p2poolv2_wallet::witness_program_codec::serde_hex")]
     pub miner_address: WitnessProgram,
     pub timestamp: u32,
     pub bits: CompactTarget,
@@ -71,7 +71,7 @@ pub struct UncleInfo {
     pub miner_bitcoin_address: String,
     /// Miner address, as the witness program the header stores. See
     /// [`ShareInfo::miner_address`].
-    #[serde(with = "p2poolv2_address::witness_program_codec::serde_hex")]
+    #[serde(with = "p2poolv2_wallet::witness_program_codec::serde_hex")]
     pub miner_address: WitnessProgram,
     pub timestamp: u32,
     pub height: Option<u32>,
@@ -854,7 +854,7 @@ pub struct DagEntry {
     ///
     /// The witness program rather than the bech32m form: the store is network
     /// agnostic, so the API and CLI layers render it.
-    #[serde(with = "p2poolv2_address::witness_program_codec::serde_hex_option")]
+    #[serde(with = "p2poolv2_wallet::witness_program_codec::serde_hex_option")]
     pub miner_address: Option<WitnessProgram>,
     pub has_block_data: bool,
 }
@@ -865,7 +865,7 @@ mod tests {
     use crate::test_utils::TestShareBlockBuilder;
     use crate::test_utils::make_test_share_program;
     use bitcoin::hashes::Hash;
-    use p2poolv2_address::witness_program_codec::to_hex;
+    use p2poolv2_wallet::witness_program_codec::to_hex;
     use tempfile::tempdir;
 
     #[test]

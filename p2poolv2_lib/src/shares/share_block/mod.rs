@@ -24,7 +24,7 @@ use bitcoin::{
     hashes::Hash,
 };
 use core::mem;
-use p2poolv2_address::witness_program_codec;
+use p2poolv2_wallet::witness_program_codec;
 use serde::{Deserialize, Serialize};
 pub use share_transaction::{
     DuplicatePrevoutError, ShareTransaction, SpendingPrevouts, extract_spending_prevouts,
@@ -69,7 +69,7 @@ pub struct ShareHeader {
     /// address matters. Storing it would let one output be spelled four ways, and
     /// since `block_hash` covers every field, each spelling would be a
     /// distinct block carrying the same proof of work.
-    #[serde(with = "p2poolv2_address::witness_program_codec::serde_hex")]
+    #[serde(with = "p2poolv2_wallet::witness_program_codec::serde_hex")]
     pub miner_address: WitnessProgram,
     /// Share block transactions merkle root - from blocktemplate
     pub merkle_root: TxMerkleNode,
