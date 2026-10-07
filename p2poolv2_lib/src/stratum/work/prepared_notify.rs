@@ -14,7 +14,7 @@ use crate::address::Address as P2PoolAddress;
 use crate::shares::share_commitment::{
     ShareCommitment, build_commitment_prefix, build_commitment_suffix, commitment_digest,
 };
-use crate::shares::transactions::coinbase::compute_non_coinbase_root;
+use crate::shares::transactions::coinbase::compute_witness_root;
 use crate::shares::witness_commitment::WitnessCommitment;
 use crate::stratum::util::{reverse_four_byte_chunks, to_be_hex};
 use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
@@ -381,7 +381,8 @@ impl PreparedNotifyParamsBuilder {
             self.donation,
             &self.fee_address,
             self.fee,
-            compute_non_coinbase_root(&[]),
+            compute_witness_root(&[]),
+            self.template.coinbasevalue,
         );
 
         Ok(PreparedNotifyParams {
@@ -483,7 +484,7 @@ pub(crate) fn build_notify_from_prepared(
             uncles: prepared.uncles.clone(),
             miner_bitcoin_address: bitcoin_address.clone(),
             miner_address: share_address.witness_program(),
-            non_coinbase_root: compute_non_coinbase_root(&[]),
+            share_witness_root: compute_witness_root(&[]),
             bits: prepared.bits,
             time: fresh_time,
             donation_address: prepared.donation_address.clone(),
@@ -686,7 +687,7 @@ mod tests {
             uncles: Vec::new(),
             miner_bitcoin_address: address,
             miner_address: make_test_share_program(1),
-            non_coinbase_root: compute_non_coinbase_root(&[]),
+            share_witness_root: compute_witness_root(&[]),
             bits,
             time: commitment.time,
             donation_address: None,
@@ -757,7 +758,7 @@ mod tests {
 
         let bitcoin_address = test_address();
         let share_address = make_test_share_program(1);
-        let non_coinbase_root = compute_non_coinbase_root(&[]);
+        let share_witness_root = compute_witness_root(&[]);
         let time = 1_700_000_000;
 
         let from_notify = get_commitment_hex(
@@ -773,7 +774,7 @@ mod tests {
             uncles: prepared.uncles.clone(),
             miner_bitcoin_address: bitcoin_address,
             miner_address: share_address,
-            non_coinbase_root,
+            share_witness_root,
             bits: prepared.bits,
             time,
             donation_address: prepared.donation_address.clone(),

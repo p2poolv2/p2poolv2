@@ -141,7 +141,7 @@ pub fn build_sim_emission(params: SimShareParams<'_>) -> Result<BuiltShare, SimS
     let coinbase_proof = job
         .share_commitment
         .as_ref()
-        .map(|commitment| CoinbaseProof::from_coinbase(&coinbase, commitment.non_coinbase_root))
+        .map(|commitment| CoinbaseProof::from_coinbase(&coinbase, commitment.share_witness_root))
         .transpose()
         .map_err(|e| SimShareError(format!("build coinbase proof: {e}")))?;
 

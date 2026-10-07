@@ -195,7 +195,7 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
         // (`handle_stratum_share` refuses a commitment without a proof) while
         // still accounting it.
         let coinbase_proof = job.share_commitment.as_ref().and_then(|commitment| {
-            CoinbaseProof::from_coinbase(&validation_result.coinbase, commitment.non_coinbase_root)
+            CoinbaseProof::from_coinbase(&validation_result.coinbase, commitment.share_witness_root)
                 .map_err(|error| error!("Failed to build coinbase proof for job {job_id}: {error}"))
                 .ok()
         });
