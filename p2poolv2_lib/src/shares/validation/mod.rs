@@ -344,8 +344,8 @@ pub trait ShareValidator {
     ///
     /// The header binds the share transactions through its proof's
     /// `share_witness_root`, which the proof of work commits to: the
-    /// non-coinbase transactions must have that witness root, and the share
-    /// coinbase must be the one the header implies
+    /// non-coinbase transactions must each appear once and have that witness
+    /// root, and the share coinbase must be the one the header implies
     /// (`build_sharechain_coinbase_for_witness_root`). The bitcoin coinbase
     /// must have the txid the header's proof gives and no witness, which the
     /// txid does not cover.
@@ -1019,6 +1019,20 @@ impl ShareValidator for DefaultShareValidator {
             .transactions
             .split_first()
             .ok_or_else(|| ValidationError::consensus("Share block has no transactions"))?;
+
+        // A merkle tree pairs the last node of an odd level with itself, so
+        // repeating trailing transactions keeps the root (CVE-2012-2459). Any
+        // repeat makes the copy a bad copy here, before the root is compared.
+        let mut seen_wtxids = HashSet::with_capacity(other_share_transactions.len());
+        if let Some(repeated) = other_share_transactions
+            .iter()
+            .map(|transaction| transaction.compute_wtxid())
+            .find(|wtxid| !seen_wtxids.insert(*wtxid))
+        {
+            return Err(ValidationError::consensus(format!(
+                "Share transaction {repeated} appears more than once"
+            )));
+        }
 
         let computed_root = compute_witness_root(other_share_transactions);
         if computed_root != share_witness_root {
@@ -2525,6 +2539,33 @@ mod tests {
         assert_eq!(error.kind(), FailureKind::Consensus);
         assert!(
             error.to_string().contains("witness"),
+            "unexpected error: {error}"
+        );
+    }
+
+    /// A merkle tree pairs the last node of an odd level with itself, so
+    /// repeating the last transaction leaves the witness root unchanged
+    /// (CVE-2012-2459). Such a copy must be rejected at the gate: stored, it
+    /// would fail transaction validation and mark the real block Invalid.
+    #[test]
+    fn test_validate_body_matches_header_fails_when_last_transaction_repeated() {
+        let mut share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .add_transaction(test_coinbase_transaction(1))
+            .add_transaction(test_coinbase_transaction(2))
+            .build();
+        let root_before = compute_witness_root(&share.transactions[1..]);
+
+        let last = share.transactions.last().unwrap().clone();
+        share.transactions.push(last);
+
+        assert_eq!(compute_witness_root(&share.transactions[1..]), root_before);
+        let error = validator()
+            .validate_body_matches_header(&share)
+            .unwrap_err();
+        assert_eq!(error.kind(), FailureKind::Consensus);
+        assert!(
+            error.to_string().contains("more than once"),
             "unexpected error: {error}"
         );
     }
