@@ -66,7 +66,9 @@ Stores share headers independently, enabling header-first sync before full block
 | `blockhash` (32 bytes) | `ShareHeader` (serialized)   | Written during header sync and block storage |
 
 The serialized header carries its `CoinbaseProof` and encodes each address as a
-one-byte network class (main, test, regtest) followed by its script pubkey.
+one-byte network class (main, test, regtest) followed by its script pubkey. It
+holds no share merkle root and no bitcoin coinbase data: every header field is
+bound to the proof of work, and the coinbase lives in `BitcoinCoinbase`.
 
 ### 1c. `TemplateMerkleBranches` - Coinbase Merkle Branches
 
@@ -75,6 +77,17 @@ The coinbase merkle branch a header's `CoinbaseProof` is checked against.
 | Key                    | Value                                  | Notes |
 |------------------------|----------------------------------------|-------|
 | `blockhash` (32 bytes) | `MerkleBranches` (count + 32-byte nodes) | Written with a full block, and during header sync for headers held without their body, so they can be served on |
+
+### 1d. `BitcoinCoinbase` - Bitcoin Coinbase
+
+The bitcoin coinbase a share block carries: the transaction the miner hashed,
+holding the aux flags, extranonce, nanosecond timestamp, payouts and BIP141
+witness commitment. Not part of the block hash; its txid is the one the
+header's `CoinbaseProof` gives.
+
+| Key                    | Value                                  | Notes |
+|------------------------|----------------------------------------|-------|
+| `blockhash` (32 bytes) | `Transaction` (consensus serialized)   | Written with a full block only; a header held without its body has none, and `get_share` returns `None` without it |
 
 ---
 

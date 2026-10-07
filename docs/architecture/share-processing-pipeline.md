@@ -232,17 +232,19 @@ receiving the PPLNS payout from a found block's coinbase) and `miner_address`
 never derived from one another, and every stage below treats them separately:
 
 - `build_sharechain_coinbase_transaction` pays `miner_address`, so the share
-  coinbase and therefore `merkle_root` depend on it.
-- `validate_share_coinbase` rejects a share whose coinbase output 0 does not
-  pay the header's `miner_address`.
+  coinbase depends on it.
+- `validate_body_matches_header` rejects a block whose share coinbase is not
+  the one its header implies, so output 0 must pay the header's
+  `miner_address`.
 - The PPLNS window, `append_proportional_distribution` and
   `validate_bitcoin_payout` use `miner_bitcoin_address` only.
 
 `ShareCommitment::hash()` digests `miner_address` directly, together with
-`non_coinbase_root`, the root of the share's non-coinbase transactions. The
-share coinbase carries the bitcoin weak block hash, so it is unique per share
-and cannot be in the commitment; it is bound by being rebuilt during
-validation. See `docs/architecture/address-format.md`.
+`share_witness_root`, the BIP141 witness root of the share's non-coinbase
+transactions. The share coinbase carries the bitcoin weak block hash, so it is
+unique per share and cannot be in the commitment; with its payee and the
+witness root bound, it follows from the header. See
+`docs/architecture/address-format.md`.
 
 ### OrganiseWorker (`node/organise_worker.rs`)
 - Runs in dedicated tokio task, spawned by NodeActor
@@ -566,6 +568,17 @@ coinbase. Without checking that binding, one bitcoin header -- and any real
 bitcoin block header meets every share target -- replays under unlimited share
 fields, each credited the work its declared `bits` claim.
 
+The rule: every field of `ShareHeader` is fixed by the proof of work, because
+`block_hash` covers every field and a free field would give one proof of work
+many share hashes. Each field is the bitcoin header itself, digested into the
+`ShareCommitment` (`coinbase_value` and the bitcoin address's network class
+included), fixed by the coinbase tail (`bitcoin_height`, through the
+locktime), or the `coinbase_proof`, whose coinbase txid the bitcoin merkle
+root fixes. Data the proof of work fixes but a header cannot check -- the
+coinbase aux flags, extranonce, nanosecond timestamp and BIP141 witness
+commitment -- is not in the header: the `ShareBlock` carries the bitcoin
+coinbase itself. `coinbase_proof.rs` has one test per header field.
+
 The binding is checkable from the header alone because of where the
 commitment sits. The bitcoin coinbase ends with
 `[padding output][OP_RETURN OP_PUSHBYTES_32 <commitment> output][locktime]`
@@ -574,9 +587,9 @@ witness commitment, whose pattern it does not match. The zero-padding output
 makes everything before the commitment output a whole number of SHA256 blocks.
 
 `ShareHeader.coinbase_proof` (`shares/coinbase_proof.rs`) carries the SHA256
-midstate of that prefix, its length, and `non_coinbase_root`. A verifier:
+midstate of that prefix, its length, and `share_witness_root`. A verifier:
 
-1. rebuilds the commitment from the header fields and `non_coinbase_root`;
+1. rebuilds the commitment from the header fields and `share_witness_root`;
 2. resumes SHA256 from the midstate over the commitment output and locktime,
    and hashes again, giving the coinbase txid;
 3. folds the coinbase merkle branch, giving the bitcoin merkle root, and
@@ -593,8 +606,22 @@ it is built locally and never verified.
 - at the block admission gate in `handle_share_block`, before buffering;
 - in `validate_share_block` and `validate_below_pplns_depth`.
 
-Both `validate_share_block` and `validate_below_pplns_depth` also check the
-proof's `non_coinbase_root` against the block's own transactions.
+The block body is not in the block hash, so it is checked against the header
+before it is stored. `validate_body_matches_header` runs at the admission gate
+and again in both validation paths, reading only the block itself:
+
+1. the non-coinbase transactions have the proof's `share_witness_root`;
+2. the share coinbase is the one the header implies
+   (`build_sharechain_coinbase_for_witness_root`);
+3. the bitcoin coinbase has the txid the proof gives
+   (`CoinbaseProof::coinbase_txid_for`).
+
+A failure at the gate is a bad copy of the block, not a bad block: it is never
+stored, so the hash stays fetchable. After the gate the body is the one the
+proof of work fixes, and a later failure is the miner's. `validate_bitcoin_payout`
+reads the aux flags, extranonce, nanosecond timestamp and witness commitment
+back out of the bitcoin coinbase (`parse_bitcoin_coinbase_fields`), rebuilds
+the coinbase from the PPLNS window, and requires the two to be equal.
 
 The coinbase merkle branch travels separately from the header, because shares
 mined on one template share a branch:
