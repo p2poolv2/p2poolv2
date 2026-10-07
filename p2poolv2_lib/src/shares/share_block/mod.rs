@@ -542,7 +542,7 @@ impl ShareBlock {
             coinbase_nsecs: 0,
             extranonce: Extranonce::default(),
             // The genesis coinbase predates the share chain and carries no
-            // commitment; `CoinbaseProof::verify` exempts genesis.
+            // commitment. Genesis is built locally and never verified.
             coinbase_proof: CoinbaseProof::default(),
         };
         Ok(Self {

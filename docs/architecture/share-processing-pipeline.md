@@ -583,8 +583,9 @@ midstate of that prefix, its length, and `non_coinbase_root`. A verifier:
    requires it to match the bitcoin header.
 
 No body, store or PPLNS read is needed. The merkle root is fixed by the proof
-of work, so a forged proof would need a SHA256 collision. The genesis share is
-exempt, because its coinbase predates the share chain.
+of work, so a forged proof would need a SHA256 collision. Nothing is exempt:
+the genesis share, whose coinbase predates the share chain, has no proof, but
+it is built locally and never verified.
 
 `validate_coinbase_proof` runs:
 

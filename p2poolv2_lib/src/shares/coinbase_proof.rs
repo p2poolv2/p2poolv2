@@ -19,7 +19,7 @@
 //! real coinbase ends with this header's commitment, which only its builder
 //! could have put there.
 
-use crate::shares::share_block::{ShareHeader, is_terminal_blockhash};
+use crate::shares::share_block::ShareHeader;
 use crate::shares::share_commitment::ShareCommitment;
 use crate::stratum::work::coinbase::{
     COMMITMENT_TAIL_LENGTH, SHA256_BLOCK_SIZE, commitment_output,
@@ -76,8 +76,8 @@ pub struct CoinbaseProof {
     pub non_coinbase_root: TxMerkleNode,
 }
 
-/// An empty proof: no prefix. It never verifies, except on the genesis share,
-/// which is exempt, and it is what fixtures without a proof deserialize to.
+/// An empty proof: no prefix. It never verifies. The genesis share carries it,
+/// and it is what fixtures without a proof deserialize to.
 impl Default for CoinbaseProof {
     fn default() -> Self {
         Self {
@@ -118,12 +118,11 @@ impl CoinbaseProof {
     /// `header.bitcoin_header`, using `branch` from the coinbase to the
     /// bitcoin merkle root.
     ///
-    /// The genesis share is exempt: its coinbase predates the share chain and
-    /// carries no commitment.
+    /// Nothing is exempt. The genesis share has no proof, because its coinbase
+    /// predates the share chain, but it is built locally and never verified:
+    /// header sync rejects its all-zeros parent and a re-sent genesis body is
+    /// already in the store.
     pub fn verify(header: &ShareHeader, branch: &[TxMerkleNode]) -> Result<(), CoinbaseProofError> {
-        if is_terminal_blockhash(&header.prev_share_blockhash) {
-            return Ok(());
-        }
         let merkle_root = header.coinbase_proof.merkle_root(header, branch)?;
         if merkle_root != header.bitcoin_header.merkle_root {
             return Err(CoinbaseProofError(format!(
@@ -296,14 +295,16 @@ mod tests {
         assert!(CoinbaseProof::verify(&header, &[]).is_err());
     }
 
-    /// The genesis coinbase predates the share chain, so genesis carries no
-    /// proof and is exempt.
+    /// An all-zeros parent does not exempt a header from its proof. Only the
+    /// network's own genesis has that parent, and it is built locally, never
+    /// verified; a peer's header with that parent and no proof would otherwise
+    /// pass under any share fields.
     #[test]
-    fn test_coinbase_proof_exempts_genesis() {
+    fn test_coinbase_proof_rejects_terminal_parent_without_proof() {
         let mut header = non_genesis_share_header();
         header.prev_share_blockhash = BlockHash::all_zeros();
         header.coinbase_proof = CoinbaseProof::default();
-        assert!(CoinbaseProof::verify(&header, &[]).is_ok());
+        assert!(CoinbaseProof::verify(&header, &[]).is_err());
     }
 
     #[test]
