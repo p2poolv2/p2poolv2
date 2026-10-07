@@ -185,6 +185,9 @@ impl Store {
             RocksDbOptions::default(),
         );
 
+        let bitcoin_coinbase_cf =
+            ColumnFamilyDescriptor::new(ColumnFamily::BitcoinCoinbase, RocksDbOptions::default());
+
         let cfs = vec![
             block_metadata_cf_descriptor,
             block_txids_cf,
@@ -203,6 +206,7 @@ impl Store {
             spends_index_cf,
             header_cf,
             template_merkle_branches_cf,
+            bitcoin_coinbase_cf,
         ];
 
         // for the db too, we use default options for now

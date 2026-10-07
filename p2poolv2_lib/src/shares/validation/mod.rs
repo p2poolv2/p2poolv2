@@ -41,10 +41,11 @@ use crate::store::block_tx_metadata::{BlockMetadata, Status};
 use crate::store::dag_store::MAX_UNCLES_DEPTH;
 use crate::store::transaction_store::PrevoutCheck;
 use crate::store::writer::StoreError;
-use crate::stratum::work::coinbase::build_bitcoin_coinbase_transaction;
+use crate::stratum::work::coinbase::{
+    build_bitcoin_coinbase_transaction, parse_bitcoin_coinbase_fields,
+};
 use crate::stratum::work::gbt::compute_merkle_root_from_branches;
 use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
-use bitcoin::script::PushBytesBuf;
 use bitcoin::{
     Address, Amount, BlockHash, CompactTarget, Target, TxMerkleNode, transaction::Version,
 };
@@ -339,12 +340,14 @@ pub trait ShareValidator {
         branch: &[TxMerkleNode],
     ) -> Result<(), ValidationError>;
 
-    /// Validate that the block's transactions are the ones its header binds.
+    /// Validate that the block's body is the one its header binds.
     ///
-    /// The header binds them through its proof's `share_witness_root`, which
-    /// the proof of work commits to: the non-coinbase transactions must have
-    /// that witness root, and the share coinbase must be the one the header
-    /// implies (`build_sharechain_coinbase_for_witness_root`).
+    /// The header binds the share transactions through its proof's
+    /// `share_witness_root`, which the proof of work commits to: the
+    /// non-coinbase transactions must have that witness root, and the share
+    /// coinbase must be the one the header implies
+    /// (`build_sharechain_coinbase_for_witness_root`). The bitcoin coinbase
+    /// must have the txid the header's proof gives.
     ///
     /// Part of the ddos prevention gate alongside
     /// `validate_header_minimum_difficulty` and `validate_block_size`: a block's
@@ -909,23 +912,34 @@ impl DefaultShareValidator {
             Self::build_expected_outputs(&share.header, &address_difficulty_map, coinbase_value)?;
         let expected_commitment_hash = ShareCommitment::from_share_block(share).hash();
 
-        let flags = match &share.header.coinbaseaux_flags {
-            Some(aux_flags) => aux_flags.to_push_bytes_buf(),
-            None => PushBytesBuf::from(&[0u8]),
-        };
+        //* The aux flags, extranonce, nanosecond timestamp and witness
+        //* commitment are read back from the coinbase itself. The admission
+        //* gate has already matched its txid to the proof of work, so these
+        //* are the values the miner hashed; rebuilding with them and comparing
+        //* the whole coinbase leaves only the payouts, the height, the pool
+        //* signature and the commitment to disagree.
+        let fields = parse_bitcoin_coinbase_fields(&share.bitcoin_coinbase).map_err(|error| {
+            ValidationError::consensus(format!("Malformed bitcoin coinbase: {error}"))
+        })?;
         let pool_signature = &self.pool_signature;
         let reconstructed_coinbase = build_bitcoin_coinbase_transaction(
             Version::TWO,
             &expected_outputs,
             share.header.bitcoin_height as i64,
-            flags,
-            share.header.witness_commitment.as_ref(),
+            fields.aux_flags,
+            fields.witness_commitment.as_ref(),
             pool_signature,
             Some(expected_commitment_hash),
-            share.header.coinbase_nsecs,
-            Some(share.header.extranonce.as_bytes()),
+            fields.nsecs,
+            Some(&fields.extranonce),
         )
         .map_err(|error| ValidationError::consensus(format!("Error building coinbase {error}")))?;
+
+        if reconstructed_coinbase != share.bitcoin_coinbase {
+            return Err(ValidationError::consensus(
+                "Bitcoin coinbase is not the coinbase the PPLNS window and share fields imply",
+            ));
+        }
 
         let reconstructed_coinbase_txid = reconstructed_coinbase.compute_txid();
         let recomputed_root = compute_merkle_root_from_branches(
@@ -1028,6 +1042,24 @@ impl ShareValidator for DefaultShareValidator {
             return Err(ValidationError::consensus(
                 "Share coinbase is not the coinbase this share's header implies",
             ));
+        }
+
+        //* The bitcoin coinbase is not in the block hash. Its txid has to be the
+        //* one the header's proof gives, which the proof of work commits to;
+        //* that is what makes the extranonce and the other values read from it
+        //* the ones the miner hashed.
+        let proof_txid = share
+            .header
+            .coinbase_proof
+            .coinbase_txid_for(&share.header)
+            .map_err(|error| {
+                ValidationError::consensus(format!("Invalid coinbase proof: {error}"))
+            })?;
+        let coinbase_txid = share.bitcoin_coinbase.compute_txid();
+        if coinbase_txid != proof_txid {
+            return Err(ValidationError::consensus(format!(
+                "Bitcoin coinbase txid {coinbase_txid} is not the {proof_txid} its header's proof gives"
+            )));
         }
         Ok(())
     }
@@ -1418,14 +1450,13 @@ mockall::mock! {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shares::coinbaseaux_flags::CoinbaseAuxFlags;
-    use crate::shares::extranonce::Extranonce;
     use crate::shares::share_block::ShareTransaction;
     use crate::shares::share_commitment::ShareCommitment;
     use crate::shares::witness_commitment::WitnessCommitment;
     use crate::store::block_tx_metadata::{BlockMetadata, ChainMembership};
     use crate::store::transaction_store::PrevoutRejection;
     use crate::store::writer::StoreError;
+    use crate::stratum::session::{EXTRANONCE1_SIZE, EXTRANONCE2_SIZE};
     use crate::stratum::work::block_template::BlockTemplate;
     use crate::stratum::work::gbt::build_merkle_branches_for_template;
     use crate::test_utils::{
@@ -2436,6 +2467,30 @@ mod tests {
             .validate_body_matches_header(&share)
             .unwrap_err();
         assert!(error.to_string().contains("witness root"));
+    }
+
+    /// The bitcoin coinbase is not in the block hash, so a copy of the block
+    /// could carry another one -- here a different scriptSig. Its txid is
+    /// then not the one the header's proof gives, and the copy is rejected.
+    #[test]
+    fn test_validate_body_matches_header_fails_when_bitcoin_coinbase_differs() {
+        let mut share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+        let script_sig = share.bitcoin_coinbase.input[0].script_sig.to_bytes();
+        let mut altered = script_sig.clone();
+        let last = altered.len() - 1;
+        altered[last] ^= 0x01;
+        share.bitcoin_coinbase.input[0].script_sig = ScriptBuf::from_bytes(altered);
+
+        let error = validator()
+            .validate_body_matches_header(&share)
+            .unwrap_err();
+        assert_eq!(error.kind(), FailureKind::Consensus);
+        assert!(
+            error.to_string().contains("Bitcoin coinbase txid"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
@@ -3528,11 +3583,12 @@ mod tests {
             b"P2Poolv2",
             Some(commitment_hash),
             TEST_COINBASE_NSECS,
-            Some(Extranonce::default().as_bytes()),
+            Some(&[0u8; EXTRANONCE1_SIZE + EXTRANONCE2_SIZE]),
         )
         .unwrap();
 
         share_block.header.bitcoin_header.merkle_root = coinbase_tx.compute_txid().into();
+        share_block.bitcoin_coinbase = coinbase_tx;
 
         // Mock PplnsWindow returning matching 60/40 distribution
         let mut mock_window = PplnsWindow::default();
@@ -3602,11 +3658,12 @@ mod tests {
             b"P2Poolv2",
             Some(commitment_hash),
             TEST_COINBASE_NSECS,
-            Some(Extranonce::default().as_bytes()),
+            Some(&[0u8; EXTRANONCE1_SIZE + EXTRANONCE2_SIZE]),
         )
         .unwrap();
 
         share_block.header.bitcoin_header.merkle_root = coinbase_tx.compute_txid().into();
+        share_block.bitcoin_coinbase = coinbase_tx;
 
         // Mock PplnsWindow returning 60/40 distribution
         let mut mock_window = PplnsWindow::default();
@@ -3625,16 +3682,18 @@ mod tests {
             });
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
-        // The reconstructed coinbase will have different outputs (60/40),
-        // producing a different merkle root than the 50/50 coinbase
+        // The reconstructed coinbase will have different outputs (60/40)
+        // from the 50/50 coinbase the block carries
         let validator =
             DefaultShareValidator::new(PoolDifficulty::default(), 1, b"P2Poolv2".to_vec());
         let error = validator
             .validate_bitcoin_payout(&share_block, &ChainStoreHandle::default(), pplns_window)
             .unwrap_err();
         assert!(
-            error.to_string().contains("merkle root"),
-            "Expected merkle root mismatch error, got: {error}"
+            error
+                .to_string()
+                .contains("PPLNS window and share fields imply"),
+            "Expected coinbase mismatch error, got: {error}"
         );
     }
 
@@ -3683,7 +3742,7 @@ mod tests {
             &[],
             None,
             TEST_COINBASE_NSECS,
-            Some(Extranonce::default().as_bytes()),
+            Some(&[0u8; EXTRANONCE1_SIZE + EXTRANONCE2_SIZE]),
         )
         .unwrap();
 
@@ -3693,6 +3752,7 @@ mod tests {
         share_block.header.coinbase_value = 312_500_000;
         share_block.header.bitcoin_height = 840_000;
         share_block.header.bitcoin_header.merkle_root = coinbase_tx.compute_txid().into();
+        share_block.bitcoin_coinbase = coinbase_tx;
 
         let mut mock_window = PplnsWindow::default();
         mock_window
@@ -3790,11 +3850,12 @@ mod tests {
             b"P2Poolv2",
             Some(commitment_hash),
             TEST_COINBASE_NSECS,
-            Some(Extranonce::default().as_bytes()),
+            Some(&[0u8; EXTRANONCE1_SIZE + EXTRANONCE2_SIZE]),
         )
         .unwrap();
 
         share_block.header.bitcoin_header.merkle_root = coinbase_tx.compute_txid().into();
+        share_block.bitcoin_coinbase = coinbase_tx;
 
         let mut mock_window = PplnsWindow::default();
         mock_window
@@ -3907,11 +3968,12 @@ mod tests {
             b"P2Poolv2",
             Some(commitment_hash),
             TEST_COINBASE_NSECS,
-            Some(Extranonce::default().as_bytes()),
+            Some(&[0u8; EXTRANONCE1_SIZE + EXTRANONCE2_SIZE]),
         )
         .unwrap();
 
         share_block.header.bitcoin_header.merkle_root = coinbase_tx.compute_txid().into();
+        share_block.bitcoin_coinbase = coinbase_tx;
 
         // Mock PplnsWindow returning 3 miners with difficulties 500, 300, 200
         let mut mock_window = PplnsWindow::default();
@@ -3971,12 +4033,13 @@ mod tests {
             .build();
         share_block.header.coinbase_value = template.coinbasevalue;
         share_block.header.bitcoin_height = template.height as u64;
-        share_block.header.coinbaseaux_flags = template
+        let aux_flags = template
             .coinbaseaux
             .get("flags")
             .and_then(|flags| hex::decode(flags).ok())
-            .map(|bytes| CoinbaseAuxFlags::new(&bytes));
-        share_block.header.witness_commitment = template
+            .map(|bytes| PushBytesBuf::try_from(bytes).unwrap())
+            .unwrap_or_else(|| PushBytesBuf::from(&[0u8]));
+        let witness_commitment = template
             .default_witness_commitment
             .as_deref()
             .and_then(|hex_str| WitnessCommitment::from_hex(hex_str).ok());
@@ -3990,17 +4053,12 @@ mod tests {
                 amount: Amount::from_sat(template.coinbasevalue),
             }],
             template.height as i64,
-            share_block
-                .header
-                .coinbaseaux_flags
-                .as_ref()
-                .map(|flags| flags.to_push_bytes_buf())
-                .unwrap_or_else(|| PushBytesBuf::from(&[0u8])),
-            share_block.header.witness_commitment.as_ref(),
+            aux_flags,
+            witness_commitment.as_ref(),
             b"P2Poolv2",
             Some(commitment_hash),
             TEST_COINBASE_NSECS,
-            Some(Extranonce::default().as_bytes()),
+            Some(&[0u8; EXTRANONCE1_SIZE + EXTRANONCE2_SIZE]),
         )
         .unwrap();
 
@@ -4019,6 +4077,7 @@ mod tests {
                 .unwrap()
                 .into();
         share_block.header.bitcoin_header.merkle_root = full_merkle_root;
+        share_block.bitcoin_coinbase = coinbase_tx;
 
         // Set merkle branches from template transactions
         share_block.template_merkle_branches = build_merkle_branches_for_template(&template)

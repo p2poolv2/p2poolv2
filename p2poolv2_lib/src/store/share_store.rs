@@ -10,6 +10,7 @@ use crate::shares::share_block::{
 use crate::store::block_tx_metadata::ChainMembership;
 use crate::store::block_tx_metadata::Status::{BlockValid, HeaderValid, Invalid, Pending};
 use bitcoin::BlockHash;
+use bitcoin::Transaction;
 use bitcoin::TxMerkleNode;
 use bitcoin::consensus::{self, Encodable, encode};
 use std::collections::{HashMap, HashSet};
@@ -20,9 +21,9 @@ impl Store {
     ///
     /// Returns early if the block already exists (duplicate guard).
     /// Stores the header in the Header CF, transaction indexes in
-    /// BlockTxids CF, and template merkle branches in
-    /// TemplateMerkleBranches CF. All writes are done in a single
-    /// atomic batch.
+    /// BlockTxids CF, template merkle branches in TemplateMerkleBranches
+    /// CF, and the bitcoin coinbase in BitcoinCoinbase CF. All writes are
+    /// done in a single atomic batch.
     pub fn add_share_block(
         &self,
         share: &ShareBlock,
@@ -64,6 +65,8 @@ impl Store {
         // Store template merkle branches for validation
         let branches = MerkleBranches(share.template_merkle_branches.clone());
         self.add_template_merkle_branches(&blockhash, &branches, batch)?;
+
+        self.add_bitcoin_coinbase(&blockhash, &share.bitcoin_coinbase, batch)?;
 
         // Update block index for parent
         self.update_block_index(&share.header.prev_share_blockhash, &blockhash, batch)?;
@@ -155,6 +158,41 @@ impl Store {
         Ok(())
     }
 
+    /// Store the bitcoin coinbase a share block carries, keyed by the
+    /// consensus-serialized blockhash.
+    fn add_bitcoin_coinbase(
+        &self,
+        blockhash: &BlockHash,
+        bitcoin_coinbase: &Transaction,
+        batch: &mut rocksdb::WriteBatch,
+    ) -> Result<(), StoreError> {
+        let column_family = self.db.cf_handle(&ColumnFamily::BitcoinCoinbase).unwrap();
+        let key = consensus::serialize(blockhash);
+        batch.put_cf::<&[u8], Vec<u8>>(
+            &column_family,
+            &key,
+            consensus::serialize(bitcoin_coinbase),
+        );
+        Ok(())
+    }
+
+    /// Retrieve the bitcoin coinbase of a stored share block.
+    ///
+    /// Returns `None` when no coinbase is stored, which is the case for a
+    /// header held without its body.
+    pub fn get_bitcoin_coinbase(
+        &self,
+        blockhash: &BlockHash,
+    ) -> Result<Option<Transaction>, StoreError> {
+        let column_family = self.db.cf_handle(&ColumnFamily::BitcoinCoinbase).unwrap();
+        let key = consensus::serialize(blockhash);
+        match self.db.get_cf::<&[u8]>(&column_family, &key) {
+            Ok(Some(data)) => Ok(Some(encode::deserialize::<Transaction>(&data)?)),
+            Ok(None) => Ok(None),
+            Err(error) => Err(StoreError::Database(error.to_string())),
+        }
+    }
+
     /// Retrieve template merkle branches for a share block.
     ///
     /// Returns an empty vector if no branches are stored (e.g. for
@@ -243,7 +281,7 @@ impl Store {
     /// Get a share from the store by reconstructing it from the Header CF
     /// and transaction CFs.
     ///
-    /// Returns None if the header or txids are missing.
+    /// Returns None if the header, txids or bitcoin coinbase are missing.
     pub fn get_share(&self, blockhash: &BlockHash) -> Option<ShareBlock> {
         let header = match self.get_share_header(blockhash) {
             Ok(Some(header)) => header,
@@ -258,10 +296,12 @@ impl Store {
             .map(ShareTransaction)
             .collect();
         let template_merkle_branches = self.get_template_merkle_branches(blockhash).ok()?;
+        let bitcoin_coinbase = self.get_bitcoin_coinbase(blockhash).ok()??;
         Some(ShareBlock {
             header,
             transactions,
             template_merkle_branches,
+            bitcoin_coinbase,
         })
     }
 
@@ -1259,6 +1299,37 @@ mod tests {
         assert_eq!(share.template_merkle_branches[0], branch_a);
         assert_eq!(share.template_merkle_branches[1], branch_b);
         assert_eq!(share.template_merkle_branches[2], branch_c);
+    }
+
+    /// The bitcoin coinbase is not in the header, so it is stored beside the
+    /// block and comes back with it.
+    #[test]
+    fn test_bitcoin_coinbase_round_trip() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let block = TestShareBlockBuilder::new().build();
+        let blockhash = block.block_hash();
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&block, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share = store.get_share(&blockhash).unwrap();
+        assert_eq!(share.bitcoin_coinbase, block.bitcoin_coinbase);
+        assert_eq!(share, block);
+    }
+
+    #[test]
+    fn test_get_bitcoin_coinbase_returns_none_for_missing() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        assert!(
+            store
+                .get_bitcoin_coinbase(&BlockHash::all_zeros())
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

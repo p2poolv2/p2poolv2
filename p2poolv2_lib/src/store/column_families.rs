@@ -22,6 +22,7 @@ pub enum ColumnFamily {
     SpendsIndex,
     Header,
     TemplateMerkleBranches,
+    BitcoinCoinbase,
 }
 
 impl ColumnFamily {
@@ -44,6 +45,7 @@ impl ColumnFamily {
             ColumnFamily::SpendsIndex => "spends_index",
             ColumnFamily::Header => "header",
             ColumnFamily::TemplateMerkleBranches => "template_merkle_branches",
+            ColumnFamily::BitcoinCoinbase => "bitcoin_coinbase",
         }
     }
 }
