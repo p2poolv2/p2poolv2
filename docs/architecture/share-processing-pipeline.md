@@ -610,7 +610,9 @@ The block body is not in the block hash, so it is checked against the header
 before it is stored. `validate_body_matches_header` runs at the admission gate
 and again in both validation paths, reading only the block itself:
 
-1. the non-coinbase transactions have the proof's `share_witness_root`;
+1. the non-coinbase transactions each appear once and have the proof's
+   `share_witness_root` (a repeated trailing transaction keeps a merkle root,
+   CVE-2012-2459);
 2. the share coinbase is the one the header implies
    (`build_sharechain_coinbase_for_witness_root`);
 3. the bitcoin coinbase has the txid the proof gives
