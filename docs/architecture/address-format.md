@@ -188,20 +188,20 @@ Bitcoin addresses must also be rejected, including
 
 ## Where the address appears in consensus
 
-- `ShareHeader.miner_address` (`shares/share_block/mod.rs:72`),
-  consensus encoded as a length-prefixed ASCII bech32m string
-  immediately after `miner_bitcoin_address` (`:228`, decoded at `:271`).
-- The share coinbase pays it: `build_sharechain_coinbase_transaction`
-  (`shares/transactions/coinbase.rs:41`) puts
+- `ShareHeader.miner_address` (`shares/share_block/mod.rs`), stored as
+  the witness program the address encodes and consensus encoded by
+  `witness_program_codec` immediately after `miner_bitcoin_address`.
+- The share coinbase pays it: `build_sharechain_coinbase_for_witness_root`
+  (`shares/transactions/coinbase.rs`) puts
   `miner_address.script_pubkey()` in output 0, valued at one share.
-- Validation enforces it: `validate_share_coinbase`
-  (`shares/validation/mod.rs:813`) rejects a share whose coinbase output
-  0 does not pay the header's `miner_address`.
-- `ShareCommitment::hash()` (`shares/share_commitment.rs:207`)
-  deliberately does **not** hash `miner_address` directly. It binds
-  `merkle_root`, and the share coinbase paying the address is what the
-  root commits to. Binding the root rather than the payee covers the
-  whole transaction set rather than just the coinbase.
+- Validation enforces it: `validate_body_matches_header`
+  (`shares/validation/mod.rs`) rejects a block whose share coinbase is not
+  the one its header implies, payee included.
+- `ShareCommitment::hash()` (`shares/share_commitment.rs`) digests
+  `miner_address` directly, beside `share_witness_root`, the witness root
+  of the share's other transactions. The share coinbase carries the weak
+  block hash, so it cannot be in the commitment; with the payee and the
+  witness root bound, it follows from the header.
 
 ## Obtaining an address
 
@@ -397,7 +397,7 @@ bitcoin address and user id all stay unset.
 ## What you can do with a share today
 
 A miner can **own** a share: the share coinbase pays one share unit to
-their taproot output key, and `merkle_root` commits to that coinbase.
+their taproot output key, and the share commitment binds that key.
 
 A miner cannot yet **spend or trade** one through this node. There is no
 transaction construction, no submission path and no CLI command for it.
