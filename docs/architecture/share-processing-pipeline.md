@@ -302,8 +302,8 @@ witness root bound, it follows from the header. See
 | write_tx/rx | std::sync mpsc | unbounded | StoreHandle -> StoreWriter (serialized writes) |
 
 The organise channel and the organise worker's `pending_blocks` buffer both
-hold whole `ShareBlock`s, each bounded at `BLOCK_TXS_SIZE_LIMIT` (200 KB) by
-`handle_share_block`, so their capacities set the worst-case memory of the
+hold whole `ShareBlock`s, each bounded at `BLOCK_TXS_SIZE_LIMIT` (200 KB, the
+share transactions and the bitcoin coinbase together) by `handle_share_block`, so their capacities set the worst-case memory of the
 organise path -- 512 + 1024 entries, rather than the 8192 + 16384 they held
 before, which allowed several GB of bodies in flight. The channel is pure
 backpressure between the parallel validation tasks and the serial organise
