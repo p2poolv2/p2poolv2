@@ -91,7 +91,6 @@ pub struct ValidationWorker {
     swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
     semaphore: Arc<Semaphore>,
     difficulty_multiplier: u128,
-    pool_signature: Vec<u8>,
     pool_difficulty: PoolDifficulty,
 }
 
@@ -103,7 +102,6 @@ impl ValidationWorker {
         organise_tx: OrganiseSender,
         swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
         difficulty_multiplier: u128,
-        pool_signature: Vec<u8>,
         pool_difficulty: PoolDifficulty,
     ) -> Self {
         Self {
@@ -113,7 +111,6 @@ impl ValidationWorker {
             swarm_tx,
             semaphore: Arc::new(Semaphore::new(available_cpus())),
             difficulty_multiplier,
-            pool_signature,
             pool_difficulty,
         }
     }
@@ -125,12 +122,9 @@ impl ValidationWorker {
     pub async fn run(mut self) -> Result<(), ValidationWorkerError> {
         info!("Validation worker started");
 
-        let share_validator: Arc<dyn ShareValidator + Send + Sync> =
-            Arc::new(DefaultShareValidator::new(
-                self.pool_difficulty,
-                self.difficulty_multiplier,
-                self.pool_signature.clone(),
-            ));
+        let share_validator: Arc<dyn ShareValidator + Send + Sync> = Arc::new(
+            DefaultShareValidator::new(self.pool_difficulty, self.difficulty_multiplier),
+        );
 
         while let Some(event) = self.validation_rx.recv().await {
             let (block_hash, prefetched_block) = match event {
@@ -351,7 +345,6 @@ mod tests {
             organise_tx,
             swarm_tx,
             1,
-            b"P2Poolv2".to_vec(),
             PoolDifficulty::default(),
         );
 
@@ -410,7 +403,6 @@ mod tests {
             organise_tx,
             swarm_tx,
             1,
-            b"P2Poolv2".to_vec(),
             PoolDifficulty::default(),
         );
 
@@ -465,7 +457,6 @@ mod tests {
             organise_tx,
             swarm_tx,
             1,
-            b"P2Poolv2".to_vec(),
             PoolDifficulty::default(),
         );
 
@@ -529,7 +520,6 @@ mod tests {
             organise_tx,
             swarm_tx,
             1,
-            b"P2Poolv2".to_vec(),
             PoolDifficulty::default(),
         );
 
@@ -574,7 +564,6 @@ mod tests {
             organise_tx,
             swarm_tx,
             1,
-            b"P2Poolv2".to_vec(),
             PoolDifficulty::default(),
         );
 
@@ -721,7 +710,6 @@ mod tests {
             organise_tx,
             swarm_tx,
             1,
-            b"P2Poolv2".to_vec(),
             PoolDifficulty::default(),
         );
 
@@ -798,7 +786,6 @@ mod tests {
             organise_tx,
             swarm_tx,
             1,
-            b"P2Poolv2".to_vec(),
             PoolDifficulty::default(),
         );
 

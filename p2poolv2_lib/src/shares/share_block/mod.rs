@@ -933,8 +933,6 @@ mod tests {
         let blocks: Vec<ShareBlock> =
             serde_json::from_str(&json_string).expect("Failed to parse share_blocks fixture");
 
-        let pool_signature = b"P2Poolv2";
-
         let network = bitcoin::Network::Signet;
         let difficulty_scale: u128 = 10;
 
@@ -1001,7 +999,7 @@ mod tests {
                 header.bitcoin_height as i64,
                 fields.aux_flags,
                 fields.witness_commitment.as_ref(),
-                pool_signature,
+                &fields.pool_signature,
                 Some(commitment_hash),
                 fields.nsecs,
                 Some(&fields.extranonce),

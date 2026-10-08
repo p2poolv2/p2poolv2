@@ -98,7 +98,6 @@ fn ingest_validator() -> DefaultShareValidator {
             0,
         ),
         1,
-        b"P2Poolv2".to_vec(),
     )
 }
 

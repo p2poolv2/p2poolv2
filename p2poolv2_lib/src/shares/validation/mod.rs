@@ -412,26 +412,22 @@ pub struct DefaultShareValidator {
     pool_difficulty: PoolDifficulty,
     /// Multiplier applied to bitcoin difficulty when walking the PPLNS window.
     difficulty_multiplier: u128,
-    /// Pool signature included in the coinbase transaction.
-    pool_signature: Vec<u8>,
     /// Time provider used to enforce the future-time bound on share timestamps.
     time_provider: Arc<dyn TimeProvider + Send + Sync>,
 }
 
 impl DefaultShareValidator {
-    /// Create a new DefaultShareValidator with the given pool difficulty,
-    /// difficulty multiplier for PPLNS window walks, and pool signature
-    /// for coinbase reconstruction. Uses `SystemTimeProvider` for timestamp
-    /// validation.
-    pub fn new(
-        pool_difficulty: PoolDifficulty,
-        difficulty_multiplier: u128,
-        pool_signature: Vec<u8>,
-    ) -> Self {
+    /// Create a new DefaultShareValidator with the given pool difficulty and
+    /// difficulty multiplier for PPLNS window walks. Uses `SystemTimeProvider`
+    /// for timestamp validation.
+    ///
+    /// There is no pool signature: payout validation reads it from each
+    /// block's own coinbase, so this node's configured signature has no say in
+    /// whether another pool's block is valid.
+    pub fn new(pool_difficulty: PoolDifficulty, difficulty_multiplier: u128) -> Self {
         Self::with_time_provider(
             pool_difficulty,
             difficulty_multiplier,
-            pool_signature,
             Arc::new(SystemTimeProvider),
         )
     }
@@ -440,13 +436,11 @@ impl DefaultShareValidator {
     pub fn with_time_provider(
         pool_difficulty: PoolDifficulty,
         difficulty_multiplier: u128,
-        pool_signature: Vec<u8>,
         time_provider: Arc<dyn TimeProvider + Send + Sync>,
     ) -> Self {
         Self {
             pool_difficulty,
             difficulty_multiplier,
-            pool_signature,
             time_provider,
         }
     }
@@ -944,23 +938,24 @@ impl DefaultShareValidator {
             Self::build_expected_outputs(&share.header, &address_difficulty_map, coinbase_value)?;
         let expected_commitment_hash = ShareCommitment::from_share_block(share).hash();
 
-        // The aux flags, extranonce, nanosecond timestamp and witness
-        // commitment are read back from the coinbase itself. The admission
-        // gate has already matched its txid to the proof of work, so these
-        // are the values the miner hashed; rebuilding with them and comparing
-        // the whole coinbase leaves only the payouts, the height, the pool
-        // signature and the commitment to disagree.
+        // The aux flags, extranonce, nanosecond timestamp, pool signature and
+        // witness commitment are read back from the coinbase itself. The
+        // admission gate has already matched its txid to the proof of work,
+        // so these are the values the miner hashed; rebuilding with them and
+        // comparing the whole coinbase leaves only the payouts, the height
+        // and the commitment to disagree. The pool signature in particular is
+        // a tag, not consensus: nodes configured with different signatures
+        // must still agree on validity.
         let fields = parse_bitcoin_coinbase_fields(&share.bitcoin_coinbase).map_err(|error| {
             ValidationError::consensus(format!("Malformed bitcoin coinbase: {error}"))
         })?;
-        let pool_signature = &self.pool_signature;
         let reconstructed_coinbase = build_bitcoin_coinbase_transaction(
             Version::TWO,
             &expected_outputs,
             share.header.bitcoin_height as i64,
             fields.aux_flags,
             fields.witness_commitment.as_ref(),
-            pool_signature,
+            &fields.pool_signature,
             Some(expected_commitment_hash),
             fields.nsecs,
             Some(&fields.extranonce),
@@ -1533,11 +1528,11 @@ mod tests {
     use std::time::SystemTime;
 
     fn validator() -> DefaultShareValidator {
-        DefaultShareValidator::new(PoolDifficulty::default(), 1, b"P2Poolv2".to_vec())
+        DefaultShareValidator::new(PoolDifficulty::default(), 1)
     }
 
     fn validator_with(pool_difficulty: PoolDifficulty) -> DefaultShareValidator {
-        DefaultShareValidator::new(pool_difficulty, 1, b"P2Poolv2".to_vec())
+        DefaultShareValidator::new(pool_difficulty, 1)
     }
 
     fn metadata_at_height(height: u32) -> BlockMetadata {
@@ -2147,8 +2142,7 @@ mod tests {
             .with(eq(bitcoin::BlockHash::all_zeros()))
             .returning(|_| Some(genesis_for_tests()));
 
-        let validator =
-            DefaultShareValidator::new(PoolDifficulty::default(), 1, b"P2Poolv2".to_vec());
+        let validator = DefaultShareValidator::new(PoolDifficulty::default(), 1);
         let result = validator.validate_share_block(&share_block, &chain_store_handle);
 
         assert!(result.is_ok(), "Expected Ok, got: {:?}", result.err());
@@ -3744,8 +3738,7 @@ mod tests {
             });
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
-        let validator =
-            DefaultShareValidator::new(PoolDifficulty::default(), 1, b"P2Poolv2".to_vec());
+        let validator = DefaultShareValidator::new(PoolDifficulty::default(), 1);
         let result = validator.validate_bitcoin_payout(
             &share_block,
             &ChainStoreHandle::default(),
@@ -3820,8 +3813,7 @@ mod tests {
 
         // The reconstructed coinbase will have different outputs (60/40)
         // from the 50/50 coinbase the block carries
-        let validator =
-            DefaultShareValidator::new(PoolDifficulty::default(), 1, b"P2Poolv2".to_vec());
+        let validator = DefaultShareValidator::new(PoolDifficulty::default(), 1);
         let error = validator
             .validate_bitcoin_payout(&share_block, &ChainStoreHandle::default(), pplns_window)
             .unwrap_err();
@@ -3995,6 +3987,111 @@ mod tests {
         assert_eq!(error.kind(), FailureKind::Consensus);
     }
 
+    /// The pool signature only tags a coinbase; it is read from the block, not
+    /// from this node's config. A block another pool tagged differently is
+    /// valid here too, or nodes with different configs would split.
+    #[test]
+    fn test_validate_bitcoin_payout_accepts_another_pools_signature() {
+        let address_a = crate::test_utils::parse_address_from_string(
+            "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
+        );
+        let mut share_block = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+        share_block.header.bitcoin_height = 840_000;
+        let commitment_hash = ShareCommitment::from_share_block(&share_block).hash();
+
+        let coinbase_tx = build_bitcoin_coinbase_transaction(
+            Version::TWO,
+            &[OutputPair {
+                address: address_a.clone(),
+                amount: Amount::from_sat(312_500_000),
+            }],
+            share_block.header.bitcoin_height as i64,
+            PushBytesBuf::from(&[0u8]),
+            None,
+            b"OtherPool",
+            Some(commitment_hash),
+            TEST_COINBASE_NSECS,
+            Some(&[0u8; EXTRANONCE1_SIZE + EXTRANONCE2_SIZE]),
+        )
+        .unwrap();
+        share_block.header.bitcoin_header.merkle_root = coinbase_tx.compute_txid().into();
+        share_block.bitcoin_coinbase = coinbase_tx;
+
+        let mut mock_window = PplnsWindow::default();
+        mock_window
+            .expect_network()
+            .return_const(bitcoin::Network::Signet);
+        let addr_a_clone = address_a.clone();
+        mock_window
+            .expect_get_distribution_from_start_hash()
+            .returning(move |_, _, _| Ok(HashMap::from([(addr_a_clone.clone(), 1000u128)])));
+
+        let result = validator().validate_bitcoin_payout(
+            &share_block,
+            &ChainStoreHandle::default(),
+            Arc::new(RwLock::new(mock_window)),
+        );
+        assert!(
+            result.is_ok(),
+            "Expected valid payout, got: {}",
+            result.unwrap_err()
+        );
+    }
+
+    /// A node with no pool signature configured pushes an empty one, and its
+    /// blocks are valid everywhere.
+    #[test]
+    fn test_validate_bitcoin_payout_accepts_empty_signature() {
+        let address_a = crate::test_utils::parse_address_from_string(
+            "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
+        );
+        let mut share_block = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+        share_block.header.bitcoin_height = 840_000;
+        let commitment_hash = ShareCommitment::from_share_block(&share_block).hash();
+
+        let coinbase_tx = build_bitcoin_coinbase_transaction(
+            Version::TWO,
+            &[OutputPair {
+                address: address_a.clone(),
+                amount: Amount::from_sat(312_500_000),
+            }],
+            share_block.header.bitcoin_height as i64,
+            PushBytesBuf::from(&[0u8]),
+            None,
+            b"",
+            Some(commitment_hash),
+            TEST_COINBASE_NSECS,
+            Some(&[0u8; EXTRANONCE1_SIZE + EXTRANONCE2_SIZE]),
+        )
+        .unwrap();
+        share_block.header.bitcoin_header.merkle_root = coinbase_tx.compute_txid().into();
+        share_block.bitcoin_coinbase = coinbase_tx;
+
+        let mut mock_window = PplnsWindow::default();
+        mock_window
+            .expect_network()
+            .return_const(bitcoin::Network::Signet);
+        let addr_a_clone = address_a.clone();
+        mock_window
+            .expect_get_distribution_from_start_hash()
+            .returning(move |_, _, _| Ok(HashMap::from([(addr_a_clone.clone(), 1000u128)])));
+
+        let result = validator().validate_bitcoin_payout(
+            &share_block,
+            &ChainStoreHandle::default(),
+            Arc::new(RwLock::new(mock_window)),
+        );
+        assert!(
+            result.is_ok(),
+            "Expected valid payout, got: {}",
+            result.unwrap_err()
+        );
+    }
+
     #[test]
     fn test_validate_bitcoin_payout_with_one_satoshi_coinbase() {
         let address_a = crate::test_utils::parse_address_from_string(
@@ -4040,8 +4137,7 @@ mod tests {
 
         // The reconstructed coinbase will also have 1 sat to address_a,
         // so merkle roots should match and validation should pass
-        let validator =
-            DefaultShareValidator::new(PoolDifficulty::default(), 1, b"P2Poolv2".to_vec());
+        let validator = DefaultShareValidator::new(PoolDifficulty::default(), 1);
         let result = validator.validate_bitcoin_payout(
             &share_block,
             &ChainStoreHandle::default(),
@@ -4164,8 +4260,7 @@ mod tests {
             });
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
-        let validator =
-            DefaultShareValidator::new(PoolDifficulty::default(), 1, b"P2Poolv2".to_vec());
+        let validator = DefaultShareValidator::new(PoolDifficulty::default(), 1);
         let result = validator.validate_bitcoin_payout(
             &share_block,
             &ChainStoreHandle::default(),
@@ -4265,8 +4360,7 @@ mod tests {
             .returning(move |_, _, _| Ok(HashMap::from([(addr_a_clone.clone(), 1000u128)])));
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
-        let validator =
-            DefaultShareValidator::new(PoolDifficulty::default(), 1, b"P2Poolv2".to_vec());
+        let validator = DefaultShareValidator::new(PoolDifficulty::default(), 1);
         let result = validator.validate_bitcoin_payout(
             &share_block,
             &ChainStoreHandle::default(),
