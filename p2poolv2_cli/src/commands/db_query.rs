@@ -1,0 +1,1030 @@
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
+//
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! Direct database query functions for offline CLI usage.
+//!
+//! These functions open a RocksDB store in read-only mode and query it
+//! directly, without requiring a running node or API server.
+
+use bitcoin::BlockHash;
+use bitcoin::{Network, WitnessProgram};
+use p2poolv2_lib::address::witness_program_codec::{to_address_string, to_hex};
+use p2poolv2_lib::address_display::{DagEntryDisplay, ShareInfoDisplay};
+use p2poolv2_lib::store::Store;
+use p2poolv2_lib::store::dag_store::{DagEntry, MAX_UNCLES_DEPTH};
+use p2poolv2_lib::store::writer::StoreError;
+use p2poolv2_lib::utils::time_provider::format_timestamp;
+use serde::Serialize;
+use serde_json::Value;
+use std::error::Error;
+use std::str::FromStr;
+
+/// Open a RocksDB store in read-only mode.
+pub fn open_store(db_path: &str) -> Result<Store, Box<dyn Error>> {
+    Store::new(db_path.to_string(), true)
+        .map_err(|error| format!("Failed to open database at {db_path}: {error}").into())
+}
+
+/// Query chain info directly from the store.
+pub fn info(store: &Store) -> Result<(), Box<dyn Error>> {
+    let genesis_blockhash = store.get_genesis_blockhash().map(|h| h.to_string());
+
+    let chain_tip_height = match store.get_top_confirmed_height() {
+        Ok(height) => Some(height),
+        Err(StoreError::NotFound(_)) => None,
+        Err(error) => return Err(format!("Failed to get tip height: {error}").into()),
+    };
+
+    let chain_tip_blockhash = match store.get_chain_tip() {
+        Ok(hash) => Some(hash.to_string()),
+        Err(StoreError::NotFound(_)) => None,
+        Err(error) => return Err(format!("Failed to get chain tip: {error}").into()),
+    };
+
+    let total_work = match store.get_total_work() {
+        Ok(work) => format!("{work:#x}"),
+        Err(error) => return Err(format!("Failed to get total work: {error}").into()),
+    };
+
+    let top_candidate_height = match store.get_top_candidate_height() {
+        Ok(height) => Some(height),
+        Err(StoreError::NotFound(_)) => None,
+        Err(error) => return Err(format!("Failed to get candidate tip height: {error}").into()),
+    };
+
+    let top_candidate_blockhash = top_candidate_height.and_then(|height| {
+        store
+            .get_candidate_at_height(height)
+            .ok()
+            .map(|h| h.to_string())
+    });
+
+    let response = serde_json::json!({
+        "genesis_blockhash": genesis_blockhash,
+        "chain_tip_height": chain_tip_height,
+        "total_work": total_work,
+        "chain_tip_blockhash": chain_tip_blockhash,
+        "top_candidate_height": top_candidate_height,
+        "top_candidate_blockhash": top_candidate_blockhash,
+    });
+    println!("{}", serde_json::to_string_pretty(&response)?);
+    Ok(())
+}
+
+/// Query confirmed shares directly from the store.
+pub fn shares(
+    store: &Store,
+    to: Option<u32>,
+    num: u32,
+    network: Option<Network>,
+) -> Result<(), Box<dyn Error>> {
+    let tip_height = store
+        .get_top_confirmed_height()
+        .map_err(|error| format!("Failed to get tip height: {error}"))?;
+
+    let to_height = match to {
+        Some(height) if height > tip_height => tip_height,
+        Some(height) => height,
+        None => tip_height,
+    };
+
+    let from_height = to_height.saturating_sub(num.saturating_sub(1));
+
+    let shares = store
+        .query_shares(from_height, to_height)
+        .map_err(|error| format!("Failed to query shares: {error}"))?;
+
+    let response = shares_response(from_height, to_height, &shares, network);
+    println!("{}", serde_json::to_string_pretty(&response)?);
+    Ok(())
+}
+
+/// Output confirmed shares as a Graphviz DOT DAG.
+pub fn shares_dot(
+    store: &Store,
+    to: Option<u32>,
+    num: u32,
+    network: Option<Network>,
+) -> Result<(), Box<dyn Error>> {
+    let tip_height = store
+        .get_top_confirmed_height()
+        .map_err(|error| format!("Failed to get tip height: {error}"))?;
+
+    let to_height = match to {
+        Some(height) if height > tip_height => tip_height,
+        Some(height) => height,
+        None => tip_height,
+    };
+
+    let from_height = to_height.saturating_sub(num.saturating_sub(1));
+
+    let shares = store
+        .query_shares(from_height, to_height)
+        .map_err(|error| format!("Failed to query shares: {error}"))?;
+
+    print_shares_dot(&shares, "confirmed_shares", network);
+    Ok(())
+}
+
+/// Output candidate shares as a Graphviz DOT DAG.
+pub fn candidates_dot(
+    store: &Store,
+    to: Option<u32>,
+    num: u32,
+    network: Option<Network>,
+) -> Result<(), Box<dyn Error>> {
+    let candidate_height = store
+        .get_top_candidate_height()
+        .map_err(|error| format!("Failed to get candidate tip height: {error}"))?;
+
+    let to_height = match to {
+        Some(height) if height > candidate_height => candidate_height,
+        Some(height) => height,
+        None => candidate_height,
+    };
+
+    let from_height = to_height.saturating_sub(num.saturating_sub(1));
+
+    let candidates = store
+        .query_candidates(from_height, to_height)
+        .map_err(|error| format!("Failed to query candidates: {error}"))?;
+
+    print_shares_dot(&candidates, "candidate_shares", network);
+    Ok(())
+}
+
+/// Query candidate shares directly from the store.
+pub fn candidates(
+    store: &Store,
+    to: Option<u32>,
+    num: u32,
+    network: Option<Network>,
+) -> Result<(), Box<dyn Error>> {
+    let candidate_height = store
+        .get_top_candidate_height()
+        .map_err(|error| format!("Failed to get candidate tip height: {error}"))?;
+
+    let to_height = match to {
+        Some(height) if height > candidate_height => candidate_height,
+        Some(height) => height,
+        None => candidate_height,
+    };
+
+    let from_height = to_height.saturating_sub(num.saturating_sub(1));
+
+    let candidates = store
+        .query_candidates(from_height, to_height)
+        .map_err(|error| format!("Failed to query candidates: {error}"))?;
+
+    let response = shares_response(from_height, to_height, &candidates, network);
+    println!("{}", serde_json::to_string_pretty(&response)?);
+    Ok(())
+}
+
+/// Look up a single share by hash or height directly from the store.
+pub fn share_lookup(
+    store: &Store,
+    hash: Option<String>,
+    height: Option<u32>,
+    full: bool,
+    network: Option<Network>,
+) -> Result<(), Box<dyn Error>> {
+    match (hash, height) {
+        (Some(hash_string), None) => {
+            let blockhash = BlockHash::from_str(&hash_string)
+                .map_err(|error| format!("Invalid blockhash '{hash_string}': {error}"))?;
+            let output = build_share_output(store, &blockhash, full, network)?;
+            let response = serde_json::to_string_pretty(&vec![output])?;
+            println!("{response}");
+        }
+        (None, Some(height)) => {
+            let outputs = lookup_by_height(store, height, full, network)?;
+            let response = serde_json::to_string_pretty(&outputs)?;
+            println!("{response}");
+        }
+        _ => return Err("Exactly one of hash or height must be provided".into()),
+    }
+    Ok(())
+}
+
+/// Query PPLNS shares directly from the store.
+pub fn pplns_shares(
+    store: &Store,
+    limit: usize,
+    start_time: Option<u64>,
+    end_time: Option<u64>,
+) -> Result<(), Box<dyn Error>> {
+    let shares = store.get_pplns_shares_filtered(Some(limit), start_time, end_time);
+    let response = serde_json::to_string_pretty(&shares)?;
+    println!("{response}");
+    Ok(())
+}
+
+/// Query all share headers at each height in the height index.
+pub fn dag(
+    store: &Store,
+    to: Option<u32>,
+    num: u32,
+    dot: bool,
+    network: Option<Network>,
+) -> Result<(), Box<dyn Error>> {
+    let confirmed_height = store.get_top_confirmed_height().ok();
+    let candidate_height = store.get_top_candidate_height().ok();
+
+    let max_height = match (confirmed_height, candidate_height) {
+        (Some(confirmed), Some(candidate)) => confirmed.max(candidate),
+        (Some(confirmed), None) => confirmed,
+        (None, Some(candidate)) => candidate,
+        (None, None) => return Err("No confirmed or candidate chain found in store".into()),
+    };
+
+    let to_height = match to {
+        Some(height) if height > max_height => max_height,
+        Some(height) => height,
+        None => max_height,
+    };
+
+    let from_height = to_height.saturating_sub(num.saturating_sub(1));
+
+    let entries = store.query_dag(from_height, to_height);
+
+    if dot {
+        print_dag_dot(&entries, network);
+    } else {
+        let response = dag_response(from_height, to_height, &entries, network);
+        println!("{}", serde_json::to_string_pretty(&response)?);
+    }
+    Ok(())
+}
+
+// --- DOT output helpers ---
+
+use p2poolv2_lib::store::dag_store::ShareInfo;
+
+/// Truncate a string to the first `n` characters.
+/// Build the JSON body the `shares` and `candidates` commands print.
+///
+/// Separate from the command so the address rendering can be tested
+/// without a store: nothing in the type system distinguishes an address from
+/// the witness program hex, since both are strings.
+fn shares_response(
+    from_height: u32,
+    to_height: u32,
+    shares: &[ShareInfo],
+    network: Option<Network>,
+) -> Value {
+    serde_json::json!({
+        "from_height": from_height,
+        "to_height": to_height,
+        "shares": ShareInfoDisplay::from_share_infos(shares, network),
+    })
+}
+
+/// Build the JSON body the `dag` command prints.
+fn dag_response(
+    from_height: u32,
+    to_height: u32,
+    entries: &[DagEntry],
+    network: Option<Network>,
+) -> Value {
+    serde_json::json!({
+        "from_height": from_height,
+        "to_height": to_height,
+        "entries": DagEntryDisplay::from_dag_entries(entries, network),
+    })
+}
+
+/// Render a miner address for display.
+///
+/// `network` comes from the config when one was supplied. Without it there is
+/// no human readable part to choose, and guessing one would print an address
+/// that names a chain this node may not be on, so the program hex is shown
+/// instead. Supply `--config` to see the address form.
+fn miner_address_display(witness_program: &WitnessProgram, network: Option<Network>) -> String {
+    match network {
+        Some(network) => to_address_string(witness_program, network),
+        None => to_hex(witness_program),
+    }
+}
+
+/// Render a miner address for a DOT label.
+///
+/// `network` comes from the config when one was supplied; without it there is
+/// no human readable part to choose, so the program hex is shown instead.
+///
+/// Truncated from both ends rather than the head: every share chain address on
+/// a given network begins with the same prefix, so a head-only slice renders
+/// every miner identically.
+fn short_miner_address(witness_program: &WitnessProgram, network: Option<Network>) -> String {
+    ends(&miner_address_display(witness_program, network), 6)
+}
+
+/// Truncate to the first and last `n` characters, joined by an ellipsis.
+fn ends(value: &str, n: usize) -> String {
+    if value.len() <= n * 2 + 3 {
+        return value.to_string();
+    }
+    format!("{}..{}", &value[..n], &value[value.len() - n..])
+}
+
+fn short(s: &str, n: usize) -> &str {
+    &s[..s.len().min(n)]
+}
+
+/// Format a unix timestamp as HH:MM:SS UTC.
+fn format_ts_hms(timestamp: u32) -> String {
+    let dt = chrono::DateTime::from_timestamp(timestamp as i64, 0).unwrap_or_default();
+    dt.format("%H:%M:%S").to_string()
+}
+
+/// Format compact target bits as an integer difficulty value.
+fn format_difficulty(bits: bitcoin::CompactTarget) -> String {
+    let target = bitcoin::Target::from(bits);
+    let diff = target.difficulty_float() as u64;
+    diff.to_string()
+}
+
+/// Render a list of ShareInfo as a Graphviz DOT digraph.
+fn print_shares_dot(shares: &[ShareInfo], graph_name: &str, network: Option<Network>) {
+    println!("digraph {graph_name} {{");
+    println!("    node [shape=record, style=filled];");
+    println!();
+
+    // Collect uncle blockhashes so we can colour them differently
+    let mut uncle_hashes = std::collections::HashSet::new();
+    for share in shares {
+        for uncle in &share.uncles {
+            uncle_hashes.insert(uncle.blockhash.to_string());
+        }
+    }
+
+    // Emit confirmed share nodes
+    for share in shares {
+        let hash = share.blockhash.to_string();
+        let id = short(&hash, 5);
+        let bitcoin_miner = short(&share.miner_bitcoin_address, 10);
+        let miner = short_miner_address(&share.miner_address, network);
+        let diff = format_difficulty(share.bits);
+        let ts = format_ts_hms(share.timestamp);
+        let label = format!(
+            "{id}|h:{height}|{bitcoin_miner}|{miner}|{diff}|{ts}",
+            height = share.height
+        );
+        println!("    \"{hash}\" [label=\"{label}\", fillcolor=\"#a8d5ba\"];");
+    }
+
+    // Emit uncle nodes
+    for share in shares {
+        for uncle in &share.uncles {
+            let hash = uncle.blockhash.to_string();
+            let id = short(&hash, 5);
+            let bitcoin_miner = short(&uncle.miner_bitcoin_address, 10);
+            let miner = short_miner_address(&uncle.miner_address, network);
+            let ts = format_ts_hms(uncle.timestamp);
+            let height_str = uncle
+                .height
+                .map(|h| format!("h:{h}"))
+                .unwrap_or_else(|| "h:?".to_string());
+            let label = format!("{id}|{height_str}|{bitcoin_miner}|{miner}|{ts}");
+            println!("    \"{hash}\" [label=\"{label}\", fillcolor=\"#f4a582\"];");
+        }
+    }
+
+    println!();
+
+    // Edges: confirmed -> prev_blockhash
+    for share in shares {
+        let hash = share.blockhash.to_string();
+        let prev = share.prev_blockhash.to_string();
+        println!("    \"{hash}\" -> \"{prev}\" [color=\"#333333\"];");
+    }
+
+    // Edges: confirmed -> uncles (dashed)
+    for share in shares {
+        let hash = share.blockhash.to_string();
+        for uncle in &share.uncles {
+            let uncle_hash = uncle.blockhash.to_string();
+            println!("    \"{hash}\" -> \"{uncle_hash}\" [style=dashed, color=\"#cc6633\"];");
+        }
+    }
+
+    // Edges: uncle -> prev_blockhash
+    for share in shares {
+        for uncle in &share.uncles {
+            let uncle_hash = uncle.blockhash.to_string();
+            let uncle_prev = uncle.prev_blockhash.to_string();
+            println!("    \"{uncle_hash}\" -> \"{uncle_prev}\" [color=\"#999999\"];");
+        }
+    }
+
+    println!("}}");
+    use std::io::Write;
+    std::io::stdout().flush().ok();
+}
+
+/// Render DagEntry list as a Graphviz DOT digraph.
+///
+/// Colours nodes by chain membership (position), which is what matters
+/// for reading fork/confirmation structure: green for Confirmed, yellow
+/// for Candidate, grey for off-chain (None). A node whose validation
+/// status is Invalid is drawn red regardless of position. The label
+/// carries both the validation status and the chain membership so the
+/// two axes stay visible. Nodes without block data get a double border.
+/// Only emits edges between nodes present in the result.
+fn print_dag_dot(entries: &[DagEntry], network: Option<Network>) {
+    let known_hashes: std::collections::HashSet<String> = entries
+        .iter()
+        .map(|entry| entry.blockhash.to_string())
+        .collect();
+
+    println!("digraph dag {{");
+    println!("    node [shape=record, style=filled];");
+    println!();
+
+    for entry in entries {
+        let hash = entry.blockhash.to_string();
+        let identifier = short(&hash, 8);
+        let bitcoin_miner = short(&entry.miner_bitcoin_address, 10);
+        let miner = match &entry.miner_address {
+            Some(program) => short_miner_address(program, network),
+            None => "unknown".to_string(),
+        };
+        let data_marker = if entry.has_block_data { "D" } else { "-" };
+        let label = format!(
+            "{}|h:{}|{}|{}|{}/{}|{}",
+            identifier,
+            entry.height,
+            bitcoin_miner,
+            miner,
+            entry.chain,
+            entry.validation_status,
+            data_marker
+        );
+        let fill_color = if entry.validation_status == "Invalid" {
+            "#f4a582"
+        } else {
+            match entry.chain.as_str() {
+                "Confirmed" => "#a8d5ba",
+                "Candidate" => "#ffffb3",
+                _ => "#d9d9d9",
+            }
+        };
+        let border = if entry.has_block_data {
+            ""
+        } else {
+            ", peripheries=2"
+        };
+        println!("    \"{hash}\" [label=\"{label}\", fillcolor=\"{fill_color}\"{border}];");
+    }
+
+    println!();
+
+    // Edges: block -> parent (only if parent is in result set)
+    for entry in entries {
+        let hash = entry.blockhash.to_string();
+        let parent = entry.parent.to_string();
+        if known_hashes.contains(&parent) {
+            println!("    \"{hash}\" -> \"{parent}\";");
+        }
+    }
+
+    // Edges: block -> uncles (only if uncle is in result set)
+    for entry in entries {
+        let hash = entry.blockhash.to_string();
+        for uncle in &entry.uncles {
+            let uncle_hash = uncle.to_string();
+            if known_hashes.contains(&uncle_hash) {
+                println!("    \"{hash}\" -> \"{uncle_hash}\" [style=dashed, color=\"#cc6633\"];");
+            }
+        }
+    }
+
+    println!("}}");
+    use std::io::Write;
+    std::io::stdout().flush().ok();
+}
+
+// --- Helper types and functions for share lookup ---
+
+#[derive(Serialize)]
+struct BitcoinHeaderOutput {
+    block_hash: String,
+    version: i32,
+    prev_blockhash: String,
+    merkle_root: String,
+    time: String,
+    bits: String,
+    nonce: u32,
+}
+
+#[derive(Serialize)]
+struct ShareLookupOutput {
+    blockhash: String,
+    height: Option<u32>,
+    /// Validation state only. Chain position is reported separately in `chain`.
+    validation_status: String,
+    chain: String,
+    parent: String,
+    uncles: Vec<String>,
+    miner_bitcoin_address: String,
+    miner_address: String,
+    merkle_root: String,
+    bits: String,
+    time: String,
+    bitcoin_header: BitcoinHeaderOutput,
+    template_merkle_branches_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    transactions: Option<Vec<String>>,
+}
+
+fn build_share_output(
+    store: &Store,
+    blockhash: &BlockHash,
+    full: bool,
+    network: Option<Network>,
+) -> Result<ShareLookupOutput, Box<dyn Error>> {
+    let share_header = store
+        .get_share_header(blockhash)?
+        .ok_or_else(|| format!("Share not found for blockhash {blockhash}"))?;
+
+    let metadata = match store.get_block_metadata(blockhash) {
+        Ok(metadata) => Some(metadata),
+        Err(StoreError::NotFound(_)) => None,
+        Err(error) => return Err(format!("Failed to get metadata for {blockhash}: {error}").into()),
+    };
+
+    let height = metadata
+        .as_ref()
+        .and_then(|metadata| metadata.expected_height);
+    let status = metadata
+        .as_ref()
+        .map(|metadata| metadata.status.as_str())
+        .unwrap_or("Unknown");
+    let chain = metadata
+        .as_ref()
+        .map(|metadata| metadata.chain.as_str())
+        .unwrap_or("Unknown");
+
+    let bitcoin_header = &share_header.bitcoin_header;
+    let bitcoin_header_output = BitcoinHeaderOutput {
+        block_hash: bitcoin_header.block_hash().to_string(),
+        version: bitcoin_header.version.to_consensus(),
+        prev_blockhash: bitcoin_header.prev_blockhash.to_string(),
+        merkle_root: bitcoin_header.merkle_root.to_string(),
+        time: format_timestamp(bitcoin_header.time as u64),
+        bits: format!("{:#x}", bitcoin_header.bits.to_consensus()),
+        nonce: bitcoin_header.nonce,
+    };
+
+    let template_merkle_branches_count = store
+        .get_template_merkle_branches(blockhash)
+        .unwrap_or_default()
+        .len();
+
+    let transaction_ids = if full {
+        let share_block = store
+            .get_share(blockhash)
+            .ok_or_else(|| format!("Full share not found for blockhash {blockhash}"))?;
+
+        Some(
+            share_block
+                .transactions
+                .iter()
+                .map(|tx| tx.compute_txid().to_string())
+                .collect(),
+        )
+    } else {
+        None
+    };
+
+    Ok(ShareLookupOutput {
+        blockhash: blockhash.to_string(),
+        height,
+        validation_status: status.to_string(),
+        chain: chain.to_string(),
+        parent: share_header.prev_share_blockhash.to_string(),
+        uncles: share_header
+            .uncles
+            .iter()
+            .map(|uncle| uncle.to_string())
+            .collect(),
+        miner_bitcoin_address: share_header.miner_bitcoin_address.to_string(),
+        miner_address: miner_address_display(&share_header.miner_address, network),
+        merkle_root: share_header.merkle_root.to_string(),
+        bits: format!("{:#x}", share_header.bits.to_consensus()),
+        time: format_timestamp(share_header.time as u64),
+        bitcoin_header: bitcoin_header_output,
+        template_merkle_branches_count,
+        transactions: transaction_ids,
+    })
+}
+
+fn lookup_by_height(
+    store: &Store,
+    height: u32,
+    full: bool,
+    network: Option<Network>,
+) -> Result<Vec<ShareLookupOutput>, Box<dyn Error>> {
+    let mut blockhashes = Vec::with_capacity(4);
+
+    if let Ok(confirmed_hash) = store.get_confirmed_at_height(height) {
+        blockhashes.push(confirmed_hash);
+    }
+
+    let upper_height = height.saturating_add(MAX_UNCLES_DEPTH as u32);
+    if let Some(start_height) = height.checked_add(1) {
+        for scan_height in start_height..=upper_height {
+            let Ok(scan_hash) = store.get_confirmed_at_height(scan_height) else {
+                continue;
+            };
+            let Ok(Some(header)) = store.get_share_header(&scan_hash) else {
+                continue;
+            };
+            for uncle_hash in &header.uncles {
+                if blockhashes.contains(uncle_hash) {
+                    continue;
+                }
+                let uncle_height = match store.get_block_metadata(uncle_hash) {
+                    Ok(metadata) => metadata.expected_height,
+                    Err(StoreError::NotFound(_)) => None,
+                    Err(error) => {
+                        return Err(format!(
+                            "Failed to get metadata for uncle {uncle_hash}: {error}"
+                        )
+                        .into());
+                    }
+                };
+                if uncle_height == Some(height) {
+                    blockhashes.push(*uncle_hash);
+                }
+            }
+        }
+    }
+
+    if blockhashes.is_empty() {
+        return Err(format!("No shares found at height {height}").into());
+    }
+
+    let mut outputs = Vec::with_capacity(blockhashes.len());
+    for blockhash in &blockhashes {
+        outputs.push(build_share_output(store, blockhash, full, network)?);
+    }
+    Ok(outputs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bitcoin::hashes::Hash as HashTrait;
+    use p2poolv2_lib::store::dag_store::UncleInfo;
+    use p2poolv2_lib::test_utils::make_test_share_program;
+    use p2poolv2_lib::test_utils::{genesis_for_tests, setup_test_chain_store_handle};
+
+    /// Helper: set up a store with genesis and return the Store reference and temp dir.
+    /// The ChainStoreHandle populates the store; we then query it directly via Store.
+    async fn setup_store_with_genesis() -> (std::sync::Arc<Store>, tempfile::TempDir) {
+        let (chain_store_handle, temp_dir) = setup_test_chain_store_handle(true).await;
+        let genesis = genesis_for_tests();
+        chain_store_handle
+            .init_or_setup_genesis(genesis)
+            .await
+            .unwrap();
+        let store = chain_store_handle.store_handle().store().clone();
+        (store, temp_dir)
+    }
+
+    // --- open_store tests ---
+
+    #[test]
+    fn test_open_store_invalid_path() {
+        let result = open_store("/nonexistent/path/to/db");
+        assert!(result.is_err());
+    }
+
+    // --- info tests ---
+
+    #[tokio::test]
+    async fn test_info_calls_store_on_empty_db() {
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let store = chain_store_handle.store_handle().store();
+        // Empty store has no total_work, so info returns an error
+        let result = info(store);
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_info_calls_store_with_genesis() {
+        let (store, _temp_dir) = setup_store_with_genesis().await;
+        let result = info(&store);
+        assert!(result.is_ok());
+    }
+
+    // --- shares tests ---
+
+    #[tokio::test]
+    async fn test_shares_errors_on_empty_store() {
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let store = chain_store_handle.store_handle().store();
+        let result = shares(store, None, 10, Some(Network::Signet));
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_shares_calls_store_with_genesis() {
+        let (store, _temp_dir) = setup_store_with_genesis().await;
+        let result = shares(&store, Some(0), 1, Some(Network::Signet));
+        assert!(result.is_ok());
+    }
+
+    // --- candidates tests ---
+
+    #[tokio::test]
+    async fn test_candidates_errors_on_empty_store() {
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let store = chain_store_handle.store_handle().store();
+        let result = candidates(store, None, 10, Some(Network::Signet));
+        assert!(result.is_err());
+    }
+
+    // --- share_lookup tests ---
+
+    #[tokio::test]
+    async fn test_share_lookup_invalid_hash() {
+        let (store, _temp_dir) = setup_store_with_genesis().await;
+        let result = share_lookup(
+            &store,
+            Some("not-a-hash".to_string()),
+            None,
+            false,
+            Some(Network::Signet),
+        );
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_share_lookup_not_found_by_hash() {
+        let (store, _temp_dir) = setup_store_with_genesis().await;
+        let result = share_lookup(
+            &store,
+            Some("0000000000000000000000000000000000000000000000000000000000000001".to_string()),
+            None,
+            false,
+            Some(Network::Signet),
+        );
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_share_lookup_genesis_by_height() {
+        let (store, _temp_dir) = setup_store_with_genesis().await;
+        let result = share_lookup(&store, None, Some(0), false, Some(Network::Signet));
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_share_lookup_genesis_by_hash() {
+        let (store, _temp_dir) = setup_store_with_genesis().await;
+        let genesis = genesis_for_tests();
+        let genesis_hash = genesis.block_hash().to_string();
+        let result = share_lookup(
+            &store,
+            Some(genesis_hash),
+            None,
+            false,
+            Some(Network::Signet),
+        );
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_share_lookup_genesis_full() {
+        let (store, _temp_dir) = setup_store_with_genesis().await;
+        let genesis = genesis_for_tests();
+        let genesis_hash = genesis.block_hash().to_string();
+        let result = share_lookup(
+            &store,
+            Some(genesis_hash),
+            None,
+            true,
+            Some(Network::Signet),
+        );
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_share_lookup_not_found_by_height() {
+        let (store, _temp_dir) = setup_store_with_genesis().await;
+        let result = share_lookup(&store, None, Some(999), false, Some(Network::Signet));
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_share_lookup_requires_hash_or_height() {
+        let (store, _temp_dir) = setup_store_with_genesis().await;
+        let result = share_lookup(&store, None, None, false, Some(Network::Signet));
+        assert!(result.is_err());
+    }
+
+    // --- pplns_shares tests ---
+
+    #[tokio::test]
+    async fn test_pplns_shares_calls_store() {
+        let (store, _temp_dir) = setup_store_with_genesis().await;
+        // Should succeed (returns empty list on store with no pplns data)
+        let result = pplns_shares(&store, 100, None, None);
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_pplns_shares_with_time_filter() {
+        let (store, _temp_dir) = setup_store_with_genesis().await;
+        let result = pplns_shares(&store, 10, Some(1_700_000_000), Some(1_700_100_000));
+        assert!(result.is_ok());
+    }
+
+    // --- dot output tests ---
+
+    #[tokio::test]
+    async fn test_shares_dot_calls_store_with_genesis() {
+        let (store, _temp_dir) = setup_store_with_genesis().await;
+        let result = shares_dot(&store, Some(0), 1, Some(Network::Signet));
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_shares_dot_errors_on_empty_store() {
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let store = chain_store_handle.store_handle().store();
+        let result = shares_dot(store, None, 10, Some(Network::Signet));
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_candidates_dot_errors_on_empty_store() {
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let store = chain_store_handle.store_handle().store();
+        let result = candidates_dot(store, None, 10, Some(Network::Signet));
+        assert!(result.is_err());
+    }
+
+    /// Without a config there is no network to name, and guessing one would
+    /// print an address for a chain this node may not be on.
+    #[test]
+    fn miner_address_display_falls_back_to_hex_without_a_network() {
+        assert_eq!(
+            miner_address_display(&make_test_share_program(1), None),
+            to_hex(&make_test_share_program(1))
+        );
+    }
+
+    /// A head only truncation would render every miner identically, because
+    /// every share address on a network shares its leading characters.
+    #[test]
+    fn short_miner_address_keeps_both_ends_so_miners_stay_distinguishable() {
+        let first = short_miner_address(&make_test_share_program(1), Some(Network::Signet));
+        let second = short_miner_address(&make_test_share_program(2), Some(Network::Signet));
+        assert_ne!(first, second);
+    }
+
+    fn test_share_info() -> ShareInfo {
+        use bitcoin::CompactTarget;
+        ShareInfo {
+            blockhash: BlockHash::all_zeros(),
+            prev_blockhash: BlockHash::all_zeros(),
+            height: 2,
+            miner_bitcoin_address: "tb1qx6e0gj7q7xurl08cwnpmeve6w6zf4tw6vfwe3f".to_string(),
+            miner_address: make_test_share_program(1),
+            timestamp: 200,
+            bits: CompactTarget::from_consensus(0x1d00ffff),
+            uncles: vec![UncleInfo {
+                blockhash: BlockHash::all_zeros(),
+                prev_blockhash: BlockHash::all_zeros(),
+                miner_bitcoin_address: "tb1qx6e0gj7q7xurl08cwnpmeve6w6zf4tw6vfwe3f".to_string(),
+                miner_address: make_test_share_program(2),
+                timestamp: 100,
+                height: Some(1),
+            }],
+        }
+    }
+
+    /// `shares` and `candidates` both print this body. The miner address must
+    /// be the bech32m form, not the witness program hex the store serializes.
+    #[test]
+    fn shares_response_renders_addresses_with_a_configured_network() {
+        let shares = vec![test_share_info()];
+        let response = shares_response(0, 1, &shares, Some(Network::Signet));
+
+        assert_eq!(
+            response["shares"][0]["miner_address"],
+            to_address_string(&make_test_share_program(1), Network::Signet)
+        );
+        assert_eq!(
+            response["shares"][0]["uncles"][0]["miner_address"],
+            to_address_string(&make_test_share_program(2), Network::Signet)
+        );
+        assert!(
+            response["shares"][0]["miner_address"]
+                .as_str()
+                .unwrap()
+                .starts_with("sp2pool1")
+        );
+    }
+
+    /// --config is optional alongside --db-path. Without it there is no
+    /// network to choose a prefix with, and guessing one would name a chain
+    /// this node may not be on, so the program hex is shown instead.
+    #[test]
+    fn shares_response_falls_back_to_hex_without_a_configured_network() {
+        let shares = vec![test_share_info()];
+        let response = shares_response(0, 1, &shares, None);
+
+        assert_eq!(
+            response["shares"][0]["miner_address"],
+            to_hex(&make_test_share_program(1))
+        );
+    }
+
+    #[test]
+    fn dag_response_renders_addresses() {
+        let entries = vec![DagEntry {
+            blockhash: BlockHash::all_zeros(),
+            height: 1,
+            validation_status: "BlockValid".to_string(),
+            chain: "Confirmed".to_string(),
+            parent: BlockHash::all_zeros(),
+            uncles: vec![],
+            miner_bitcoin_address: "tb1qx6e0gj7q7xurl08cwnpmeve6w6zf4tw6vfwe3f".to_string(),
+            miner_address: Some(make_test_share_program(1)),
+            has_block_data: true,
+        }];
+        let response = dag_response(0, 1, &entries, Some(Network::Signet));
+
+        assert_eq!(
+            response["entries"][0]["miner_address"],
+            to_address_string(&make_test_share_program(1), Network::Signet)
+        );
+    }
+
+    #[test]
+    fn test_print_shares_dot_output_structure() {
+        use bitcoin::CompactTarget;
+
+        let shares = vec![ShareInfo {
+            blockhash: BlockHash::from_str(
+                "000000000000000000000000000000000000000000000000000000000000abcd",
+            )
+            .unwrap(),
+            prev_blockhash: BlockHash::from_str(
+                "0000000000000000000000000000000000000000000000000000000000001234",
+            )
+            .unwrap(),
+            height: 1,
+            miner_bitcoin_address: "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q".to_string(),
+            miner_address: make_test_share_program(1),
+            timestamp: 1700000000,
+            bits: CompactTarget::from_consensus(0x1d00ffff),
+            uncles: vec![p2poolv2_lib::store::dag_store::UncleInfo {
+                blockhash: BlockHash::from_str(
+                    "00000000000000000000000000000000000000000000000000000000000000ff",
+                )
+                .unwrap(),
+                prev_blockhash: BlockHash::from_str(
+                    "0000000000000000000000000000000000000000000000000000000000001234",
+                )
+                .unwrap(),
+                miner_bitcoin_address: "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string(),
+                miner_address: make_test_share_program(2),
+                timestamp: 1699999990,
+                height: Some(1),
+            }],
+        }];
+
+        // Just verify it doesn't panic — output goes to stdout
+        print_shares_dot(&shares, "test_graph", Some(Network::Signet));
+    }
+
+    // --- dag tests ---
+
+    #[tokio::test]
+    async fn test_dag_with_genesis() {
+        let (store, _temp_dir) = setup_store_with_genesis().await;
+        let result = dag(&store, Some(0), 1, false, Some(Network::Signet));
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_dag_errors_on_empty_store() {
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let store = chain_store_handle.store_handle().store();
+        let result = dag(store, None, 10, false, Some(Network::Signet));
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_dag_dot_with_genesis() {
+        let (store, _temp_dir) = setup_store_with_genesis().await;
+        let result = dag(&store, Some(0), 1, true, Some(Network::Signet));
+        assert!(result.is_ok());
+    }
+}

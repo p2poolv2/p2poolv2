@@ -1,18 +1,6 @@
-// Copyright (C) 2024-2026 P2Poolv2 Developers (see AUTHORS)
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
 //
-// This file is part of P2Poolv2
-//
-// P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free
-// Software Foundation, either version 3 of the License, or (at your option)
-// any later version.
-//
-// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License along with
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 use base64::Engine;
 use chrono::{TimeZone, Utc};
@@ -45,6 +33,7 @@ async fn test_api_server_without_authentication() -> Result<(), ApiError> {
         auth_user: None,
         auth_token: None,
         auth_password: None,
+        cors_allowed: false,
     };
 
     // Start API server with the new signature
@@ -128,6 +117,7 @@ async fn test_api_server_with_authentication() -> Result<(), ApiError> {
         auth_user: Some("testuser".to_string()),
         auth_token: Some(test_token),
         auth_password: None,
+        cors_allowed: false,
     };
 
     // Start API server with authentication
@@ -245,6 +235,7 @@ async fn test_pplns_shares_endpoint_get_all() -> Result<(), ApiError> {
         auth_user: None,
         auth_token: None,
         auth_password: None,
+        cors_allowed: false,
     };
 
     // Start API server
@@ -358,6 +349,7 @@ async fn test_pplns_shares_endpoint_limit() -> Result<(), ApiError> {
         auth_user: None,
         auth_token: None,
         auth_password: None,
+        cors_allowed: false,
     };
 
     // Start API server
@@ -466,6 +458,7 @@ async fn test_pplns_shares_endpoint_time_filter() -> Result<(), ApiError> {
         auth_user: None,
         auth_token: None,
         auth_password: None,
+        cors_allowed: false,
     };
 
     // Start API server

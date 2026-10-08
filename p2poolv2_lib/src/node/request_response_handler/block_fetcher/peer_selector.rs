@@ -1,24 +1,15 @@
-// Copyright (C) 2024-2026 P2Poolv2 Developers (see AUTHORS)
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
 //
-// This file is part of P2Poolv2
-//
-// P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free
-// Software Foundation, either version 3 of the License, or (at your option)
-// any later version.
-//
-// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License along with
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Round-robin peer selection with per-peer capacity tracking.
 
 use super::MAX_IN_FLIGHT_PER_PEER;
 use libp2p::PeerId;
 use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::time::Instant;
 
 /// Manages peer selection for block fetching using round-robin distribution.
 ///
@@ -58,6 +49,22 @@ impl PeerSelector {
         self.peers.entry(peer_id).or_insert(0);
     }
 
+    /// Remove a disconnected peer from the selector.
+    ///
+    /// Sets the round-robin index to a hash-derived position to avoid
+    /// bias toward the first peer in the map.
+    pub(super) fn remove_peer(&mut self, peer_id: &PeerId) {
+        self.peers.remove(peer_id);
+        let peer_count = self.peers.len();
+        if peer_count == 0 {
+            self.next_peer_index = 0;
+            return;
+        }
+        let mut hasher = DefaultHasher::new();
+        Instant::now().hash(&mut hasher);
+        self.next_peer_index = hasher.finish() as usize % peer_count;
+    }
+
     /// Select a peer using round-robin, skipping peers at capacity.
     ///
     /// Returns None if all peers are at capacity or no peers are known.
@@ -90,6 +97,14 @@ impl PeerSelector {
     pub(super) fn record_completion(&mut self, peer_id: PeerId) {
         if let Some(count) = self.peers.get_mut(&peer_id) {
             *count = count.saturating_sub(1);
+        }
+    }
+
+    /// Returns true if the peer is known and below the in-flight capacity limit.
+    pub(super) fn peer_has_capacity(&self, peer_id: &PeerId) -> bool {
+        match self.peers.get(peer_id) {
+            Some(&count) => count < MAX_IN_FLIGHT_PER_PEER,
+            None => false,
         }
     }
 
@@ -222,6 +237,50 @@ mod tests {
         let expected_set: std::collections::HashSet<PeerId> =
             [peer_b, peer_c].into_iter().collect();
         assert_eq!(selected_set, expected_set);
+    }
+
+    #[test]
+    fn test_peer_selector_remove_peer() {
+        let mut selector = PeerSelector::new();
+        let peer_a = PeerId::random();
+        let peer_b = PeerId::random();
+        let peer_c = PeerId::random();
+        selector.update_peers(vec![peer_a, peer_b, peer_c]);
+
+        selector.remove_peer(&peer_b);
+
+        // Only peer_a and peer_c remain
+        let mut selected = std::collections::HashSet::new();
+        selected.insert(selector.select_peer().unwrap());
+        selected.insert(selector.select_peer().unwrap());
+        assert!(selected.contains(&peer_a));
+        assert!(selected.contains(&peer_c));
+        assert!(!selected.contains(&peer_b));
+    }
+
+    #[test]
+    fn test_peer_selector_remove_last_peer() {
+        let mut selector = PeerSelector::new();
+        let peer_a = PeerId::random();
+        selector.add_peer(peer_a);
+
+        selector.remove_peer(&peer_a);
+
+        assert!(!selector.has_peers());
+        assert!(selector.select_peer().is_none());
+    }
+
+    #[test]
+    fn test_peer_selector_remove_unknown_peer_is_noop() {
+        let mut selector = PeerSelector::new();
+        let peer_a = PeerId::random();
+        let peer_b = PeerId::random();
+        selector.add_peer(peer_a);
+
+        selector.remove_peer(&peer_b);
+
+        assert!(selector.has_peers());
+        assert_eq!(selector.select_peer().unwrap(), peer_a);
     }
 
     #[test]

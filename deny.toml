@@ -1,0 +1,90 @@
+# Supply-chain policy for P2Poolv2. See docs in the cargo-deny book:
+# https://embarkstudios.github.io/cargo-deny/
+
+[graph]
+all-features = true
+# Only the platforms we publish images for (see .github/workflows/docker.yml).
+# Scoping this keeps Windows- and macOS-only crates out of every check.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "armv7-unknown-linux-gnueabihf",
+]
+
+[licenses]
+# P2Poolv2 ships under MIT OR Apache-2.0, so a dependency licence must permit
+# redistributing the linked work under either of those. That means permissive
+# only: any copyleft licence (GPL, AGPL, LGPL, MPL) is disqualifying, a
+# stricter bar than the AGPL era. Every entry below was observed in the tree.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unlicense",
+    "CC0-1.0",
+    "Unicode-3.0",
+    "BSL-1.0",
+    "MITNFA",
+]
+confidence-threshold = 0.93
+
+# Our own crates are publish = false, so their licence is our decision, not a
+# dependency policy question. Skipping them keeps this file agnostic to any
+# future relicence of the workspace itself.
+private = { ignore = true }
+
+[bans]
+# Duplicate majors cannot be denied outright while bitcoin 0.32 pins rand 0.8.
+# Cargo only hard-errors on duplicate `links` crates, so this check is the only
+# thing that catches version skew. Keep the skip list short and commented.
+multiple-versions = "warn"
+# Catch an accidental `foo = "*"` on a registry dependency, but allow the
+# version-less path deps between our own crates (the workspace is publish = false).
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+
+[advisories]
+# TRIAGE PROCEDURE
+#
+# This check reads Cargo.lock, but [graph] targets scopes it to the platforms
+# we ship, so crates that are only lockfile entries for features we never
+# enable do not appear here at all. Before adding an ignore entry, classify it:
+#
+#   1. cargo tree -i <crate>@<version> --workspace --all-features
+#      Nothing printed means it is not in the host build graph.
+#   2. cargo tree -i <crate>@<version> --target all --all-features
+#      Shows which target or feature would pull it in.
+#   3. Classify as one of:
+#      reachable and fixable  -> fix it, do not ignore
+#      reachable but blocked  -> ignore, naming the upstream blocker
+#      lockfile only          -> should not reach this file; check the scoping
+#
+# Every entry carries the advisory id, why it is unfixable here, and the
+# condition under which it is removed. An ignore list without removal
+# conditions becomes permanent.
+ignore = [
+    # Reachable, blocked upstream in libp2p. libp2p-dns 0.44 pins
+    # hickory-resolver 0.25, and the fix for RUSTSEC-2026-0119 is in
+    # hickory-proto 0.26.1. RUSTSEC-2026-0118 has no patched release at all.
+    # Remove both when libp2p moves to hickory 0.26.
+    "RUSTSEC-2026-0118",  # hickory-proto 0.25.2, no fix published
+    "RUSTSEC-2026-0119",  # hickory-proto 0.25.2, fixed in >=0.26.1
+
+    # Unmaintained proc macro, build-time only, reached through
+    # libp2p-tcp -> if-watch -> netlink-packet-core. Remove when that chain
+    # drops paste.
+    "RUSTSEC-2024-0436",  # paste 1.0.15
+]
+yanked = "deny"
+# "all" rather than "workspace": unmaintained transitive crates are the ones we
+# are least likely to notice otherwise. paste above is exactly that case.
+unmaintained = "all"

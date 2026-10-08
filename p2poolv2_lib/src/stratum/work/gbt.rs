@@ -1,18 +1,6 @@
-// Copyright (C) 2024-2026 P2Poolv2 Developers (see AUTHORS)
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
 //
-// This file is part of P2Poolv2
-//
-// P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free
-// Software Foundation, either version 3 of the License, or (at your option)
-// any later version.
-//
-// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License along with
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 use crate::stratum::work::block_template::BlockTemplate;
 use crate::stratum::work::error::WorkError;
@@ -20,7 +8,7 @@ use crate::stratum::work::notify::{NotifyCmd, NotifySender};
 use bitcoin::hashes::{Hash, sha256d};
 use bitcoindrpc::{BitcoinRpcConfig, BitcoindRpcClient};
 use std::sync::Arc;
-use tracing::{debug, info};
+use tracing::{debug, error, instrument};
 
 #[cfg(test)]
 const GBT_NO_TRANSACTIONS_FIXTURE: &str =
@@ -84,7 +72,7 @@ fn compute_merkle_branches(input_txids: Vec<sha256d::Hash>) -> Vec<sha256d::Hash
 
 /// Get a new blocktemplate from the bitcoind server
 /// Parse the received JSON into a BlockTemplate struct and return it.
-#[allow(dead_code)]
+#[instrument(level = "debug", skip(bitcoind))]
 async fn get_block_template(
     bitcoind: &BitcoindRpcClient,
     network: bitcoin::Network,
@@ -123,7 +111,7 @@ pub async fn start_gbt(
     ) {
         Ok(client) => client,
         Err(e) => {
-            info!("Failed to connect to bitcoind: {}", e);
+            error!("Failed to connect to bitcoind: {}", e);
             return Err(Box::new(WorkError {
                 message: format!("Failed to connect to bitcoind: {e}"),
             }));
@@ -132,32 +120,14 @@ pub async fn start_gbt(
 
     // Print network difficulty at startup
     if let Ok(difficulty) = bitcoind.get_difficulty().await {
-        info!("Bitcoin network difficulty: {}", difficulty);
-    }
-
-    let template = match get_block_template(&bitcoind, network).await {
-        Ok(template) => template,
-        Err(e) => {
-            info!("Error getting block template: {}", e);
-            return Err(Box::new(WorkError {
-                message: format!("Error getting initial block template: {e}"),
-            }));
-        }
-    };
-
-    // Initial template sent to start gbt task.
-    if result_tx
-        .send(NotifyCmd::SendToAll {
-            template: Arc::new(template),
-        })
-        .await
-        .is_err()
-    {
-        info!("Failed to send block template to channel");
+        debug!("Bitcoin network difficulty: {}", difficulty);
     }
 
     tokio::spawn(async move {
+        // first tick will happen instantly
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(poll_interval));
+        // avoid spamming if it is taking longer than [poll_internal]
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
         loop {
             tokio::select! {
@@ -171,11 +141,11 @@ pub async fn start_gbt(
                                 .await
                                 .is_err()
                             {
-                                info!("Failed to send block template to channel");
+                                error!("Failed to send block template to channel");
                             }
                         }
                         Err(e) => {
-                            info!("Error polling block template: {}", e);
+                            error!("Error polling block template: {}", e);
                         }
                     }
                 }
@@ -192,12 +162,12 @@ pub async fn start_gbt(
                                         .await
                                         .is_err()
                                     {
-                                        info!("Failed to send block template to channel");
+                                        error!("Failed to send block template to channel");
                                     }
                                     interval.reset();
                                 }
                                 Err(e) => {
-                                    info!(
+                                    error!(
                                         "Error getting block template after ZMQ notification: {}",
                                         e
                                     );
@@ -205,7 +175,7 @@ pub async fn start_gbt(
                             }
                         }
                         None => {
-                            info!("ZMQ channel closed, stopping GBT task");
+                            debug!("ZMQ channel closed, stopping GBT task");
                             break;
                         }
                     }
@@ -526,7 +496,7 @@ mod gbt_server_tests {
         )
         .await;
 
-        println!("Result: {:?}", result);
+        println!("Result: {result:?}");
 
         assert!(result.is_ok());
 

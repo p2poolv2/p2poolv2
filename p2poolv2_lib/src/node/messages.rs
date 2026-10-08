@@ -1,26 +1,28 @@
-// Copyright (C) 2024-2026 P2Poolv2 Developers (see AUTHORS)
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
 //
-// This file is part of P2Poolv2
-//
-// P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free
-// Software Foundation, either version 3 of the License, or (at your option)
-// any later version.
-//
-// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License along with
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
+use crate::shares::coinbase_proof::MAX_COINBASE_MERKLE_BRANCH_LENGTH;
 use crate::shares::share_block::{ShareBlock, ShareHeader, Txids};
 use bitcoin::consensus::{Decodable, Encodable, encode};
 use bitcoin::hashes::{Hash, sha256d};
 use bitcoin::io::{Read, Write};
-use bitcoin::{BlockHash, Txid, VarInt};
+use bitcoin::{BlockHash, TxMerkleNode, Txid, VarInt};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt::Display;
+
+/// Largest P2P message payload this node will decode, in bytes.
+///
+/// The codec rejects a larger advertised length before allocating, so this
+/// bounds the memory one peer message can pin -- including responses queued for
+/// the response worker. Sized for P2Pool's own messages rather than bitcoin's
+/// 5 MB block-relay limit: the largest legitimate message is a `ShareHeaders`
+/// batch of `MAX_HEADERS_IN_RESPONSE` plus up to one height of overshoot
+/// (~1 MB of worst-case headers and branches); a `ShareBlock` is bounded by its 200 KB
+/// transaction limit. `test_full_share_headers_response_fits_max_message_size`
+/// guards the margin.
+pub const MAX_P2P_MESSAGE_SIZE: usize = 1024 * 1024;
 
 /// Message type discriminants for determining the message type
 /// We use a single byte integer instead of bitcoin's 12 byte string
@@ -33,6 +35,8 @@ mod message_discriminants {
     pub const SHARE_BLOCK: u8 = 5;
     pub const GET_DATA: u8 = 6;
     pub const TRANSACTION: u8 = 7;
+    pub const HANDSHAKE: u8 = 8;
+    pub const ACK: u8 = 9;
 }
 
 /// InventoryMessage discriminants to determine the type of inventory message
@@ -47,37 +51,42 @@ mod getdata_discriminants {
     pub const TXID: u8 = 1;
 }
 
-/// Network magic bytes for different P2Poolv2 networks
-/// Chosen at random.
-pub mod network_magic {
-    /// Mainnet P2Poolv2
-    pub const MAINNET: [u8; 4] = [0x5a, 0xf0, 0x19, 0x13];
-    /// Testnet P2Poolv2
-    pub const TESTNET: [u8; 4] = [0xbc, 0xc7, 0x13, 0xc6];
-    /// Signet P2Poolv2
-    pub const SIGNET: [u8; 4] = [0x44, 0xe0, 0x9a, 0x44];
-    /// Regtest P2Poolv2
-    pub const REGTEST: [u8; 4] = [0x3f, 0x8e, 0xa2, 0xd8];
-}
-
 /// P2P network messages, encoded using bitcoin consensus_encode
 #[derive(Debug, Clone, PartialEq, Eq)]
+// Boxing the large variants would ripple through every match site and every
+// consensus encode/decode impl for marginal benefit.
+#[allow(clippy::large_enum_variant)]
 pub enum Message {
     Inventory(InventoryMessage),
-    NotFound(()),
+    NotFound(GetData),
     GetShareHeaders(Vec<BlockHash>, BlockHash),
     GetShareBlocks(Vec<BlockHash>, BlockHash),
-    ShareHeaders(Vec<ShareHeader>),
+    ShareHeaders(ShareHeaderBatch),
     ShareBlock(ShareBlock),
     GetData(GetData),
     Transaction(bitcoin::Transaction),
+    Handshake(HandshakeData),
+    /// Acknowledgment response for request-response messages that
+    /// sometimes do not need to send a meaningful return payload
+    /// (e.g. Handshake, Inventory). This is a stop gap solution to
+    /// avoiding timeout errors from libp2p and timeouts filling up
+    /// queues. Ideally we need to build our own stream protocol for
+    /// libp2p. Something, we don't want to take on now.
+    Ack,
 }
 
-/// A complete P2P network message with protocol framing
+/// Handshake data exchanged when a connection is established.
+/// Both peers send their confirmed tip height and hash so each
+/// side can determine whether it needs to fetch headers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HandshakeData {
+    pub tip_height: u32,
+    pub tip_hash: BlockHash,
+}
+
+/// A complete P2P network message with protocol framing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RawMessage {
-    /// Network magic bytes (4 bytes identifier)
-    pub magic: [u8; 4],
     /// The actual message payload
     pub payload: Message,
     /// Length of the payload in bytes
@@ -87,9 +96,9 @@ pub struct RawMessage {
 }
 
 impl RawMessage {
-    /// Create a new RawMessage from magic bytes and a Message
+    /// Create a new RawMessage from a Message
     /// Automatically computes payload_len and checksum
-    pub fn new(magic: [u8; 4], payload: Message) -> Self {
+    pub fn new(payload: Message) -> Self {
         // Encode payload to calculate length and checksum
         let mut engine = sha256d::Hash::engine();
         let payload_len = payload
@@ -102,7 +111,6 @@ impl RawMessage {
         let checksum = [hash[0], hash[1], hash[2], hash[3]];
 
         Self {
-            magic,
             payload,
             payload_len,
             checksum,
@@ -118,76 +126,205 @@ impl RawMessage {
     pub fn payload(&self) -> &Message {
         &self.payload
     }
-
-    /// Get the magic bytes
-    pub fn magic(&self) -> &[u8; 4] {
-        &self.magic
-    }
 }
 
 impl Display for RawMessage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "RawMessage(magic: {:?}, {})", self.magic, self.payload)
+        write!(f, "RawMessage({})", self.payload)
+    }
+}
+
+impl Message {
+    /// Returns the variant name as a static string slice.
+    ///
+    /// We need to avoid allocation for debug logging, when we don't
+    /// want to clone message.
+    pub fn message_type(&self) -> &'static str {
+        match self {
+            Message::Inventory(_) => "Inventory",
+            Message::NotFound(_) => "NotFound",
+            Message::GetShareHeaders(_, _) => "GetShareHeaders",
+            Message::GetShareBlocks(_, _) => "GetShareBlocks",
+            Message::ShareHeaders(_) => "ShareHeaders",
+            Message::ShareBlock(_) => "ShareBlock",
+            Message::GetData(_) => "GetData",
+            Message::Transaction(_) => "Transaction",
+            Message::Handshake(_) => "Handshake",
+            Message::Ack => "Ack",
+        }
     }
 }
 
 impl Display for Message {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Message::Inventory(_) => write!(f, "Inventory"),
-            Message::NotFound(_) => write!(f, "NotFound"),
-            Message::GetShareHeaders(_, _) => write!(f, "GetShareHeaders"),
-            Message::GetShareBlocks(_, _) => write!(f, "GetShareBlocks"),
-            Message::ShareHeaders(_) => write!(f, "ShareHeaders"),
-            Message::ShareBlock(_) => write!(f, "ShareBlock"),
-            Message::GetData(_) => write!(f, "GetData"),
-            Message::Transaction(_) => write!(f, "Transaction"),
-        }
+        f.write_str(self.message_type())
     }
 }
 
-struct ShareHeaderSerializationWrapper<'a>(&'a Vec<ShareHeader>);
+/// A `ShareHeaders` response: headers, each with the coinbase merkle branch
+/// its `CoinbaseProof` is checked against.
+///
+/// Each header leaves out its bitcoin merkle root when its proof and branch
+/// give it back, which they do for every share but genesis: the receiver
+/// derives the root, and a forged proof derives a root whose bitcoin header
+/// fails its proof-of-work check.
+///
+/// Shares mined on one block template share a branch, so each distinct branch
+/// is sent once in `branches` and every header names its branch by index. The
+/// table belongs to this message alone: a header never refers to another
+/// message's table, so dropped, reordered or retried responses cannot leave a
+/// header without its branch. Decoding rejects an index outside the table, so
+/// `branch` never fails on a decoded batch.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ShareHeaderBatch {
+    headers: Vec<ShareHeader>,
+    /// Index into `branches` for the header at the same position.
+    branch_indexes: Vec<u16>,
+    branches: Vec<Vec<TxMerkleNode>>,
+}
 
-impl<'a> Encodable for ShareHeaderSerializationWrapper<'a> {
+impl ShareHeaderBatch {
+    /// Build a batch from headers and their coinbase merkle branches,
+    /// storing each distinct branch once.
+    pub fn from_headers_with_branches(entries: Vec<(ShareHeader, Vec<TxMerkleNode>)>) -> Self {
+        let mut headers = Vec::with_capacity(entries.len());
+        let mut branch_indexes = Vec::with_capacity(entries.len());
+        let mut branches: Vec<Vec<TxMerkleNode>> = Vec::new();
+        let mut index_of_branch: HashMap<Vec<TxMerkleNode>, u16> =
+            HashMap::with_capacity(entries.len());
+        for (header, branch) in entries {
+            let index = match index_of_branch.get(&branch) {
+                Some(index) => *index,
+                None => {
+                    let index = branches.len() as u16;
+                    index_of_branch.insert(branch.clone(), index);
+                    branches.push(branch);
+                    index
+                }
+            };
+            headers.push(header);
+            branch_indexes.push(index);
+        }
+        Self {
+            headers,
+            branch_indexes,
+            branches,
+        }
+    }
+
+    /// The headers, in message order.
+    pub fn headers(&self) -> &[ShareHeader] {
+        &self.headers
+    }
+
+    /// The coinbase merkle branch of the header at `position`.
+    pub fn branch(&self, position: usize) -> &[TxMerkleNode] {
+        &self.branches[self.branch_indexes[position] as usize]
+    }
+
+    /// Number of distinct branches carried.
+    pub fn branch_count(&self) -> usize {
+        self.branches.len()
+    }
+
+    /// Each header's hash with its branch, for storing the branches of
+    /// headers held without their bodies.
+    pub fn blockhashes_with_branches(&self) -> Vec<(BlockHash, Vec<TxMerkleNode>)> {
+        self.headers
+            .iter()
+            .enumerate()
+            .map(|(position, header)| (header.block_hash(), self.branch(position).to_vec()))
+            .collect()
+    }
+
+    pub fn len(&self) -> usize {
+        self.headers.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.headers.is_empty()
+    }
+}
+
+impl Encodable for ShareHeaderBatch {
     #[inline]
     fn consensus_encode<W: Write + ?Sized>(&self, w: &mut W) -> Result<usize, bitcoin::io::Error> {
-        let mut len = 0;
-        len += VarInt::from(self.0.len()).consensus_encode(w)?;
-        for share_header in self.0.iter() {
-            len += share_header.consensus_encode(w)?;
-            len += 0u8.consensus_encode(w)?;
+        let mut len = VarInt::from(self.branches.len()).consensus_encode(w)?;
+        for branch in &self.branches {
+            len += VarInt::from(branch.len()).consensus_encode(w)?;
+            for node in branch {
+                len += node.consensus_encode(w)?;
+            }
+        }
+        len += VarInt::from(self.headers.len()).consensus_encode(w)?;
+        for (header, branch_index) in self.headers.iter().zip(&self.branch_indexes) {
+            let branch = &self.branches[*branch_index as usize];
+            let root_is_derivable = header.coinbase_proof.merkle_root(header, branch).ok()
+                == Some(header.bitcoin_header.merkle_root);
+            len += branch_index.consensus_encode(w)?;
+            len += (!root_is_derivable).consensus_encode(w)?;
+            len += header.consensus_encode_with(w, !root_is_derivable)?;
         }
         Ok(len)
     }
 }
 
-struct ShareHeaderDeserializationWrapper(Vec<ShareHeader>);
-
-impl Decodable for ShareHeaderDeserializationWrapper {
+impl Decodable for ShareHeaderBatch {
     #[inline]
     fn consensus_decode_from_finite_reader<R: Read + ?Sized>(
         r: &mut R,
     ) -> Result<Self, encode::Error> {
-        let len = VarInt::consensus_decode(r)?.0;
-        // should be above usual number of items to avoid
-        // allocation
-        let mut ret = Vec::with_capacity(core::cmp::min(1024 * 16, len as usize));
-        for _ in 0..len {
-            ret.push(Decodable::consensus_decode(r)?);
-            if u8::consensus_decode(r)? != 0u8 {
+        // The reader is bounded by MAX_P2P_MESSAGE_SIZE, so the counts only
+        // need capping for the initial allocations.
+        let branch_count = VarInt::consensus_decode(r)?.0 as usize;
+        let mut branches = Vec::with_capacity(core::cmp::min(branch_count, 1024 * 16));
+        for _ in 0..branch_count {
+            let node_count = VarInt::consensus_decode(r)?.0 as usize;
+            if node_count > MAX_COINBASE_MERKLE_BRANCH_LENGTH {
                 return Err(encode::Error::ParseFailed(
-                    "Headers message should not contain transactions",
+                    "Coinbase merkle branch too long",
                 ));
             }
+            let mut branch = Vec::with_capacity(node_count);
+            for _ in 0..node_count {
+                branch.push(TxMerkleNode::consensus_decode(r)?);
+            }
+            branches.push(branch);
         }
-        Ok(ShareHeaderDeserializationWrapper(ret))
+        let header_count = VarInt::consensus_decode(r)?.0 as usize;
+        let mut headers = Vec::with_capacity(core::cmp::min(header_count, 1024 * 16));
+        let mut branch_indexes = Vec::with_capacity(core::cmp::min(header_count, 1024 * 16));
+        for _ in 0..header_count {
+            let branch_index = u16::consensus_decode(r)?;
+            let branch: &Vec<TxMerkleNode> =
+                branches
+                    .get(branch_index as usize)
+                    .ok_or(encode::Error::ParseFailed(
+                        "Share header names a branch outside the batch",
+                    ))?;
+            let includes_bitcoin_merkle_root = bool::consensus_decode(r)?;
+            let mut header = ShareHeader::consensus_decode_with(r, includes_bitcoin_merkle_root)?;
+            if !includes_bitcoin_merkle_root {
+                header.bitcoin_header.merkle_root = header
+                    .coinbase_proof
+                    .merkle_root(&header, branch)
+                    .map_err(|_| {
+                        encode::Error::ParseFailed("Cannot derive share header bitcoin merkle root")
+                    })?;
+            }
+            headers.push(header);
+            branch_indexes.push(branch_index);
+        }
+        Ok(Self {
+            headers,
+            branch_indexes,
+            branches,
+        })
     }
 
     #[inline]
     fn consensus_decode<R: Read + ?Sized>(r: &mut R) -> Result<Self, encode::Error> {
-        Self::consensus_decode_from_finite_reader(
-            &mut r.take(bitcoin::p2p::message::MAX_MSG_SIZE as u64),
-        )
+        Self::consensus_decode_from_finite_reader(&mut r.take(MAX_P2P_MESSAGE_SIZE as u64))
     }
 }
 
@@ -200,7 +337,11 @@ impl Encodable for Message {
                 len += inv.consensus_encode(w)?;
                 Ok(len)
             }
-            Message::NotFound(_) => NOT_FOUND.consensus_encode(w),
+            Message::NotFound(get_data) => {
+                let mut len = NOT_FOUND.consensus_encode(w)?;
+                len += get_data.consensus_encode(w)?;
+                Ok(len)
+            }
             Message::GetShareHeaders(hashes, stop) => {
                 let mut len = GET_SHARE_HEADERS.consensus_encode(w)?;
                 len += hashes.consensus_encode(w)?;
@@ -215,7 +356,7 @@ impl Encodable for Message {
             }
             Message::ShareHeaders(headers) => {
                 let mut len = SHARE_HEADERS.consensus_encode(w)?;
-                len += ShareHeaderSerializationWrapper(headers).consensus_encode(w)?;
+                len += headers.consensus_encode(w)?;
                 Ok(len)
             }
             Message::ShareBlock(block) => {
@@ -233,6 +374,16 @@ impl Encodable for Message {
                 len += tx.consensus_encode(w)?;
                 Ok(len)
             }
+            Message::Handshake(handshake_data) => {
+                let mut len = HANDSHAKE.consensus_encode(w)?;
+                len += handshake_data.tip_height.consensus_encode(w)?;
+                len += handshake_data.tip_hash.consensus_encode(w)?;
+                Ok(len)
+            }
+            Message::Ack => {
+                let len = ACK.consensus_encode(w)?;
+                Ok(len)
+            }
         }
     }
 }
@@ -243,7 +394,7 @@ impl Decodable for Message {
         let disc = u8::consensus_decode(r)?;
         match disc {
             INVENTORY => Ok(Message::Inventory(InventoryMessage::consensus_decode(r)?)),
-            NOT_FOUND => Ok(Message::NotFound(())),
+            NOT_FOUND => Ok(Message::NotFound(GetData::consensus_decode(r)?)),
             GET_SHARE_HEADERS => Ok(Message::GetShareHeaders(
                 Vec::<BlockHash>::consensus_decode(r)?,
                 BlockHash::consensus_decode(r)?,
@@ -252,14 +403,19 @@ impl Decodable for Message {
                 Vec::<BlockHash>::consensus_decode(r)?,
                 BlockHash::consensus_decode(r)?,
             )),
-            SHARE_HEADERS => Ok(Message::ShareHeaders(
-                ShareHeaderDeserializationWrapper::consensus_decode(r)?.0,
-            )),
+            SHARE_HEADERS => Ok(Message::ShareHeaders(ShareHeaderBatch::consensus_decode(
+                r,
+            )?)),
             SHARE_BLOCK => Ok(Message::ShareBlock(ShareBlock::consensus_decode(r)?)),
             GET_DATA => Ok(Message::GetData(GetData::consensus_decode(r)?)),
             TRANSACTION => Ok(Message::Transaction(
                 bitcoin::Transaction::consensus_decode(r)?,
             )),
+            HANDSHAKE => Ok(Message::Handshake(HandshakeData {
+                tip_height: u32::consensus_decode(r)?,
+                tip_hash: BlockHash::consensus_decode(r)?,
+            })),
+            ACK => Ok(Message::Ack),
             _ => Err(encode::Error::ParseFailed("Invalid Message discriminant")),
         }
     }
@@ -268,7 +424,6 @@ impl Decodable for Message {
 impl Encodable for RawMessage {
     fn consensus_encode<W: Write + ?Sized>(&self, w: &mut W) -> Result<usize, bitcoin::io::Error> {
         let mut len = 0;
-        len += self.magic.consensus_encode(w)?;
         len += self.payload_len.consensus_encode(w)?;
         len += self.checksum.consensus_encode(w)?;
         len += self.payload.consensus_encode(w)?;
@@ -279,9 +434,16 @@ impl Encodable for RawMessage {
 impl Decodable for RawMessage {
     fn consensus_decode<R: Read + ?Sized>(r: &mut R) -> Result<Self, encode::Error> {
         // Read header
-        let magic: [u8; 4] = Decodable::consensus_decode(r)?;
         let payload_len: u32 = Decodable::consensus_decode(r)?;
         let expected_checksum: [u8; 4] = Decodable::consensus_decode(r)?;
+
+        // Reject an oversized advertised length before allocating, so a
+        // malicious peer cannot trigger a multi-gigabyte allocation / OOM.
+        if payload_len as usize > MAX_P2P_MESSAGE_SIZE {
+            return Err(encode::Error::ParseFailed(
+                "Payload length exceeds maximum message size",
+            ));
+        }
 
         // Read payload into buffer
         let mut payload_bytes = vec![0u8; payload_len as usize];
@@ -297,7 +459,6 @@ impl Decodable for RawMessage {
         let payload = Message::consensus_decode(&mut &payload_bytes[..])?;
 
         Ok(RawMessage {
-            magic,
             payload_len,
             checksum: expected_checksum,
             payload,
@@ -389,6 +550,12 @@ impl Decodable for GetData {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::node::p2p_message_handlers::MAX_HEADERS_IN_RESPONSE;
+    use crate::shares::coinbaseaux_flags::CoinbaseAuxFlags;
+    use crate::shares::validation::MAX_UNCLES;
+    use crate::shares::witness_commitment::WitnessCommitment;
+    use crate::store::dag_store::MAX_BLOCKS_PER_HEIGHT;
+    use crate::test_utils::TestShareBlockBuilder;
     use bitcoin::consensus::encode;
     use std::str::FromStr;
 
@@ -399,7 +566,7 @@ mod tests {
                 .unwrap(),
         ];
         let msg = Message::Inventory(InventoryMessage::BlockHashes(block_hashes.clone()));
-        let raw = RawMessage::new(network_magic::REGTEST, msg.clone());
+        let raw = RawMessage::new(msg.clone());
 
         // Test encoding
         let mut encoded = Vec::new();
@@ -408,7 +575,6 @@ mod tests {
         // Test decoding
         let decoded = RawMessage::consensus_decode(&mut &encoded[..]).unwrap();
 
-        assert_eq!(decoded.magic, network_magic::REGTEST);
         assert_eq!(decoded.payload, msg);
         assert_eq!(decoded.payload_len, raw.payload_len);
         assert_eq!(decoded.checksum, raw.checksum);
@@ -416,38 +582,91 @@ mod tests {
 
     #[test]
     fn test_raw_message_checksum_verification() {
-        let msg = Message::NotFound(());
-        let raw = RawMessage::new(network_magic::MAINNET, msg);
+        let msg = Message::NotFound(GetData::Block(BlockHash::all_zeros()));
+        let raw = RawMessage::new(msg);
 
         let mut encoded = Vec::new();
         raw.consensus_encode(&mut encoded).unwrap();
 
-        // Corrupt the checksum
-        encoded[8] ^= 0xFF;
+        // Corrupt the checksum. The header is now payload_len (4 bytes) followed
+        // by the checksum (4 bytes), so the checksum starts at byte 4.
+        encoded[4] ^= 0xFF;
 
         // Decoding should fail
         let result = RawMessage::consensus_decode(&mut &encoded[..]);
         assert!(result.is_err());
     }
 
+    /// The largest legitimate message -- a full `ShareHeaders` response of
+    /// worst-case headers -- must fit under `MAX_P2P_MESSAGE_SIZE`, or header
+    /// sync would be rejected by our own codec. Worst case per header: the
+    /// maximum uncles, the longest address script (P2WSH) in every address
+    /// field, the longest coinbaseaux flags, a witness commitment, the bitcoin
+    /// merkle root included, and a distinct coinbase branch of the maximum
+    /// length -- no two headers sharing a block template. The sender completes
+    /// whole heights, so a response can overshoot `MAX_HEADERS_IN_RESPONSE` by
+    /// up to one dense height.
     #[test]
-    fn test_raw_message_different_networks() {
-        let msg = Message::NotFound(());
+    fn test_full_share_headers_response_fits_max_message_size() {
+        let longest_address =
+            bitcoin::Address::p2wsh(&bitcoin::ScriptBuf::new(), bitcoin::Network::Regtest);
+        let mut header = TestShareBlockBuilder::new()
+            .uncles(vec![BlockHash::all_zeros(); MAX_UNCLES])
+            .build()
+            .header;
+        // Changing committed fields after the build leaves the proof unable to
+        // derive the root, so the encoder includes it: the larger encoding.
+        header.miner_bitcoin_address = longest_address.clone();
+        header.donation_address = Some(longest_address.clone());
+        header.donation = Some(u16::MAX);
+        header.fee_address = Some(longest_address);
+        header.fee = Some(u16::MAX);
+        header.coinbaseaux_flags = Some(CoinbaseAuxFlags::new(&[0xff; 32]));
+        header.witness_commitment = Some(
+            WitnessCommitment::from_hex(
+                "6a24aa21a9ede2f61c3f71d1defd3fa999dfa36953755c690689799962b48bebd836974e8cf9",
+            )
+            .unwrap(),
+        );
 
-        let raw_mainnet = RawMessage::new(network_magic::MAINNET, msg.clone());
-        let raw_testnet = RawMessage::new(network_magic::TESTNET, msg.clone());
-        let raw_signet = RawMessage::new(network_magic::SIGNET, msg.clone());
-        let raw_regtest = RawMessage::new(network_magic::REGTEST, msg);
+        let header_count = MAX_HEADERS_IN_RESPONSE + MAX_BLOCKS_PER_HEIGHT;
+        let mut entries = Vec::with_capacity(header_count);
+        for index in 0..header_count as u32 {
+            let mut node = [0u8; 32];
+            node[..4].copy_from_slice(&index.to_le_bytes());
+            let branch = vec![
+                bitcoin::TxMerkleNode::from_byte_array(node);
+                MAX_COINBASE_MERKLE_BRANCH_LENGTH
+            ];
+            entries.push((header.clone(), branch));
+        }
+        let message = Message::ShareHeaders(ShareHeaderBatch::from_headers_with_branches(entries));
+        let encoded = encode::serialize(&message);
 
-        assert_eq!(raw_mainnet.magic, network_magic::MAINNET);
-        assert_eq!(raw_testnet.magic, network_magic::TESTNET);
-        assert_eq!(raw_signet.magic, network_magic::SIGNET);
-        assert_eq!(raw_regtest.magic, network_magic::REGTEST);
+        assert!(
+            encoded.len() < MAX_P2P_MESSAGE_SIZE,
+            "a full ShareHeaders response is {} bytes, over the {} byte cap",
+            encoded.len(),
+            MAX_P2P_MESSAGE_SIZE
+        );
+    }
+
+    #[test]
+    fn test_raw_message_rejects_oversized_payload_len() {
+        // A malicious peer advertises a payload length larger than the maximum
+        // message size. Decoding must reject it without allocating the buffer.
+        let payload_len = (MAX_P2P_MESSAGE_SIZE as u32) + 1;
+        let mut encoded = Vec::new();
+        encoded.extend_from_slice(&payload_len.to_le_bytes());
+        encoded.extend_from_slice(&[0u8; 4]); // checksum placeholder
+
+        let result = RawMessage::consensus_decode(&mut &encoded[..]);
+        assert!(result.is_err());
     }
 
     #[test]
     fn test_message_not_found_roundtrip() {
-        let msg = Message::NotFound(());
+        let msg = Message::NotFound(GetData::Block(BlockHash::all_zeros()));
         let mut encoded = Vec::new();
         msg.consensus_encode(&mut encoded).unwrap();
 
@@ -556,7 +775,7 @@ mod tests {
     #[test]
     fn test_message_discriminants_unique() {
         use message_discriminants::*;
-        let discriminants = vec![
+        let discriminants = [
             INVENTORY,
             NOT_FOUND,
             GET_SHARE_HEADERS,
@@ -565,6 +784,8 @@ mod tests {
             SHARE_BLOCK,
             GET_DATA,
             TRANSACTION,
+            HANDSHAKE,
+            ACK,
         ];
 
         // Check all discriminants are unique
@@ -572,8 +793,7 @@ mod tests {
             for j in (i + 1)..discriminants.len() {
                 assert_ne!(
                     discriminants[i], discriminants[j],
-                    "Discriminants at positions {} and {} are not unique",
-                    i, j
+                    "Discriminants at positions {i} and {j} are not unique"
                 );
             }
         }
@@ -600,7 +820,7 @@ mod tests {
         msg.consensus_encode(&mut serialized).unwrap();
 
         // Test deserialization
-        let deserialized = encode::deserialize::<Message>(&mut serialized).unwrap();
+        let deserialized = encode::deserialize::<Message>(&serialized).unwrap();
 
         let deserialized: Vec<BlockHash> = match deserialized {
             Message::Inventory(InventoryMessage::BlockHashes(have_shares)) => have_shares,
@@ -659,5 +879,191 @@ mod tests {
             }
             _ => panic!("Expected Txid variant"),
         }
+    }
+
+    #[test]
+    fn test_handshake_message_roundtrip() {
+        let tip_hash =
+            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+                .unwrap();
+        let handshake_data = HandshakeData {
+            tip_height: 42,
+            tip_hash,
+        };
+
+        let msg = Message::Handshake(handshake_data.clone());
+        let mut encoded = Vec::new();
+        msg.consensus_encode(&mut encoded).unwrap();
+
+        let decoded = Message::consensus_decode(&mut &encoded[..]).unwrap();
+        match decoded {
+            Message::Handshake(decoded_data) => {
+                assert_eq!(decoded_data.tip_height, 42);
+                assert_eq!(decoded_data.tip_hash, tip_hash);
+            }
+            _ => panic!("Expected Handshake variant"),
+        }
+    }
+
+    #[test]
+    fn test_handshake_message_fresh_node_roundtrip() {
+        let handshake_data = HandshakeData {
+            tip_height: 0,
+            tip_hash: BlockHash::all_zeros(),
+        };
+
+        let msg = Message::Handshake(handshake_data);
+        let mut encoded = Vec::new();
+        msg.consensus_encode(&mut encoded).unwrap();
+
+        let decoded = Message::consensus_decode(&mut &encoded[..]).unwrap();
+        match decoded {
+            Message::Handshake(decoded_data) => {
+                assert_eq!(decoded_data.tip_height, 0);
+                assert_eq!(decoded_data.tip_hash, BlockHash::all_zeros());
+            }
+            _ => panic!("Expected Handshake variant"),
+        }
+    }
+
+    #[test]
+    fn test_ack_message_roundtrip() {
+        let msg = Message::Ack;
+        let mut encoded = Vec::new();
+        msg.consensus_encode(&mut encoded).unwrap();
+
+        let decoded = Message::consensus_decode(&mut &encoded[..]).unwrap();
+        assert_eq!(decoded, Message::Ack);
+    }
+
+    /// Shares mined on one template share a coinbase branch, so the batch
+    /// carries it once.
+    #[test]
+    fn test_share_header_batch_stores_shared_branch_once() {
+        let first = TestShareBlockBuilder::new().nonce(1).build().header;
+        let second = TestShareBlockBuilder::new().nonce(2).build().header;
+        let branch = vec![bitcoin::TxMerkleNode::from_byte_array([0x42; 32])];
+
+        let batch = ShareHeaderBatch::from_headers_with_branches(vec![
+            (first, branch.clone()),
+            (second, branch.clone()),
+        ]);
+
+        assert_eq!(batch.len(), 2);
+        assert_eq!(batch.branch_count(), 1);
+        assert_eq!(batch.branch(0), branch.as_slice());
+        assert_eq!(batch.branch(1), branch.as_slice());
+    }
+
+    #[test]
+    fn test_share_header_batch_keeps_distinct_branches_apart() {
+        let first = TestShareBlockBuilder::new().nonce(1).build().header;
+        let second = TestShareBlockBuilder::new().nonce(2).build().header;
+        let first_branch = vec![bitcoin::TxMerkleNode::from_byte_array([0x42; 32])];
+        let second_branch = vec![bitcoin::TxMerkleNode::from_byte_array([0x43; 32])];
+
+        let batch = ShareHeaderBatch::from_headers_with_branches(vec![
+            (first, first_branch.clone()),
+            (second, second_branch.clone()),
+        ]);
+
+        assert_eq!(batch.branch_count(), 2);
+        assert_eq!(batch.branch(0), first_branch.as_slice());
+        assert_eq!(batch.branch(1), second_branch.as_slice());
+    }
+
+    #[test]
+    fn test_share_headers_message_round_trips_with_branches() {
+        let first = TestShareBlockBuilder::new().nonce(1).build().header;
+        let second = TestShareBlockBuilder::new().nonce(2).build().header;
+        let branch = vec![
+            bitcoin::TxMerkleNode::from_byte_array([0x42; 32]),
+            bitcoin::TxMerkleNode::from_byte_array([0x43; 32]),
+        ];
+        let message = Message::ShareHeaders(ShareHeaderBatch::from_headers_with_branches(vec![
+            (first, branch.clone()),
+            (second, Vec::new()),
+        ]));
+
+        let decoded: Message = encode::deserialize(&encode::serialize(&message)).unwrap();
+
+        assert_eq!(decoded, message);
+    }
+
+    /// A header naming a branch the batch does not carry is a malformed
+    /// message, rejected at decode so a decoded batch always resolves.
+    #[test]
+    fn test_share_header_batch_decode_rejects_branch_index_outside_table() {
+        let header = TestShareBlockBuilder::new().build().header;
+        let mut bytes = Vec::new();
+        VarInt::from(0usize).consensus_encode(&mut bytes).unwrap();
+        VarInt::from(1usize).consensus_encode(&mut bytes).unwrap();
+        header.consensus_encode(&mut bytes).unwrap();
+        0u16.consensus_encode(&mut bytes).unwrap();
+
+        let result: Result<ShareHeaderBatch, _> = encode::deserialize(&bytes);
+
+        assert!(result.is_err());
+    }
+
+    /// A header whose proof derives its bitcoin merkle root travels without
+    /// it, and the receiver restores it exactly.
+    #[test]
+    fn test_share_header_batch_omits_derivable_bitcoin_merkle_root() {
+        let header = TestShareBlockBuilder::new()
+            .prev_share_blockhash(
+                "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5".to_string(),
+            )
+            .build()
+            .header;
+        let derivable =
+            ShareHeaderBatch::from_headers_with_branches(vec![(header.clone(), vec![])]);
+        let underivable = ShareHeaderBatch::from_headers_with_branches(vec![(
+            header.clone(),
+            vec![bitcoin::TxMerkleNode::from_byte_array([0x42; 32])],
+        )]);
+
+        let derivable_bytes = encode::serialize(&derivable);
+        let underivable_bytes = encode::serialize(&underivable);
+
+        // The underivable batch carries one more branch node and the root.
+        assert_eq!(underivable_bytes.len() - derivable_bytes.len(), 32 + 32);
+        let decoded: ShareHeaderBatch = encode::deserialize(&derivable_bytes).unwrap();
+        assert_eq!(decoded.headers(), [header].as_slice());
+    }
+
+    /// A sender that leaves the root out under a forged proof makes the
+    /// receiver derive a different root, so the bitcoin header the receiver
+    /// sees is not the one the proof of work was done on.
+    #[test]
+    fn test_share_header_batch_forged_proof_derives_a_different_root() {
+        let original = TestShareBlockBuilder::new()
+            .prev_share_blockhash(
+                "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5".to_string(),
+            )
+            .build()
+            .header;
+        let mut forged = original.clone();
+        forged.coinbase_proof.midstate[0] ^= 1;
+
+        let mut bytes = Vec::new();
+        VarInt::from(1usize).consensus_encode(&mut bytes).unwrap();
+        VarInt::from(0usize).consensus_encode(&mut bytes).unwrap();
+        VarInt::from(1usize).consensus_encode(&mut bytes).unwrap();
+        0u16.consensus_encode(&mut bytes).unwrap();
+        false.consensus_encode(&mut bytes).unwrap();
+        forged.consensus_encode_with(&mut bytes, false).unwrap();
+
+        let decoded: ShareHeaderBatch = encode::deserialize(&bytes).unwrap();
+
+        let decoded_header = &decoded.headers()[0];
+        assert_ne!(
+            decoded_header.bitcoin_header.merkle_root,
+            original.bitcoin_header.merkle_root
+        );
+        assert_ne!(
+            decoded_header.bitcoin_header.block_hash(),
+            original.bitcoin_header.block_hash()
+        );
     }
 }

@@ -1,18 +1,6 @@
-// Copyright (C) 2024-2026 P2Poolv2 Developers (see AUTHORS)
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
 //
-// This file is part of P2Poolv2
-//
-// P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free
-// Software Foundation, either version 3 of the License, or (at your option)
-// any later version.
-//
-// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License along with
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 use crate::stratum::difficulty_adjuster::DifficultyAdjusterTrait;
 use crate::stratum::error::Error;
@@ -58,6 +46,8 @@ pub async fn handle_subscribe<'a, D: DifficultyAdjusterTrait>(
 
 #[cfg(test)]
 mod tests {
+    use p2poolv2_config::DEFAULT_VERSION_MASK;
+
     use super::*;
     use crate::stratum::difficulty_adjuster::DifficultyAdjuster;
     use crate::stratum::messages::Id;
@@ -67,7 +57,7 @@ mod tests {
     async fn test_handle_subscribe_success() {
         // Setup
         let message = SimpleRequest::new_subscribe(1, "UA".to_string(), "v1.0".to_string(), None);
-        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
         session.subscribed = false;
 
         // Execute
@@ -134,7 +124,7 @@ mod tests {
     async fn test_handle_subscribe_already_subscribed() {
         // Setup
         let message = SimpleRequest::new_subscribe(1, "UA".to_string(), "v1.0".to_string(), None);
-        let mut session = Session::<DifficultyAdjuster>::new(2, 2, None, 0x1fffe000);
+        let mut session = Session::<DifficultyAdjuster>::new(2, 2, None, DEFAULT_VERSION_MASK);
         session.subscribed = true;
 
         // Execute

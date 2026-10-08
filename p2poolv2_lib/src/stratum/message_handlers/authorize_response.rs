@@ -1,26 +1,19 @@
-// Copyright (C) 2024-2026 P2Poolv2 Developers (see AUTHORS)
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
 //
-// This file is part of P2Poolv2
-//
-// P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free
-// Software Foundation, either version 3 of the License, or (at your option)
-// any later version.
-//
-// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License along with
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
+use crate::address::{Address as P2PoolAddress, AddressError};
+use crate::config::PoolMode;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
-use crate::stratum::difficulty_adjuster::DifficultyAdjusterTrait;
-use crate::stratum::error::Error;
-use crate::stratum::messages::{Message, Response, SetDifficultyNotification, SimpleRequest};
-use crate::stratum::server::StratumContext;
-use crate::stratum::session::Session;
-use crate::stratum::validate_username;
+use crate::stratum::{
+    difficulty_adjuster::DifficultyAdjusterTrait,
+    error::{Error, StratumErrorCode},
+    messages::{Id, Message, Response, SetDifficultyNotification, SimpleRequest},
+    parse_password::parse_password,
+    server::StratumContext,
+    session::Session,
+    validate_username,
+};
 use tracing::debug;
 
 /// Register user in the store and update session with their IDs
@@ -38,6 +31,73 @@ async fn register_user<D: DifficultyAdjusterTrait>(
     session.user_id = Some(user_id);
 
     Ok(())
+}
+
+/// Resolve which share chain address owns this miner's shares.
+///
+/// The node's configured address wins: when set, it owns every share on the
+/// pool and a miner naming a different owner from the node is a conflict.
+/// Two rules drive the table -- never derive an address, and never silently
+/// substitute one for another, because a miner who set a miner address must
+/// be told rather than have shares assigned elsewhere.
+///
+/// Hydrapool builds no share commitment, so no address is needed there.
+fn resolve_share_address(
+    configured: Option<P2PoolAddress>,
+    supplied: Option<&Result<P2PoolAddress, AddressError>>,
+    network: bitcoin::Network,
+    mode: PoolMode,
+) -> Result<Option<P2PoolAddress>, String> {
+    if mode == PoolMode::Hydrapool {
+        return Ok(None);
+    }
+
+    match (configured, supplied) {
+        (Some(configured), Some(Ok(supplied))) if *supplied != configured => Err(format!(
+            "Share address {supplied} conflicts with the pool's configured {configured}. Remove p2p= from the password, or set it to the node address."
+        )),
+        (Some(configured), Some(Err(error))) => Err(format!(
+            "Could not read the p2p= share address ({error}). Remove it to use the node's address {configured}, or correct it. Note p2p=<address> is 71 characters and some miner firmware truncates the password field."
+        )),
+	// Double check the configured miner address has correct network
+        (Some(configured), _) => configured.require_network(network).map(Some).map_err(|error| {
+            format!("Configured share address is not usable on this pool: {error}")
+        }),
+        (None, Some(Ok(supplied))) => supplied
+            .require_network(network)
+            .map(Some)
+            .map_err(|error| format!("Share address is not usable on this pool: {error}")),
+        (None, Some(Err(error))) => Err(format!(
+            "Could not read the p2p= share address ({error}). Note p2p=<address> is 71 characters and some miner firmware truncates the password field."
+        )),
+        (None, None) => Err(
+            "This pool needs a share chain address. Set the stratum password to p2p=<address>. See docs/architecture/address-format.md for how to get one from your wallet."
+                .to_string(),
+        ),
+    }
+}
+
+/// Send an authorization error, disconnecting on a repeat offence.
+///
+/// Returning `Err` here instead would close the socket without writing anything
+/// (see the message loop in `stratum::server`), leaving the miner with an
+/// unexplained disconnect and nothing to diagnose. So the first attempt gets a
+/// message and the second, still wrong, drops the connection.
+fn reject_authorize<'a, D: DifficultyAdjusterTrait>(
+    session: &mut Session<D>,
+    id: Option<Id>,
+    reason: String,
+) -> Result<Vec<Message<'a>>, Error> {
+    if session.auth_failed_once {
+        return Err(Error::AuthorizationFailure(format!(
+            "Second miner address failure. Disconnecting. {reason}"
+        )));
+    }
+    session.auth_failed_once = true;
+    debug!("Rejecting authorize: {reason}");
+    Ok(vec![Message::Response(
+        Response::new_error(id, StratumErrorCode::UnauthorizedWorker).with_message(reason),
+    )])
 }
 
 /// Handle the "mining.authorize" message
@@ -60,27 +120,25 @@ pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
             "Already authorized".to_string(),
         ));
     }
-    let username = match message.params[0].clone() {
+    let username = match message.params.first().and_then(|p| p.clone()) {
         Some(name) => name,
         None => {
-            return Ok(vec![Message::Response(Response::new_error(
-                message.id,
-                -401,
-                "Empty username".to_string(),
-            ))]);
+            return Ok(vec![Message::Response(
+                Response::new_error(message.id, StratumErrorCode::UnauthorizedWorker)
+                    .with_message("Empty username".to_string()),
+            )]);
         }
     };
     let parsed_username =
         match validate_username::validate(&username, ctx.validate_addresses, ctx.network) {
             Ok(validated) => validated,
-            Err(e) => {
+            Err(_e) => {
                 if !session.auth_failed_once {
                     session.auth_failed_once = true;
-                    return Ok(vec![Message::Response(Response::new_error(
-                        message.id,
-                        -401,
-                        format!("Invalid username {e}"),
-                    ))]);
+                    return Ok(vec![Message::Response(
+                        Response::new_error(message.id, StratumErrorCode::UnauthorizedWorker)
+                            .with_message("Invalid username".to_string()),
+                    )]);
                 } else {
                     return Err(Error::AuthorizationFailure(
                         "Second invalid username. Disconnecting.".to_string(),
@@ -89,11 +147,33 @@ pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
             }
         };
 
-    session.username = Some(message.params[0].clone().unwrap());
+    // Parse once; the password carries both the difficulty hint and the share
+    // chain address. Resolve the address before authorizing the session so an
+    // invalid address leaves the miner able to correct and retry.
+    let password = message
+        .params
+        .get(1)
+        .and_then(|parameter| parameter.clone());
+    let parsed_password = password.as_deref().map(parse_password);
+
+    let supplied_address = parsed_password
+        .as_ref()
+        .and_then(|parsed| parsed.miner_address.as_ref());
+
+    let miner_address =
+        match resolve_share_address(ctx.miner_address, supplied_address, ctx.network, ctx.mode) {
+            Ok(address) => address,
+            Err(reason) => return reject_authorize(session, message.id, reason),
+        };
+
+    session.username = Some(username.clone());
     session.btcaddress = Some(parsed_username.address_str.to_string());
     session.parsed_address = parsed_username.parsed_address;
-    session.workername = parsed_username.worker_name.map(|s| s.to_string());
-    session.password = message.params[1].clone();
+    session.workername = parsed_username
+        .worker_name
+        .map(|worker_name| worker_name.to_string());
+    session.password = password;
+    session.miner_address = miner_address;
 
     // Register user in the store
     register_user(session, parsed_username.address_str, ctx.chain_store_handle).await?;
@@ -107,14 +187,28 @@ pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
         .await
     {
         Ok(_) => {}
-        Err(e) => {
-            tracing::error!("Failed to send increment worker count message: {}", e);
+        Err(error) => {
+            tracing::error!("Failed to send increment worker count message: {}", error);
         }
+    };
+
+    let start_difficulty = match parsed_password.and_then(|parsed| parsed.difficulty) {
+        Some(requested_difficulty) => {
+            let constrained = session
+                .difficulty_adjuster
+                .apply_difficulty_constraints(requested_difficulty, Some(requested_difficulty));
+            debug!(
+                "Password difficulty override: requested={}, constrained={}",
+                requested_difficulty, constrained
+            );
+            constrained
+        }
+        None => ctx.start_difficulty,
     };
 
     session
         .difficulty_adjuster
-        .set_current_difficulty(ctx.start_difficulty);
+        .set_current_difficulty(start_difficulty);
     // After authorization, the connection handler will pick up the current
     // prepared template from the watch channel and send the first notify.
     // We set a flag so handle_connection knows to send the initial notify.
@@ -122,7 +216,7 @@ pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
 
     Ok(vec![
         Message::Response(Response::new_ok(message.id, serde_json::json!(true))),
-        Message::SetDifficulty(SetDifficultyNotification::new(ctx.start_difficulty)),
+        Message::SetDifficulty(SetDifficultyNotification::new(start_difficulty)),
     ])
 }
 
@@ -131,24 +225,25 @@ mod tests {
     use super::*;
     use crate::accounting::stats::metrics;
     use crate::stratum::difficulty_adjuster::DifficultyAdjuster;
-    use crate::stratum::messages::Id;
+    use crate::stratum::server::PoolMode;
     use crate::stratum::server::StratumContext;
     use crate::stratum::work::tracker::start_tracker_actor;
+    use crate::test_utils::make_test_share_address;
     use crate::test_utils::setup_test_chain_store_handle;
     use bitcoindrpc::BitcoindRpcClient;
     use bitcoindrpc::test_utils::setup_mock_bitcoin_rpc;
+    use p2poolv2_config::DEFAULT_VERSION_MASK;
     use tokio::sync::mpsc;
 
     #[tokio::test]
     async fn test_handle_authorize_first_time() {
         // Setup
-        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
         let request = SimpleRequest::new_authorize(
             12345,
             "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx".to_string(),
             Some("x".to_string()),
         );
-        let (notify_tx, mut notify_rx) = mpsc::channel(1);
         let (emissions_tx, _emissions_rx) = mpsc::channel(10);
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let stats_dir = tempfile::tempdir().unwrap();
@@ -159,7 +254,6 @@ mod tests {
         let tracker_handle = start_tracker_actor();
 
         let ctx = StratumContext {
-            notify_tx,
             tracker_handle,
             bitcoindrpc_client: BitcoindRpcClient::new(
                 &bitcoinrpc_config.url,
@@ -173,9 +267,11 @@ mod tests {
             ignore_difficulty: false,
             validate_addresses: true,
             emissions_tx,
-            network: bitcoin::network::Network::Testnet,
+            network: bitcoin::network::Network::Testnet4,
             metrics: metrics_handle,
             chain_store_handle,
+            mode: PoolMode::P2poolv2,
+            miner_address: Some(make_test_share_address(1, bitcoin::Network::Testnet4)),
         };
 
         // Execute
@@ -211,14 +307,6 @@ mod tests {
         assert!(session.user_id.is_some(), "user_id should be set");
         assert!(session.user_id.is_some());
 
-        // After authorization, no NotifyCmd is sent -- the connection handler
-        // picks up the current template from the watch channel instead.
-        let notify_cmd = notify_rx.try_recv();
-        assert!(
-            notify_cmd.is_err(),
-            "No NotifyCmd should be sent after authorization (handled by watch channel)"
-        );
-
         // Verify the session's needs_first_notify flag was set
         assert!(
             session.needs_first_notify,
@@ -239,14 +327,13 @@ mod tests {
     #[tokio::test]
     async fn test_handle_authorize_already_authorized() {
         // Setup
-        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
         session.username = Some("tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx".to_string());
         let request = SimpleRequest::new_authorize(
             12345,
             "worker1".to_string(),
             Some("password".to_string()),
         );
-        let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel(1);
         let (emissions_tx, _emissions_rx) = mpsc::channel(10);
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let tracker_handle = start_tracker_actor();
@@ -257,7 +344,6 @@ mod tests {
         let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
         let ctx = StratumContext {
-            notify_tx,
             tracker_handle,
             bitcoindrpc_client: BitcoindRpcClient::new(
                 &bitcoinrpc_config.url,
@@ -271,9 +357,11 @@ mod tests {
             ignore_difficulty: false,
             validate_addresses: true,
             emissions_tx,
-            network: bitcoin::network::Network::Testnet,
+            network: bitcoin::network::Network::Testnet4,
             metrics: metrics_handle,
             chain_store_handle,
+            mode: PoolMode::P2poolv2,
+            miner_address: Some(make_test_share_address(1, bitcoin::Network::Testnet4)),
         };
 
         // Execute
@@ -286,18 +374,12 @@ mod tests {
             Some("tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx".to_string())
         );
         assert!(session.password.is_none());
-
-        let notify_cmd = notify_rx.try_recv();
-        assert!(
-            notify_cmd.is_err(),
-            "No notification should be sent when already authorized"
-        );
     }
 
     #[tokio::test]
     async fn test_register_user() {
         let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
-        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
         let btcaddress = "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx";
 
         // Execute
@@ -322,8 +404,8 @@ mod tests {
     async fn test_register_same_user_twice() {
         let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
-        let mut session1 = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
-        let mut session2 = Session::<DifficultyAdjuster>::new(2, 2, None, 0x1fffe000);
+        let mut session1 = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
+        let mut session2 = Session::<DifficultyAdjuster>::new(2, 2, None, DEFAULT_VERSION_MASK);
         let btcaddress = "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx";
 
         // Execute - register the same user twice
@@ -345,8 +427,8 @@ mod tests {
     async fn test_register_user_multiple_users() {
         let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
-        let mut session1 = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
-        let mut session2 = Session::<DifficultyAdjuster>::new(2, 2, None, 0x1fffe000);
+        let mut session1 = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
+        let mut session2 = Session::<DifficultyAdjuster>::new(2, 2, None, DEFAULT_VERSION_MASK);
         let btcaddress1 = "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx";
         let btcaddress2 = "tb1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3q0sl5k7";
 
@@ -376,13 +458,12 @@ mod tests {
     #[tokio::test]
     async fn test_handle_authorize_invalid_username_first_attempt() {
         // Setup
-        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
         let request = SimpleRequest::new_authorize(
             12345,
             "invalid_address_format".to_string(),
             Some("x".to_string()),
         );
-        let (notify_tx, _notify_rx) = mpsc::channel(1);
         let (emissions_tx, _emissions_rx) = mpsc::channel(10);
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let tracker_handle = start_tracker_actor();
@@ -394,7 +475,6 @@ mod tests {
         let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
         let ctx = StratumContext {
-            notify_tx,
             tracker_handle,
             bitcoindrpc_client: BitcoindRpcClient::new(
                 &bitcoinrpc_config.url,
@@ -408,9 +488,11 @@ mod tests {
             ignore_difficulty: false,
             validate_addresses: true,
             emissions_tx,
-            network: bitcoin::network::Network::Testnet,
+            network: bitcoin::network::Network::Testnet4,
             metrics: metrics_handle,
             chain_store_handle,
+            mode: PoolMode::P2poolv2,
+            miner_address: Some(make_test_share_address(1, bitcoin::Network::Testnet4)),
         };
 
         // Execute
@@ -427,10 +509,10 @@ mod tests {
             Message::Response(response) => {
                 assert!(response.error.is_some(), "Response should have an error");
                 let error = response.error.as_ref().unwrap();
-                assert_eq!(error.code, -401, "Error code should be -401");
-                assert!(
-                    error.message.contains("Invalid username"),
-                    "Error message should mention invalid username"
+                assert_eq!(error.code, 24, "Error code should be 24");
+                assert_eq!(
+                    error.message, "Invalid username",
+                    "Error message should be 'Invalid username'"
                 );
             }
             _ => panic!("Expected Response message"),
@@ -472,16 +554,128 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_handle_authorize_with_password_difficulty_override() {
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
+        let request = SimpleRequest::new_authorize(
+            12345,
+            "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx".to_string(),
+            Some("d=500".to_string()),
+        );
+        let (emissions_tx, _emissions_rx) = mpsc::channel(10);
+        let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let tracker_handle = start_tracker_actor();
+
+        let ctx = StratumContext {
+            tracker_handle,
+            bitcoindrpc_client: BitcoindRpcClient::new(
+                &bitcoinrpc_config.url,
+                &bitcoinrpc_config.username,
+                &bitcoinrpc_config.password,
+            )
+            .unwrap(),
+            start_difficulty: 1000,
+            minimum_difficulty: 1,
+            maximum_difficulty: None,
+            ignore_difficulty: false,
+            validate_addresses: true,
+            emissions_tx,
+            network: bitcoin::network::Network::Testnet4,
+            metrics: metrics_handle,
+            chain_store_handle,
+            mode: PoolMode::P2poolv2,
+            miner_address: Some(make_test_share_address(1, bitcoin::Network::Testnet4)),
+        };
+
+        let messages = handle_authorize(request, &mut session, ctx).await.unwrap();
+
+        assert_eq!(session.password, Some("d=500".to_string()));
+        assert_eq!(
+            session.difficulty_adjuster.get_current_difficulty(),
+            500,
+            "Difficulty should be overridden to 500 from password"
+        );
+
+        if let Message::SetDifficulty(notification) = &messages[1] {
+            assert_eq!(
+                notification.params[0], 500,
+                "SetDifficulty notification should use password difficulty"
+            );
+        } else {
+            panic!("Expected SetDifficulty message");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_authorize_password_difficulty_respects_minimum() {
+        let mut session = Session::<DifficultyAdjuster>::new(1, 100, None, DEFAULT_VERSION_MASK);
+        let request = SimpleRequest::new_authorize(
+            12345,
+            "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx".to_string(),
+            Some("d=50".to_string()),
+        );
+        let (emissions_tx, _emissions_rx) = mpsc::channel(10);
+        let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let tracker_handle = start_tracker_actor();
+
+        let ctx = StratumContext {
+            tracker_handle,
+            bitcoindrpc_client: BitcoindRpcClient::new(
+                &bitcoinrpc_config.url,
+                &bitcoinrpc_config.username,
+                &bitcoinrpc_config.password,
+            )
+            .unwrap(),
+            start_difficulty: 1000,
+            minimum_difficulty: 100,
+            maximum_difficulty: None,
+            ignore_difficulty: false,
+            validate_addresses: true,
+            emissions_tx,
+            network: bitcoin::network::Network::Testnet4,
+            metrics: metrics_handle,
+            chain_store_handle,
+            mode: PoolMode::P2poolv2,
+            miner_address: Some(make_test_share_address(1, bitcoin::Network::Testnet4)),
+        };
+
+        let messages = handle_authorize(request, &mut session, ctx).await.unwrap();
+
+        assert_eq!(
+            session.difficulty_adjuster.get_current_difficulty(),
+            100,
+            "Difficulty should be clamped to pool minimum of 100"
+        );
+
+        if let Message::SetDifficulty(notification) = &messages[1] {
+            assert_eq!(
+                notification.params[0], 100,
+                "SetDifficulty notification should use clamped difficulty"
+            );
+        } else {
+            panic!("Expected SetDifficulty message");
+        }
+    }
+
+    #[tokio::test]
     async fn test_handle_authorize_invalid_username_second_attempt() {
         // Setup - session with auth_failed_once already true
-        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
         session.auth_failed_once = true;
         let request = SimpleRequest::new_authorize(
             12345,
             "invalid_address_format".to_string(),
             Some("x".to_string()),
         );
-        let (notify_tx, _notify_rx) = mpsc::channel(1);
         let (emissions_tx, _emissions_rx) = mpsc::channel(10);
         let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
         let tracker_handle = start_tracker_actor();
@@ -493,7 +687,6 @@ mod tests {
         let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
         let ctx = StratumContext {
-            notify_tx,
             tracker_handle,
             bitcoindrpc_client: BitcoindRpcClient::new(
                 &bitcoinrpc_config.url,
@@ -507,9 +700,11 @@ mod tests {
             ignore_difficulty: false,
             validate_addresses: true,
             emissions_tx,
-            network: bitcoin::network::Network::Testnet,
+            network: bitcoin::network::Network::Testnet4,
             metrics: metrics_handle,
             chain_store_handle,
+            mode: PoolMode::P2poolv2,
+            miner_address: Some(make_test_share_address(1, bitcoin::Network::Testnet4)),
         };
 
         // Execute
@@ -535,5 +730,706 @@ mod tests {
             session.btcaddress.is_none(),
             "BTC address should not be set for invalid address"
         );
+    }
+
+    #[tokio::test]
+    async fn test_handle_authorize_empty_params_returns_error_not_panic() {
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
+        let request = SimpleRequest {
+            id: Some(Id::Number(1)),
+            method: std::borrow::Cow::Owned("mining.authorize".to_string()),
+            params: std::borrow::Cow::Owned(vec![]),
+        };
+        let (emissions_tx, _) = mpsc::channel(10);
+        let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        let tracker_handle = start_tracker_actor();
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+
+        let ctx = StratumContext {
+            tracker_handle,
+            bitcoindrpc_client: BitcoindRpcClient::new(
+                &bitcoinrpc_config.url,
+                &bitcoinrpc_config.username,
+                &bitcoinrpc_config.password,
+            )
+            .unwrap(),
+            start_difficulty: 1000,
+            minimum_difficulty: 1,
+            maximum_difficulty: None,
+            ignore_difficulty: false,
+            validate_addresses: true,
+            emissions_tx,
+            network: bitcoin::network::Network::Testnet4,
+            metrics: metrics_handle,
+            chain_store_handle,
+            mode: PoolMode::P2poolv2,
+            miner_address: Some(make_test_share_address(1, bitcoin::Network::Testnet4)),
+        };
+
+        let result = handle_authorize(request, &mut session, ctx).await;
+        assert!(result.is_ok());
+        let messages = result.unwrap();
+        let response = match &messages[..] {
+            [Message::Response(r)] => r,
+            _ => panic!("expected Response"),
+        };
+        let err = response.error.as_ref().unwrap();
+        assert_eq!(err.code, 24, "should be UnauthorizedWorker (code 24)");
+        assert_eq!(err.message, "Empty username");
+    }
+}
+
+#[cfg(test)]
+mod p2p_miner_address_tests {
+    use super::*;
+    use crate::accounting::stats::metrics;
+    use crate::stratum::difficulty_adjuster::DifficultyAdjuster;
+    use crate::stratum::server::PoolMode;
+    use crate::stratum::server::StratumContext;
+    use crate::stratum::work::tracker::start_tracker_actor;
+    use crate::test_utils::make_test_share_address;
+    use crate::test_utils::setup_test_chain_store_handle;
+    use bitcoindrpc::BitcoindRpcClient;
+    use bitcoindrpc::test_utils::setup_mock_bitcoin_rpc;
+    use p2poolv2_config::DEFAULT_VERSION_MASK;
+    use tokio::sync::mpsc;
+
+    /// BIP086 tweak of PUBKEY_G on testnet4.
+    const SHARE_ADDRESS: &str =
+        "tp2pool1pmfr3p9j00pfxjh0zmgp99y8zftmd3s5pmedqhyptwy6lm87hf5sss3v29v";
+    const BITCOIN_ADDRESS: &str = "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx";
+
+    #[tokio::test]
+    async fn authorize_stores_the_share_address_from_the_password() {
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
+        let request = SimpleRequest::new_authorize(
+            12345,
+            BITCOIN_ADDRESS.to_string(),
+            Some(format!("p2p={SHARE_ADDRESS}")),
+        );
+        let (emissions_tx, _emissions_rx) = mpsc::channel(10);
+        let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let tracker_handle = start_tracker_actor();
+
+        let ctx = StratumContext {
+            tracker_handle,
+            bitcoindrpc_client: BitcoindRpcClient::new(
+                &bitcoinrpc_config.url,
+                &bitcoinrpc_config.username,
+                &bitcoinrpc_config.password,
+            )
+            .unwrap(),
+            start_difficulty: 1000,
+            minimum_difficulty: 1,
+            maximum_difficulty: None,
+            ignore_difficulty: false,
+            validate_addresses: true,
+            emissions_tx,
+            network: bitcoin::network::Network::Testnet4,
+            metrics: metrics_handle,
+            chain_store_handle,
+            mode: PoolMode::P2poolv2,
+            miner_address: None,
+        };
+
+        handle_authorize(request, &mut session, ctx).await.unwrap();
+
+        assert_eq!(
+            session.miner_address.map(|address| address.to_string()),
+            Some(SHARE_ADDRESS.to_string())
+        );
+        // The two addresses are on different chains and must not be conflated.
+        assert_eq!(session.btcaddress, Some(BITCOIN_ADDRESS.to_string()));
+        assert!(session.parsed_address.is_some());
+    }
+
+    #[tokio::test]
+    async fn authorize_without_a_p2p_option_uses_the_configured_share_address() {
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
+        let request =
+            SimpleRequest::new_authorize(12345, BITCOIN_ADDRESS.to_string(), Some("x".to_string()));
+        let (emissions_tx, _emissions_rx) = mpsc::channel(10);
+        let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let tracker_handle = start_tracker_actor();
+
+        let ctx = StratumContext {
+            tracker_handle,
+            bitcoindrpc_client: BitcoindRpcClient::new(
+                &bitcoinrpc_config.url,
+                &bitcoinrpc_config.username,
+                &bitcoinrpc_config.password,
+            )
+            .unwrap(),
+            start_difficulty: 1000,
+            minimum_difficulty: 1,
+            maximum_difficulty: None,
+            ignore_difficulty: false,
+            validate_addresses: true,
+            emissions_tx,
+            network: bitcoin::network::Network::Testnet4,
+            metrics: metrics_handle,
+            chain_store_handle,
+            mode: PoolMode::P2poolv2,
+            miner_address: Some(SHARE_ADDRESS.parse().unwrap()),
+        };
+
+        handle_authorize(request, &mut session, ctx).await.unwrap();
+
+        assert_eq!(
+            session.miner_address.map(|address| address.to_string()),
+            Some(SHARE_ADDRESS.to_string())
+        );
+        assert_eq!(session.btcaddress, Some(BITCOIN_ADDRESS.to_string()));
+        assert!(session.parsed_address.is_some());
+    }
+
+    #[tokio::test]
+    async fn hydrapool_authorize_with_no_password_leaves_the_share_address_unset() {
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
+        let request = SimpleRequest::new_authorize(12345, BITCOIN_ADDRESS.to_string(), None);
+        let (emissions_tx, _emissions_rx) = mpsc::channel(10);
+        let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let tracker_handle = start_tracker_actor();
+
+        let ctx = StratumContext {
+            tracker_handle,
+            bitcoindrpc_client: BitcoindRpcClient::new(
+                &bitcoinrpc_config.url,
+                &bitcoinrpc_config.username,
+                &bitcoinrpc_config.password,
+            )
+            .unwrap(),
+            start_difficulty: 1000,
+            minimum_difficulty: 1,
+            maximum_difficulty: None,
+            ignore_difficulty: false,
+            validate_addresses: true,
+            emissions_tx,
+            network: bitcoin::network::Network::Testnet4,
+            metrics: metrics_handle,
+            chain_store_handle,
+            mode: PoolMode::Hydrapool,
+            miner_address: None,
+        };
+
+        handle_authorize(request, &mut session, ctx).await.unwrap();
+
+        assert!(session.miner_address.is_none());
+        assert_eq!(session.btcaddress, Some(BITCOIN_ADDRESS.to_string()));
+        assert!(session.parsed_address.is_some());
+    }
+
+    /// A malformed p2p= address is a rejection, not a silent drop: the miner
+    /// named an owner we cannot honour, and assigning their shares elsewhere
+    /// would be worse than refusing the connection.
+    #[tokio::test]
+    async fn authorize_with_a_malformed_share_address_is_rejected() {
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
+        let request = SimpleRequest::new_authorize(
+            12345,
+            BITCOIN_ADDRESS.to_string(),
+            Some("p2p=not-a-share-address".to_string()),
+        );
+        let (emissions_tx, _emissions_rx) = mpsc::channel(10);
+        let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let tracker_handle = start_tracker_actor();
+
+        let ctx = StratumContext {
+            tracker_handle,
+            bitcoindrpc_client: BitcoindRpcClient::new(
+                &bitcoinrpc_config.url,
+                &bitcoinrpc_config.username,
+                &bitcoinrpc_config.password,
+            )
+            .unwrap(),
+            start_difficulty: 1000,
+            minimum_difficulty: 1,
+            maximum_difficulty: None,
+            ignore_difficulty: false,
+            validate_addresses: true,
+            emissions_tx,
+            network: bitcoin::network::Network::Testnet4,
+            metrics: metrics_handle.clone(),
+            chain_store_handle,
+            mode: PoolMode::P2poolv2,
+            miner_address: None,
+        };
+
+        let messages = handle_authorize(request, &mut session, ctx.clone())
+            .await
+            .unwrap();
+
+        assert!(session.miner_address.is_none());
+        assert!(session.username.is_none());
+        assert!(session.btcaddress.is_none());
+        assert!(session.parsed_address.is_none());
+        assert!(session.workername.is_none());
+        assert!(session.password.is_none());
+        assert!(session.user_id.is_none());
+        assert!(!session.needs_first_notify);
+        assert!(
+            session.auth_failed_once,
+            "a rejected address must arm the two-strikes disconnect"
+        );
+        assert!(metrics_handle.get_metrics().await.users.is_empty());
+
+        if let Message::Response(response) = &messages[0] {
+            let message_text = format!("{:?}", response.error);
+            assert!(
+                response.error.is_some(),
+                "a malformed share address must be reported to the miner"
+            );
+            assert!(
+                message_text.contains("p2p="),
+                "the error must name the option the miner has to fix: {message_text}"
+            );
+        } else {
+            panic!("Expected a Response message");
+        }
+
+        let retry_request = SimpleRequest::new_authorize(
+            12346,
+            BITCOIN_ADDRESS.to_string(),
+            Some(format!("p2p={SHARE_ADDRESS}")),
+        );
+        let retry_messages = handle_authorize(retry_request, &mut session, ctx)
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            retry_messages.as_slice(),
+            [Message::Response(response), Message::SetDifficulty(_)] if response.error.is_none()
+        ));
+        assert!(session.user_id.is_some());
+        assert_eq!(
+            session.miner_address.map(|address| address.to_string()),
+            Some(SHARE_ADDRESS.to_string())
+        );
+    }
+
+    /// A miner supplying both options must get both. This is the regression
+    /// guard for parsing the password once and using two of its fields.
+    #[tokio::test]
+    async fn share_address_and_difficulty_are_both_applied_from_one_password() {
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
+        let request = SimpleRequest::new_authorize(
+            12345,
+            BITCOIN_ADDRESS.to_string(),
+            Some(format!("p2p={SHARE_ADDRESS},d=500")),
+        );
+        let (emissions_tx, _emissions_rx) = mpsc::channel(10);
+        let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let tracker_handle = start_tracker_actor();
+
+        let ctx = StratumContext {
+            tracker_handle,
+            bitcoindrpc_client: BitcoindRpcClient::new(
+                &bitcoinrpc_config.url,
+                &bitcoinrpc_config.username,
+                &bitcoinrpc_config.password,
+            )
+            .unwrap(),
+            start_difficulty: 1000,
+            minimum_difficulty: 1,
+            maximum_difficulty: None,
+            ignore_difficulty: false,
+            validate_addresses: true,
+            emissions_tx,
+            network: bitcoin::network::Network::Testnet4,
+            metrics: metrics_handle,
+            chain_store_handle,
+            mode: PoolMode::P2poolv2,
+            miner_address: None,
+        };
+
+        handle_authorize(request, &mut session, ctx).await.unwrap();
+
+        assert_eq!(
+            session.miner_address.map(|address| address.to_string()),
+            Some(SHARE_ADDRESS.to_string())
+        );
+        assert_eq!(session.btcaddress, Some(BITCOIN_ADDRESS.to_string()));
+        assert!(session.parsed_address.is_some());
+        assert_eq!(session.difficulty_adjuster.get_current_difficulty(), 500);
+    }
+
+    /// The conflict rule end to end: a miner naming a different owner than the
+    /// node's configured one must be told, through `handle_authorize` rather
+    /// than only in the resolver. Nothing else proves the rejection survives
+    /// the wiring and reaches the client.
+    #[tokio::test]
+    async fn authorize_with_a_conflicting_share_address_is_rejected() {
+        let configured = make_test_share_address(2, bitcoin::Network::Testnet4);
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
+        let request = SimpleRequest::new_authorize(
+            12345,
+            BITCOIN_ADDRESS.to_string(),
+            Some(format!("p2p={SHARE_ADDRESS}")),
+        );
+        let (emissions_tx, _emissions_rx) = mpsc::channel(10);
+        let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let tracker_handle = start_tracker_actor();
+
+        let ctx = StratumContext {
+            tracker_handle,
+            bitcoindrpc_client: BitcoindRpcClient::new(
+                &bitcoinrpc_config.url,
+                &bitcoinrpc_config.username,
+                &bitcoinrpc_config.password,
+            )
+            .unwrap(),
+            start_difficulty: 1000,
+            minimum_difficulty: 1,
+            maximum_difficulty: None,
+            ignore_difficulty: false,
+            validate_addresses: true,
+            emissions_tx,
+            network: bitcoin::network::Network::Testnet4,
+            metrics: metrics_handle.clone(),
+            chain_store_handle,
+            mode: PoolMode::P2poolv2,
+            miner_address: Some(configured),
+        };
+
+        let messages = handle_authorize(request, &mut session, ctx).await.unwrap();
+
+        // The miner is not adopted in any form: no session state, no stored
+        // user, no metrics entry for an address the node refused.
+        assert!(session.miner_address.is_none());
+        assert!(session.username.is_none());
+        assert!(session.btcaddress.is_none());
+        assert!(session.user_id.is_none());
+        assert!(metrics_handle.get_metrics().await.users.is_empty());
+        assert!(
+            session.auth_failed_once,
+            "a rejected address must arm the two-strikes disconnect"
+        );
+
+        // Naming both addresses matters: the fix could belong to the miner or
+        // the operator, and neither can act on "mismatch" alone.
+        let Message::Response(response) = &messages[0] else {
+            panic!("Expected a Response message");
+        };
+        let message_text = format!("{:?}", response.error);
+        assert!(response.error.is_some(), "{message_text}");
+        assert!(message_text.contains(SHARE_ADDRESS), "{message_text}");
+        assert!(
+            message_text.contains(&configured.to_string()),
+            "{message_text}"
+        );
+    }
+
+    /// The second half of "disconnect the client with a clear error": the first
+    /// attempt is answered, a repeat is dropped. Reachable only because
+    /// rejection leaves `session.username` unset, so a retry gets past the
+    /// already-authorized guard and reaches the two-strikes branch.
+    #[tokio::test]
+    async fn a_repeated_conflicting_share_address_disconnects() {
+        let configured = make_test_share_address(2, bitcoin::Network::Testnet4);
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
+        let (emissions_tx, _emissions_rx) = mpsc::channel(10);
+        let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let tracker_handle = start_tracker_actor();
+
+        let ctx = StratumContext {
+            tracker_handle,
+            bitcoindrpc_client: BitcoindRpcClient::new(
+                &bitcoinrpc_config.url,
+                &bitcoinrpc_config.username,
+                &bitcoinrpc_config.password,
+            )
+            .unwrap(),
+            start_difficulty: 1000,
+            minimum_difficulty: 1,
+            maximum_difficulty: None,
+            ignore_difficulty: false,
+            validate_addresses: true,
+            emissions_tx,
+            network: bitcoin::network::Network::Testnet4,
+            metrics: metrics_handle,
+            chain_store_handle,
+            mode: PoolMode::P2poolv2,
+            miner_address: Some(configured),
+        };
+
+        let first = handle_authorize(
+            SimpleRequest::new_authorize(
+                1,
+                BITCOIN_ADDRESS.to_string(),
+                Some(format!("p2p={SHARE_ADDRESS}")),
+            ),
+            &mut session,
+            ctx.clone(),
+        )
+        .await
+        .expect("the first attempt must be answered, not cut");
+
+        // The first attempt has to be a *rejection*. Without this the second
+        // Err below would also be produced by a first attempt that succeeded
+        // and left the session authorized, which is a different code path.
+        let Message::Response(response) = &first[0] else {
+            panic!("Expected a Response message");
+        };
+        assert!(
+            response.error.is_some(),
+            "the first conflicting attempt must be rejected"
+        );
+
+        let second = handle_authorize(
+            SimpleRequest::new_authorize(
+                2,
+                BITCOIN_ADDRESS.to_string(),
+                Some(format!("p2p={SHARE_ADDRESS}")),
+            ),
+            &mut session,
+            ctx,
+        )
+        .await;
+
+        let Err(Error::AuthorizationFailure(reason)) = second else {
+            panic!("a repeat offence must disconnect, got {second:?}");
+        };
+        // Naming the offending address is what distinguishes this from the
+        // already-authorized guard, which carries no address at all.
+        assert!(
+            reason.contains(SHARE_ADDRESS),
+            "must disconnect for the share address, not the already-authorized \
+             guard, got {reason:?}"
+        );
+    }
+}
+
+/// Direct coverage of the share address resolution table.
+///
+/// These drive the pure function rather than `handle_authorize`, so every arm
+/// is reachable without a StratumContext, a store and a mock rpc server.
+#[cfg(test)]
+mod resolve_share_address_tests {
+    use super::*;
+    use crate::test_utils::make_test_share_address;
+    use bitcoin::Network;
+
+    fn configured() -> P2PoolAddress {
+        make_test_share_address(1, Network::Signet)
+    }
+
+    fn different() -> P2PoolAddress {
+        make_test_share_address(2, Network::Signet)
+    }
+
+    fn unparseable() -> Result<P2PoolAddress, AddressError> {
+        Err("not-a-share-address".parse::<P2PoolAddress>().unwrap_err())
+    }
+
+    #[test]
+    fn hydrapool_needs_no_address_at_all() {
+        let resolved =
+            resolve_share_address(None, None, Network::Signet, PoolMode::Hydrapool).unwrap();
+        assert!(resolved.is_none());
+    }
+
+    /// Hydrapool builds no share commitment, so a supplied address is not an
+    /// error there, it is simply unused.
+    #[test]
+    fn hydrapool_ignores_a_supplied_address() {
+        let supplied = Ok(configured());
+        let resolved =
+            resolve_share_address(None, Some(&supplied), Network::Signet, PoolMode::Hydrapool)
+                .unwrap();
+        assert!(resolved.is_none());
+    }
+
+    #[test]
+    fn hydrapool_ignores_a_conflict_that_would_fail_in_p2poolv2() {
+        let supplied = Ok(different());
+        let resolved = resolve_share_address(
+            Some(configured()),
+            Some(&supplied),
+            Network::Signet,
+            PoolMode::Hydrapool,
+        )
+        .unwrap();
+        assert!(resolved.is_none());
+    }
+
+    #[test]
+    fn configured_address_is_used_when_the_password_has_none() {
+        let resolved = resolve_share_address(
+            Some(configured()),
+            None,
+            Network::Signet,
+            PoolMode::P2poolv2,
+        )
+        .unwrap();
+        assert_eq!(resolved, Some(configured()));
+    }
+
+    #[test]
+    fn supplied_address_matching_the_configured_one_is_accepted() {
+        let supplied = Ok(configured());
+        let resolved = resolve_share_address(
+            Some(configured()),
+            Some(&supplied),
+            Network::Signet,
+            PoolMode::P2poolv2,
+        )
+        .unwrap();
+        assert_eq!(resolved, Some(configured()));
+    }
+
+    /// The error has to name both addresses: the fix could belong to either the
+    /// miner or the operator, and neither can act on "mismatch" alone.
+    #[test]
+    fn supplied_address_conflicting_with_the_configured_one_is_rejected() {
+        let supplied = Ok(different());
+        let reason = resolve_share_address(
+            Some(configured()),
+            Some(&supplied),
+            Network::Signet,
+            PoolMode::P2poolv2,
+        )
+        .unwrap_err();
+
+        assert!(reason.contains(&configured().to_string()), "{reason}");
+        assert!(reason.contains(&different().to_string()), "{reason}");
+    }
+
+    /// Unparseable while the pool has one configured is a conflict, not a
+    /// fallback: the miner named an owner we cannot check against the pool's,
+    /// and silently using the pool address would assign their shares elsewhere.
+    #[test]
+    fn unparseable_supplied_address_is_rejected_even_with_a_configured_one() {
+        let supplied = unparseable();
+        let reason = resolve_share_address(
+            Some(configured()),
+            Some(&supplied),
+            Network::Signet,
+            PoolMode::P2poolv2,
+        )
+        .unwrap_err();
+
+        assert!(reason.contains("p2p="), "{reason}");
+        assert!(reason.contains(&configured().to_string()), "{reason}");
+    }
+
+    #[test]
+    fn supplied_address_is_used_when_the_node_configured_none() {
+        let supplied = Ok(configured());
+        let resolved =
+            resolve_share_address(None, Some(&supplied), Network::Signet, PoolMode::P2poolv2)
+                .unwrap();
+        assert_eq!(resolved, Some(configured()));
+    }
+
+    /// Both a supplied and a configured address are network checked here.
+    #[test]
+    fn supplied_address_for_another_network_is_rejected() {
+        let supplied = Ok(make_test_share_address(1, Network::Testnet4));
+        let reason =
+            resolve_share_address(None, Some(&supplied), Network::Signet, PoolMode::P2poolv2)
+                .unwrap_err();
+
+        assert!(reason.contains("not usable on this pool"), "{reason}");
+    }
+
+    /// A configured address is held to the same rule. Config parse checks it
+    /// too, but `StratumServerBuilder::miner_address` takes any address, so a
+    /// path that skips config parsing would otherwise commit every share on
+    /// the pool to an address written for another chain without complaint.
+    #[test]
+    fn configured_address_for_another_network_is_rejected() {
+        let configured = make_test_share_address(1, Network::Testnet4);
+        let reason =
+            resolve_share_address(Some(configured), None, Network::Signet, PoolMode::P2poolv2)
+                .unwrap_err();
+
+        assert!(reason.contains("Configured share address"), "{reason}");
+    }
+
+    /// The same rule applies when the miner names the very same address: the
+    /// pair agreeing does not make either of them usable here.
+    #[test]
+    fn configured_address_for_another_network_is_rejected_even_when_supplied_matches() {
+        let configured = make_test_share_address(1, Network::Testnet4);
+        let supplied = Ok(make_test_share_address(1, Network::Testnet4));
+        let reason = resolve_share_address(
+            Some(configured),
+            Some(&supplied),
+            Network::Signet,
+            PoolMode::P2poolv2,
+        )
+        .unwrap_err();
+
+        assert!(reason.contains("Configured share address"), "{reason}");
+    }
+
+    #[test]
+    fn configured_address_on_its_own_network_is_accepted() {
+        let configured = make_test_share_address(1, Network::Signet);
+        let resolved =
+            resolve_share_address(Some(configured), None, Network::Signet, PoolMode::P2poolv2)
+                .unwrap();
+
+        assert_eq!(resolved, Some(configured));
+    }
+
+    #[test]
+    fn unparseable_supplied_address_without_a_configured_one_is_rejected() {
+        let supplied = unparseable();
+        let reason =
+            resolve_share_address(None, Some(&supplied), Network::Signet, PoolMode::P2poolv2)
+                .unwrap_err();
+
+        assert!(reason.contains("p2p="), "{reason}");
+    }
+
+    /// The message has to tell a miner what to do, not merely that something is
+    /// missing, since this is the first thing a new miner hits.
+    #[test]
+    fn no_address_from_either_source_is_rejected() {
+        let reason =
+            resolve_share_address(None, None, Network::Signet, PoolMode::P2poolv2).unwrap_err();
+
+        assert!(reason.contains("p2p="), "{reason}");
+        assert!(reason.contains("address-format.md"), "{reason}");
     }
 }

@@ -7,6 +7,922 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.15.3] - 2026-09-21
+
+### Changed
+
+- Relicensed from AGPL-3.0-or-later to the dual license `MIT OR Apache-2.0`.
+  `LICENSE` is replaced by `LICENSE-MIT` and `LICENSE-APACHE`, and every source
+  file now carries an SPDX header instead of the GPL notice. Downstream users
+  may take the project under either license at their option.
+
+### Fixed
+
+- Block fetching no longer degrades to quadratic time on a large initial sync.
+  Duplicate detection across the pending and backlog queues used nested linear
+  scans, so fetching the whole chain could spend a long time enqueuing before it
+  dispatched a single request. It now uses a hash-set membership index and
+  begins requesting block bodies immediately, while the queues keep their
+  request order.
+- `p2poolv2_cli db cleanup-dense-heights` now collapses a dense height to its
+  real chain block. It invalidates off-chain `BlockValid` siblings (shares this
+  node mined onto a losing fork), not only `HeaderValid` ones, and processes
+  heights top-down so flood siblings that merely reference each other as uncles
+  are removed as well; genuine uncles referenced by a served block are kept.
+  Previously such heights stayed dense and could still stop peers syncing past
+  them.
+
+### Security
+
+- Updated `rustls` to 0.23.45, resolving RUSTSEC-2026-0285: version 0.23.43 could
+  accept a TLS 1.3 handshake message packed into the same record as a preceding
+  key-changing message, contrary to RFC 8446 section 5.1. The handshake
+  transcript remains authenticated, so this could not alter or complete a
+  handshake.
+
+## [v0.15.2] - 2026-09-06
+
+### Fixed
+
+- Increase docker action timeout on github
+
+### Removed
+
+- x86_64 macOS (Intel) release binaries
+- linux/arm/v7 docker images
+
+## [v0.15.1] - 2026-09-06
+
+### Breaking
+
+- Environment variable overrides now use `__` between a config section and its
+  key: `P2POOL_STORE__PATH`, not `P2POOL_STORE_PATH`. A single underscore could
+  not address a field whose own name contains one, so
+  `P2POOL_STORE_PPLNS_TTL_DAYS` resolved to `store.pplns.ttl.days` and was
+  silently discarded. Operators setting any `P2POOL_*` override must add the
+  second underscore. `P2POOL_CONFIG` and `P2POOL_STATIC_DIR` are unaffected;
+  they are read directly rather than through the config crate.
+- RocksDB engine moves from 10.4.2 to 11.8.1 with the `rocksdb` 0.25 upgrade,
+  and libp2p moves from 0.53 to 0.56. Both are format-relevant and land
+  together with the planned chain reset.
+- docker-compose now requires `NETWORK` in `.env` and refuses to start without
+  it. It selects bitcoind's config file and p2poolv2's share chain and store
+  directory, so one value keeps them on the same chain. It overrides `network`
+  in a mounted `config.toml`, which is ignored under compose.
+- The libp2p protocol strings now carry the share chain genesis hash as well as
+  the bitcoin network: `/p2pool/<network>/<genesis prefix>/1.0.0`, used for the
+  request-response protocol, Kademlia, Identify and the Noise prologue. Nodes on
+  different share chains no longer negotiate a protocol, so a node on an older
+  release cannot connect to one on this release. The genesis hash is derived in
+  code rather than taken from config, so a chain cannot be joined by mistyping a
+  network name.
+- The testnet4 share chain genesis moves to bitcoin block
+  `0000000000a57b6dd9b7340a2e2cbb7069a0ccdf28f3db69070ea89d7287444b` at height
+  151197, resetting that share chain. Existing testnet4 stores are on the old
+  chain and must be deleted.
+
+### Added
+
+- `cargo-deny` in CI, checking advisories, licences, duplicate versions and
+  source registries, with a `deny.toml` policy and `just deny`. Licence, ban
+  and source violations block; advisories run non-blocking with a daily
+  schedule, so a newly published advisory does not stop an unrelated merge.
+- Dependabot for cargo, GitHub Actions and Docker base images, weekly.
+  Semver-compatible cargo updates arrive as one grouped PR. Majors are left to
+  Dependabot except for libp2p, rocksdb and bitcoinconsensus, and bitcoin is
+  also held at minor because 0.32 to 0.33 changes consensus serialization.
+- Known-answer tests for `password_to_hmac` and `build_basic_auth_header`,
+  pinning the values that operator `auth_token` config depends on.
+- Characterisation tests for environment-variable overrides, including the
+  exact keys docker-compose sets.
+- Startup check that the genesis this node is built for matches the one the
+  store was built on. A store holding another share chain now fails with
+  `GenesisMismatch` naming both hashes and telling the operator to delete the
+  store directory, instead of quietly keeping two chains in one database and
+  serving the heavier old one to peers on the new chain. The check reads the
+  share header, which pruning never removes.
+
+### Changed
+
+- Dependencies updated across the tree. Packages with known advisories drop
+  from 25 to 3, and the lockfile from 574 packages to 542. The three that
+  remain are blocked upstream in libp2p and are recorded in `deny.toml` with
+  the conditions for removing them.
+- `reqwest` 0.13 changes what `default-tls` means, so TLS moves from OpenSSL to
+  rustls. `openssl`, `openssl-sys`, `native-tls` and `hyper-tls` leave the tree
+  entirely. Certificate trust is unchanged: `rustls-platform-verifier` still
+  uses the platform trust store.
+- Container base images move to Debian 13 (trixie) for both build and runtime
+  stages, and the runtime image now installs `ca-certificates`, which rustls
+  requires when constructing an HTTPS client.
+- CI lint runs `cargo clippy --workspace --all-targets --all-features
+  -- -D warnings`, matching what AGENTS.md already required.
+- GitHub Actions in `rust.yml` are pinned by commit SHA, as `docker.yml`
+  already did.
+- The node logs its P2P protocol string at startup, so an operator can see which
+  share chain a node will peer on.
+- CI runs coverage through `cargo nextest`, pins the remaining action hashes,
+  builds on a newer Rust docker image, and skips the codecov upload on
+  dependabot PRs, where the token is not available.
+
+### Removed
+
+- `void` and `rust_decimal` dependencies. libp2p 0.55 replaced `void::Void`
+  with `std::convert::Infallible`, and `rust_decimal` had no references in any
+  source file.
+
+### Fixed
+
+- `P2POOL_NETWORK_LISTEN_ADDRESS` in docker-compose silently did nothing,
+  because it could not reach a field whose name contains an underscore. It now
+  applies, with the same default the shipped config already used.
+- docker-compose hardcoded the bitcoind endpoint to `127.0.0.1`, contradicting
+  the `http://bitcoind:38332` in the shipped config. It is now passed through
+  only when set, so platforms that inject it (Umbrel and similar) can, while
+  everyone else keeps the value from their `config.toml`. Neither this nor the
+  chain override had any effect before, because both named a `bitcoin` config
+  section that does not exist.
+- `publish = false` had no effect on eight of the nine crates. Workspace
+  package keys apply only where a member opts in, so those crates were
+  publishable despite the workspace declaring otherwise.
+- `OutgoingConnectionError` logged every failed outbound connection twice.
+
+## [v0.14.1] - 2026-09-04
+
+### Fixed
+
+- Docker image build to handle new p2poolv2_address crate.
+
+## [v0.14.0] - 2026-09-04
+
+### Added
+
+- Share chain addresses: a new `p2poolv2_address` crate encoding a taproot
+  output key as bech32m under a P2Poolv2 human readable part (`p2pool`,
+  `tp2pool`, `sp2pool`, `rp2pool`). Witness version 1 only; testnet3 is
+  unsupported.
+- `ShareHeader.miner_address`, the share chain owner of a share's coinbase
+  output, alongside the existing `miner_bitcoin_address` that receives the
+  bitcoin payout. The two are never derived from one another. It is stored as
+  the taproot witness program an address encodes, not as the address, because
+  an address also names a network and the network is not consensus data.
+- `p2p=<address>` in the stratum password, naming the share chain address for
+  a miner's shares. Combines with the existing `d=` and `th=` hints.
+- Any well formed P2TR share chain address is accepted, including one whose
+  output key is not a curve point. Bitcoin lets anyone pay to such an output
+  and it is unspendable at the owner's own cost, while rejecting it would have
+  put an elliptic curve operation on every share header decode.
+- Optional `[stratum] miner_address`. When set it owns every share the pool
+  mines, so miners need no password change; a miner sending a different
+  address is rejected.
+- Prometheus pool metrics and Grafana dashboards for the pool, node, and
+  users, with provisioning and import-ready public variants.
+- Pool-wide block fund tracking, with effort reset only on a pool-wide
+  block find rather than on every bitcoin block.
+- Grafana dashboard setup instructions in the README.
+- `p2poolv2_cli address`, which encodes a taproot output key as a share chain
+  address. It takes the `witness_program` field of `bitcoin-cli
+  getaddressinfo` on stdin or as an argument, applies no tweak because the
+  wallet already did, and checks the key is a curve point so a typo cannot
+  produce an address whose shares nobody can spend. It needs no running node
+  and no config file, and it never sees a private key.
+- A security policy file.
+
+### Changed
+
+- **BREAKING (consensus):** share chain restart on all networks. `ShareHeader`
+  gained `miner_address` and the share coinbase now pays it, so every share
+  block hash changes, genesis included. The commitment hash embedded in the
+  bitcoin coinbase scriptSig changes with it. `miner_address` is encoded as a
+  witness version byte, a length byte and the program, rather than as an
+  address string. An address string would have carried the human readable
+  part, which names a network and is covered by `block_hash`, so one owner
+  could be spelled four ways and each spelling would have been a distinct
+  share block carrying the same proof of work. The version travels in the
+  encoding, so accepting a further witness version later is a policy change
+  rather than a format break, and validation rejects anything but P2TR.
+- **BREAKING (consensus):** the share coinbase carries the weak block hash in
+  its scriptSig, and is no longer covered by the share commitment. Every share
+  a miner produced was previously byte identical -- null prevout, empty
+  scriptSig, and a payout derived only from the address -- so one miner's
+  shares all shared a txid and their share units collided on a single
+  outpoint. A miner with ten thousand shares held one. The weak block hash is
+  unique per share by construction, because `prev_share_blockhash` is in the
+  commitment, so a replay under a different parent changes the commitment, the
+  bitcoin coinbase, and therefore the hash.
+
+  This required the commitment to stop covering the coinbase, which would
+  otherwise be circular: the commitment is fixed before the miner hashes,
+  while the weak block hash exists only afterwards. `ShareCommitment` drops
+  `merkle_root` and gains `non_coinbase_root`, the merkle root over the share
+  transactions excluding the coinbase, which is all zeros while share blocks
+  carry nothing else. It also now digests `miner_address` directly: that used
+  to be committed only through the coinbase that pays it, so with the coinbase
+  outside the commitment it is the sole binding between a share's owner and
+  its proof of work.
+
+  `ShareHeader` is unchanged in shape. `merkle_root` keeps bitcoin's meaning,
+  the root over all share transactions with the coinbase at leaf zero, and is
+  computed at assembly from the final coinbase rather than copied from the
+  commitment. `validate_share_coinbase` rebuilds the coinbase from the header
+  and compares, which proves it is the canonical one rather than merely well
+  shaped.
+- **BREAKING (stratum):** in p2poolv2 mode, authorize is rejected unless a
+  share chain address is available, either from `[stratum] miner_address` or
+  from `p2p=<address>` in the miner's password. Hydrapool mode is unaffected,
+  and rejects `miner_address` at startup.
+- In p2poolv2 mode, config parsing rejects a network that has no share chain
+  human readable part, and a configured `miner_address` is re-checked against
+  the pool's network when a miner authorizes. Without the startup check the
+  node ran and rejected every authorize forever, for a reason no miner could
+  fix.
+- **BREAKING (JSON API):** `miner_address` on the `/share`, `/shares`,
+  `/share_headers`, `/candidates` and `/dag` endpoints, in `db-query` output
+  and in WebSocket `Share` events now carries the share chain address. The bitcoin payout
+  address moved to a new `miner_bitcoin_address` field. The key kept its name
+  and changed meaning, so consumers must be updated rather than warned by a
+  missing field.
+- Share chain addresses are parsed with the same segwit decoder bitcoin uses
+  for its own addresses, minus the restriction on the human readable part, so
+  the BIP350 pairing of witness version to checksum applies: version 0
+  requires bech32 and later versions bech32m. The 90 character segwit limit
+  applies too.
+- `db-query` renders a share chain owner as its witness program hex when no
+  `--config` is given, since without one there is no network to choose a
+  human readable part with. Pass `--config` to see the address form; the API
+  and the WebSocket feed always have the configured network and always render
+  the address.
+- The dashboard shows both addresses, truncated client side.
+- The `share_sync` test fixture is regenerated from a live signet node, with
+  bitcoin headers carrying real proof of work mined under the two-address
+  commitment and the per-share coinbase.
+- `impl Encodable for ShareCommitment` is removed. It was a second, unused
+  definition of the commitment byte layout that had already drifted from the
+  one `hash()` uses, so it could only ever produce a digest no peer would
+  reconstruct.
+- The notify path no longer computes a share merkle root. The commitment does
+  not cover the coinbase, so there is nothing per-miner left to compute there;
+  the root was previously recomputed for every miner on every notify despite
+  being constant for the life of a session.
+- **BREAKING (JSON API):** the `status` field is renamed to
+  `validation_status` on the `/share` and `/dag` endpoints and in
+  `db-query` output; read the sibling `chain` field for chain position.
+- Block metadata `Status` now tracks validation state only, with chain
+  position moved to a separate `chain` field.
+- `ValidationError` carries a failure kind (`Consensus`, `StoreAccess`,
+  `Recoverable`) so a transient store failure no longer shuts the node down.
+- Ingest-time prevout validation no longer judges whether a prevout's source
+  is confirmed or whether the prevout is already spent. Both answers change
+  with a reorg, so recording them as a permanent `Invalid` barred a
+  higher-work fork from ever being adopted when the same transaction appeared
+  on both sides of the fork. Confirmation re-checks them with the reorg
+  overlay applied, and marks the block `Invalid` there.
+- A template that cannot be prepared now stops the notifier, which shuts the
+  node down, instead of being logged and skipped. The watch channel hands its
+  last value to every connected and newly connecting miner, so skipping left
+  the pool hashing a previousblockhash bitcoin had moved past, with nothing to
+  age the job out.
+- An empty sharechain PPLNS window and a zero PPLNS total difficulty are both
+  errors rather than fallbacks onto the bootstrap address, so they reach the
+  notifier and shut the node down. Paying a whole coinbase to one address at
+  the moment the payout data is known to be wrong is worse than stopping.
+  Neither is a bootstrapping state: genesis is on the confirmed index, so a new
+  chain has it in the window, and the total difficulty is at least 1 on every
+  network unless `difficulty_multiplier` is configured below 1.0, which
+  truncates to zero when cast.
+- Every block a promotion confirms is now reported at its own height, instead
+  of only the block that triggered the promotion being reported at the new
+  confirmed tip's height. A promotion confirms a whole prefix whenever
+  confirmation was stalled and then catches up, and the rest of that prefix was
+  missing from the share feed and from the pool effort numerator entirely.
+- The mining base search keeps a validated block it has already found when it
+  hits its search bound, instead of discarding it and falling back to the
+  confirmed tip. Discarding it defeated the search in the case it exists for: a
+  subtree above the confirmed tip large enough to exhaust the budget, which a
+  peer can produce cheaply at minimum pool difficulty.
+- The organise worker's pending buffer no longer holds one entry per delivery
+  of the same block. A stored `HeaderValid` block is re-validated and
+  re-emitted every time a peer sends it, so replaying one observed share filled
+  the buffer and started dropping live blocks -- which are already stored with
+  their bodies, so nothing re-requests them and confirmation stops at their
+  height.
+- The DoS gate now checks the header's merkle root against the transactions
+  carried with the block. A block's identity is its header hash, so a peer
+  could attach arbitrary transactions -- up to the 200 KB size limit, and even
+  in reply to a block requested by hash -- and have them buffered and stored
+  under a hash that said nothing about them.
+- Uncle block bodies are required only for blocks inside the PPLNS zone. The
+  BlockReceiver admits a block whose uncle sits below `prune_height`, because
+  those bodies are never fetched, but validation required them in both tiers --
+  so such a block was stored and then failed validation forever on data nothing
+  would request. Uncle acceptance is now a pure function of chain shape, with
+  body presence checked separately which runs during block validation in pplns
+  zone
+- A failed `mark_invalid` is no longer reported as an invalidation. The batch
+  is dropped uncommitted, so the block keeps its `HeaderValid` status and
+  candidate membership and confirmation still stops at its height; both the
+  chain-context path and the `InvalidBlock` event path acted as though the
+  candidate chain had been rebuilt. The block is now re-buffered for a retry
+  where it is available, the confirmed-chain follow-up is skipped where it is
+  not, and a closed store writer channel is fatal rather than logged.
+- The validation tier is recorded on `OrganiseEvent::Block` instead of being
+  re-derived by the organise worker. Both stages read `check_pplns_zone`
+  independently and the candidate tip can shorten between them, so a block
+  tiered below the PPLNS zone at stage 1 could be marked `BlockValid` back
+  inside the zone with its merkle root, coinbase, witness commitment and
+  scripts never checked. Those checks now run before promotion when that flip
+  happens.
+- `ValidationError` gains a fourth failure kind, `Unresolvable`: a check that
+  needs data this node no longer retains and that no retry can decide. The
+  organise worker drops such a block without recording a verdict, rather than
+  buffering it. A PPLNS anchor deeper than the retained window is the first
+  case; it was `Recoverable`, which buffered the share under a parent height
+  that drains never revisit, so the entry held its slot until the buffer began
+  dropping live blocks.
+- `difficulty_multiplier` is validated at config parse: it must be a finite
+  whole number of at least 1. Every consumer reads it through an `as u128`
+  cast, so a smaller value truncated to zero and a fractional one silently
+  rounded down, changing the payout window for the whole pool.
+- Invalidating the last candidate above the confirmed tip now leaves the
+  candidate top at the confirmed tip instead of deleting it. An absent top
+  candidate height means the candidate chain has never been written, which
+  stopped `organise_block` from promoting and let any header become the
+  candidate tip with no parent, contiguity or work check.
+- Coinbase maturity is measured from the stored `coinbase_root_height` to the
+  spending block's own height, so the verdict no longer depends on which
+  branch this node has confirmed. `check_prevouts_and_find_coinbase` is now
+  `check_prevouts` and enforces existence, the payout window, and maturity in
+  one batch read; `find_immature_coinbase_prevout` is removed.
+- PPLNS payout is anchored on `prev_share_blockhash` instead of the live tip.
+- The PPLNS window scan is bounded relative to its anchor.
+- The PPLNS window retains an extra 1% of shares.
+- Uncle selection requires at least `HeaderValid` status and excludes
+  ancestors, nephews, and blocks beyond `MAX_UNCLES_DEPTH`.
+- The mining base is loaded from confirmed tip descendants rather than the
+  confirmed tip itself.
+- The organise worker's pending block buffer capacity is reduced to bound
+  memory use.
+- The fallback confirmation path is removed.
+- The unused `OrganiseEvent::Header` variant is removed; header
+  organisation was already a direct store call.
+- CI runs the workspace test suite both with and without the `sim` feature.
+- The share blockhash is computed once per stratum submit, and the
+  extranonce only when an emission needs it.
+
+### Fixed
+
+- Reject blocks whose transactions exceed `BLOCK_TXS_SIZE_LIMIT` before
+  buffering them.
+- Buffer a block until its parent and uncle bodies are available, so
+  validation no longer fails on missing ancestor transactions.
+- Re-check prevouts when extending and when reorging the confirmed chain,
+  using an in-batch overlay so blocks in the same batch are visible.
+- Use parent height plus one when checking coinbase maturity.
+- Reorg the candidate chain onto the best surviving branch when a block is
+  invalidated, instead of stalling confirmation at its height.
+- Stop adding `Invalid` blocks to the candidate chain or confirming them.
+- Mark a block `BlockValid` only once its parent is `BlockValid`.
+- Mark prune-window blocks `BlockValid` so confirmation can pass them.
+- Set the candidate top correctly on reorg.
+- Drain descendants of every removed block on reorg, not just the tip.
+- Re-buffer and retry a block that failed with a recoverable error instead
+  of leaving the chain stalled.
+- Validate share timestamps against chain structure.
+- Remove a TOCTOU race between reading the chain tip and its height.
+- Propagate errors when building the output distribution instead of
+  falling back to a default.
+- Fix a flaky tip-currency test that depended on a one-second clock tick.
+- Store a locally mined block and organise its header atomically, matching
+  the received-share path and fixing a sync failure under the sped-up
+  nightly simulation.
+- Record a miner's share even when it misses pool difficulty, fixing
+  under-reported per-miner hashrate as pool difficulty rose.
+- Publish self-contained multi-arch release manifests, with cleanup of
+  per-arch temporary tags on both success and failure.
+
+## [v0.13.0] - 2026-07-14
+
+### Added
+
+- Network isolation for P2P: the bitcoin network name is now embedded
+  in the libp2p protocol strings (request-response, Kademlia, and
+  Identify) and in the Noise handshake prologue. Nodes on different
+  networks (main, testnet4, signet, regtest) derive different protocol
+  strings and fail to negotiate. This results in so cross-network
+  connections being dropped during the Noise handshake before any
+  P2Poolv2 messages are exchanged or peer slots are allocated.
+
+- Ansible deployment: Add playbook and roles to deploy P2Poolv2 nodes.
+  Supports multiple instances (e.g. mainnet + testnet4) on the same
+  host with per-instance configs, systemd services, and data
+  directories. Includes nginx reverse proxy role with rate limiting,
+  WebSocket support, Let's Encrypt certificates, and optional Grafana
+  proxy. Credentials managed via ansible-vault. See ansible/README.adoc
+  for setup instructions.
+
+- Pruning support: Add two-zone block body validation, PPLNS zone and
+  Prune Zone. Full block bodies are required for PPLNS zone at sync
+  time. We fetch and retain only headers in the prune zone. All blocks
+  below the prune zone will be deleted in a future PR. See wiki page
+  on Pruning and/or the LLM architecture docs in docs/architecture for
+  more details.
+  - Block bodies are only fetched within PRUNE_DEPTH of the candidate
+    tip. Blocks below this are validated header-only with PoW at sync
+    time.
+  - `validate_below_pplns_depth`: lightweight validation for
+    prune-zone blocks, including PoW, uncles check, block size, tx
+    count.
+  - `coinbase_root_height` stored in StoredTxOut: tracks oldest
+    coinbase ancestor. Outputs deeper than PPLNS_DEPTH from tip are
+    unspendable.
+  - Confirmation pipeline promotes prune-zone blocks without body
+    data.  SpendsIndex skipped for these blocks as outputs are
+    unspendable anyway.
+  - `verify_chain` tool respects prune boundary. There are no body
+    checks below it.
+  - Constants: `PPLNS_DEPTH=120960`, `PRUNE_DEPTH=241920`,
+    `PRUNE_INTERVAL=360`.
+
+- ShareBlock relay: blocks are now pushed directly as full ShareBlocks
+  instead of the Inv-then-fetch protocol, reducing propagation latency.
+  Blocks are relayed on validation and broadcast only when the chain is
+  current.
+
+- Kademlia peer discovery with periodic bootstrap. libp2p identity is
+  now configured from the node key, routable IPv6 address detection is
+  improved, and the node advertises its external address to peers.
+
+- Local block validation: locally mined blocks are enqueued for
+  validation before being broadcast, matching the same path as
+  remotely received blocks. Blocks are always broadcast after
+  successful validation.
+
+- Simulation framework: no-PoW share emitter, sim_overrides module,
+  separate sim binary crate, log-based metrics with target rate
+  auto-detect, nightly integration test, and simulation runbook.
+
+- TLA+ pruning specification with two-window (Spend and Prune) model
+  and blockchain transaction specs.
+
+- Build script that embeds the git version; version is printed in info
+  log on startup.
+
+- Docker image builds for release tags. Podman-specific commands added
+  to docker compose setup.
+
+- Nightly sim script with configurable dial fanout, lagging node
+  detection, and clean starts between runs.
+
+### Changed
+
+- RocksDB bloom filters enabled for column families using point
+  queries, improving read performance.
+
+- Limit transient dependencies to only those required, reducing
+  compile times and binary size.
+
+- PPLNS window rebuild no longer evicts the cache, avoiding redundant
+  recalculations during sync.
+
+- Candidates with available body are now preferred when selecting
+  uncles.
+
+- Do not candidatize a block that is already confirmed. Update
+  candidates when a local block is confirmed.
+
+- Use fresh timestamp when building work instead of reusing stale
+  values.
+
+- Send getheaders when a received block has a missing parent, resuming
+  sync without waiting for the next periodic retry.
+
+- Refactor node main into separate build and runner functions. Move
+  sim to a separate binary crate with sim_overrides module localising
+  pool difficulty, payout distribution, genesis, PoW, and emission
+  overrides.
+
+- Remove network parameter from Emission Worker.
+
+- Use Bitcoin Core 31.0 for regtest in sim.
+
+- Docker compose uses net mode host to avoid NAT issues.
+
+- Run docker checks and builds only on release branches.
+
+- Use debug logging level for nightly runs.
+
+### Fixed
+
+- Block receiver no longer early-returns on pending blocks, which
+  could cause missed block processing.
+
+- Sim uncle rate metric no longer over-counts under reorg churn by
+  counting distinct blocks instead of all appearances.
+
+- Do not advertise observed address with ephemeral source port to
+  peers, which caused unreachable address entries in peer routing
+  tables.
+
+- Reject inbound messages whose advertised payload length exceeds the
+  maximum message size before allocating the payload buffer. Closes a
+  DoS/OOM vector where a malicious peer could advertise a large length
+  prefix to exhaust memory.
+
+## [v0.12.0] - 2026-06-12
+
+### Changed
+
+- PPLNS payout implementation is selected based on pool mode from
+  stratum config. Simple PPLNS uses shares stored in rocksdb for
+  hydrapool standalone PPLNS mode. Sharechain PPLNS uses shares from
+  rocksdb stored for the chain DAG.
+
+## [v0.11.2] - 2026-06-12
+
+### Fixed
+
+- Fix high-hashrate miners causing 90%+ rejection rate for
+  low-hashrate miners in Hydrapool (standalone PPLNS) mode. The share
+  chain ASERT difficulty acts as a global floor for all shares. When a
+  powerful miner (e.g. Antminer S21 at 200TH) joined a pool of
+  NerdAxe miners (~30TH total), ASERT raised the pool difficulty to
+  match the combined hashrate, making it impossible for low-hashrate
+  miners to produce shares meeting the pool target. In Hydrapool mode
+  the ASERT pool difficulty check on submitted shares is now skipped,
+  so per-worker vardiff is the sole difficulty control.
+
+### Added
+
+- Pool operating mode config field (`mode` in `[stratum]` section).
+  Defaults to `p2poolv2` (full share chain with ASERT enforcement).
+  Set to `hydrapool` for standalone PPLNS pools where the ASERT pool
+  difficulty check is skipped and the share commitment is omitted from
+  the coinbase to save space.
+
+## [v0.11.0] - 2026-05-25
+
+### Fixed
+
+- Fix confirmed chain divergence during sync. Blocks are now confirmed
+  strictly in candidate chain order instead of by block body arrival
+  order. The candidate chain resolves historical forks via cumulative
+  work (ASERT breaks equal-work ties at the next height through
+  different parent timestamps), and the confirmed chain follows it.
+  Previously, `build_direct_candidates` confirmed whichever block body
+  arrived first at each height, which could diverge from the peer's
+  confirmed chain, causing PPLNS distribution mismatches and merkle
+  root validation failures.
+
+- Add uncle body availability check before block confirmation. Both
+  `should_extend_confirmed` and `reorg_confirmed` now verify that all
+  uncle bodies referenced by candidate blocks are available in the
+  store before promoting them. This prevents missing uncle data in the
+  PPLNS window which caused incorrect payout distributions.
+
+- Add fallback confirmation path. When the candidate chain cannot be
+  advanced (e.g. stuck on a fork with missing block data), any block
+  at confirmed_height + 1 that is a child of the confirmed tip with
+  all block and uncle data available can be confirmed. This allows
+  locally mined blocks to advance the confirmed chain.
+
+- Trigger confirmed chain advancement when blocks are buffered by the
+  organise worker. After a candidate chain reorg, the block at
+  `confirmed_tip + 1` may already have its body stored but no
+  OrganiseEvent was sent for it. The organise worker now calls
+  organise_block when buffering blocks to pick up such blocks.
+
+- Downgrade uncle-on-confirmed-chain validation log from error to
+  debug. This validation failure is expected during sync when the
+  confirmed chain has not yet settled and is harmless because the
+  block body is still stored and confirmed via the candidate chain
+  path.
+
+- Cap the candidate chain scan in `find_promotable_candidates` to
+  `FETCH_BATCH_SIZE` entries beyond the confirmed tip. Previously
+  scanned the entire gap to the candidate tip (up to 50k+ entries),
+  causing ~25ms delays per call during sync.
+
+## [v0.10.15] - 2026-05-19
+
+### Fixed
+
+- Gracefully handle bad submit responses from broken ASICs
+
+## [v0.10.15] - 2026-05-17
+
+### Fixed
+
+- Fix worker stats reset on reconnect. We used to replace existing
+  worker entries, resetting `shares_valid_total` to zero. Changed to
+  preserve accumulated stats across reconnections.
+
+- Add grace period for stats persistence. Inactive workers are kept
+  for 6 hours and users for 3 days before being removed from stats,
+  allowing reconnections to preserve accumulated history.
+
+## [v0.10.14] - 2026-05-16
+
+### Fixed
+
+- Fix user and worker `shares_valid_total` Prometheus counter overflow.
+  The TWO32 multiplication used saturating_mul on u64, capping at
+  u64::MAX for users with accumulated difficulty above ~4.29 billion.
+  Switched to f64 arithmetic which handles the full range correctly.
+
+## [v0.10.13] - 2026-05-15
+
+### Changed
+
+- Use precomputed merkle branches in share validation instead of
+  re-parsing all transaction IDs from hex on every mining.submit.
+  The branches are computed once when the block template arrives and
+  reused across all miners, eliminating ~30% CPU overhead from hex
+  parsing and full merkle tree rebuilds. Submit latency reduced by
+  ~33% average and ~51% at p99, throughput increased ~40%.
+
+- Parameterize JMeter stratum test plan so host, port, thread count,
+  ramp-up, duration and submit delay can be overridden from the
+  command line via JMeter properties.
+
+### Added
+
+- Standalone JMeter load generator script (run_remote_load.sh) for
+  driving stratum traffic against a remote server without needing a
+  local build or mock-bitcoind.
+
+## [v0.10.12] - 2026-05-14
+
+### Added
+
+- Max stratum connections limit to prevent resource exhaustion from
+  too many concurrent miner connections.
+
+- Support for `extranonce.subscribe` stratum extension, allowing
+  miners to request extranonce updates.
+
+- Support for user-provided start difficulty with d and th params in
+  password field.
+
+- Per-user share valid total prometheus metric for tracking individual
+  miner contribution rates.
+
+- Test coverage for max connections limit, empty authorize requests,
+  non-hex nonce in submit params, NotSubscribed and InvalidJobId
+  stratum error paths.
+
+### Changed
+
+- Stratum error handling refactored to use a dedicated
+  `StratumErrorCode` module with a minimal set of error codes,
+  replacing the ckpool/blitzpool codes that were not used in
+  production. Validation failures now pass the error reason in the
+  response message.
+
+- Set coinbase locktime and sequence per BIP54 and rename coinbase
+  builder functions for clarity.
+
+- Use Vec for share duplicate detection instead of HashMap.
+
+- Feature gate hydrapool PPLNS share storage so it is only compiled
+  when the hydrapool pplns storage feature is enabled.
+
+- Use non-blocking compact console logging and quieter info-level
+  logging to reduce log noise.
+
+- Use debug log level for max connections reached events.
+
+- Use share count for all users with non-zero shares in metrics.
+
+- Simplify finding height from coinbase and remove extract height
+  from coinbase dead code.
+
+- Update mainnet genesis block.
+
+### Fixed
+
+- Remove unwraps from submit param parsing and diff validator to
+  prevent panics on malformed miner input.
+
+- Check for none version masks to avoid panics when version rolling
+  is not configured.
+
+- Fix docker signet bootstrap script.
+
+- Fix typos across the codebase.
+
+## [v0.10.11] - 2026-05-09
+
+### Changed
+
+- Share header sync now uses height-based DAG walking instead of
+  confirmed-chain walk + uncle reference chasing. The sender collects
+  ALL valid blocks at each height from the height index, producing a
+  complete topologically sorted subgraph. This fixes sync failures
+  caused by missing fork block ancestors that the old approach never
+  included.
+
+- Locator matching relaxed from confirmed-only to any valid block
+  status (HeaderValid, Candidate, Confirmed, BlockValid). This
+  prevents follow-up batch failures when the last header in a batch
+  was a fork block.
+
+- Receiver supports multiple chain anchors per batch, allowing
+  height-based batches with blocks from different branches to
+  validate correctly.
+
+### Fixed
+
+- Fork block ancestors missing from header sync response. The old
+  confirmed-chain walk + `collect_uncle_chain` missed fork blocks whose
+  `prev_share_blockhash` pointed to non-confirmed blocks, causing
+  "parent not in batch or store" errors during testnet4 sync.
+
+- Out-of-order header arrival no longer creates phantom entries at
+  height 1 in the height index. `initialise_new_header` now returns an
+  error when the parent is missing instead of silently defaulting.
+
+- Missing external parents in a share headers batch now trigger a
+  retry with a deeper locator instead of dropping the batch.
+  HeaderSyncError enum distinguishes retryable errors (missing
+  parent/uncle) from non-retryable errors (ASERT mismatch,
+  insufficient work). Retry depth is computed from the lowest anchor
+  height in the failed batch.
+
+- `build_locator` and `send_getheaders` accept a depth parameter so
+  the retry locator can start further back than the confirmed tip.
+
+## [v0.10.10] - 2026-05-06
+
+### Fixed
+
+- Locator response now starts the confirmed chain walk from
+  `anchor_height` - `MAX_UNCLES_DEPTH`, ensuring uncle blocks
+  referenced by shares near the anchor are included in header
+  batches. Previously the walk started at anchor_height + 1, causing
+  "Declared uncle not delivered in batch and not in store" errors that
+  broke sync between nodes.
+
+- Block fetcher now dispatches body requests to the announcing peer
+  (the inv/headers source) when the chain is current. Previously
+  round-robin selection often picked a peer that hadn't received the
+  body yet, resulting in NotFound responses and 2-7 second lag on
+  non-mining nodes.
+
+- Node now retries header sync every 60 seconds when the confirmed
+  tip is stale (older than 300 seconds). Previously a single failed
+  sync attempt during handshake left the node permanently stuck with
+  no recovery path.
+
+- Locator response now chases transitive uncle references
+  (uncle-of-uncle chains) so the receiver has all declared uncle
+  bodies available. Previously only direct uncles of confirmed blocks
+  were included, causing "Declared uncle not delivered in batch"
+  errors when an uncle itself referenced another uncle.
+
+## [v0.10.9] - 2026-05-02
+
+### Fixed
+
+- Ignore verify_chain binary from cargo dist release binaries
+
+## [v0.10.8] - 2026-05-02
+
+### Changed
+
+- Streamline header organisation by simplifying the candidate chain
+  extension path and removing redundant lookups during header sync.
+
+- Block fetcher now fetches missing blocks in batches instead of
+  one at a time, reducing round-trips during sync.
+
+- Buffer out-of-order blocks in the BlockReceiver actor until their
+  parent and uncle dependencies are ready, then validate ASERT
+  difficulty and commit atomically. Cascading descendants are driven
+  iteratively when ancestors arrive.
+
+- Remove `schedule_dependents` from the organise worker.
+  `drain_pending_blocks` and the normal block pipeline already handle
+  chain advancement, so scheduling dependents caused 40% redundant
+  validation work during sync.
+
+- Refactor `get_candidate_blocks_missing_data` into smaller functions
+  for readability: `missing_data_scan_start` and
+  `scan_heights_for_missing_blocks`.
+
+### Fixed
+
+- Use confirmed tip (not candidate) in `is_current()` to fix slow
+  initial sync. The candidate tip is always recent during sync (each
+  newly-received header has a fresh timestamp), which prevented inv
+  suppression. Using the confirmed tip correctly identifies the node
+  as not-current during initial sync, allowing bulk header-first sync
+  to run in batches of 2000 instead of one block per inv message.
+
+- BlockReceiver now checks uncle block bodies via `share_block_exists`
+  and fetches missing uncles, preventing confirmation stalls when uncle
+  bodies were never retrieved.
+
+## [v0.10.7] - 2026-04-28
+
+### Fixed
+
+- Increase `MAX_TIP_AGE_SECS` from 60s to 300s to prevent chain stall
+  where inventory messages were ignored after sync. The chance of a
+  60s gap is about 1 in 400. At 5min we have a 1 in trillion chance
+  now.
+
+## [v0.10.6] - 2026-04-24
+
+### Fixed
+
+- Fix uncle sync errors by skipping uncles when looking for anchor
+  and committing new headers so new branch lookups can see them.
+
+- Respond to getdata block for all known blocks, not just confirmed
+  ones.
+
+- Update locator handling to use confirmed chain only and remove
+  pre-seeding headers when handling headers messages.
+
+- Initialise new header only if it doesn't exist, avoiding
+  overwrites during sync.
+
+- Include uncles when building block fetch list during sync.
+
+- Clear block fetcher for any received block to avoid stale
+  in-flight requests.
+
+- Include details in Message::NotFound response.
+
+### Changed
+
+- Follow candidate chain for payout distribution.
+
+- Change the testnet4 genesis to today. This is our testnet4 daa
+  anchor. Genesis timestamps are now in genesis data.
+
+- Stop clamping asert daa to bitcoin difficulty.
+
+- Refactor extend and reorg candidate functions for clarity.
+
+- Dashboard: show chain tip and height in page title, show
+  difficulty, and fix layout for mobile.
+
+### Added
+
+- Add `debug_tools/share_latency.py` for computing share propagation and
+  confirmation latencies across nodes from log files. Supports glob
+  patterns, per-pair and aggregate statistics, and --include-uncles flag
+  to separately track uncle vs confirmed chain latencies.
+
+## [v0.10.5] - 2026-04-20
+
+### Fixed
+
+- Fix shared headers to always include uncles at chain boundary. This
+  bug was causing sync to fail when this corner case was reached.
+
+- Send getheaders in response to Inv blockhash for proper sync. We do
+  not immediately send ShareBlock now, instead we let getheaders and
+  headers sync drive the chain sync.
+
+- Don't emit BlockFetch for ancestors on BlockReceive, reducing
+  redundant fetches. Related to the fix in the previous point.
+
+- Fallback to confirmed tip only on NotFound, propagating real store
+  errors instead of silently masking them.
+
+### Changed
+
+- Per-peer rate limiting with dedicated service tasks. Each connected
+  peer now gets its own spawned task with an independent rate limiter,
+  so one flooding peer cannot block requests from others. Requests are
+  forwarded via bounded channels with two-tier overload protection:
+  channel full (instant disconnect) and rate limit timeout (sustained
+  flood disconnect). Peer service tasks are spawned on connection and
+  cleaned up on disconnect.
+
+- Raise default max_requests_per_second from 1 to 100 to match sample
+  config and support legitimate sync traffic.
+
+- Remove rate limit window config option. The rate limit config uses
+  per second semantics, so the window option was unnecessary.
+
+- Check candidate chain (not just confirmed) for is_current
+
+- Send Inv messages with peer block knowledge for protocol correctness
+
+- Remove bitcoin transactions from ShareBlock to reduce message
+  size. We will deal with building bitcoin blocks for submitting from
+  other pool peers in a later version.
+
+- Ignore Request ShareBlock messages during sync. This avoids block
+  fetch storms during initial sync from both sides of the chain,
+  genesis and tip.
+
+- Clean up unused peer id from ShareBlockReceived as we don't respond
+  to share block received to the same peer now.
+
 ## [v0.10.4] - 2026-04-18
 
 ## Added
@@ -202,3 +1118,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Pre v0.7.0
 
 We used tags like hydrapool.v0.x.0 and we didn't keep a changelog.
+
+[Unreleased]: https://github.com/p2poolv2/p2poolv2/compare/v0.15.2...HEAD
+[v0.15.2]: https://github.com/p2poolv2/p2poolv2/compare/v0.15.1...v0.15.2
+[v0.15.1]: https://github.com/p2poolv2/p2poolv2/compare/v0.14.1...v0.15.1
+[v0.14.1]: https://github.com/p2poolv2/p2poolv2/compare/v0.14.0...v0.14.1
+[v0.14.0]: https://github.com/p2poolv2/p2poolv2/compare/v0.13.0...v0.14.0
+[v0.13.0]: https://github.com/p2poolv2/p2poolv2/compare/v0.12.0...v0.13.0
+[v0.12.0]: https://github.com/p2poolv2/p2poolv2/compare/v0.11.2...v0.12.0
+[v0.11.2]: https://github.com/p2poolv2/p2poolv2/compare/v0.11.0...v0.11.2
+[v0.11.0]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.15...v0.11.0
+[v0.10.15]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.14...v0.10.15
+[v0.10.14]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.13...v0.10.14
+[v0.10.13]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.12...v0.10.13
+[v0.10.12]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.11...v0.10.12
+[v0.10.11]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.10...v0.10.11
+[v0.10.10]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.9...v0.10.10
+[v0.10.9]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.8...v0.10.9
+[v0.10.8]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.7...v0.10.8
+[v0.10.7]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.6...v0.10.7
+[v0.10.6]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.5...v0.10.6
+[v0.10.5]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.4...v0.10.5
+[v0.10.4]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.3...v0.10.4
+[v0.10.3]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.2...v0.10.3
+[v0.10.2]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.1...v0.10.2
+[v0.10.1]: https://github.com/p2poolv2/p2poolv2/compare/v0.10.0...v0.10.1
+[v0.10.0]: https://github.com/p2poolv2/p2poolv2/compare/v0.9.1...v0.10.0
+[v0.9.1]: https://github.com/p2poolv2/p2poolv2/compare/v0.9.0...v0.9.1
+[v0.9.0]: https://github.com/p2poolv2/p2poolv2/compare/v0.8.0...v0.9.0
+[v0.8.0]: https://github.com/p2poolv2/p2poolv2/compare/v0.7.0...v0.8.0
+[v0.7.0]: https://github.com/p2poolv2/p2poolv2/compare/v0.1.0...v0.7.0

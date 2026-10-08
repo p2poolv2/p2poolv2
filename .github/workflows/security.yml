@@ -1,0 +1,55 @@
+name: Security
+
+# Advisories land against unchanged code, so this cannot be a PR-only check.
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  schedule:
+    - cron: "24 6 * * *" # everyday at 06:24
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+jobs:
+  # Licence, duplicate-version and source-registry policy. Deterministic: the
+  # result only changes when a dependency changes, so this blocks.
+  policy:
+    name: cargo-deny (licences, bans, sources)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          persist-credentials: false
+
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: cargo-deny
+
+      - run: cargo deny check licenses bans sources
+
+  # Vulnerability advisories, from the same tool and the same deny.toml.
+  # Split out and non-blocking because a newly published RUSTSEC advisory can
+  # turn this red overnight against unchanged code, which should not stop an
+  # unrelated merge. The daily schedule above is what surfaces those.
+  advisories:
+    name: cargo-deny (advisories)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          persist-credentials: false
+
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: cargo-deny
+
+      - run: cargo deny check advisories

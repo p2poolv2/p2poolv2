@@ -1,18 +1,6 @@
-// Copyright (C) 2024-2026 P2Poolv2 Developers (see AUTHORS)
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
 //
-// This file is part of P2Poolv2
-//
-// P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free
-// Software Foundation, either version 3 of the License, or (at your option)
-// any later version.
-//
-// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License along with
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 use crate::api::endpoints::MAX_NUM_SHARES_IN_RESPONSE;
 use crate::api::error::ApiError;
@@ -22,10 +10,12 @@ use axum::{
     extract::{Query, State},
 };
 use bitcoin::TxMerkleNode;
+use p2poolv2_lib::address_display::render_header_addresses;
 use p2poolv2_lib::shares::share_block::ShareHeader;
 use p2poolv2_lib::shares::share_block::share_transaction::ShareTransaction;
 use p2poolv2_lib::store::writer::StoreError;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::sync::Arc;
 
 /// Query parameters for the /share_headers endpoint.
@@ -69,11 +59,11 @@ pub struct ShareHeadersResponse {
 pub(crate) async fn share_headers(
     State(state): State<Arc<AppState>>,
     Query(query): Query<ShareHeadersQuery>,
-) -> Result<Json<ShareHeadersResponse>, ApiError> {
+) -> Result<Json<Value>, ApiError> {
     let chain_store_handle = &state.chain_store_handle;
     let num = query.num.unwrap_or(10);
 
-    if num < 1 || num > MAX_NUM_SHARES_IN_RESPONSE {
+    if !(1..=MAX_NUM_SHARES_IN_RESPONSE).contains(&num) {
         return Err(ApiError::BadRequest(format!(
             "num must be between 1 and {MAX_NUM_SHARES_IN_RESPONSE}, got {num}"
         )));
@@ -103,7 +93,7 @@ pub(crate) async fn share_headers(
 
     let store = chain_store_handle.store_handle().store();
 
-    let headers = if need_full_blocks {
+    let headers: Vec<ShareHeaderEntry> = if need_full_blocks {
         let share_blocks = store
             .query_share_blocks(from_height, to_height)
             .map_err(|error| match &error {
@@ -149,11 +139,26 @@ pub(crate) async fn share_headers(
             .collect()
     };
 
-    Ok(Json(ShareHeadersResponse {
+    let response = ShareHeadersResponse {
         from_height,
         to_height,
         headers,
-    }))
+    };
+
+    // ShareHeaderEntry flattens the header, so miner_address sits at the top
+    // level of each entry rather than under a "header" key. Rendering it
+    // needs both the serialized value and the typed source, so the response
+    // is serialized here rather than by axum.
+    let mut value = serde_json::to_value(&response)
+        .map_err(|error| ApiError::ServerError(format!("Failed to serialize response: {error}")))?;
+    render_header_addresses(
+        &mut value["headers"],
+        &response.headers,
+        state.app_config.network,
+        |entry| &entry.header,
+    );
+
+    Ok(Json(value))
 }
 
 #[cfg(test)]
@@ -161,7 +166,9 @@ mod tests {
     use super::*;
     use crate::api::server::{AppConfig, AppState};
     use axum::extract::{Query, State};
+    use bitcoin::Network;
     use p2poolv2_lib::accounting::stats::metrics;
+    use p2poolv2_lib::address::witness_program_codec::to_address_string;
     use p2poolv2_lib::monitoring_events::create_monitoring_event_channel;
     use p2poolv2_lib::node::actor::NodeHandle;
     use p2poolv2_lib::stratum::work::tracker::start_tracker_actor;
@@ -179,6 +186,7 @@ mod tests {
             app_config: AppConfig {
                 pool_signature_length: 0,
                 network: bitcoin::Network::Signet,
+                cors_allowed: false,
             },
             chain_store_handle,
             metrics_handle,
@@ -246,11 +254,20 @@ mod tests {
         assert!(result.is_ok());
 
         let response = result.unwrap().0;
-        assert_eq!(response.from_height, 0);
-        assert_eq!(response.to_height, 0);
-        assert_eq!(response.headers.len(), 1);
-        assert_eq!(response.headers[0].header, genesis.header);
-        assert!(response.headers[0].transactions.is_none());
+        assert_eq!(response["from_height"], 0);
+        assert_eq!(response["to_height"], 0);
+        assert_eq!(response["headers"].as_array().unwrap().len(), 1);
+        // ShareHeaderEntry flattens the header, so its fields sit at the top
+        // level of the entry.
+        assert_eq!(
+            response["headers"][0]["merkle_root"],
+            genesis.header.merkle_root.to_string()
+        );
+        assert_eq!(
+            response["headers"][0]["miner_address"],
+            to_address_string(&genesis.header.miner_address, Network::Signet)
+        );
+        assert!(response["headers"][0]["transactions"].is_null());
     }
 
     #[tokio::test]
@@ -276,11 +293,16 @@ mod tests {
         assert!(result.is_ok());
 
         let response = result.unwrap().0;
-        assert_eq!(response.from_height, 0);
-        assert_eq!(response.to_height, 0);
-        assert_eq!(response.headers.len(), 1);
-        assert_eq!(response.headers[0].header, genesis.header);
-        let transactions = response.headers[0].transactions.as_ref().unwrap();
-        assert_eq!(*transactions, genesis.transactions);
+        assert_eq!(response["from_height"], 0);
+        assert_eq!(response["to_height"], 0);
+        assert_eq!(response["headers"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            response["headers"][0]["merkle_root"],
+            genesis.header.merkle_root.to_string()
+        );
+        assert_eq!(
+            response["headers"][0]["transactions"],
+            serde_json::to_value(&genesis.transactions).unwrap()
+        );
     }
 }

@@ -1,18 +1,6 @@
-// Copyright (C) 2024-2026 P2Poolv2 Developers (see AUTHORS)
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
 //
-// This file is part of P2Poolv2
-//
-// P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free
-// Software Foundation, either version 3 of the License, or (at your option)
-// any later version.
-//
-// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License along with
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 use crate::accounting::stats::user::User;
 use std::fs::File;
@@ -65,8 +53,10 @@ mod tests {
         fs::create_dir_all(&stats_dir).unwrap();
 
         // Create a test user
-        let mut user = User::default();
-        user.shares_valid_total = 10;
+        let user = User {
+            shares_valid_total: 10,
+            ..Default::default()
+        };
 
         // Save the user stats
         save_user_stats("test_address", &user, log_dir.to_string()).unwrap();

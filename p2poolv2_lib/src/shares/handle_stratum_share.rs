@@ -1,18 +1,6 @@
-// Copyright (C) 2024-2026 P2Poolv2 Developers (see AUTHORS)
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
 //
-// This file is part of P2Poolv2
-//
-// P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free
-// Software Foundation, either version 3 of the License, or (at your option)
-// any later version.
-//
-// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License along with
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 #[cfg(test)]
 #[mockall_double::double]
@@ -21,9 +9,10 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::coinbaseaux_flags::CoinbaseAuxFlags;
 use crate::shares::share_block::{ShareBlock, ShareHeader, ShareTransaction};
-use crate::shares::transactions::coinbase::create_coinbase_transaction;
+use crate::shares::transactions::coinbase::build_sharechain_coinbase_transaction;
 use crate::shares::witness_commitment::WitnessCommitment;
 use crate::stratum::emission::Emission;
+use bitcoin::TxMerkleNode;
 use bitcoin::merkle_tree;
 use std::error::Error;
 use tracing::debug;
@@ -39,23 +28,28 @@ pub async fn handle_stratum_share(
     let Emission {
         pplns,
         header,
-        coinbase,
         blocktemplate,
         share_commitment,
         coinbase_nsecs,
         template_merkle_branches,
         extranonce,
+        coinbase_proof,
     } = emission;
 
     // Send share to peers only in p2p mode, i.e. if the pool is run with a miner address that results in a commitment
     if let Some(share_commitment) = share_commitment {
+        let coinbase_proof =
+            coinbase_proof.ok_or("Share commitment emitted without a coinbase proof")?;
         // TODO: Get share chain transactions and use them here. When
         // non-coinbase share transactions are added, pass them to
-        // create_coinbase_transaction so the BIP141 witness commitment
-        // covers their wtxids.
+        // build_sharechain_coinbase_transaction so the BIP141 witness
+        // commitment covers their wtxids.
         let other_share_transactions: Vec<ShareTransaction> = Vec::new();
-        let share_coinbase = create_coinbase_transaction(
-            &share_commitment.miner_bitcoin_address,
+        // The weak block hash is what makes this coinbase unique to this
+        // share.
+        let share_coinbase = build_sharechain_coinbase_transaction(
+            &share_commitment.miner_address,
+            header.block_hash(),
             &other_share_transactions,
         );
 
@@ -63,18 +57,21 @@ pub async fn handle_stratum_share(
         share_transactions.push(ShareTransaction(share_coinbase));
         share_transactions.extend(other_share_transactions);
 
+        // The header's merkle root is computed here, from the transactions we
+        // actually assembled, exactly as a bitcoin miner computes theirs once
+        // the coinbase is final.
         let txids = share_transactions
             .iter()
             .map(|tx| tx.compute_txid().to_raw_hash());
-        let merkle_root = match merkle_tree::calculate_root(txids) {
-            Some(merkle_root) => merkle_root,
+        let merkle_root: TxMerkleNode = match merkle_tree::calculate_root(txids) {
+            Some(merkle_root) => merkle_root.into(),
             None => return Err("No coinbase found".into()),
         };
 
         let share_header = ShareHeader::from_commitment_and_header(
             share_commitment,
+            merkle_root,
             header,
-            merkle_root.into(),
             blocktemplate
                 .coinbaseaux
                 .get("flags")
@@ -87,16 +84,12 @@ pub async fn handle_stratum_share(
             blocktemplate.height as u64,
             coinbase_nsecs,
             extranonce,
+            coinbase_proof,
         );
-
-        let mut bitcoin_transactions = Vec::with_capacity(blocktemplate.transactions.len() + 1);
-        bitcoin_transactions.push(coinbase);
-        bitcoin_transactions.extend(blocktemplate.decode_transactions());
 
         let share_block = ShareBlock {
             header: share_header,
             transactions: share_transactions,
-            bitcoin_transactions,
             template_merkle_branches,
         };
 
@@ -105,10 +98,11 @@ pub async fn handle_stratum_share(
             share_block.transactions.len()
         );
 
-        // Store share block via ChainStoreHandle. This is later
-        // organised in emission worker once this function returns.
+        // Persist the share block and organise its header onto the
+        // candidate chain in a single atomic write, matching the block
+        // receiver path.
         chain_store_handle
-            .add_share_block(share_block.clone())
+            .add_share_block_and_organise_header(share_block.clone())
             .await
             .map_err(|e| format!("Failed to add share to chain: {e}"))?;
 
@@ -128,6 +122,7 @@ pub async fn handle_stratum_share(
 mod tests {
     use super::*;
     use crate::accounting::payout::simple_pplns::SimplePplnsShare;
+    use crate::shares::coinbase_proof::CoinbaseProof;
     use crate::shares::extranonce::Extranonce;
     use crate::store::writer::StoreError;
     use crate::stratum::work::block_template::BlockTemplate;
@@ -188,23 +183,15 @@ mod tests {
             nonce: 12345,
         };
 
-        // Create a minimal coinbase transaction
-        let coinbase = Transaction {
-            version: Version::TWO,
-            lock_time: LockTime::ZERO,
-            input: vec![],
-            output: vec![],
-        };
-
         Emission {
             pplns,
             header: bitcoin_header,
-            coinbase,
             blocktemplate: Arc::new(create_test_blocktemplate()),
             share_commitment: None,
             coinbase_nsecs: TEST_COINBASE_NSECS,
             template_merkle_branches: vec![],
             extranonce: Extranonce::default(),
+            coinbase_proof: None,
         }
     }
 
@@ -230,25 +217,17 @@ mod tests {
             nonce: 12345,
         };
 
-        // Create a minimal coinbase transaction
-        let coinbase = Transaction {
-            version: Version::TWO,
-            lock_time: LockTime::ZERO,
-            input: vec![],
-            output: vec![],
-        };
-
         let commitment = create_test_commitment();
 
         Emission {
             pplns,
             header: bitcoin_header,
-            coinbase,
             blocktemplate: Arc::new(create_test_blocktemplate()),
             share_commitment: Some(commitment),
             coinbase_nsecs: TEST_COINBASE_NSECS,
             template_merkle_branches: vec![],
             extranonce: Extranonce::default(),
+            coinbase_proof: Some(CoinbaseProof::default()),
         }
     }
 
@@ -275,8 +254,8 @@ mod tests {
 
         // Mock add_share to succeed
         mock_chain_store
-            .expect_add_share_block()
-            .returning(|_| Ok(()));
+            .expect_add_share_block_and_organise_header()
+            .returning(|_| Ok(None));
 
         let emission = create_test_emission_with_commitment();
 
@@ -289,8 +268,35 @@ mod tests {
         let share_block = share_block.unwrap();
         // Verify the share block has the expected structure
         assert_eq!(share_block.transactions.len(), 1); // One share coinbase
-        // bitcoin_transactions includes the emission coinbase (1) + decoded template txs (0)
-        assert_eq!(share_block.bitcoin_transactions.len(), 1);
+    }
+
+    /// Regression test: a locally mined share must be persisted and have
+    /// its header organised onto the candidate chain atomically, exactly
+    /// like the block receiver path.
+    ///
+    /// Organising the header writes the block metadata up front. If the
+    /// share were persisted without it (the body-only `add_share_block`
+    /// path), a chain-context validation rejection in the organise worker
+    /// would leave the share in the DAG with a parent->child edge but no
+    /// metadata. A later share building on it would drive the confirm walk
+    /// into `get_block_metadata` -> NotFound and wedge the confirmed chain
+    /// permanently. No expectation is set for the body-only path, so
+    /// reverting to it would panic this test.
+    #[tokio::test]
+    async fn test_handle_stratum_share_organises_header_atomically() {
+        let mut mock_chain_store = ChainStoreHandle::default();
+
+        mock_chain_store
+            .expect_add_share_block_and_organise_header()
+            .times(1)
+            .returning(|_| Ok(None));
+
+        let emission = create_test_emission_with_commitment();
+
+        let result = handle_stratum_share(emission, &mock_chain_store).await;
+
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_some());
     }
 
     #[tokio::test]
@@ -317,8 +323,8 @@ mod tests {
 
         // Mock add_share to succeed
         mock_chain_store
-            .expect_add_share_block()
-            .returning(|_| Ok(()));
+            .expect_add_share_block_and_organise_header()
+            .returning(|_| Ok(None));
 
         let emission = create_test_emission_with_commitment();
         let expected_commitment = emission.share_commitment.clone().unwrap();
@@ -355,8 +361,8 @@ mod tests {
 
         // Mock add_share to succeed
         mock_chain_store
-            .expect_add_share_block()
-            .returning(|_| Ok(()));
+            .expect_add_share_block_and_organise_header()
+            .returning(|_| Ok(None));
 
         // Create emission with some bitcoin transactions
         let pplns = SimplePplnsShare {
@@ -377,14 +383,6 @@ mod tests {
             time: 1700000000,
             bits: CompactTarget::from_consensus(0x1b4188f5),
             nonce: 12345,
-        };
-
-        // Create a coinbase transaction
-        let coinbase = Transaction {
-            version: Version::TWO,
-            lock_time: LockTime::ZERO,
-            input: vec![],
-            output: vec![],
         };
 
         // Create a valid template transaction by serializing a real Transaction
@@ -416,7 +414,6 @@ mod tests {
         let emission = Emission {
             pplns,
             header: bitcoin_header,
-            coinbase,
             blocktemplate: Arc::new(blocktemplate),
             share_commitment: Some(commitment),
             coinbase_nsecs: TEST_COINBASE_NSECS,
@@ -425,15 +422,13 @@ mod tests {
                 bitcoin::TxMerkleNode::all_zeros(),
             ],
             extranonce: Extranonce::default(),
+            coinbase_proof: Some(CoinbaseProof::default()),
         };
 
         let result = handle_stratum_share(emission, &mock_chain_store).await;
 
         assert!(result.is_ok());
         let share_block = result.unwrap().unwrap();
-
-        // Verify bitcoin transactions are included (1 coinbase + 2 from template)
-        assert_eq!(share_block.bitcoin_transactions.len(), 3);
 
         // Verify merkle branches are passed through from Emission to ShareBlock
         assert_eq!(share_block.template_merkle_branches.len(), 2);

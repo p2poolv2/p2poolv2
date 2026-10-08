@@ -1,19 +1,8 @@
-// Copyright (C) 2024-2026 P2Poolv2 Developers (see AUTHORS)
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
 //
-// This file is part of P2Poolv2
-//
-// P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free
-// Software Foundation, either version 3 of the License, or (at your option)
-// any later version.
-//
-// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License along with
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
+use crate::accounting::payout::sharechain_pplns::pplns_window::PRUNE_DEPTH;
 use crate::node::request_response_handler::block_fetcher::{BlockFetcherEvent, BlockFetcherHandle};
 use crate::node::validation_worker::{ValidationEvent, ValidationSender};
 #[cfg(test)]
@@ -21,36 +10,24 @@ use crate::node::validation_worker::{ValidationEvent, ValidationSender};
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
-use crate::shares::share_block::ShareBlock;
+use crate::shares::share_block::{ShareBlock, is_terminal_blockhash};
 use crate::shares::validation::ShareValidator;
 use crate::store::block_tx_metadata::Status;
 use bitcoin::BlockHash;
-use bitcoin::hashes::Hash;
 use std::collections::{HashMap, VecDeque};
 use std::error::Error;
 use std::sync::Arc;
-use std::time::Instant;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info, warn};
 
-/// Maximum number of blocks held in the pending set.
-const PENDING_CAPACITY: usize = 2000;
-
 /// Channel capacity for block receiver events.
 const BLOCK_RECEIVER_CHANNEL_CAPACITY: usize = 8192;
-
-/// Interval for evicting stale pending blocks.
-const EVICTION_TICK_SECONDS: u64 = 60;
-
-/// Maximum age of a pending block before eviction.
-const STALE_THRESHOLD_SECONDS: u64 = 300;
 
 /// Events sent to the BlockReceiver actor.
 pub enum BlockReceiverEvent {
     /// A new share block arrived from a peer, after passing DoS
     /// validation (validate_share_header) in handle_share_block.
     ShareBlockReceived {
-        peer_id: libp2p::PeerId,
         share_block: ShareBlock,
         result_tx: oneshot::Sender<Result<(), Box<dyn Error + Send + Sync>>>,
     },
@@ -68,7 +45,6 @@ pub fn create_block_receiver_channel() -> (BlockReceiverHandle, BlockReceiverRec
 /// HeaderValid in the store.
 struct PendingBlock {
     share_block: ShareBlock,
-    received_at: Instant,
 }
 
 /// Buffers incoming ShareBlocks until their direct parent and uncles are
@@ -93,16 +69,6 @@ pub struct BlockReceiver {
     validation_tx: ValidationSender,
 }
 
-/// True iff the given status means the block has been admitted to the
-/// chain at least at the HeaderValid level (so its metadata can be used
-/// to validate descendants).
-fn is_at_least_header_valid(status: Status) -> bool {
-    matches!(
-        status,
-        Status::HeaderValid | Status::Candidate | Status::Confirmed | Status::BlockValid
-    )
-}
-
 impl BlockReceiver {
     /// Create a new BlockReceiver actor.
     pub fn new(
@@ -114,8 +80,8 @@ impl BlockReceiver {
     ) -> Self {
         Self {
             event_rx,
-            pending: HashMap::with_capacity(PENDING_CAPACITY),
-            descendants: HashMap::with_capacity(PENDING_CAPACITY),
+            pending: HashMap::new(),
+            descendants: HashMap::new(),
             share_validator,
             chain_store_handle,
             block_fetcher_handle,
@@ -128,18 +94,15 @@ impl BlockReceiver {
         self.pending.len()
     }
 
-    /// Add a block to the pending set. Evicts the oldest entry if at
-    /// capacity. Updates the descendants index for parent and uncles.
+    /// Add a block to the pending set.
+    /// Updates the descendants index for parent and uncles.
     fn add_to_pending(&mut self, block_hash: BlockHash, share_block: ShareBlock) {
         if self.pending.contains_key(&block_hash) {
             return;
         }
-        if self.pending.len() >= PENDING_CAPACITY {
-            self.evict_oldest();
-        }
 
         let parent_hash = share_block.header.prev_share_blockhash;
-        if parent_hash != BlockHash::all_zeros() {
+        if !is_terminal_blockhash(&parent_hash) {
             self.descendants
                 .entry(parent_hash)
                 .or_insert_with(|| Vec::with_capacity(2))
@@ -152,13 +115,8 @@ impl BlockReceiver {
                 .push(block_hash);
         }
 
-        self.pending.insert(
-            block_hash,
-            PendingBlock {
-                share_block,
-                received_at: Instant::now(),
-            },
-        );
+        self.pending
+            .insert(block_hash, PendingBlock { share_block });
     }
 
     /// Remove a block from the pending set and clean up its entries
@@ -167,12 +125,12 @@ impl BlockReceiver {
         let pending_block = self.pending.remove(block_hash)?;
 
         let parent_hash = pending_block.share_block.header.prev_share_blockhash;
-        if parent_hash != BlockHash::all_zeros() {
-            if let Some(descendants_list) = self.descendants.get_mut(&parent_hash) {
-                descendants_list.retain(|hash| hash != block_hash);
-                if descendants_list.is_empty() {
-                    self.descendants.remove(&parent_hash);
-                }
+        if !is_terminal_blockhash(&parent_hash)
+            && let Some(descendants_list) = self.descendants.get_mut(&parent_hash)
+        {
+            descendants_list.retain(|hash| hash != block_hash);
+            if descendants_list.is_empty() {
+                self.descendants.remove(&parent_hash);
             }
         }
         for uncle_hash in &pending_block.share_block.header.uncles {
@@ -185,37 +143,6 @@ impl BlockReceiver {
         }
 
         Some(pending_block.share_block)
-    }
-
-    /// Evict the oldest pending block by received_at timestamp.
-    fn evict_oldest(&mut self) {
-        let oldest_hash = self
-            .pending
-            .iter()
-            .min_by_key(|(_, pending_block)| pending_block.received_at)
-            .map(|(hash, _)| *hash);
-
-        if let Some(hash) = oldest_hash {
-            debug!("Evicting oldest pending block {hash} to maintain capacity");
-            self.remove_from_pending(&hash);
-        }
-    }
-
-    /// Evict pending blocks older than the stale threshold.
-    fn evict_stale_pending(&mut self) {
-        let threshold = Instant::now() - std::time::Duration::from_secs(STALE_THRESHOLD_SECONDS);
-
-        let stale_hashes: Vec<BlockHash> = self
-            .pending
-            .iter()
-            .filter(|(_, pending_block)| pending_block.received_at < threshold)
-            .map(|(hash, _)| *hash)
-            .collect();
-
-        for hash in stale_hashes {
-            info!("Evicting stale pending block {hash}");
-            self.remove_from_pending(&hash);
-        }
     }
 
     /// Look up parent (time, expected_height) for ASERT.
@@ -231,30 +158,52 @@ impl BlockReceiver {
         Ok((header.time, expected_height))
     }
 
-    /// Return parent and uncle hashes that are not yet HeaderValid in
-    /// the store. The returned list is what needs to be fetched before
-    /// this block can be processed.
-    fn collect_ancestors_not_ready(&self, share_block: &ShareBlock) -> Vec<BlockHash> {
-        let header = &share_block.header;
-        let mut not_ready: Vec<BlockHash> = Vec::with_capacity(1 + header.uncles.len());
-        let parent_hash = header.prev_share_blockhash;
-        if parent_hash != BlockHash::all_zeros() && !self.ancestor_ready(&parent_hash) {
-            not_ready.push(parent_hash);
-        }
-        for uncle_hash in &header.uncles {
-            if !self.ancestor_ready(uncle_hash) {
-                not_ready.push(*uncle_hash);
+    /// Height below which block bodies are never fetched, so ancestry checks
+    /// must not require them.
+    ///
+    /// Falls back to 0 -- bodies required everywhere -- when the candidate tip
+    /// cannot be read. That can only hold a block back in `pending`, never
+    /// admit one whose ancestry is unverified.
+    fn current_prune_height(&self) -> u32 {
+        match self.chain_store_handle.get_candidate_tip_height() {
+            Ok(Some(tip_height)) => tip_height.saturating_sub(PRUNE_DEPTH as u32),
+            Ok(None) => 0,
+            Err(error) => {
+                warn!("Could not read candidate tip height for prune boundary: {error}");
+                0
             }
         }
-        not_ready
     }
 
-    /// Check whether a single ancestor hash is at status HeaderValid or
-    /// better in the store.
-    fn ancestor_ready(&self, hash: &BlockHash) -> bool {
-        match self.chain_store_handle.get_block_metadata(hash) {
-            Ok(metadata) => is_at_least_header_valid(metadata.status),
-            Err(_) => false,
+    /// Whether the block's parent and uncles have the data validation needs.
+    ///
+    /// Each must have its block body stored, not merely its header.
+    ///
+    /// Blocks below `prune_height` are exempt because their bodies are never
+    /// fetched; requiring one would stall the chain at the prune boundary.
+    ///
+    /// An ancestor with no metadata has simply not arrived: the store reports
+    /// that as an error and the block is buffered rather than dropped.
+    fn ancestry_ready(&self, share_block: &ShareBlock, prune_height: u32) -> bool {
+        let header = &share_block.header;
+        let mut ancestors = Vec::with_capacity(1 + header.uncles.len());
+        if !is_terminal_blockhash(&header.prev_share_blockhash) {
+            ancestors.push(header.prev_share_blockhash);
+        }
+        ancestors.extend_from_slice(&header.uncles);
+
+        match self
+            .chain_store_handle
+            .all_block_and_uncle_data_available(&ancestors, prune_height)
+        {
+            Ok(ready) => ready,
+            Err(error) => {
+                debug!(
+                    "Ancestry of block {} not ready: {error}",
+                    share_block.block_hash()
+                );
+                false
+            }
         }
     }
 
@@ -265,11 +214,7 @@ impl BlockReceiver {
         let expected_bits = self
             .share_validator
             .pool_difficulty()
-            .calculate_target_clamped(
-                parent_time,
-                parent_height,
-                share_block.header.bitcoin_header.bits,
-            );
+            .calculate_target_clamped(parent_time, parent_height);
         if share_block.header.bits != expected_bits {
             let block_hash = share_block.block_hash();
             return Err(format!(
@@ -304,14 +249,14 @@ impl BlockReceiver {
 
         if let Err(error) = self
             .validation_tx
-            .send(ValidationEvent::ValidateBlock(*block_hash))
+            .send(ValidationEvent::ValidateBlockHash(*block_hash))
             .await
         {
-            error!("Failed to send ValidateBlock for {block_hash}: {error}");
+            error!("Failed to send ValidateBlockHash for {block_hash}: {error}");
             return Err(error.into());
         }
 
-        info!("Committed and queued validation for block {block_hash}");
+        debug!("Committed and queued validation for block {block_hash}");
         Ok(())
     }
 
@@ -323,11 +268,10 @@ impl BlockReceiver {
     /// Otherwise, if the block's direct parent and all uncles are at
     /// HeaderValid+, validate ASERT, persist, then drive any
     /// descendants buffered in pending. If the parent or uncles are
-    /// not yet ready, buffer in pending and request the missing
-    /// hashes from the block fetcher.
+    /// not yet ready, buffer in pending. The headers-first pipeline
+    /// will supply ancestors via header sync and block fetch.
     async fn process_share_block(
         &mut self,
-        peer_id: libp2p::PeerId,
         share_block: ShareBlock,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let block_hash = share_block.block_hash();
@@ -351,34 +295,20 @@ impl BlockReceiver {
             }
         }
 
-        if self.pending.contains_key(&block_hash) {
-            debug!("Block {block_hash} already pending, ignoring duplicate");
-            return Ok(());
-        }
-
         // Notify block fetcher that we received this block so it can
         // clear any in-flight request.
         let _ = self
             .block_fetcher_handle
-            .send(BlockFetcherEvent::BlockReceived(block_hash))
+            .send(BlockFetcherEvent::BlockRequestCompleted(block_hash))
             .await;
 
-        let ancestors_not_ready = self.collect_ancestors_not_ready(&share_block);
-        if !ancestors_not_ready.is_empty() {
-            debug!(
-                "Block {block_hash} has {} unready ancestors, buffering",
-                ancestors_not_ready.len()
-            );
+        if !self.ancestry_ready(&share_block, self.current_prune_height()) {
+            debug!("Block {block_hash} has unready ancestors, buffering");
             self.add_to_pending(block_hash, share_block);
-            let _ = self
-                .block_fetcher_handle
-                .send(BlockFetcherEvent::FetchBlocks {
-                    blockhashes: ancestors_not_ready,
-                    peer_id,
-                })
-                .await;
             return Ok(());
         }
+
+        self.remove_from_pending(&block_hash);
 
         // Ancestry is ready: ASERT-check and persist this block.
         if let Err(error) = self.validate_asert(&share_block) {
@@ -405,6 +335,7 @@ impl BlockReceiver {
         if let Some(descendants_list) = self.descendants.get(&just_committed) {
             queue.extend(descendants_list.iter().copied());
         }
+        let prune_height = self.current_prune_height();
 
         while let Some(descendant_hash) = queue.pop_front() {
             let Some(pending_block) = self.pending.get(&descendant_hash) else {
@@ -412,8 +343,7 @@ impl BlockReceiver {
             };
             let share_block = pending_block.share_block.clone();
 
-            let unready = self.collect_ancestors_not_ready(&share_block);
-            if !unready.is_empty() {
+            if !self.ancestry_ready(&share_block, prune_height) {
                 // Still waiting on a different ancestor; leave in pending.
                 continue;
             }
@@ -440,32 +370,21 @@ impl BlockReceiver {
 
     /// Run the BlockReceiver event loop.
     ///
-    /// Processes incoming share blocks and periodically evicts stale
-    /// pending blocks. Runs until the event channel is closed.
+    /// Processes incoming share blocks. Runs until the event channel
+    /// is closed.
     pub async fn run(mut self) {
-        let mut eviction_interval =
-            tokio::time::interval(std::time::Duration::from_secs(EVICTION_TICK_SECONDS));
-
         loop {
-            tokio::select! {
-                event = self.event_rx.recv() => {
-                    match event {
-                        Some(BlockReceiverEvent::ShareBlockReceived {
-                            peer_id,
-                            share_block,
-                            result_tx,
-                        }) => {
-                            let result = self.process_share_block(peer_id, share_block).await;
-                            let _ = result_tx.send(result);
-                        }
-                        None => {
-                            info!("BlockReceiver channel closed, shutting down");
-                            return;
-                        }
-                    }
+            match self.event_rx.recv().await {
+                Some(BlockReceiverEvent::ShareBlockReceived {
+                    share_block,
+                    result_tx,
+                }) => {
+                    let result = self.process_share_block(share_block).await;
+                    let _ = result_tx.send(result);
                 }
-                _ = eviction_interval.tick() => {
-                    self.evict_stale_pending();
+                None => {
+                    info!("BlockReceiver channel closed, shutting down");
+                    return;
                 }
             }
         }
@@ -480,10 +399,11 @@ mod tests {
     #[mockall_double::double]
     use crate::pool_difficulty::PoolDifficulty;
     use crate::shares::validation::MockDefaultShareValidator;
-    use crate::store::block_tx_metadata::BlockMetadata;
+    use crate::store::block_tx_metadata::{BlockMetadata, ChainMembership};
     use crate::store::writer::StoreError;
     use crate::test_utils::TestShareBlockBuilder;
     use bitcoin::CompactTarget;
+    use bitcoin::hashes::Hash;
 
     #[test]
     fn test_add_to_pending_inserts_block() {
@@ -595,36 +515,6 @@ mod tests {
     }
 
     #[test]
-    fn test_evict_oldest_at_capacity() {
-        let (_, event_rx) = create_block_receiver_channel();
-        let (block_fetcher_handle, _) = block_fetcher::create_block_fetcher_channel();
-        let (validation_tx, _) = validation_worker::create_validation_channel();
-        let mut receiver = BlockReceiver::new(
-            event_rx,
-            Arc::new(MockDefaultShareValidator::default()),
-            ChainStoreHandle::default(),
-            block_fetcher_handle,
-            validation_tx,
-        );
-
-        for nonce in 0..PENDING_CAPACITY {
-            let share_block = TestShareBlockBuilder::new().nonce(nonce as u32).build();
-            let block_hash = share_block.block_hash();
-            receiver.add_to_pending(block_hash, share_block);
-        }
-        assert_eq!(receiver.pending_count(), PENDING_CAPACITY);
-
-        let extra_block = TestShareBlockBuilder::new()
-            .nonce(PENDING_CAPACITY as u32)
-            .build();
-        let extra_hash = extra_block.block_hash();
-        receiver.add_to_pending(extra_hash, extra_block);
-
-        assert_eq!(receiver.pending_count(), PENDING_CAPACITY);
-        assert!(receiver.pending.contains_key(&extra_hash));
-    }
-
-    #[test]
     fn test_genesis_parent_not_tracked_in_descendants_key() {
         let (_, event_rx) = create_block_receiver_channel();
         let (block_fetcher_handle, _) = block_fetcher::create_block_fetcher_channel();
@@ -646,105 +536,21 @@ mod tests {
         assert!(!receiver.descendants.contains_key(&BlockHash::all_zeros()));
     }
 
+    /// The parent and every uncle are handed to the store together, so both
+    /// are held to the same body-or-below-prune rule.
     #[test]
-    fn test_collect_unready_ancestors_returns_missing_parent() {
-        let missing_parent_hash = BlockHash::from_byte_array([0x55; 32]);
-
-        let mut mock_store = ChainStoreHandle::default();
-        mock_store
-            .expect_get_block_metadata()
-            .returning(|_| Err(StoreError::NotFound("not found".to_string())));
-
-        let (_, event_rx) = create_block_receiver_channel();
-        let (block_fetcher_handle, _) = block_fetcher::create_block_fetcher_channel();
-        let (validation_tx, _) = validation_worker::create_validation_channel();
-        let receiver = BlockReceiver::new(
-            event_rx,
-            Arc::new(MockDefaultShareValidator::default()),
-            mock_store,
-            block_fetcher_handle,
-            validation_tx,
-        );
-
-        let child_block = TestShareBlockBuilder::new()
-            .prev_share_blockhash(missing_parent_hash.to_string())
-            .nonce(0xe9695791)
-            .build();
-
-        let not_ready = receiver.collect_ancestors_not_ready(&child_block);
-        assert_eq!(not_ready, vec![missing_parent_hash]);
-    }
-
-    #[test]
-    fn test_collect_not_ready_ancestors_empty_when_parent_header_valid() {
+    fn test_ancestry_ready_checks_parent_and_uncles() {
         let parent_hash = BlockHash::from_byte_array([0x66; 32]);
+        let uncle_hash = BlockHash::from_byte_array([0x67; 32]);
 
         let mut mock_store = ChainStoreHandle::default();
         mock_store
-            .expect_get_block_metadata()
-            .with(mockall::predicate::eq(parent_hash))
-            .returning(|_| {
-                Ok(BlockMetadata {
-                    expected_height: Some(0),
-                    chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
-                    status: Status::HeaderValid,
-                })
-            });
-
-        let (_, event_rx) = create_block_receiver_channel();
-        let (block_fetcher_handle, _) = block_fetcher::create_block_fetcher_channel();
-        let (validation_tx, _) = validation_worker::create_validation_channel();
-        let receiver = BlockReceiver::new(
-            event_rx,
-            Arc::new(MockDefaultShareValidator::default()),
-            mock_store,
-            block_fetcher_handle,
-            validation_tx,
-        );
-
-        let child_block = TestShareBlockBuilder::new()
-            .prev_share_blockhash(parent_hash.to_string())
-            .nonce(0xe9695791)
-            .build();
-
-        assert!(
-            receiver
-                .collect_ancestors_not_ready(&child_block)
-                .is_empty()
-        );
-    }
-
-    #[test]
-    fn test_collect_not_ready_ancestors_includes_not_ready_uncle() {
-        let parent_hash = BlockHash::from_byte_array([0x77; 32]);
-        let uncle_hash = BlockHash::from_byte_array([0x78; 32]);
-
-        let mut mock_store = ChainStoreHandle::default();
-        mock_store
-            .expect_get_block_metadata()
-            .with(mockall::predicate::eq(parent_hash))
-            .returning(|_| {
-                Ok(BlockMetadata {
-                    expected_height: Some(0),
-                    chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
-                    status: Status::Confirmed,
-                })
-            });
-        mock_store
-            .expect_get_block_metadata()
-            .with(mockall::predicate::eq(uncle_hash))
-            .returning(|_| Err(StoreError::NotFound("not found".to_string())));
-
-        let (_, event_rx) = create_block_receiver_channel();
-        let (block_fetcher_handle, _) = block_fetcher::create_block_fetcher_channel();
-        let (validation_tx, _) = validation_worker::create_validation_channel();
-        let receiver = BlockReceiver::new(
-            event_rx,
-            Arc::new(MockDefaultShareValidator::default()),
-            mock_store,
-            block_fetcher_handle,
-            validation_tx,
-        );
+            .expect_all_block_and_uncle_data_available()
+            .withf(move |hashes, prune_height| {
+                hashes == [parent_hash, uncle_hash] && *prune_height == 7
+            })
+            .times(1)
+            .returning(|_, _| Ok(true));
 
         let child_block = TestShareBlockBuilder::new()
             .prev_share_blockhash(parent_hash.to_string())
@@ -752,10 +558,174 @@ mod tests {
             .nonce(0xe9695791)
             .build();
 
-        assert_eq!(
-            receiver.collect_ancestors_not_ready(&child_block),
-            vec![uncle_hash]
+        let (_, event_rx) = create_block_receiver_channel();
+        let (block_fetcher_handle, _) = block_fetcher::create_block_fetcher_channel();
+        let (validation_tx, _) = validation_worker::create_validation_channel();
+        let receiver = BlockReceiver::new(
+            event_rx,
+            Arc::new(MockDefaultShareValidator::default()),
+            mock_store,
+            block_fetcher_handle,
+            validation_tx,
         );
+
+        assert!(receiver.ancestry_ready(&child_block, 7));
+    }
+
+    /// A parent that has its header but not its body holds the block back.
+    /// Header sync marks a whole range HeaderValid before any body is fetched,
+    /// so header status alone would let a block validate while the Outputs CF
+    /// is still missing its parent's transactions.
+    #[test]
+    fn test_ancestry_not_ready_when_parent_body_missing() {
+        let parent_hash = BlockHash::from_byte_array([0x55; 32]);
+
+        let mut mock_store = ChainStoreHandle::default();
+        mock_store
+            .expect_all_block_and_uncle_data_available()
+            .returning(|_, _| Ok(false));
+
+        let child_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(parent_hash.to_string())
+            .nonce(0xe9695791)
+            .build();
+
+        let (_, event_rx) = create_block_receiver_channel();
+        let (block_fetcher_handle, _) = block_fetcher::create_block_fetcher_channel();
+        let (validation_tx, _) = validation_worker::create_validation_channel();
+        let receiver = BlockReceiver::new(
+            event_rx,
+            Arc::new(MockDefaultShareValidator::default()),
+            mock_store,
+            block_fetcher_handle,
+            validation_tx,
+        );
+
+        assert!(!receiver.ancestry_ready(&child_block, 0));
+    }
+
+    /// An ancestor with no metadata has not arrived yet. The store reports that
+    /// as an error, and the block must be buffered rather than dropped.
+    #[test]
+    fn test_ancestry_not_ready_when_ancestor_metadata_missing() {
+        let mut mock_store = ChainStoreHandle::default();
+        mock_store
+            .expect_all_block_and_uncle_data_available()
+            .returning(|_, _| Err(StoreError::NotFound("no metadata".to_string())));
+
+        let child_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(BlockHash::from_byte_array([0x55; 32]).to_string())
+            .nonce(0xe9695791)
+            .build();
+
+        let (_, event_rx) = create_block_receiver_channel();
+        let (block_fetcher_handle, _) = block_fetcher::create_block_fetcher_channel();
+        let (validation_tx, _) = validation_worker::create_validation_channel();
+        let receiver = BlockReceiver::new(
+            event_rx,
+            Arc::new(MockDefaultShareValidator::default()),
+            mock_store,
+            block_fetcher_handle,
+            validation_tx,
+        );
+
+        assert!(!receiver.ancestry_ready(&child_block, 0));
+    }
+
+    /// Genesis has no parent to wait for, so the terminal hash is not sent to
+    /// the store, which has no metadata for it.
+    #[test]
+    fn test_ancestry_ready_skips_terminal_parent() {
+        let mut mock_store = ChainStoreHandle::default();
+        mock_store
+            .expect_all_block_and_uncle_data_available()
+            .withf(|hashes, _| hashes.is_empty())
+            .times(1)
+            .returning(|_, _| Ok(true));
+
+        let genesis_child = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+
+        let (_, event_rx) = create_block_receiver_channel();
+        let (block_fetcher_handle, _) = block_fetcher::create_block_fetcher_channel();
+        let (validation_tx, _) = validation_worker::create_validation_channel();
+        let receiver = BlockReceiver::new(
+            event_rx,
+            Arc::new(MockDefaultShareValidator::default()),
+            mock_store,
+            block_fetcher_handle,
+            validation_tx,
+        );
+
+        assert!(receiver.ancestry_ready(&genesis_child, 0));
+    }
+
+    /// Bodies are only fetched within PRUNE_DEPTH of the candidate tip, so the
+    /// boundary the ancestry check exempts is the tip less that depth.
+    #[test]
+    fn test_prune_height_is_candidate_tip_less_prune_depth() {
+        let mut mock_store = ChainStoreHandle::default();
+        mock_store
+            .expect_get_candidate_tip_height()
+            .returning(|| Ok(Some(PRUNE_DEPTH as u32 + 5)));
+
+        let (_, event_rx) = create_block_receiver_channel();
+        let (block_fetcher_handle, _) = block_fetcher::create_block_fetcher_channel();
+        let (validation_tx, _) = validation_worker::create_validation_channel();
+        let receiver = BlockReceiver::new(
+            event_rx,
+            Arc::new(MockDefaultShareValidator::default()),
+            mock_store,
+            block_fetcher_handle,
+            validation_tx,
+        );
+
+        assert_eq!(receiver.current_prune_height(), 5);
+    }
+
+    /// With no candidate chain yet, nothing is exempt: every ancestor needs its
+    /// body. That can only delay a block, never admit an unverified one.
+    #[test]
+    fn test_prune_height_is_zero_without_candidate_tip() {
+        let mut mock_store = ChainStoreHandle::default();
+        mock_store
+            .expect_get_candidate_tip_height()
+            .returning(|| Ok(None));
+
+        let (_, event_rx) = create_block_receiver_channel();
+        let (block_fetcher_handle, _) = block_fetcher::create_block_fetcher_channel();
+        let (validation_tx, _) = validation_worker::create_validation_channel();
+        let receiver = BlockReceiver::new(
+            event_rx,
+            Arc::new(MockDefaultShareValidator::default()),
+            mock_store,
+            block_fetcher_handle,
+            validation_tx,
+        );
+
+        assert_eq!(receiver.current_prune_height(), 0);
+    }
+
+    /// A store failure reading the tip falls back to the strict end of the
+    /// rule rather than exempting everything.
+    #[test]
+    fn test_prune_height_is_zero_when_tip_read_fails() {
+        let mut mock_store = ChainStoreHandle::default();
+        mock_store
+            .expect_get_candidate_tip_height()
+            .returning(|| Err(StoreError::Database("read failed".to_string())));
+
+        let (_, event_rx) = create_block_receiver_channel();
+        let (block_fetcher_handle, _) = block_fetcher::create_block_fetcher_channel();
+        let (validation_tx, _) = validation_worker::create_validation_channel();
+        let receiver = BlockReceiver::new(
+            event_rx,
+            Arc::new(MockDefaultShareValidator::default()),
+            mock_store,
+            block_fetcher_handle,
+            validation_tx,
+        );
+
+        assert_eq!(receiver.current_prune_height(), 0);
     }
 
     #[tokio::test]
@@ -768,6 +738,12 @@ mod tests {
         let parent_header_clone = parent_header.clone();
 
         let mut mock_store = ChainStoreHandle::default();
+        mock_store
+            .expect_get_candidate_tip_height()
+            .returning(|| Ok(Some(0)));
+        mock_store
+            .expect_all_block_and_uncle_data_available()
+            .returning(|_, _| Ok(true));
         // The new block's own metadata lookup (fast path) returns NotFound.
         // The parent is at status Confirmed.
         mock_store
@@ -777,7 +753,8 @@ mod tests {
                     Ok(BlockMetadata {
                         expected_height: Some(0),
                         chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
-                        status: Status::Confirmed,
+                        status: Status::BlockValid,
+                        chain: ChainMembership::Confirmed,
                     })
                 } else {
                     Err(StoreError::NotFound("not found".to_string()))
@@ -795,7 +772,7 @@ mod tests {
         let mut pool_difficulty = PoolDifficulty::default();
         pool_difficulty
             .expect_calculate_target_clamped()
-            .returning(|_, _, _| {
+            .returning(|_, _| {
                 CompactTarget::from_consensus(crate::shares::share_block::MAX_POOL_TARGET)
             });
         mock_validator
@@ -822,29 +799,37 @@ mod tests {
             CompactTarget::from_consensus(crate::shares::share_block::MAX_POOL_TARGET);
         let child_hash = child_block.block_hash();
 
-        let peer_id = libp2p::PeerId::random();
-        let result = receiver.process_share_block(peer_id, child_block).await;
+        let result = receiver.process_share_block(child_block).await;
         assert!(result.is_ok(), "Expected Ok, got: {}", result.unwrap_err());
 
         assert_eq!(receiver.pending_count(), 0);
 
         let fetcher_event = block_fetcher_rx.try_recv().unwrap();
         match fetcher_event {
-            BlockFetcherEvent::BlockReceived(hash) => assert_eq!(hash, child_hash),
-            other => panic!("Expected BlockReceived, got: {other}"),
+            BlockFetcherEvent::BlockRequestCompleted(hash) => assert_eq!(hash, child_hash),
+            other => panic!("Expected BlockRequestCompleted, got: {other}"),
         }
 
         let validation_event = validation_rx.try_recv().unwrap();
         match validation_event {
-            ValidationEvent::ValidateBlock(hash) => assert_eq!(hash, child_hash),
+            ValidationEvent::ValidateBlockHash(hash) => assert_eq!(hash, child_hash),
+            ValidationEvent::ValidateShareBlock(_) => {
+                panic!("Expected ValidateBlockHash, got ValidateShareBlock")
+            }
         }
     }
 
     #[tokio::test]
-    async fn test_process_share_block_missing_parent_buffers_and_fetches() {
+    async fn test_process_share_block_missing_parent_buffers_without_fetching() {
         let missing_parent_hash = BlockHash::from_byte_array([0x99; 32]);
 
         let mut mock_store = ChainStoreHandle::default();
+        mock_store
+            .expect_get_candidate_tip_height()
+            .returning(|| Ok(Some(0)));
+        mock_store
+            .expect_all_block_and_uncle_data_available()
+            .returning(|_, _| Err(StoreError::NotFound("no metadata".to_string())));
         mock_store
             .expect_get_block_metadata()
             .returning(|_| Err(StoreError::NotFound("not found".to_string())));
@@ -867,8 +852,7 @@ mod tests {
             .build();
         let child_hash = child_block.block_hash();
 
-        let peer_id = libp2p::PeerId::random();
-        let result = receiver.process_share_block(peer_id, child_block).await;
+        let result = receiver.process_share_block(child_block).await;
         assert!(result.is_ok());
 
         assert_eq!(receiver.pending_count(), 1);
@@ -876,21 +860,81 @@ mod tests {
 
         let fetcher_event = block_fetcher_rx.try_recv().unwrap();
         match fetcher_event {
-            BlockFetcherEvent::BlockReceived(hash) => assert_eq!(hash, child_hash),
-            other => panic!("Expected BlockReceived, got: {other}"),
+            BlockFetcherEvent::BlockRequestCompleted(hash) => assert_eq!(hash, child_hash),
+            other => panic!("Expected BlockRequestCompleted, got: {other}"),
         }
 
-        let fetch_event = block_fetcher_rx.try_recv().unwrap();
-        match fetch_event {
-            BlockFetcherEvent::FetchBlocks {
-                blockhashes,
-                peer_id: event_peer_id,
-            } => {
-                assert_eq!(blockhashes, vec![missing_parent_hash]);
-                assert_eq!(event_peer_id, peer_id);
-            }
-            other => panic!("Expected FetchBlocks, got: {other}"),
+        assert!(
+            block_fetcher_rx.try_recv().is_err(),
+            "No FetchBlocks should be sent; headers-first pipeline supplies ancestors"
+        );
+    }
+
+    /// The receiver itself does not bound the pending buffer: every block
+    /// naming a parent that never arrives takes a slot it never releases.
+    ///
+    /// That is safe only because the admission gate in `handle_share_block`
+    /// now runs `validate_coinbase_proof`, which binds the share fields --
+    /// `prev_share_blockhash` included -- to the bitcoin header's proof of
+    /// work. A bitcoin header replayed under another parent fails there, so
+    /// each block reaching this buffer costs a share's worth of real work.
+    /// This test drives the receiver directly, below that gate, to pin the
+    /// receiver's half: it buffers whatever it is given.
+    #[tokio::test]
+    async fn test_replayed_header_under_distinct_parents_fills_pending() {
+        const REPLAYS: u8 = 32;
+
+        let mut mock_store = ChainStoreHandle::default();
+        mock_store
+            .expect_get_candidate_tip_height()
+            .returning(|| Ok(Some(0)));
+        mock_store
+            .expect_all_block_and_uncle_data_available()
+            .returning(|_, _| Err(StoreError::NotFound("no metadata".to_string())));
+        mock_store
+            .expect_get_block_metadata()
+            .returning(|_| Err(StoreError::NotFound("not found".to_string())));
+
+        let (_, event_rx) = create_block_receiver_channel();
+        let (block_fetcher_handle, _block_fetcher_rx) =
+            block_fetcher::create_block_fetcher_channel();
+        let (validation_tx, _validation_rx) = validation_worker::create_validation_channel();
+        let mut receiver = BlockReceiver::new(
+            event_rx,
+            Arc::new(MockDefaultShareValidator::default()),
+            mock_store,
+            block_fetcher_handle,
+            validation_tx,
+        );
+
+        // Every block carries the same bitcoin header and the same declared
+        // bits; only the parent hash differs. Starts at 1: an all-zeros parent
+        // is the genesis sentinel, which add_to_pending does not index.
+        let mut hashes = std::collections::HashSet::new();
+        for replay in 1..=REPLAYS {
+            let block = TestShareBlockBuilder::new()
+                .prev_share_blockhash(BlockHash::from_byte_array([replay; 32]).to_string())
+                .nonce(0xe9695791)
+                .build();
+            hashes.insert(block.block_hash());
+            receiver.process_share_block(block).await.unwrap();
         }
+
+        assert_eq!(
+            hashes.len(),
+            REPLAYS as usize,
+            "each parent hash yields a distinct block hash, so dedupe never fires"
+        );
+        assert_eq!(
+            receiver.pending_count(),
+            REPLAYS as usize,
+            "every replay occupies its own pending slot"
+        );
+        assert_eq!(
+            receiver.descendants.len(),
+            REPLAYS as usize,
+            "and its own descendants entry"
+        );
     }
 
     #[tokio::test]
@@ -901,6 +945,7 @@ mod tests {
                 expected_height: Some(0),
                 chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
                 status: Status::BlockValid,
+                chain: ChainMembership::None,
             })
         });
 
@@ -917,9 +962,7 @@ mod tests {
         );
 
         let block = TestShareBlockBuilder::new().nonce(0xe9695791).build();
-        let result = receiver
-            .process_share_block(libp2p::PeerId::random(), block)
-            .await;
+        let result = receiver.process_share_block(block).await;
         assert!(result.is_ok());
 
         assert!(block_fetcher_rx.try_recv().is_err());
@@ -942,6 +985,12 @@ mod tests {
         let parent_header_clone = parent_header.clone();
 
         let mut mock_store = ChainStoreHandle::default();
+        mock_store
+            .expect_get_candidate_tip_height()
+            .returning(|| Ok(Some(0)));
+        mock_store
+            .expect_all_block_and_uncle_data_available()
+            .returning(|_, _| Ok(true));
         // Both the new block (already HeaderValid) and its parent are
         // HeaderValid in the store.
         mock_store.expect_get_block_metadata().returning(|_| {
@@ -949,6 +998,7 @@ mod tests {
                 expected_height: Some(0),
                 chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
                 status: Status::HeaderValid,
+                chain: ChainMembership::None,
             })
         });
         mock_store
@@ -964,7 +1014,7 @@ mod tests {
         let mut pool_difficulty = PoolDifficulty::default();
         pool_difficulty
             .expect_calculate_target_clamped()
-            .returning(|_, _, _| {
+            .returning(|_, _| {
                 CompactTarget::from_consensus(crate::shares::share_block::MAX_POOL_TARGET)
             });
         mock_validator
@@ -991,14 +1041,15 @@ mod tests {
             CompactTarget::from_consensus(crate::shares::share_block::MAX_POOL_TARGET);
         let child_hash = child_block.block_hash();
 
-        let result = receiver
-            .process_share_block(libp2p::PeerId::random(), child_block)
-            .await;
+        let result = receiver.process_share_block(child_block).await;
         assert!(result.is_ok(), "Expected Ok, got: {}", result.unwrap_err());
 
         let event = validation_rx.try_recv().unwrap();
         match event {
-            ValidationEvent::ValidateBlock(hash) => assert_eq!(hash, child_hash),
+            ValidationEvent::ValidateBlockHash(hash) => assert_eq!(hash, child_hash),
+            ValidationEvent::ValidateShareBlock(_) => {
+                panic!("Expected ValidateBlockHash, got ValidateShareBlock")
+            }
         }
     }
 
@@ -1013,13 +1064,20 @@ mod tests {
 
         let mut mock_store = ChainStoreHandle::default();
         mock_store
+            .expect_get_candidate_tip_height()
+            .returning(|| Ok(Some(0)));
+        mock_store
+            .expect_all_block_and_uncle_data_available()
+            .returning(|_, _| Ok(true));
+        mock_store
             .expect_get_block_metadata()
             .returning(move |hash| {
                 if hash == &parent_hash {
                     Ok(BlockMetadata {
                         expected_height: Some(0),
                         chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
-                        status: Status::Confirmed,
+                        status: Status::BlockValid,
+                        chain: ChainMembership::Confirmed,
                     })
                 } else {
                     Err(StoreError::NotFound("not found".to_string()))
@@ -1032,7 +1090,7 @@ mod tests {
         let mut mock_pool_difficulty = PoolDifficulty::default();
         mock_pool_difficulty
             .expect_calculate_target_clamped()
-            .returning(|_, _, _| CompactTarget::from_consensus(0x1d00ffff));
+            .returning(|_, _| CompactTarget::from_consensus(0x1d00ffff));
         let mut mock_validator = MockDefaultShareValidator::default();
         mock_validator
             .expect_pool_difficulty()
@@ -1057,9 +1115,7 @@ mod tests {
         child_block.header.bits =
             CompactTarget::from_consensus(crate::shares::share_block::MAX_POOL_TARGET);
 
-        let result = receiver
-            .process_share_block(libp2p::PeerId::random(), child_block)
-            .await;
+        let result = receiver.process_share_block(child_block).await;
         assert!(result.is_ok());
 
         // Block must NOT enter the store and validation must NOT be emitted.
@@ -1094,6 +1150,25 @@ mod tests {
         let child_hash = child_block.block_hash();
 
         let mut mock_store = ChainStoreHandle::default();
+        mock_store
+            .expect_get_candidate_tip_height()
+            .returning(|| Ok(Some(0)));
+        // The child's ancestry: the parent has no body on the first check, and
+        // has one once the parent itself commits.
+        mock_store
+            .expect_all_block_and_uncle_data_available()
+            .withf(move |hashes, _| hashes == [parent_hash])
+            .times(1)
+            .returning(|_, _| Ok(false));
+        mock_store
+            .expect_all_block_and_uncle_data_available()
+            .withf(move |hashes, _| hashes == [parent_hash])
+            .returning(|_, _| Ok(true));
+        // The parent's ancestry: root is already in the store.
+        mock_store
+            .expect_all_block_and_uncle_data_available()
+            .withf(move |hashes, _| hashes == [root_hash])
+            .returning(|_, _| Ok(true));
         // root_hash always Confirmed (it is the anchor in the store).
         mock_store
             .expect_get_block_metadata()
@@ -1102,7 +1177,8 @@ mod tests {
                 Ok(BlockMetadata {
                     expected_height: Some(0),
                     chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
-                    status: Status::Confirmed,
+                    status: Status::BlockValid,
+                    chain: ChainMembership::Confirmed,
                 })
             });
         // child_hash: always NotFound (never reaches the store via the
@@ -1112,14 +1188,12 @@ mod tests {
             .expect_get_block_metadata()
             .with(mockall::predicate::eq(child_hash))
             .returning(|_| Err(StoreError::NotFound("not found".to_string())));
-        // parent_hash: NotFound on the first 2 calls (collect_not_ready
-        // for the buffered child + parent's own fast-path lookup), then
-        // Confirmed for cascade collect_not_ready and validate_asert
-        // lookups.
+        // parent_hash: NotFound for the parent's own fast-path lookup, then
+        // Confirmed for the cascaded child's validate_asert lookup.
         mock_store
             .expect_get_block_metadata()
             .with(mockall::predicate::eq(parent_hash))
-            .times(2)
+            .times(1)
             .returning(|_| Err(StoreError::NotFound("not found".to_string())));
         mock_store
             .expect_get_block_metadata()
@@ -1128,7 +1202,8 @@ mod tests {
                 Ok(BlockMetadata {
                     expected_height: Some(0),
                     chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
-                    status: Status::Confirmed,
+                    status: Status::BlockValid,
+                    chain: ChainMembership::Confirmed,
                 })
             });
         mock_store
@@ -1142,7 +1217,7 @@ mod tests {
         let mut pool_difficulty = PoolDifficulty::default();
         pool_difficulty
             .expect_calculate_target_clamped()
-            .returning(|_, _, _| {
+            .returning(|_, _| {
                 CompactTarget::from_consensus(crate::shares::share_block::MAX_POOL_TARGET)
             });
         mock_validator
@@ -1161,17 +1236,15 @@ mod tests {
             validation_tx,
         );
 
-        let peer_id = libp2p::PeerId::random();
-
         // Child arrives first -- parent is missing in store, so child
         // is buffered.
-        let result = receiver.process_share_block(peer_id, child_block).await;
+        let result = receiver.process_share_block(child_block).await;
         assert!(result.is_ok());
         assert_eq!(receiver.pending_count(), 1);
 
         // Parent arrives -- commits itself, then cascade commits the
         // buffered child.
-        let result = receiver.process_share_block(peer_id, parent_block).await;
+        let result = receiver.process_share_block(parent_block).await;
         assert!(result.is_ok(), "Expected Ok, got: {}", result.unwrap_err());
 
         assert_eq!(receiver.pending_count(), 0);
@@ -1180,13 +1253,136 @@ mod tests {
             .try_recv()
             .expect("expected first validation event");
         match event1 {
-            ValidationEvent::ValidateBlock(hash) => assert_eq!(hash, parent_hash),
+            ValidationEvent::ValidateBlockHash(hash) => assert_eq!(hash, parent_hash),
+            ValidationEvent::ValidateShareBlock(_) => {
+                panic!("Expected ValidateBlockHash, got ValidateShareBlock")
+            }
         }
         let event2 = validation_rx
             .try_recv()
             .expect("expected second validation event");
         match event2 {
-            ValidationEvent::ValidateBlock(hash) => assert_eq!(hash, child_hash),
+            ValidationEvent::ValidateBlockHash(hash) => assert_eq!(hash, child_hash),
+            ValidationEvent::ValidateShareBlock(_) => {
+                panic!("Expected ValidateBlockHash, got ValidateShareBlock")
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_pending_block_re_received_with_ready_parent_is_processed() {
+        let parent_hash = BlockHash::from_byte_array([0xdd; 32]);
+        let parent_header = TestShareBlockBuilder::new()
+            .nonce(0xe9695790)
+            .build()
+            .header;
+        let parent_header_clone = parent_header.clone();
+
+        let mut child_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(parent_hash.to_string())
+            .nonce(0xe9695791)
+            .build();
+        child_block.header.bits =
+            CompactTarget::from_consensus(crate::shares::share_block::MAX_POOL_TARGET);
+        let child_hash = child_block.block_hash();
+        let child_block_clone = child_block.clone();
+
+        let mut mock_store = ChainStoreHandle::default();
+        mock_store
+            .expect_get_candidate_tip_height()
+            .returning(|| Ok(Some(0)));
+        // First arrival: the parent's body is not stored yet. Second arrival:
+        // it is, so the block is committed rather than left in pending.
+        mock_store
+            .expect_all_block_and_uncle_data_available()
+            .times(1)
+            .returning(|_, _| Ok(false));
+        mock_store
+            .expect_all_block_and_uncle_data_available()
+            .returning(|_, _| Ok(true));
+        // The child's own metadata lookup (fast path) is NotFound on both
+        // arrivals; only add_share_block would have stored it.
+        mock_store
+            .expect_get_block_metadata()
+            .with(mockall::predicate::eq(child_hash))
+            .returning(|_| Err(StoreError::NotFound("not found".to_string())));
+        // The parent's metadata is read by validate_asert on the second
+        // arrival. The ancestry gate reads bodies, not metadata, so it does
+        // not consume this.
+        mock_store
+            .expect_get_block_metadata()
+            .with(mockall::predicate::eq(parent_hash))
+            .returning(|_| {
+                Ok(BlockMetadata {
+                    expected_height: Some(0),
+                    chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
+                    status: Status::HeaderValid,
+                    chain: ChainMembership::None,
+                })
+            });
+        mock_store
+            .expect_get_share_header()
+            .with(mockall::predicate::eq(parent_hash))
+            .returning(move |_| Ok(parent_header_clone.clone()));
+        mock_store
+            .expect_add_share_block_and_organise_header()
+            .returning(|_| Ok(None));
+
+        let mut mock_validator = MockDefaultShareValidator::default();
+        let mut pool_difficulty = PoolDifficulty::default();
+        pool_difficulty
+            .expect_calculate_target_clamped()
+            .returning(|_, _| {
+                CompactTarget::from_consensus(crate::shares::share_block::MAX_POOL_TARGET)
+            });
+        mock_validator
+            .expect_pool_difficulty()
+            .return_const(pool_difficulty);
+
+        let (_, event_rx) = create_block_receiver_channel();
+        let (block_fetcher_handle, mut block_fetcher_rx) =
+            block_fetcher::create_block_fetcher_channel();
+        let (validation_tx, mut validation_rx) = validation_worker::create_validation_channel();
+        let mut receiver = BlockReceiver::new(
+            event_rx,
+            Arc::new(mock_validator),
+            mock_store,
+            block_fetcher_handle,
+            validation_tx,
+        );
+
+        // First arrival: parent not ready, block is buffered
+        let result = receiver.process_share_block(child_block).await;
+        assert!(result.is_ok());
+        assert_eq!(receiver.pending_count(), 1);
+
+        // Drain the BlockRequestCompleted from first arrival
+        let fetcher_event = block_fetcher_rx.try_recv().unwrap();
+        match fetcher_event {
+            BlockFetcherEvent::BlockRequestCompleted(hash) => assert_eq!(hash, child_hash),
+            other => panic!("Expected BlockRequestCompleted, got: {other}"),
+        }
+
+        // Second arrival (via GetData response after headers synced parent).
+        // Parent is now HeaderValid. Block should be processed, not dropped.
+        let result = receiver.process_share_block(child_block_clone).await;
+        assert!(result.is_ok(), "Expected Ok, got: {}", result.unwrap_err());
+
+        // BlockRequestCompleted must be sent to clear the fetcher's in-flight state
+        let fetcher_event = block_fetcher_rx.try_recv().unwrap();
+        match fetcher_event {
+            BlockFetcherEvent::BlockRequestCompleted(hash) => assert_eq!(hash, child_hash),
+            other => panic!("Expected BlockRequestCompleted on re-receive, got: {other}"),
+        }
+
+        // Block should have been committed and sent to validation
+        assert_eq!(receiver.pending_count(), 0);
+        let validation_event = validation_rx.try_recv().unwrap();
+        match validation_event {
+            ValidationEvent::ValidateBlockHash(hash) => assert_eq!(hash, child_hash),
+            ValidationEvent::ValidateShareBlock(_) => {
+                panic!("Expected ValidateBlockHash, got ValidateShareBlock")
+            }
         }
     }
 
@@ -1195,6 +1391,12 @@ mod tests {
         let missing_parent_hash = BlockHash::from_byte_array([0xbb; 32]);
 
         let mut mock_store = ChainStoreHandle::default();
+        mock_store
+            .expect_get_candidate_tip_height()
+            .returning(|| Ok(Some(0)));
+        mock_store
+            .expect_all_block_and_uncle_data_available()
+            .returning(|_, _| Err(StoreError::NotFound("no metadata".to_string())));
         mock_store
             .expect_get_block_metadata()
             .returning(|_| Err(StoreError::NotFound("not found".to_string())));
@@ -1216,11 +1418,9 @@ mod tests {
             .nonce(0xe9695791)
             .build();
 
-        let peer_id = libp2p::PeerId::random();
         let (result_tx, result_rx) = oneshot::channel();
         event_tx
             .send(BlockReceiverEvent::ShareBlockReceived {
-                peer_id,
                 share_block: child_block,
                 result_tx,
             })

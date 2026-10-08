@@ -1,23 +1,13 @@
-// Copyright (C) 2024-2026 P2Poolv2 Developers (see AUTHORS)
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
 //
-// This file is part of P2Poolv2
-//
-// P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free
-// Software Foundation, either version 3 of the License, or (at your option)
-// any later version.
-//
-// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License along with
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 pub mod accounting;
+pub use p2poolv2_wallet as address;
 pub mod auth;
 pub mod command;
 pub use p2poolv2_config as config;
+pub mod address_display;
 pub mod logging;
 pub mod middleware;
 pub mod monitoring_events;
@@ -25,6 +15,9 @@ pub mod node;
 pub mod pool_difficulty;
 pub mod service;
 pub mod shares;
+#[cfg(feature = "sim")]
+pub mod sim;
+pub mod sim_overrides;
 pub mod store;
 pub mod stratum;
 pub mod utils;
@@ -32,4 +25,4 @@ pub mod utils;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
 
-pub use service::build_service;
+pub use service::spawn_peer_service;

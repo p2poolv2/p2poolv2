@@ -1,29 +1,18 @@
-// Copyright (C) 2024-2026 P2Poolv2 Developers (see AUTHORS)
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
 //
-// This file is part of P2Poolv2
-//
-// P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free
-// Software Foundation, either version 3 of the License, or (at your option)
-// any later version.
-//
-// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License along with
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 use super::block_template::BlockTemplate;
 use crate::shares::share_commitment::ShareCommitment;
 use bitcoin::BlockHash;
-use dashmap::{DashMap, DashSet};
+use dashmap::DashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::debug;
 pub mod parse_coinbase;
 
 const MAX_JOB_AGE_SECS: u64 = 15 * 60; // 15 minutes
+const EXPECTED_SHARES_PER_JOB: usize = 4; // new jobs are created every 10s. Target share period 3s.
 
 /// The job id sent to miners.
 /// A job id matches a block template.
@@ -64,8 +53,10 @@ pub struct JobDetails {
 #[derive(Debug)]
 pub struct JobTracker {
     job_details: DashMap<JobId, JobDetails>,
-    /// Tracks submitted shares per job for duplicate detection (internal only)
-    job_shares: DashMap<JobId, DashSet<BlockHash>>,
+    /// Tracks submitted share hashes per job for duplicate detection (internal only).
+    /// Vec is used instead because each job accumulates very few shares (~3),
+    /// making linear scan faster than hash lookups with far less memory overhead.
+    job_shares: DashMap<JobId, Vec<BlockHash>>,
     latest_job_id: AtomicU64,
 }
 
@@ -84,6 +75,7 @@ impl JobTracker {
     }
 
     /// Insert a block template with the specified job id
+    #[allow(clippy::too_many_arguments)] // wiring constructor: each parameter is a distinct collaborator, a params struct would only move the list
     pub fn insert_job(
         &self,
         block_template: Arc<BlockTemplate>,
@@ -109,7 +101,8 @@ impl JobTracker {
                 template_merkle_branches,
             },
         );
-        self.job_shares.insert(job_id, DashSet::new());
+        self.job_shares
+            .insert(job_id, Vec::with_capacity(EXPECTED_SHARES_PER_JOB));
         job_id
     }
 
@@ -126,6 +119,18 @@ impl JobTracker {
     /// Get job details by job id
     pub fn get_job(&self, job_id: JobId) -> Option<JobDetails> {
         self.job_details.get(&job_id).map(|r| r.clone())
+    }
+
+    /// Current bitcoin network difficulty derived from the latest job's
+    /// block template `bits`. Returns None when there is no job yet or the
+    /// `bits` field cannot be parsed. Uses the mainnet-relative difficulty
+    /// (`difficulty_float`) so it shares units with the pool's truediffone
+    /// share difficulties. This lets Grafana divide work by this value.
+    pub fn get_network_difficulty(&self) -> Option<f64> {
+        let job = self.get_job(self.get_latest_job_id())?;
+        let compact_target =
+            bitcoin::pow::CompactTarget::from_unprefixed_hex(&job.blocktemplate.bits).ok()?;
+        Some(bitcoin::Target::from_compact(compact_target).difficulty_float())
     }
 
     /// Remove job details that are older than the specified duration in seconds
@@ -150,11 +155,15 @@ impl JobTracker {
         before_count - self.job_details.len()
     }
 
-    /// Add a share to shares tracker for duplicate detection
-    /// Returns true if share is newly inserted, false if job not found or share already exists
+    /// Add a share to shares tracker for duplicate detection.
+    /// Returns true if share is newly inserted, false if job not found or share already exists.
     pub fn add_share(&self, job_id: JobId, blockhash: BlockHash) -> bool {
-        if let Some(shares) = self.job_shares.get(&job_id) {
-            shares.insert(blockhash)
+        let Some(mut shares) = self.job_shares.get_mut(&job_id) else {
+            return false;
+        };
+        if !shares.contains(&blockhash) {
+            shares.push(blockhash);
+            true
         } else {
             false
         }
@@ -233,12 +242,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_get_network_difficulty() {
+        let tracker = start_tracker_actor();
+
+        // No job inserted yet -> no difficulty available
+        assert!(tracker.get_network_difficulty().is_none());
+
+        let template_str = include_str!(
+            "../../../../../p2poolv2_tests/test_data/gbt/signet/gbt-no-transactions.json"
+        );
+        let template: BlockTemplate = serde_json::from_str(template_str).unwrap();
+        let expected = bitcoin::Target::from_compact(
+            bitcoin::pow::CompactTarget::from_unprefixed_hex(&template.bits).unwrap(),
+        )
+        .difficulty_float();
+
+        let job_id = tracker.get_next_job_id();
+        tracker.insert_job(
+            Arc::new(template),
+            "cb1".to_string(),
+            "cb2".to_string(),
+            Some(create_test_commitment()),
+            TEST_COINBASE_NSECS,
+            vec![],
+            job_id,
+        );
+
+        let difficulty = tracker.get_network_difficulty().unwrap();
+        assert_eq!(difficulty, expected);
+        assert!(difficulty > 0.0);
+    }
+
+    #[tokio::test]
     async fn test_block_template_operations() {
         let template_str = include_str!(
             "../../../../../p2poolv2_tests/test_data/gbt/signet/gbt-no-transactions.json"
         );
 
-        let template: BlockTemplate = serde_json::from_str(&template_str).unwrap();
+        let template: BlockTemplate = serde_json::from_str(template_str).unwrap();
         let cloned_template = template.clone();
 
         let tracker = start_tracker_actor();
@@ -282,7 +323,7 @@ mod tests {
             "../../../../../p2poolv2_tests/test_data/gbt/signet/gbt-no-transactions.json"
         );
 
-        let template: BlockTemplate = serde_json::from_str(&template_str).unwrap();
+        let template: BlockTemplate = serde_json::from_str(template_str).unwrap();
 
         // Create tracker directly
         let tracker = JobTracker::new();
@@ -360,7 +401,7 @@ mod tests {
         let template_str = include_str!(
             "../../../../../p2poolv2_tests/test_data/gbt/signet/gbt-no-transactions.json"
         );
-        let template: BlockTemplate = serde_json::from_str(&template_str).unwrap();
+        let template: BlockTemplate = serde_json::from_str(template_str).unwrap();
 
         let tracker = JobTracker::new();
         let job_id = JobId(1);

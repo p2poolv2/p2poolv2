@@ -1,18 +1,6 @@
-// Copyright (C) 2024-2026 P2Poolv2 Developers (see AUTHORS)
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
 //
-// This file is part of P2Poolv2
-//
-// P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free
-// Software Foundation, either version 3 of the License, or (at your option)
-// any later version.
-//
-// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License along with
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 use std::error::Error;
 
@@ -32,6 +20,8 @@ pub struct GenesisData {
     pub bitcoin_block_hex: &'static str,
     /// Bitcoin header height
     pub bitcoin_height: u64,
+    /// Unix timestamp for the genesis share block
+    pub timestamp: u32,
 }
 
 const SIGNET_GENESIS_DATA: GenesisData = GenesisData {
@@ -40,13 +30,15 @@ const SIGNET_GENESIS_DATA: GenesisData = GenesisData {
     // bitcoin_header_hex: "0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a008f4d5fae77031e8ad22203",
     bitcoin_block_hex: include!("signet.rs"),
     bitcoin_height: 0,
+    timestamp: 1776855600,
 };
 
 const TESTNET4_GENESIS_DATA: GenesisData = GenesisData {
     public_key: "02ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d",
-    // for bitcoin blockhash 00000000000000013c0a1f4152b458118ed666282e6235d744bf2a5d66ecf022
+    // for bitcoin blockhash 0000000000a57b6dd9b7340a2e2cbb7069a0ccdf28f3db69070ea89d7287444b
     bitcoin_block_hex: include!("testnet4.rs"),
-    bitcoin_height: 130754,
+    bitcoin_height: 151197,
+    timestamp: 1788701400, // 09-06-2026T1330
 };
 
 // Using the following JSON data for the genesis block
@@ -56,6 +48,17 @@ const MAINNET_GENESIS_DATA: GenesisData = GenesisData {
     // header in hex "00a06f239cf5fe7a514fd6f9e64d77cd2345cf225ee3fe9b75bf00000000000000000000923435bf0a5f91886f7f94ade677752a526dec905eef07d181893faf15113a75b039fb6821eb01173c0137da"
     bitcoin_block_hex: include!("main.rs"),
     bitcoin_height: 920527,
+    timestamp: 1776855600,
+};
+
+// Regtest genesis: anchors the share chain on a local regtest bitcoind.
+// The bitcoin block is regtest height 0; it is only a fixed starting
+// point and need not match the connected node's tip.
+const REGTEST_GENESIS_DATA: GenesisData = GenesisData {
+    public_key: "02ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d",
+    bitcoin_block_hex: include!("regtest.rs"),
+    bitcoin_height: 0,
+    timestamp: 1776855600,
 };
 
 /// Get the genesis data for a given network
@@ -64,6 +67,7 @@ pub fn genesis_data(network: bitcoin::Network) -> Result<GenesisData, Box<dyn Er
         bitcoin::Network::Signet => Ok(SIGNET_GENESIS_DATA),
         bitcoin::Network::Testnet4 => Ok(TESTNET4_GENESIS_DATA),
         bitcoin::Network::Bitcoin => Ok(MAINNET_GENESIS_DATA),
+        bitcoin::Network::Regtest => Ok(REGTEST_GENESIS_DATA),
         _ => Err("Unsupported network".into()),
     }
 }

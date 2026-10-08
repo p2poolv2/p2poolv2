@@ -1,18 +1,6 @@
-// Copyright (C) 2024-2026 P2Poolv2 Developers (see AUTHORS)
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
 //
-// This file is part of P2Poolv2
-//
-// P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free
-// Software Foundation, either version 3 of the License, or (at your option)
-// any later version.
-//
-// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License along with
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 use crate::api::endpoints::MAX_NUM_SHARES_IN_RESPONSE;
 use crate::api::error::ApiError;
@@ -21,7 +9,7 @@ use axum::{
     Json,
     extract::{Query, State},
 };
-use p2poolv2_lib::store::dag_store::ShareInfo;
+use p2poolv2_lib::address_display::ShareInfoDisplay;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -39,7 +27,7 @@ pub struct CandidatesQuery {
 pub struct CandidatesResponse {
     pub from_height: u32,
     pub to_height: u32,
-    pub shares: Vec<ShareInfo>,
+    pub shares: Vec<ShareInfoDisplay>,
 }
 
 /// Returns candidate shares and their uncles for a height range.
@@ -84,7 +72,7 @@ pub(crate) async fn candidates(
     Ok(Json(CandidatesResponse {
         from_height,
         to_height,
-        shares: candidates,
+        shares: ShareInfoDisplay::from_share_infos(&candidates, Some(state.app_config.network)),
     }))
 }
 
@@ -111,6 +99,7 @@ mod tests {
             app_config: AppConfig {
                 pool_signature_length: 0,
                 network: bitcoin::Network::Signet,
+                cors_allowed: false,
             },
             chain_store_handle,
             metrics_handle,

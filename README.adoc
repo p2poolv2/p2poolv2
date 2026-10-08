@@ -1,5 +1,6 @@
 image:https://github.com/p2poolv2/p2poolv2/actions/workflows/rust.yml/badge.svg[Rust CI, link=https://github.com/p2poolv2/p2poolv2/actions/workflows/rust.yml]
 image:https://codecov.io/gh/p2poolv2/p2poolv2/graph/badge.svg?token=Xeu4GFdASS[Codecov, link=https://codecov.io/gh/p2poolv2/p2poolv2]
+image:https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg[License: MIT OR Apache-2.0, link=#license]
 
 == P2Poolv2
 
@@ -89,8 +90,75 @@ p2poolv2_cli --help
 
 . Edit the `config.toml` as required.
 .. At the very least you need to provide the bitcoind rpc details under the `[bitcoinrpc]` section.
+.. Replace `[stratum] miner_address` with your own share chain address. The
+sample ships an unspendable placeholder, so shares mined against it are lost.
 . Run P2Poolv2 `p2poolv2 config.toml`
 . Point your miners to `<yourhost>:<your stratum port in config.toml>`
+. Decide where the share chain address comes from. Every share needs an owner
+on the share chain, and that owner is a different address, on a different
+chain, from the bitcoin address that receives the payout.
++
+--
+The stratum *username* stays the bitcoin payout address, exactly as before.
+
+The share address comes from one of two places:
+
+* *The node's address.* Set `[stratum] miner_address` in `config.toml` and no
+miner needs to change anything -- every share the pool mines is owned by that
+address, while bitcoin PPLNS payouts still go per miner from the username. Use
+this if your miner firmware caps the password field, or if you intend to
+accumulate the tradable shares yourself.
+* *Per miner.* Set the stratum password to `p2p=<address>`, combinable with the
+existing difficulty hints as a comma-separated list, for example
+`p2p=sp2pool1...,d=1000`. A miner that sends a *different* address from the
+node's configured one is rejected rather than silently overridden.
+
+If neither is set, authorize is rejected with `This pool needs a share chain
+address. Set the stratum password to p2p=<address>...`.
+
+Hydrapool mode (`mode = "hydrapool"`) builds no share chain and needs none of
+this; setting `miner_address` there fails at startup.
+--
+
+==== Getting a share chain address
+
+Take the key from a wallet that will custody and back it up. The recommended
+source is a Bitcoin Core wallet:
+
+[,shell]
+----
+ADDR=$(bitcoin-cli -signet getnewaddress "p2pool share owner" bech32m)
+bitcoin-cli -signet getaddressinfo "$ADDR"    # check "ismine" and "solvable"
+bitcoin-cli -signet getaddressinfo "$ADDR" | jq -r .witness_program \
+  | p2poolv2_cli address --network signet
+----
+
+`witness_program` is the 32 byte taproot output key; `p2poolv2_cli address`
+encodes it under the share chain prefix for the network you name (`main`,
+`testnet4`, `signet` or `regtest`, as Bitcoin Core names them). Check
+`"ismine": true` and `"solvable": true` in the `getaddressinfo` output, or you
+are assigning shares to a key you cannot sign with.
+
+Use the address either on the node, as `[stratum] miner_address` in
+`config.toml`, or from the miner, as the stratum password:
+
+[,shell]
+----
+p2p=sp2pool1p504yc8zlqs4w077ss6787v8z5zxgke6nc333md75k87t82u5ryqqd9033x,d=1000
+----
+
+The `p2p=` key is case insensitive and the fields may be in any order, comma,
+space, tab or semicolon separated. The stratum *username* stays your bitcoin
+payout address. Note that `p2p=<address>` alone is 71 characters, so check your
+firmware does not truncate the password field; a truncated address fails its
+checksum rather than sending your shares elsewhere.
+
+P2Poolv2 does not generate private keys and ships no tool to do so, by design.
+The encoder takes a public output key only, never a private key.
+
+NOTE: A taproot address is not a share chain address. `tb1p...` and
+`sp2pool1p...` encode the same 32 bytes, but the prefix is covered by the
+checksum, so neither parser accepts the other's form.
 
 === Enable Dashboard
 
@@ -116,6 +184,30 @@ export P2POOL_STATIC_DIR=/path/to/static
 
 If `P2POOL_STATIC_DIR` is not set, the dashboard is not available when
 running from a release binary.
+
+=== Grafana dashboards
+
+Prometheus + Grafana dashboards for a P2Poolv2 node's `/metrics`.
+
+==== Run the metrics stack (Docker)
+
+[,shell]
+----
+cd docker
+docker compose -f docker-compose.metrics.yml up -d
+----
+
+Grafana at http://localhost:3000 (admin/admin). The `*-provision.json` files in
+`dashboards/` are auto-provisioned; Prometheus scrapes the node on `:46884`.
+
+=== Use in your own Grafana
+
+Import the JSON from link:./prometheus/grafana/dashboards-public/[`dashboards-public/`] (choose your
+Prometheus datasource at the prompt). These variable-free copies can also be
+shared read-only via Grafana's *Share externally*.
+
+Full guide: link:https://github.com/wiki/Dashboards.adoc[`Dashboards.adoc`].
+
 
 === Setup Systemd Service
 
@@ -173,3 +265,36 @@ use them in their individual crates.
 link:p2poolv2_api/README.md[API Documentation]
 
 link:p2poolv2_cli/README.md[CLI Documentation]
+
+== Run Nightly Script
+
+We have a script that runs a number of nodes for a period of time with
+simulated hashrate. This helps us continuously validate the p2p
+networking, with sync, and maintaining of the DAG is working
+correctly.
+
+[,shell]
+----
+DIAL_FANOUT=3 IDEAL_BLOCK_TIME=1 SHARES_PER_BLOCK=5 NODE_COUNT=10 CONVERGENCE_WAIT_SECONDS=100 LATENCY_MS=100 ./load-tests/sim/nightly.sh
+----
+
+See the link:docs/simulation/[docs/simulation] directory for detailed
+documentation on how to run the script and interpret the results.
+
+== License
+
+Licensed under either of
+
+* Apache License, Version 2.0 (link:LICENSE-APACHE[LICENSE-APACHE] or
+  https://www.apache.org/licenses/LICENSE-2.0)
+* MIT license (link:LICENSE-MIT[LICENSE-MIT] or
+  https://opensource.org/licenses/MIT)
+
+at your option.
+
+=== Contribution
+
+Unless you explicitly state otherwise, any contribution intentionally
+submitted for inclusion in P2Poolv2 by you, as defined in the Apache-2.0
+license, shall be dual licensed as above, without any additional terms or
+conditions.

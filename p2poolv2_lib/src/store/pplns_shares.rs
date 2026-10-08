@@ -1,32 +1,29 @@
-// Copyright (C) 2024-2026 P2Poolv2 Developers (see AUTHORS)
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
 //
-// This file is part of P2Poolv2
-//
-// P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free
-// Software Foundation, either version 3 of the License, or (at your option)
-// any later version.
-//
-// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License along with
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 use super::{Store, column_families::ColumnFamily, writer::StoreError};
 use crate::accounting::payout::simple_pplns::SimplePplnsShare;
+#[cfg(any(feature = "hydrapool-pplns-accounting", test))]
 use crate::utils::snowflake_simplified::get_next_id;
+#[cfg(any(feature = "hydrapool-pplns-accounting", test))]
 use bitcoin::consensus::Encodable;
 use bitcoin::consensus::encode;
 use std::time::{SystemTime, UNIX_EPOCH};
 const INITIAL_SHARE_VEC_CAPACITY: usize = 100_000;
 
 impl Store {
-    /// Add PPLNS Share to pplns_share_cf
-    /// btcaddress and workername are skipped during serialization (serde(skip)) to minimize storage
+    /// No-op when hydrapool-pplns-accounting feature is disabled.
+    #[cfg(not(any(feature = "hydrapool-pplns-accounting", test)))]
+    pub fn add_pplns_share(&self, _pplns_share: SimplePplnsShare) -> Result<(), StoreError> {
+        Ok(())
+    }
+
+    /// Add PPLNS Share to pplns_share_cf.
+    /// btcaddress and workername are skipped during serialization (serde(skip)) to minimize storage.
     ///
-    /// Key is timestamp (8) + user_id (8) + share id (8) = 24 bytes
+    /// Key is timestamp (8) + user_id (8) + share id (8) = 24 bytes.
+    #[cfg(any(feature = "hydrapool-pplns-accounting", test))]
     pub fn add_pplns_share(&self, pplns_share: SimplePplnsShare) -> Result<(), StoreError> {
         let pplns_share_cf = self.db.cf_handle(&ColumnFamily::Share).unwrap();
 
@@ -64,6 +61,9 @@ impl Store {
         });
 
         let mut read_opts = rocksdb::ReadOptions::default();
+        // Avoid polluting the block cache with scan data -- this range scan
+        // can touch 100K+ items and would evict hot tip/header data.
+        read_opts.fill_cache(false);
 
         // Set lower bound for start_time if specified (exclusive lower bound)
         if let Some(start) = start_time {
@@ -85,8 +85,8 @@ impl Store {
         let use_limit = limit.unwrap_or(INITIAL_SHARE_VEC_CAPACITY);
         let mut shares: Vec<SimplePplnsShare> = Vec::with_capacity(use_limit);
 
-        for (_key, mut value) in iter.take(use_limit).flatten() {
-            if let Ok(share) = encode::deserialize::<SimplePplnsShare>(&mut value) {
+        for (_key, value) in iter.take(use_limit).flatten() {
+            if let Ok(share) = encode::deserialize::<SimplePplnsShare>(&value) {
                 shares.push(share);
             }
         }

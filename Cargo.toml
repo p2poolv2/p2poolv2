@@ -1,21 +1,23 @@
 [workspace]
 members = [
     "bitcoindrpc",
+    "p2poolv2_wallet",
     "p2poolv2_config",
     "p2poolv2_lib",
     "p2poolv2_node",
     "p2poolv2_cli",
     "p2poolv2_api",
     "p2poolv2_tests",
+    "p2poolv2_sim",
 ]
 resolver = "2"
 
 [workspace.package]
-version = "0.10.4"
+version = "0.15.3"
 edition = "2024"
 authors = ["Kulpreet Singh<kp@opdup.com>"]
-license = "AGPL-3.0-or-later"
-description = "Peer to peer mining pool for bitcoin"
+license = "MIT OR Apache-2.0"
+description = "P2Poolv2 is a peer-to-peer Bitcoin mining pool where miners coordinate directly and verify their rewards without centralized operators"
 readme = "README.adoc"
 homepage = "https://github.com/p2poolv2/p2poolv2"
 repository = "https://github.com/p2poolv2/p2poolv2"
@@ -39,7 +41,7 @@ debug = true
 inherits = "release"
 
 [workspace.dependencies]
-libp2p = { version = "0.53", features = [
+libp2p = { version = "0.56", features = [
     "tcp",
     "dns",
     "tokio",
@@ -52,43 +54,49 @@ libp2p = { version = "0.53", features = [
     "secp256k1",
     "request-response",
 ] }
-tokio = { version = "1.0", features = ["full"] }
+tokio = { version = "1.0", features = ["rt-multi-thread", "net", "io-util", "sync", "time", "signal", "macros"] }
 futures = "0.3"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = { version = "0.2.3" }
-config = "0.13"
+config = { version = "0.15", default-features = false, features = ["toml"] }
 serde = { version = "1.0", features = ["derive"] }
 clap = { version = "4.0", features = ["derive", "env"] }
 hex = "0.4.3"
+# Held at the digest 0.10 generation on purpose. hmac 0.13 / sha2 0.11 move to
+# digest 0.11, but libp2p-identity still pins the older stack through
+# ed25519-dalek, hkdf and curve25519-dalek, so upgrading compiles both and adds
+# seven duplicate crates for no functional gain. Revisit when libp2p-identity
+# moves to digest 0.11. The known-answer tests in p2poolv2_lib/src/auth.rs pin
+# the output, so the upgrade is safe whenever it happens.
 hmac = "0.12"
 sha2 = "0.10"
-rocksdb = { version = "0.24.0", features = ["multi-threaded-cf"] }
+rocksdb = { version = "0.25.0", features = ["multi-threaded-cf"] }
 async-trait = "0.1.83"
 thiserror = "2.0.8"
 serde_json = "1.0.135"
-rust_decimal = { version = "1.36.0", features = [
-    "serde",
-    "serde-with-arbitrary-precision",
-] }
-rust_decimal_macros = "1.36.0"
 zmq = "0.10"
 bitcoin = { version = "0.32.5", features = ["serde", "rand"] }
 bitcoinconsensus = { version = "0.106.0" }
-base64 = "0.22.1"
-void = "1.0.2"
+base64 = "0.23.1"
 chrono = { version = "0.4", features = ["serde"] }
-tokio-util = "0.7.15"
+tokio-util = { version = "0.7.15", features = ["codec"] }
 tokio-stream = "0.1.17"
 bitcoindrpc = { path = "bitcoindrpc" }
+p2poolv2_wallet = { path = "p2poolv2_wallet" }
 p2poolv2_config = { path = "p2poolv2_config" }
 p2poolv2_api = { path = "p2poolv2_api" }
 p2poolv2_lib = { path = "p2poolv2_lib", features = ["test-utils"] }
-reqwest = { version = "0.12", features = ["json"] }
-mockall = "0.13.1"
+reqwest = { version = "0.13", default-features = false, features = ["json", "default-tls"] }
+mockall = "0.15"
 mockall_double = "0.3.1"
 tempfile = "3.15.0"
 tokio-test = "0.4.3"
+wiremock = "0.6.2"
 dashmap = "6"
-uint = "0.9"
-criterion = { version = "0.5", features = ["html_reports"] }
+uint = "0.10"
+criterion = { version = "0.8", features = ["html_reports"] }
+tower = "0.5"
+rand = "0.10"
+temp-env = "0.3.6"
+test-log = { version = "0.2.17", features = ["trace"] }

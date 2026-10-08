@@ -1,40 +1,41 @@
-// Copyright (C) 2024-2026 P2Poolv2 Developers (see AUTHORS)
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
 //
-// This file is part of P2Poolv2
-//
-// P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free
-// Software Foundation, either version 3 of the License, or (at your option)
-// any later version.
-//
-// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License along with
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
+pub mod address;
 pub mod api_client;
+pub mod blocked_ips;
 pub mod candidates;
 pub mod chain_info;
+pub mod dag;
+pub mod db;
+pub mod db_query;
 pub mod gen_auth;
+pub mod peers;
 pub mod peers_info;
 pub mod pplns_shares;
 pub mod share;
 pub mod shares;
+pub mod transactions;
 
 use crate::commands;
+use bitcoin::Network;
 use clap::{ArgGroup, Parser, Subcommand};
 use p2poolv2_lib::config::Config;
 use std::error::Error;
+use std::path::Path;
 
 /// P2Pool v2 CLI utility
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 pub struct Cli {
-    /// Path to p2poolv2 config file (not required for gen-auth command)
+    /// Path to p2poolv2 config file (not required for address, gen-auth or --db-path commands)
     #[arg(short, long, env("P2POOL_CONFIG"), global = true)]
     pub config: Option<String>,
+
+    /// Path to RocksDB database directory for direct offline queries
+    #[arg(long, global = true)]
+    pub db_path: Option<String>,
 
     /// Command to execute
     #[command(subcommand)]
@@ -71,6 +72,9 @@ pub enum Commands {
         /// Include template merkle branches in the output
         #[arg(short = 'm', long, default_value = "false")]
         template_merkle_branches: bool,
+        /// Output as Graphviz DOT format DAG (requires --db-path)
+        #[arg(short, long, default_value = "false")]
+        dot: bool,
     },
     /// Display candidate shares and their uncles for a height range
     Candidates {
@@ -80,6 +84,9 @@ pub enum Commands {
         /// Number of candidates to display going back from --to. Default 10.
         #[arg(short, long, default_value = "10")]
         num: u32,
+        /// Output as Graphviz DOT format DAG (requires --db-path)
+        #[arg(short, long, default_value = "false")]
+        dot: bool,
     },
     /// Look up a share by its blockhash or height
     #[command(group(ArgGroup::new("query").required(true).args(["hash", "height"])))]
@@ -94,8 +101,45 @@ pub enum Commands {
         #[arg(short, long, default_value = "false")]
         full: bool,
     },
-    /// Show connected peers by querying the running node's API
-    PeersInfo,
+    /// Display all share headers at each height in the height index (DAG view)
+    Dag {
+        /// Height to query up to, inclusive. Default is confirmed chain tip.
+        #[arg(short, long)]
+        to: Option<u32>,
+        /// Number of heights to display going back from --to. Default 10.
+        #[arg(short, long, default_value = "10")]
+        num: u32,
+        /// Output as Graphviz DOT format DAG (requires --db-path)
+        #[arg(short, long, default_value = "false")]
+        dot: bool,
+    },
+    /// Peer management commands (requires running node with --config)
+    Peers {
+        #[command(subcommand)]
+        command: PeersCommands,
+    },
+    /// Transaction queries
+    Transactions {
+        #[command(subcommand)]
+        command: TransactionsCommands,
+    },
+    /// Database maintenance commands (requires --db-path, node must be stopped)
+    Db {
+        #[command(subcommand)]
+        command: DbCommands,
+    },
+    /// Print the share chain address for a taproot output key
+    ///
+    /// Takes the `witness_program` field of `bitcoin-cli getaddressinfo`, the
+    /// already tweaked 32 byte taproot output key, in hex. Reads it from stdin
+    /// when no argument is given.
+    Address {
+        /// Taproot output key, hex. Omit to read it from stdin.
+        witness_program: Option<String>,
+        /// Network whose prefix to encode under: main, testnet4, signet or regtest
+        #[arg(short, long, value_parser = commands::address::parse_network)]
+        network: Network,
+    },
     /// Generate API authentication credentials (salt, password, HMAC)
     GenAuth {
         /// Username for API authentication
@@ -105,66 +149,192 @@ pub enum Commands {
     },
 }
 
+#[derive(Subcommand, Debug)]
+pub enum DbCommands {
+    /// Clean up dense heights by invalidating excess HeaderValid blocks
+    CleanupDenseHeights,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum TransactionsCommands {
+    /// Get a transaction by txid
+    Get {
+        /// Transaction hash
+        txid: String,
+        /// Output raw hex instead of JSON
+        #[arg(long, default_value = "false")]
+        raw: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum PeersCommands {
+    /// Show connected peers
+    Info,
+    /// List blocked IPs
+    Blocked,
+    /// Block an IP address at runtime
+    Block {
+        /// IP address to block
+        ip: String,
+    },
+    /// Unblock an IP address at runtime
+    Unblock {
+        /// IP address to unblock
+        ip: String,
+    },
+}
+
 pub async fn run() -> Result<(), Box<dyn Error>> {
     tracing_subscriber::fmt::init();
 
     let cli = Cli::parse();
 
     match &cli.command {
+        Some(Commands::Address {
+            witness_program,
+            network,
+        }) => {
+            commands::address::execute(witness_program.clone(), *network)?;
+        }
         Some(Commands::GenAuth { username, password }) => {
             commands::gen_auth::execute(username.clone(), password.clone())?;
         }
-        Some(
-            Commands::PeersInfo
-            | Commands::Info
-            | Commands::PplnsShares { .. }
-            | Commands::Shares { .. }
-            | Commands::Candidates { .. }
-            | Commands::Share { .. },
-        ) => {
+        Some(Commands::Db { command }) => {
+            let db_path = cli
+                .db_path
+                .as_ref()
+                .ok_or("--db-path required for db commands")?;
+            commands::db::execute(command, db_path)?;
+        }
+        Some(Commands::Peers { command }) => {
             let config_path = cli
                 .config
                 .as_ref()
-                .ok_or("Config file required for this command. Use --config")?;
+                .ok_or("Config file required for peers commands. Use --config")?;
             let config = Config::load(config_path)?;
+            commands::peers::execute(command, &config.api).await?;
+        }
+        Some(
+            Commands::Info
+            | Commands::PplnsShares { .. }
+            | Commands::Shares { .. }
+            | Commands::Candidates { .. }
+            | Commands::Share { .. }
+            | Commands::Dag { .. }
+            | Commands::Transactions { .. },
+        ) => {
+            if let Some(db_path) = &cli.db_path {
+                // Direct database query mode (offline, no running node required)
+                let store = commands::db_query::open_store(db_path)?;
 
-            match &cli.command {
-                Some(Commands::PeersInfo) => {
-                    commands::peers_info::execute(&config.api).await?;
+                // A miner address is stored as the bare witness program it
+                // encodes, so rendering it needs the network. --config is
+                // documented as not required here.
+                let network = match &cli.config {
+                    Some(config_path) if Path::new(config_path).exists() => {
+                        Some(Config::load(config_path)?.stratum.network)
+                    }
+                    _ => None,
+                };
+
+                match &cli.command {
+                    Some(Commands::Info) => {
+                        commands::db_query::info(&store)?;
+                    }
+                    Some(Commands::PplnsShares {
+                        limit,
+                        start_time,
+                        end_time,
+                    }) => {
+                        commands::db_query::pplns_shares(&store, *limit, *start_time, *end_time)?;
+                    }
+                    Some(Commands::Shares { to, num, dot, .. }) => {
+                        if *dot {
+                            commands::db_query::shares_dot(&store, *to, *num, network)?;
+                        } else {
+                            commands::db_query::shares(&store, *to, *num, network)?;
+                        }
+                    }
+                    Some(Commands::Candidates { to, num, dot }) => {
+                        if *dot {
+                            commands::db_query::candidates_dot(&store, *to, *num, network)?;
+                        } else {
+                            commands::db_query::candidates(&store, *to, *num, network)?;
+                        }
+                    }
+                    Some(Commands::Share { hash, height, full }) => {
+                        commands::db_query::share_lookup(
+                            &store,
+                            hash.clone(),
+                            *height,
+                            *full,
+                            network,
+                        )?;
+                    }
+                    Some(Commands::Dag { to, num, dot }) => {
+                        commands::db_query::dag(&store, *to, *num, *dot, network)?;
+                    }
+                    Some(Commands::Transactions { command }) => {
+                        commands::transactions::execute_db(&store, command)?;
+                    }
+                    _ => unreachable!(),
                 }
-                Some(Commands::Info) => {
-                    commands::chain_info::execute(&config.api).await?;
-                }
-                Some(Commands::PplnsShares {
-                    limit,
-                    start_time,
-                    end_time,
-                }) => {
-                    commands::pplns_shares::execute(&config.api, *limit, *start_time, *end_time)
+            } else {
+                // API query mode (requires running node)
+                let config_path = cli
+                    .config
+                    .as_ref()
+                    .ok_or("Config file required for this command. Use --config or --db-path")?;
+                let config = Config::load(config_path)?;
+
+                match &cli.command {
+                    Some(Commands::Info) => {
+                        commands::chain_info::execute(&config.api).await?;
+                    }
+                    Some(Commands::PplnsShares {
+                        limit,
+                        start_time,
+                        end_time,
+                    }) => {
+                        commands::pplns_shares::execute(
+                            &config.api,
+                            *limit,
+                            *start_time,
+                            *end_time,
+                        )
                         .await?;
+                    }
+                    Some(Commands::Shares {
+                        to,
+                        num,
+                        share_block_transactions,
+                        template_merkle_branches,
+                        dot: _,
+                    }) => {
+                        commands::shares::execute(
+                            &config.api,
+                            *to,
+                            *num,
+                            *share_block_transactions,
+                            *template_merkle_branches,
+                        )
+                        .await?;
+                    }
+                    Some(Commands::Candidates { to, num, dot: _ }) => {
+                        commands::candidates::execute(&config.api, *to, *num).await?;
+                    }
+                    Some(Commands::Share { hash, height, full }) => {
+                        commands::share::execute(&config.api, hash.clone(), *height, *full).await?;
+                    }
+                    Some(Commands::Dag { to, num, dot: _ }) => {
+                        commands::dag::execute(&config.api, *to, *num).await?;
+                    }
+                    Some(Commands::Transactions { command }) => {
+                        commands::transactions::execute_api(&config.api, command).await?;
+                    }
+                    _ => unreachable!(),
                 }
-                Some(Commands::Shares {
-                    to,
-                    num,
-                    share_block_transactions,
-                    template_merkle_branches,
-                }) => {
-                    commands::shares::execute(
-                        &config.api,
-                        *to,
-                        *num,
-                        *share_block_transactions,
-                        *template_merkle_branches,
-                    )
-                    .await?;
-                }
-                Some(Commands::Candidates { to, num }) => {
-                    commands::candidates::execute(&config.api, *to, *num).await?;
-                }
-                Some(Commands::Share { hash, height, full }) => {
-                    commands::share::execute(&config.api, hash.clone(), *height, *full).await?;
-                }
-                _ => unreachable!(),
             }
         }
         None => {

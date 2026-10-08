@@ -1,18 +1,6 @@
-// Copyright (C) 2024-2026 P2Poolv2 Developers (see AUTHORS)
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
 //
-// This file is part of P2Poolv2
-//
-// P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free
-// Software Foundation, either version 3 of the License, or (at your option)
-// any later version.
-//
-// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License along with
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Broadcast event types for monitoring via WebSocket subscriptions.
 //!
@@ -85,8 +73,10 @@ pub fn create_monitoring_event_channel() -> (MonitoringEventSender, MonitoringEv
 mod tests {
     use super::*;
     use crate::store::dag_store::UncleInfo;
+    use crate::test_utils::make_test_share_program;
     use bitcoin::hashes::Hash;
     use bitcoin::{BlockHash, CompactTarget};
+    use p2poolv2_wallet::witness_program_codec::to_hex;
 
     #[test]
     fn test_share_event_serialization() {
@@ -94,7 +84,8 @@ mod tests {
             blockhash: BlockHash::all_zeros(),
             prev_blockhash: BlockHash::all_zeros(),
             height: 100,
-            miner_address: "02aa".to_string(),
+            miner_bitcoin_address: "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q".to_string(),
+            miner_address: make_test_share_program(1),
             timestamp: 1700000000,
             bits: CompactTarget::from_consensus(0x1d00ffff),
             uncles: vec![],
@@ -103,7 +94,15 @@ mod tests {
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("\"topic\":\"Share\""));
         assert!(json.contains("\"height\":100"));
-        assert!(json.contains("\"miner_address\":\"02aa\""));
+        assert!(
+            json.contains(
+                "\"miner_bitcoin_address\":\"tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q\""
+            )
+        );
+        assert!(json.contains(&format!(
+            "\"miner_address\":\"{}\"",
+            to_hex(&make_test_share_program(1))
+        )));
     }
 
     #[test]
@@ -134,7 +133,8 @@ mod tests {
             blockhash: BlockHash::all_zeros(),
             prev_blockhash: BlockHash::all_zeros(),
             height: 42,
-            miner_address: "02aabbccdd".to_string(),
+            miner_bitcoin_address: "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q".to_string(),
+            miner_address: make_test_share_program(1),
             timestamp: 1_700_000_000,
             bits: CompactTarget::from_consensus(0x1b4188f5),
             uncles: vec![],
@@ -143,7 +143,15 @@ mod tests {
         let event = MonitoringEvent::Share(share);
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("\"height\":42"));
-        assert!(json.contains("\"miner_address\":\"02aabbccdd\""));
+        assert!(
+            json.contains(
+                "\"miner_bitcoin_address\":\"tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q\""
+            )
+        );
+        assert!(json.contains(&format!(
+            "\"miner_address\":\"{}\"",
+            to_hex(&make_test_share_program(1))
+        )));
         assert!(json.contains("\"timestamp\":1700000000"));
     }
 
@@ -152,7 +160,8 @@ mod tests {
         let uncle = UncleInfo {
             blockhash: BlockHash::all_zeros(),
             prev_blockhash: BlockHash::all_zeros(),
-            miner_address: "02uncle".to_string(),
+            miner_bitcoin_address: "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string(),
+            miner_address: make_test_share_program(2),
             timestamp: 1_700_000_010,
             height: Some(41),
         };
@@ -161,7 +170,8 @@ mod tests {
             blockhash: BlockHash::all_zeros(),
             prev_blockhash: BlockHash::all_zeros(),
             height: 42,
-            miner_address: "02parent".to_string(),
+            miner_bitcoin_address: "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q".to_string(),
+            miner_address: make_test_share_program(1),
             timestamp: 1_700_000_020,
             bits: CompactTarget::from_consensus(0x1b4188f5),
             uncles: vec![uncle],
@@ -170,7 +180,7 @@ mod tests {
         let event = MonitoringEvent::Share(share);
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("\"uncles\""));
-        assert!(json.contains("\"02uncle\""));
+        assert!(json.contains(&format!("\"{}\"", to_hex(&make_test_share_program(2)))));
         assert!(json.contains("\"height\":42"));
     }
 

@@ -1,18 +1,6 @@
-// Copyright (C) 2024-2026 P2Poolv2 Developers (see AUTHORS)
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
 //
-// This file is part of P2Poolv2
-//
-// P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free
-// Software Foundation, either version 3 of the License, or (at your option)
-// any later version.
-//
-// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License along with
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 use super::block_template::BlockTemplate;
 use super::error::WorkError;
@@ -25,8 +13,8 @@ use crate::pool_difficulty;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
+use crate::sim_overrides;
 use crate::stratum::work::prepared_notify::{PreparedNotifyParams, PreparedNotifyParamsBuilder};
-use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
 use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
 use tracing::{debug, error};
@@ -45,33 +33,43 @@ pub(crate) struct NotifyContext {
 /// Build the output distribution for the coinbase transaction using
 /// payout accounting in NotifyContext.
 ///
-/// difficulty_multiplier is used to get the total difficulty we need
-/// to match to collect all the shares to use to compute output distribution.
+/// The total difficulty threshold is computed by `sim_overrides::pplns_total_difficulty`,
+/// which uses the production formula (bitcoin_difficulty * multiplier) in normal
+/// builds and a sim-specific formula in sim builds.
+///
+/// Returns `Err` if the payout distribution cannot be resolved.
 fn build_output_distribution(
     template: &BlockTemplate,
+    pool_target: bitcoin::CompactTarget,
+    anchor: bitcoin::BlockHash,
     context: &mut NotifyContext,
-) -> Vec<OutputPair> {
+) -> Result<Vec<OutputPair>, WorkError> {
     let total_amount = bitcoin::Amount::from_sat(template.coinbasevalue);
 
     let compact_target = bitcoin::pow::CompactTarget::from_unprefixed_hex(&template.bits).unwrap();
-    let required_target = bitcoin::Target::from_compact(compact_target);
+    let bitcoin_difficulty =
+        bitcoin::Target::from_compact(compact_target).difficulty(context.config.network);
+    let share_pool_difficulty =
+        bitcoin::Target::from_compact(pool_target).difficulty(context.config.network);
 
-    let total_difficulty = required_target
-        .difficulty(context.config.network)
-        .saturating_mul(context.config.difficulty_multiplier as u128);
+    let total_difficulty = sim_overrides::pplns_total_difficulty(
+        bitcoin_difficulty,
+        context.config.difficulty_multiplier as u128,
+        share_pool_difficulty,
+    );
 
-    match context.payout.get_output_distribution(
-        &context.chain_store_handle,
-        total_difficulty,
-        total_amount,
-        &context.config,
-    ) {
-        Ok(distribution) => distribution,
-        Err(e) => {
-            debug!("Payout distribution failed: {}", e);
-            Vec::new()
-        }
-    }
+    context
+        .payout
+        .get_output_distribution(
+            &context.chain_store_handle,
+            anchor,
+            total_difficulty,
+            total_amount,
+            &context.config,
+        )
+        .map_err(|error| WorkError {
+            message: format!("Payout distribution failed: {error}"),
+        })
 }
 
 /// Build a PreparedNotifyParams from a template using the notify context.
@@ -83,29 +81,26 @@ fn build_prepared_notify(
     clean_jobs: bool,
     context: &mut NotifyContext,
 ) -> Result<PreparedNotifyParams, WorkError> {
-    let output_distribution = build_output_distribution(template, context);
-
     let (tip, uncles) = context
         .chain_store_handle
-        .get_chain_tip_and_uncles()
+        .get_mining_base_and_uncles()
         .map_err(|error| WorkError {
-            message: format!("Failed to get chain tip: {error}"),
+            message: format!("Failed to get mining base: {error}"),
         })?;
     let (tip_height, parent_time) = context
         .chain_store_handle
-        .get_tip_height_and_time()
+        .get_share_height_and_time(&tip)
         .map_err(|error| WorkError {
             message: format!("Failed to get tip height: {error}"),
         })?;
-    let bitcoin_bits =
-        bitcoin::CompactTarget::from_unprefixed_hex(&template.bits).map_err(|_| WorkError {
-            message: "Failed to parse bitcoin bits from block template".to_string(),
-        })?;
-    let target =
-        context
-            .pool_difficulty
-            .calculate_target_clamped(parent_time, tip_height, bitcoin_bits);
-    let time = SystemTimeProvider.seconds_since_epoch() as u32;
+    let target = context
+        .pool_difficulty
+        .calculate_target_clamped(parent_time, tip_height);
+
+    //* Anchor the payout on the same `tip` we commit as prev_share_blockhash
+    //* below, so a confirmed-chain advance between reads cannot make the
+    //* coinbase pay a window inconsistent with its declared prev.
+    let output_distribution = build_output_distribution(template, target, tip, context)?;
 
     PreparedNotifyParamsBuilder::new(
         Arc::clone(template),
@@ -114,9 +109,8 @@ fn build_prepared_notify(
         clean_jobs,
     )
     .prev_share_blockhash(tip)
-    .uncles(uncles.into_iter().collect())
+    .uncles(uncles)
     .bits(target)
-    .time(time)
     .donation_address(context.config.donation_address().cloned())
     .donation(context.config.donation)
     .fee_address(context.config.fee_address().cloned())
@@ -167,6 +161,14 @@ fn publish_prepared_notify(
 /// PreparedNotifyParams once per template, and publishes it via the
 /// watch channel. Each connection handler receives the prepared
 /// template and builds per-miner notifies independently.
+///
+/// Returns as soon as a template cannot be prepared, which the node turns into
+/// `ShutdownReason::Error`. Continuing is not an option: the watch channel
+/// keeps handing every connected and newly connecting miner the last template
+/// that did build, so the pool would go on hashing a previousblockhash bitcoin
+/// has moved past, with nothing to age the job out and only a repeated error
+/// log to show for it. The block template fetcher shuts the node down on the
+/// same class of failure.
 pub async fn start_notify(
     mut notifier_rx: mpsc::Receiver<NotifyCmd>,
     template_tx: watch::Sender<Option<Arc<PreparedNotifyParams>>>,
@@ -204,8 +206,8 @@ pub async fn start_notify(
                     &mut notify_context,
                     &template_tx,
                 ) {
-                    error!("Failed to publish notify: {error}");
-                    continue;
+                    error!("Failed to publish notify, shutting down: {error}");
+                    return;
                 }
             }
             NotifyCmd::NewNotify => {
@@ -214,8 +216,8 @@ pub async fn start_notify(
                     if let Err(error) =
                         publish_prepared_notify(template, true, &mut notify_context, &template_tx)
                     {
-                        error!("Failed to publish new notify: {error}");
-                        continue;
+                        error!("Failed to publish new notify, shutting down: {error}");
+                        return;
                     }
                 } else {
                     debug!("NewNotify received but no template available yet");
@@ -237,6 +239,7 @@ mod tests {
     };
     use crate::stratum::work::tracker::{JobId, start_tracker_actor};
     use crate::test_utils::genesis_for_tests;
+    use crate::test_utils::make_test_share_address;
     use bitcoin::CompressedPublicKey;
     use bitcoin::{Address, Amount, Network, ScriptBuf, TxOut};
     use std::collections::HashMap;
@@ -248,7 +251,7 @@ mod tests {
         let mut mock_payout = MockPayoutDistribution::default();
         mock_payout
             .expect_get_output_distribution()
-            .return_once(move |_, _, _, _| Ok(distribution));
+            .return_once(move |_, _, _, _, _| Ok(distribution));
         mock_payout
     }
 
@@ -271,7 +274,6 @@ mod tests {
         let prepared =
             PreparedNotifyParamsBuilder::new(Arc::new(template), test_distribution, &[], false)
                 .bits(bitcoin::CompactTarget::from_consensus(0x1d00ffff))
-                .time(1700000000u32)
                 .build()
                 .expect("Failed to build prepared notify");
 
@@ -280,8 +282,13 @@ mod tests {
             .unwrap()
             .assume_checked();
         let tracker_handle = start_tracker_actor();
-        let notify_json = build_notify_from_prepared(&prepared, Some(&address), &tracker_handle)
-            .expect("Failed to build notify");
+        let notify_json = build_notify_from_prepared(
+            &prepared,
+            Some(&address),
+            Some(&make_test_share_address(1, bitcoin::Network::Signet)),
+            &tracker_handle,
+        )
+        .expect("Failed to build notify");
 
         let notify: Notify = serde_json::from_str(&notify_json).expect("Invalid notify JSON");
 
@@ -301,6 +308,78 @@ mod tests {
         );
     }
 
+    /// A template that cannot be prepared ends the notifier rather than leaving
+    /// the previous one in the watch channel.
+    ///
+    /// The watch channel hands its last value to every connected miner and to
+    /// every miner that connects afterwards, so keeping a job whose
+    /// previousblockhash bitcoin has moved past would silently put the whole
+    /// pool on dead work. Returning here is what the node turns into a
+    /// shutdown.
+    #[tokio::test]
+    async fn test_start_notify_stops_when_a_template_cannot_be_prepared() {
+        let (template_tx, mut template_rx) =
+            watch::channel::<Option<Arc<PreparedNotifyParams>>>(None);
+        let (notify_tx, notify_rx) = mpsc::channel::<NotifyCmd>(10);
+
+        let mut chain_store_handle = ChainStoreHandle::default();
+        let genesis = genesis_for_tests();
+        let genesis_hash = genesis.block_hash();
+        let genesis_header = genesis.header.clone();
+        chain_store_handle
+            .expect_get_mining_base_and_uncles()
+            .returning(move || Ok((genesis_hash, vec![])));
+        chain_store_handle
+            .expect_get_share_height_and_time()
+            .returning(|_| Ok((0, genesis_for_tests().header.time)));
+
+        let pool_difficulty =
+            pool_difficulty::PoolDifficulty::new(genesis_header.bits, genesis_header.time, 0);
+        let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
+
+        // The payout anchor cannot be resolved, which is persistent: the mining
+        // base does not move while confirmation is stalled.
+        let mut mock_payout = MockPayoutDistribution::default();
+        mock_payout
+            .expect_get_output_distribution()
+            .returning(|_, _, _, _, _| Err("no payout distribution for anchor".into()));
+
+        let task_handle = tokio::spawn(async move {
+            start_notify(
+                notify_rx,
+                template_tx,
+                chain_store_handle,
+                &stratum_config,
+                Box::new(mock_payout),
+                pool_difficulty,
+            )
+            .await;
+        });
+
+        let data = include_str!(
+            "../../../../p2poolv2_tests/test_data/gbt/regtest/ckpool/one-txn/gbt.json"
+        );
+        let gbt_json: serde_json::Value = serde_json::from_str(data).expect("Invalid JSON");
+        let template: BlockTemplate =
+            serde_json::from_value(gbt_json).expect("Failed to parse BlockTemplate");
+        notify_tx
+            .send(NotifyCmd::SendToAll {
+                template: Arc::new(template),
+            })
+            .await
+            .expect("Failed to send template");
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), task_handle)
+            .await
+            .expect("notifier must stop when a template cannot be prepared")
+            .expect("notifier task panicked");
+
+        assert!(
+            template_rx.borrow_and_update().is_none(),
+            "no job may be published from a template that failed to prepare"
+        );
+    }
+
     #[tokio::test]
     async fn test_start_notify() {
         // Create watch channel for prepared templates
@@ -316,15 +395,15 @@ mod tests {
         let genesis_hash = genesis.block_hash();
         let genesis_header = genesis.header.clone();
         chain_store_handle
-            .expect_get_chain_tip_and_uncles()
-            .returning(move || Ok((genesis_hash, std::collections::HashSet::new())));
+            .expect_get_mining_base_and_uncles()
+            .returning(move || Ok((genesis_hash, vec![])));
 
         let pool_difficulty =
             pool_difficulty::PoolDifficulty::new(genesis_header.bits, genesis_header.time, 0);
 
         chain_store_handle
-            .expect_get_tip_height_and_time()
-            .returning(|| Ok((0, genesis_for_tests().header.time)));
+            .expect_get_share_height_and_time()
+            .returning(|_| Ok((0, genesis_for_tests().header.time)));
 
         let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
 
@@ -338,7 +417,7 @@ mod tests {
         let mut mock_payout = MockPayoutDistribution::default();
         mock_payout
             .expect_get_output_distribution()
-            .returning(move |_, _, _, _| Ok(test_distribution.clone()));
+            .returning(move |_, _, _, _, _| Ok(test_distribution.clone()));
 
         let task_handle = tokio::spawn(async move {
             start_notify(
@@ -356,7 +435,7 @@ mod tests {
         let data = include_str!(
             "../../../../p2poolv2_tests/test_data/gbt/regtest/ckpool/one-txn/gbt.json"
         );
-        let gbt_json: serde_json::Value = serde_json::from_str(&data).expect("Invalid JSON");
+        let gbt_json: serde_json::Value = serde_json::from_str(data).expect("Invalid JSON");
         let template: BlockTemplate =
             serde_json::from_value(gbt_json.clone()).expect("Failed to parse BlockTemplate");
 
@@ -386,6 +465,7 @@ mod tests {
         let result = build_notify_from_prepared(
             prepared.as_ref().unwrap(),
             Some(&miner_address),
+            Some(&make_test_share_address(1, bitcoin::Network::Signet)),
             &tracker_handle,
         );
         assert!(result.is_ok(), "build_notify_from_prepared should succeed");
@@ -401,7 +481,7 @@ mod tests {
         let data = include_str!(
             "../../../../p2poolv2_tests/test_data/gbt/regtest/ckpool/one-txn/gbt.json"
         );
-        let gbt_json: serde_json::Value = serde_json::from_str(&data).expect("Invalid JSON");
+        let gbt_json: serde_json::Value = serde_json::from_str(data).expect("Invalid JSON");
         let template: BlockTemplate =
             serde_json::from_value(gbt_json.clone()).expect("Failed to parse BlockTemplate");
 
@@ -410,12 +490,12 @@ mod tests {
         let genesis = genesis_for_tests();
         let genesis_hash = genesis.block_hash();
         chain_store_handle
-            .expect_get_chain_tip_and_uncles()
-            .returning(move || Ok((genesis_hash, std::collections::HashSet::new())));
+            .expect_get_mining_base_and_uncles()
+            .returning(move || Ok((genesis_hash, vec![])));
 
         chain_store_handle
-            .expect_get_tip_height_and_time()
-            .returning(|| Ok((0, genesis_for_tests().header.time)));
+            .expect_get_share_height_and_time()
+            .returning(|_| Ok((0, genesis_for_tests().header.time)));
 
         // Setup config and tracker
         let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
@@ -452,8 +532,13 @@ mod tests {
         let prepared = prepared.unwrap();
 
         // Build per-miner notify from prepared
-        let notify_str = build_notify_from_prepared(&prepared, Some(&btcaddress), &tracker_handle)
-            .expect("build_notify_from_prepared should succeed");
+        let notify_str = build_notify_from_prepared(
+            &prepared,
+            Some(&btcaddress),
+            Some(&make_test_share_address(1, bitcoin::Network::Signet)),
+            &tracker_handle,
+        )
+        .expect("build_notify_from_prepared should succeed");
 
         // Verify notify string is valid JSON
         let notify: Notify = serde_json::from_str(&notify_str).expect("Invalid notify JSON");
@@ -538,21 +623,25 @@ mod tests {
             true,
         )
         .bits(bitcoin::CompactTarget::from_consensus(0x1d00ffff))
-        .time(1700000000u32)
         .build()
         .expect("Failed to build prepared notify");
 
         let address = original_output_pairs[0].address.clone();
         let tracker_handle = start_tracker_actor();
-        let notify_json = build_notify_from_prepared(&prepared, Some(&address), &tracker_handle)
-            .expect("Failed to build notify");
+        let notify_json = build_notify_from_prepared(
+            &prepared,
+            Some(&address),
+            Some(&make_test_share_address(1, bitcoin::Network::Signet)),
+            &tracker_handle,
+        )
+        .expect("Failed to build notify");
 
         let notify: Notify = serde_json::from_str(&notify_json).expect("Invalid notify JSON");
         let coinbase2_hex = &notify.params.coinbase2;
 
         // Extract outputs from coinbase2 and verify they match the original
         let extracted_txouts =
-            extract_outputs_from_coinbase2(coinbase2_hex, 33, pool_signature.len()).unwrap();
+            extract_outputs_from_coinbase2(coinbase2_hex, pool_signature.len()).unwrap();
 
         let expected_txout_1 = TxOut {
             value: original_output_pairs[0].amount,
@@ -569,9 +658,12 @@ mod tests {
             script_pubkey: witness_script,
         };
 
-        assert_eq!(extracted_txouts.len(), 3); // 2 payments + 1 witness
+        // 2 payments + witness commitment + padding + share commitment
+        assert_eq!(extracted_txouts.len(), 5);
         assert_eq!(extracted_txouts[0], expected_txout_1);
         assert_eq!(extracted_txouts[1], expected_txout_2);
         assert_eq!(extracted_txouts[2], expected_txout_3);
+        assert_eq!(extracted_txouts[3].value, Amount::ZERO);
+        assert_eq!(extracted_txouts[4].value, Amount::ZERO);
     }
 }

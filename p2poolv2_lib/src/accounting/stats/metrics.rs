@@ -1,25 +1,12 @@
-// Copyright (C) 2024-2026 P2Poolv2 Developers (see AUTHORS)
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
 //
-// This file is part of P2Poolv2
-//
-// P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free
-// Software Foundation, either version 3 of the License, or (at your option)
-// any later version.
-//
-// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License along with
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 use crate::accounting::stats::pool_local_stats::load_pool_local_stats;
 use crate::accounting::stats::user::User;
-use crate::accounting::stats::worker::Worker;
 use crate::accounting::{payout::simple_pplns::SimplePplnsShare, stats::pool_local_stats};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::time::SystemTime;
 use tokio::sync::{mpsc, oneshot};
 use tracing::error;
@@ -27,6 +14,24 @@ use tracing::error;
 const METRICS_MESSAGE_BUFFER_SIZE: usize = 1000;
 pub const INITIAL_USER_MAP_CAPACITY: usize = 1000;
 const METRICS_SAVE_INTERVAL: u64 = 5;
+/// Maximum number of recently found blocks retained for the block-found
+/// metric. Bounds the label cardinality of `bitcoin_block_found_time_seconds`.
+pub const MAX_BLOCKS_FOUND_TRACKED: usize = 20;
+
+/// A bitcoin block found by the pool, retained for the block-found metric.
+///
+/// blockhash and height are exposed as Prometheus labels so Grafana can
+/// build block explorer links. The retained set is bounded by
+/// MAX_BLOCKS_FOUND_TRACKED so label cardinality stays low.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct BlockFound {
+    /// Block hash as a hex string, used as a Grafana data-link label
+    pub blockhash: String,
+    /// Bitcoin block height
+    pub height: u64,
+    /// Unix timestamp in seconds when the block was found
+    pub timestamp: u64,
+}
 
 /// Represents the metrics for the P2Poolv2 pool, we derive the stats every five minutes from this
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -49,6 +54,21 @@ pub struct PoolMetrics {
     pub users: HashMap<String, User>,
     /// Current pool difficulty
     pub pool_difficulty: u64,
+    /// Total number of bitcoin blocks found by the pool (monotonic counter)
+    #[serde(default)]
+    pub blocks_found_total: u64,
+    /// Ring of the most recently found blocks, capped at
+    /// MAX_BLOCKS_FOUND_TRACKED. Exposed with blockhash/height labels for
+    /// Grafana block explorer links.
+    #[serde(default)]
+    pub blocks_found: VecDeque<BlockFound>,
+    /// Confirmed sharechain pool difficulty since the last bitcoin block was
+    /// found; reset to zero on each block find. Numerator of the block effort
+    /// metric (`work_since_last_block / network_difficulty`). Runtime-only (not
+    /// persisted), mainnet-relative units matching network_difficulty. Pool
+    /// hashrate is derived separately from confirmed-chain total work.
+    #[serde(default)]
+    pub work_since_last_block: f64,
 }
 
 impl Default for PoolMetrics {
@@ -66,6 +86,9 @@ impl Default for PoolMetrics {
             best_share_ever: 0,
             users: HashMap::with_capacity(INITIAL_USER_MAP_CAPACITY),
             pool_difficulty: 0,
+            blocks_found_total: 0,
+            blocks_found: VecDeque::with_capacity(MAX_BLOCKS_FOUND_TRACKED),
+            work_since_last_block: 0.0,
         }
     }
 }
@@ -79,6 +102,8 @@ impl PoolMetrics {
             accepted_difficulty_total: pool_stats.accepted_difficulty_total,
             rejected_total: pool_stats.rejected_total,
             users: pool_stats.users,
+            blocks_found_total: pool_stats.blocks_found_total,
+            blocks_found: pool_stats.blocks_found,
             ..Default::default()
         })
     }
@@ -95,6 +120,15 @@ pub enum MetricsMessage {
         response: oneshot::Sender<()>,
     },
     RecordShareRejected {
+        response: oneshot::Sender<()>,
+    },
+    RecordBlockFound {
+        blockhash: String,
+        height: u64,
+        response: oneshot::Sender<()>,
+    },
+    RecordConfirmedShare {
+        difficulty: f64,
         response: oneshot::Sender<()>,
     },
     IncrementWorkerCount {
@@ -166,6 +200,21 @@ impl MetricsActor {
                 self.record_share_rejected();
                 let _ = response.send(());
             }
+            MetricsMessage::RecordBlockFound {
+                blockhash,
+                height,
+                response,
+            } => {
+                self.record_block_found(blockhash, height);
+                let _ = response.send(());
+            }
+            MetricsMessage::RecordConfirmedShare {
+                difficulty,
+                response,
+            } => {
+                self.record_confirmed_share(difficulty);
+                let _ = response.send(());
+            }
             MetricsMessage::IncrementWorkerCount {
                 btcaddress,
                 workername,
@@ -226,25 +275,70 @@ impl MetricsActor {
         self.metrics.rejected_total += 1;
     }
 
+    /// Record a bitcoin block found by the pool.
+    ///
+    /// Increments the monotonic counter, appends to the bounded ring of
+    /// recently found blocks (evicting the oldest past MAX_BLOCKS_FOUND_TRACKED).
+    /// Also resets the block effort accumulator since work now targets the
+    /// next block.
+    ///
+    /// A blockhash already present in the ring is ignored, so a share that is
+    /// re-promoted after a reorg does not double-count or reset effort twice.
+    fn record_block_found(&mut self, blockhash: String, height: u64) {
+        if self
+            .metrics
+            .blocks_found
+            .iter()
+            .any(|block| block.blockhash == blockhash)
+        {
+            return;
+        }
+        let timestamp = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        self.metrics.blocks_found_total += 1;
+        self.metrics.blocks_found.push_back(BlockFound {
+            blockhash,
+            height,
+            timestamp,
+        });
+        while self.metrics.blocks_found.len() > MAX_BLOCKS_FOUND_TRACKED {
+            self.metrics.blocks_found.pop_front();
+        }
+        self.metrics.work_since_last_block = 0.0;
+    }
+
+    /// Record the pool difficulty of a confirmed sharechain share for the
+    /// per-block effort accumulator. Hashrate is derived separately from
+    /// confirmed-chain total work.
+    fn record_confirmed_share(&mut self, difficulty: f64) {
+        self.metrics.work_since_last_block += difficulty;
+    }
+
     /// Increment worker counts - called after worker has authorised successfully.
+    /// Uses entry().or_default() to preserve existing worker stats on reconnect.
     fn worker_authorized(&mut self, btcaddress: String, workername: String) {
-        self.metrics
+        let worker = self
+            .metrics
             .users
             .entry(btcaddress)
             .or_default()
             .workers
-            .insert(workername, Worker::default());
+            .entry(workername)
+            .or_default();
+        worker.active = true;
+        worker.best_share = 0;
     }
 
     /// Decrement pool wide worker counts, if worker found as authorised. Unauthorised workers are not counted.
     /// Also marks Worker inactive, if found.
     fn mark_worker_inactive(&mut self, btcaddress: Option<String>, workername: String) {
-        if let Some(btcaddress) = btcaddress {
-            if let Some(user) = self.metrics.users.get_mut(&btcaddress) {
-                if let Some(worker) = user.workers.get_mut(&workername) {
-                    worker.active = false;
-                }
-            }
+        if let Some(btcaddress) = btcaddress
+            && let Some(user) = self.metrics.users.get_mut(&btcaddress)
+            && let Some(worker) = user.workers.get_mut(&workername)
+        {
+            worker.active = false;
         }
     }
 
@@ -258,9 +352,9 @@ impl MetricsActor {
     /// Set last update time. Largely used for testing.
     fn set_last_update(&mut self, lastupdate: u64) {
         self.metrics.lastupdate = Some(lastupdate);
-        for (_btcaddress, user) in self.metrics.users.iter_mut() {
+        for user in self.metrics.users.values_mut() {
             user.last_share_at = lastupdate;
-            for (_workername, worker) in user.workers.iter_mut() {
+            for worker in user.workers.values_mut() {
                 worker.last_share_at = lastupdate;
             }
         }
@@ -306,6 +400,41 @@ impl MetricsHandle {
             })
             .await
             .expect("Error recording share");
+        response_rx.await
+    }
+
+    /// Record a bitcoin block found by the pool
+    pub async fn record_block_found(
+        &self,
+        blockhash: String,
+        height: u64,
+    ) -> Result<(), tokio::sync::oneshot::error::RecvError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.sender
+            .send(MetricsMessage::RecordBlockFound {
+                blockhash,
+                height,
+                response: response_tx,
+            })
+            .await
+            .expect("Error recording block found");
+        response_rx.await
+    }
+
+    /// Record the pool difficulty of a confirmed sharechain share for the
+    /// block effort metric.
+    pub async fn record_confirmed_share(
+        &self,
+        difficulty: f64,
+    ) -> Result<(), tokio::sync::oneshot::error::RecvError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.sender
+            .send(MetricsMessage::RecordConfirmedShare {
+                difficulty,
+                response: response_tx,
+            })
+            .await
+            .expect("Error recording confirmed share");
         response_rx.await
     }
 
@@ -384,6 +513,19 @@ impl MetricsHandle {
             .expect("Error setting last update");
         response_rx.await
     }
+}
+
+/// Spawn a metrics actor with default metrics and return its handle.
+///
+/// Test-only helper for wiring components that require a `MetricsHandle`
+/// without touching disk or the stats saver.
+#[cfg(test)]
+pub(crate) fn spawn_test_metrics_handle() -> MetricsHandle {
+    let (sender, receiver) = mpsc::channel(METRICS_MESSAGE_BUFFER_SIZE);
+    tokio::spawn(async move {
+        MetricsActor::new(receiver).run().await;
+    });
+    MetricsHandle { sender }
 }
 
 /// Construct a new metrics actor with existing metrics and return its handle
@@ -495,6 +637,64 @@ mod tests {
         let _ = handle.record_share_rejected().await;
 
         let _ = handle.record_share_rejected().await;
+    }
+
+    #[tokio::test]
+    async fn test_confirmed_share_and_block_found_reset() {
+        let log_dir = tempfile::tempdir().unwrap();
+        let handle = start_metrics(log_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
+
+        // Confirmed sharechain work accumulates into the effort numerator.
+        let _ = handle.record_confirmed_share(500.0).await;
+        let _ = handle.record_confirmed_share(250.0).await;
+
+        let metrics = handle.get_metrics().await;
+        assert_eq!(metrics.work_since_last_block, 750.0);
+
+        let _ = handle
+            .record_block_found(
+                "00000000000000000000abcdef0123456789abcdef0123456789abcdef012345".to_string(),
+                840000,
+            )
+            .await;
+
+        let metrics = handle.get_metrics().await;
+        assert_eq!(metrics.blocks_found_total, 1);
+        assert_eq!(metrics.blocks_found.len(), 1);
+        let found = metrics.blocks_found.front().unwrap();
+        assert_eq!(
+            found.blockhash,
+            "00000000000000000000abcdef0123456789abcdef0123456789abcdef012345"
+        );
+        assert_eq!(found.height, 840000);
+        assert!(found.timestamp > 0);
+        // Finding a block resets effort toward the next block.
+        assert_eq!(metrics.work_since_last_block, 0.0);
+    }
+
+    #[tokio::test]
+    async fn test_blocks_found_ring_evicts_oldest() {
+        let log_dir = tempfile::tempdir().unwrap();
+        let handle = start_metrics(log_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
+
+        let overflow = MAX_BLOCKS_FOUND_TRACKED as u64 + 5;
+        for height in 0..overflow {
+            let _ = handle
+                .record_block_found(format!("hash{height:064x}"), height)
+                .await;
+        }
+
+        let metrics = handle.get_metrics().await;
+        // Counter is monotonic and counts every find
+        assert_eq!(metrics.blocks_found_total, overflow);
+        // Ring is capped and holds only the most recent finds
+        assert_eq!(metrics.blocks_found.len(), MAX_BLOCKS_FOUND_TRACKED);
+        assert_eq!(metrics.blocks_found.front().unwrap().height, 5);
+        assert_eq!(metrics.blocks_found.back().unwrap().height, overflow - 1);
     }
 
     #[tokio::test]
@@ -613,7 +813,7 @@ mod tests {
         );
         assert_eq!(reloaded.accepted_total, metrics.accepted_total);
         assert_eq!(reloaded.rejected_total, metrics.rejected_total);
-        // Inactive workers/users are filtered out when saving to JSON
+        // Users that never submitted a share are filtered out when saving to JSON
         assert!(!reloaded.users.contains_key("user4"));
         // Active user1 with worker1 should be present
         assert!(reloaded.users.contains_key("user1"));
@@ -743,5 +943,105 @@ mod tests {
         assert_eq!(user_b.shares_valid_total, 30);
         assert_eq!(user_b.best_share, 33);
         assert!(user_b.workers.contains_key("workerB1"));
+    }
+
+    #[tokio::test]
+    async fn test_worker_reauthorize_preserves_stats() {
+        let log_dir = tempfile::tempdir().unwrap();
+        let handle = start_metrics(log_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
+
+        let _ = handle
+            .increment_worker_count("miner1".to_string(), "rig1".to_string())
+            .await;
+
+        let _ = handle
+            .record_share_accepted(
+                SimplePplnsShare {
+                    user_id: 1,
+                    difficulty: 1000,
+                    btcaddress: Some("miner1".to_string()),
+                    workername: Some("rig1".to_string()),
+                    n_time: 1000,
+                    job_id: "job1".to_string(),
+                    extranonce2: "extra1".to_string(),
+                    nonce: "nonce1".to_string(),
+                },
+                5500,
+            )
+            .await;
+
+        let _ = handle
+            .record_share_accepted(
+                SimplePplnsShare {
+                    user_id: 1,
+                    difficulty: 1000,
+                    btcaddress: Some("miner1".to_string()),
+                    workername: Some("rig1".to_string()),
+                    n_time: 1001,
+                    job_id: "job2".to_string(),
+                    extranonce2: "extra2".to_string(),
+                    nonce: "nonce2".to_string(),
+                },
+                3200,
+            )
+            .await;
+
+        let metrics = handle.get_metrics().await;
+        let worker = metrics
+            .users
+            .get("miner1")
+            .unwrap()
+            .workers
+            .get("rig1")
+            .unwrap();
+        assert_eq!(worker.shares_valid_total, 2000);
+        assert_eq!(worker.best_share, 5500);
+        assert_eq!(worker.best_share_ever, 5500);
+
+        // Worker disconnects
+        let _ = handle
+            .decrement_worker_count(Some("miner1".to_string()), "rig1".to_string())
+            .await;
+
+        // Worker reconnects - re-authorizes with same name
+        let _ = handle
+            .increment_worker_count("miner1".to_string(), "rig1".to_string())
+            .await;
+
+        // Stats should be preserved, best_share reset for new session
+        let metrics = handle.get_metrics().await;
+        let user = metrics.users.get("miner1").unwrap();
+        let worker = user.workers.get("rig1").unwrap();
+        assert_eq!(worker.shares_valid_total, 2000);
+        assert_eq!(worker.best_share, 0);
+        assert_eq!(worker.best_share_ever, 5500);
+        assert!(worker.active);
+
+        // New shares accumulate on top of existing stats
+        let _ = handle
+            .record_share_accepted(
+                SimplePplnsShare {
+                    user_id: 1,
+                    difficulty: 1000,
+                    btcaddress: Some("miner1".to_string()),
+                    workername: Some("rig1".to_string()),
+                    n_time: 2000,
+                    job_id: "job3".to_string(),
+                    extranonce2: "extra3".to_string(),
+                    nonce: "nonce3".to_string(),
+                },
+                4100,
+            )
+            .await;
+
+        let metrics = handle.get_metrics().await;
+        let user = metrics.users.get("miner1").unwrap();
+        let worker = user.workers.get("rig1").unwrap();
+        assert_eq!(worker.shares_valid_total, 3000);
+        assert_eq!(user.shares_valid_total, 3000);
+        assert_eq!(worker.best_share, 4100);
+        assert_eq!(worker.best_share_ever, 5500);
     }
 }

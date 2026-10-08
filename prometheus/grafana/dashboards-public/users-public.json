@@ -1,0 +1,304 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_PROMETHEUS",
+      "label": "Prometheus",
+      "description": "",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    }
+  ],
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "type": "dashboard",
+        "enable": true,
+        "hide": true,
+        "name": "Annotations & Alerts"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "id": 100,
+      "type": "text",
+      "title": "",
+      "transparent": true,
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "options": {
+        "mode": "html",
+        "content": "<ul>\n  <li><a href=\"https://grafana.p2poolv2.org/public-dashboards/9c5354852ba648b6926bb2adde0e3b83\" target=\"_blank\" rel=\"noopener\"><strong>Pool Stats</strong></a> \u2014 pool-wide hashrate, block effort, blocks found, and coinbase split</li>\n  <li><a href=\"https://grafana.p2poolv2.org/public-dashboards/92528dc7b7394a43bfb3a9513f390b7b\" target=\"_blank\" rel=\"noopener\"><strong>Node</strong></a> \u2014 local node view, hashrate, users, workers, uptime, etc.</li>\n  <li><a href=\"https://grafana.p2poolv2.org/public-dashboards/8583b50e898649978e468da111f14cd9\" target=\"_blank\" rel=\"noopener\"><strong>Miner leaderboard</strong></a> \u2014 every miner's hashrate and best share</li>\n</ul>"
+      }
+    },
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Top 15 miners by hashrate",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Hs",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "auto",
+            "axisPlacement": "auto",
+            "axisColorMode": "text"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "topk(15, sum by(btcaddress) (rate(worker_shares_valid_total[1h])))",
+          "refId": "A",
+          "instant": false,
+          "range": true,
+          "legendFormat": "{{btcaddress}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "table",
+      "title": "Miners",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 12,
+        "x": 0,
+        "y": 13
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Hashrate"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "Hs"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Best share"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "sishort"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "Hashrate",
+            "desc": true
+          }
+        ],
+        "footer": {
+          "show": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "sum by(btcaddress) (rate(worker_shares_valid_total[1h]))",
+          "refId": "A",
+          "format": "table",
+          "instant": true,
+          "range": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "max by(btcaddress) (worker_best_share_ever)",
+          "refId": "B",
+          "format": "table",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "transformations": [
+        {
+          "id": "joinByField",
+          "options": {
+            "byField": "btcaddress",
+            "mode": "outer"
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Time 1": true,
+              "Time 2": true
+            },
+            "renameByName": {
+              "btcaddress": "Miner",
+              "Value #A": "Hashrate",
+              "Value #B": "Best share"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "piechart",
+      "title": "Hashrate distribution (top 10 + others)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 12,
+        "w": 12,
+        "x": 12,
+        "y": 13
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Hs",
+          "custom": {
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "pieType": "pie",
+        "legend": {
+          "displayMode": "list",
+          "placement": "right",
+          "showLegend": true,
+          "values": [
+            "percent"
+          ]
+        },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "topk(10, sum by(btcaddress) (rate(worker_shares_valid_total[1h])))",
+          "refId": "A",
+          "instant": true,
+          "range": false,
+          "legendFormat": "{{btcaddress}}"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "expr": "label_replace(sum(rate(worker_shares_valid_total[1h])) - sum(topk(10, sum by(btcaddress) (rate(worker_shares_valid_total[1h])))), \"btcaddress\", \"Others\", \"\", \"\")",
+          "refId": "B",
+          "instant": true,
+          "range": false,
+          "legendFormat": "{{btcaddress}}"
+        }
+      ]
+    }
+  ],
+  "preload": false,
+  "schemaVersion": 39,
+  "tags": [],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Users and Workers (Public)",
+  "uid": "adnhx6xpub"
+}

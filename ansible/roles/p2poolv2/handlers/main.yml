@@ -1,0 +1,3 @@
+---
+# Handlers not used -- restart logic is inline in tasks to ensure
+# correct p2poolv2_instance scoping in multi-instance loops.

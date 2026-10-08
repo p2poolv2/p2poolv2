@@ -1,37 +1,18 @@
-// Copyright (C) 2024-2026 P2Poolv2 Developers (see AUTHORS)
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
 //
-// This file is part of P2Poolv2
-//
-// P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free
-// Software Foundation, either version 3 of the License, or (at your option)
-// any later version.
-//
-// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License along with
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 use super::address_serde;
 use super::option_address_serde;
-use super::share_block::ShareHeader;
-use crate::pool_difficulty::PoolDifficulty;
-#[cfg(test)]
-#[mockall_double::double]
-use crate::shares::chain::chain_store_handle::ChainStoreHandle;
-#[cfg(not(test))]
-use crate::shares::chain::chain_store_handle::ChainStoreHandle;
-use crate::stratum::work::block_template::BlockTemplate;
-use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
+use super::share_block::{ShareBlock, ShareHeader};
+use super::transactions::coinbase::compute_non_coinbase_root;
+use bitcoin::WitnessProgram;
 use bitcoin::consensus::Encodable;
 use bitcoin::hashes::Hash;
 use bitcoin::io::Write;
-use bitcoin::{Address, BlockHash, CompactTarget, hashes};
+use bitcoin::{Address, BlockHash, CompactTarget, TxMerkleNode, hashes};
+use p2poolv2_wallet::witness_program_codec;
 use serde::Serialize;
-use std::error::Error;
-use std::sync::Arc;
 
 /// Share commitment created by miner and embedded in the bitcoin
 /// coinbase to tie the share to the bitcoin weak block
@@ -56,6 +37,24 @@ pub struct ShareCommitment {
     /// Bitcoin address identifying the miner mining the share
     #[serde(serialize_with = "address_serde::serialize")]
     pub miner_bitcoin_address: Address,
+    /// Share chain miner address owning the share coinbase output, stored as
+    /// the witness program that address encodes. Distinct from
+    /// `miner_bitcoin_address`, which receives the bitcoin payout.
+    ///
+    /// Hashed directly. The coinbase is no longer in the commitment,
+    /// as it carries the weak block hash, so this is now the only thing
+    /// binding a miner to the proof of work produced.
+    #[serde(with = "p2poolv2_wallet::witness_program_codec::serde_hex")]
+    pub miner_address: WitnessProgram,
+    /// Merkle root over this share's *non-coinbase* transactions.
+    ///
+    /// The coinbase is deliberately absent: it carries the weak block hash, so
+    /// it cannot exist until the work is done, while this commitment is fixed
+    /// before the miner starts hashing. Validation binds the coinbase by
+    /// rebuilding it instead. Committing this root still ties the rest of the
+    /// transaction set to the proof of work, which is what stops a peer taking
+    /// a valid share, swapping its transactions and republishing.
+    pub non_coinbase_root: TxMerkleNode,
     /// Share chain difficult as compact target
     pub bits: CompactTarget,
     /// Timestamp for the share, as set by the miner
@@ -74,31 +73,197 @@ pub struct ShareCommitment {
     pub coinbase_value: u64,
 }
 
-impl ShareCommitment {
-    /// Make a SHA256 hash for commitment using consensus encoding.
-    ///
-    /// Encodes all shared fields via consensus_encode, then appends
-    /// the miner address script_pubkey and hashes the result.
-    pub fn hash(&self) -> hashes::sha256::Hash {
-        let mut serialized = Vec::new();
-        self.consensus_encode(&mut serialized)
-            .expect("encoding commitment should never fail");
-        self.miner_bitcoin_address
+/// Bytes the timestamp contributes to the commitment encoding.
+const COMMITMENT_TIME_SIZE: usize = size_of::<u32>();
+
+/// Upper bound on a consensus-encoded `script_pubkey`.
+///
+/// The longest script a `bitcoin::Address` can produce is a witness program
+/// with the maximum payload, which encodes as:
+///
+/// ```text
+///  1  CompactSize length prefix (these scripts are well under 253 bytes)
+///  1  witness version opcode, OP_0 or OP_PUSHNUM_1 through OP_PUSHNUM_16
+///  1  OP_PUSHBYTES_n for the program that follows
+/// 40  witness program payload, which BIP141 caps at 40 bytes
+/// ```
+const MAX_ENCODED_SCRIPT_PUBKEY_SIZE: usize = 1 + 1 + 1 + 40;
+
+/// A `TxMerkleNode` is a 32 byte hash and encodes as exactly that.
+const MERKLE_ROOT_SIZE: usize = 32;
+
+/// Bytes appended after the suffix, per miner. Only a capacity hint, so an
+/// over-estimate costs nothing and an under-estimate costs one realloc.
+const COMMITMENT_TAIL_SIZE: usize = MAX_ENCODED_SCRIPT_PUBKEY_SIZE + MERKLE_ROOT_SIZE;
+
+/// Serialize the commitment fields before time:
+/// prev_share_blockhash + uncles + bits.
+///
+/// Shared across miners for a template: none of these vary per miner, and
+/// `uncles` in particular is a length-prefixed vector nobody wants to re-encode
+/// thousands of times per template.
+pub(crate) fn build_commitment_prefix(
+    prev_share_blockhash: BlockHash,
+    uncles: &[BlockHash],
+    bits: CompactTarget,
+) -> Vec<u8> {
+    let mut prefix = Vec::with_capacity(64);
+    prev_share_blockhash
+        .consensus_encode(&mut prefix)
+        .expect("encoding prev_share_blockhash should never fail");
+    uncles
+        .to_vec()
+        .consensus_encode(&mut prefix)
+        .expect("encoding uncles should never fail");
+    bits.consensus_encode(&mut prefix)
+        .expect("encoding bits should never fail");
+    prefix
+}
+
+/// Serialize the commitment fields after time:
+/// donation_address + donation + fee_address + fee + non_coinbase_root.
+///
+/// Shared across miners for a template. Worth pre-building: the addresses
+/// encode as their bech32 *strings*, so each one costs a checksum computation
+/// and an allocation that would otherwise repeat for every connected miner.
+/// `non_coinbase_root` belongs here for the same reason: it is a property of
+/// the template's share transaction set, not of any one miner.
+pub(crate) fn build_commitment_suffix(
+    donation_address: &Option<Address>,
+    donation: Option<u16>,
+    fee_address: &Option<Address>,
+    fee: Option<u16>,
+    non_coinbase_root: TxMerkleNode,
+) -> Vec<u8> {
+    let mut suffix = Vec::with_capacity(128);
+    encode_optional_address(donation_address, &mut suffix)
+        .expect("encoding donation address should never fail");
+    donation
+        .unwrap_or(0)
+        .consensus_encode(&mut suffix)
+        .expect("encoding donation should never fail");
+    encode_optional_address(fee_address, &mut suffix)
+        .expect("encoding fee address should never fail");
+    fee.unwrap_or(0)
+        .consensus_encode(&mut suffix)
+        .expect("encoding fee should never fail");
+    non_coinbase_root
+        .consensus_encode(&mut suffix)
+        .expect("encoding non-coinbase root should never fail");
+    suffix
+}
+
+/// The single definition of the commitment byte layout.
+///
+/// Both callers go through here so the order can only be defined once:
+/// [`ShareCommitment::hash`] serializes its own fields and calls it, while the
+/// notify path pre-builds `prefix` and `suffix` once per template and calls it
+/// per miner. Duplicating the order across those two paths is how a miner ends
+/// up committing to a digest no peer will reconstruct.
+pub(crate) fn commitment_digest(
+    prefix: &[u8],
+    time: u32,
+    suffix: &[u8],
+    miner_bitcoin_address: Option<&Address>,
+    miner_address: Option<WitnessProgram>,
+) -> hashes::sha256::Hash {
+    let mut serialized = Vec::with_capacity(
+        prefix.len() + COMMITMENT_TIME_SIZE + suffix.len() + COMMITMENT_TAIL_SIZE,
+    );
+    serialized.extend_from_slice(prefix);
+    time.consensus_encode(&mut serialized)
+        .expect("encoding time should never fail");
+    serialized.extend_from_slice(suffix);
+
+    if let Some(address) = miner_bitcoin_address {
+        address
             .script_pubkey()
             .consensus_encode(&mut serialized)
             .expect("encoding address script_pubkey should never fail");
-        bitcoin::hashes::sha256::Hash::hash(&serialized)
+    }
+    if let Some(program) = miner_address {
+        witness_program_codec::consensus_encode(&program, &mut serialized)
+            .expect("encoding miner address should never fail");
     }
 
-    /// Reconstruct a ShareCommitment from a ShareHeader.
+    hashes::sha256::Hash::hash(&serialized)
+}
+
+impl ShareCommitment {
+    /// Make a SHA256 hash for commitment using consensus encoding.
     ///
-    /// Copies all commitment fields from the header back into a
-    /// ShareCommitment so that the commitment hash can be recomputed.
-    pub fn from_share_header(header: &ShareHeader) -> Self {
+    /// Hash of this commitment, as embedded in the bitcoin coinbase scriptSig.
+    ///
+    /// Serializes its own fields and delegates the byte layout to
+    /// [`commitment_digest`], which the notify path also uses with a
+    /// pre-built prefix and suffix. This is the slower of the two callers: it
+    /// re-encodes the shared fields every time, including the bech32 strings of
+    /// the donation and fee addresses. That is fine here, because this path
+    /// runs once per received share during validation rather than once per
+    /// connected miner per template.
+    ///
+    /// `miner_address` is digested directly. The coinbase is not in the
+    /// commitment as it carries the weak block hash and is unique
+    /// per share, so this is now the only binding between a share's owner and
+    /// its proof of work.
+    ///
+    /// `non_coinbase_root` commits to the non-coinbase tx in share block. The
+    /// coinbase is bound separately, by rebuilding it during validation.
+    pub fn hash(&self) -> hashes::sha256::Hash {
+        let prefix = build_commitment_prefix(self.prev_share_blockhash, &self.uncles, self.bits);
+        let suffix = build_commitment_suffix(
+            &self.donation_address,
+            self.donation,
+            &self.fee_address,
+            self.fee,
+            self.non_coinbase_root,
+        );
+        commitment_digest(
+            &prefix,
+            self.time,
+            &suffix,
+            Some(&self.miner_bitcoin_address),
+            Some(self.miner_address),
+        )
+    }
+
+    /// Reconstruct a ShareCommitment from a share block.
+    ///
+    /// Takes the whole block, not just its header, because
+    /// `non_coinbase_root` is recomputed from the block's transactions rather
+    /// than stored on the header. Keeping it off the header is what stops the
+    /// header growing with the share transaction set, and the block is always
+    /// in hand where this is used: the only caller is `validate_bitcoin_payout`,
+    /// which already takes a `ShareBlock`.
+    ///
+    /// The consequence worth knowing is that a commitment can only be verified
+    /// while the block body is retained. That is the same horizon as before:
+    /// the check also needs the PPLNS window, which stops resolving for an
+    /// anchor older than the retained entries, so body and window expire
+    /// together.
+    pub fn from_share_block(share: &ShareBlock) -> Self {
+        Self::from_share_header_and_root(
+            &share.header,
+            compute_non_coinbase_root(share.transactions.get(1..).unwrap_or_default()),
+        )
+    }
+
+    /// Reconstruct a ShareCommitment from a share header and the root of its
+    /// non-coinbase transactions, the one commitment input the header does
+    /// not carry.
+    ///
+    /// Header sync uses the root from the header's `CoinbaseProof`, so it can
+    /// check the commitment without the block body.
+    pub fn from_share_header_and_root(
+        header: &ShareHeader,
+        non_coinbase_root: TxMerkleNode,
+    ) -> Self {
         Self {
             prev_share_blockhash: header.prev_share_blockhash,
             uncles: header.uncles.clone(),
             miner_bitcoin_address: header.miner_bitcoin_address.clone(),
+            miner_address: header.miner_address,
+            non_coinbase_root,
             bits: header.bits,
             time: header.time,
             donation_address: header.donation_address.clone(),
@@ -111,7 +276,7 @@ impl ShareCommitment {
 }
 
 /// Encode an optional address as a bool flag followed by the address string when present.
-fn encode_optional_address<W: Write + ?Sized>(
+pub(crate) fn encode_optional_address<W: Write + ?Sized>(
     address: &Option<Address>,
     writer: &mut W,
 ) -> Result<usize, bitcoin::io::Error> {
@@ -128,87 +293,22 @@ fn encode_optional_address<W: Write + ?Sized>(
     Ok(len)
 }
 
-impl Encodable for ShareCommitment {
-    /// Consensus-encode the shared fields of the commitment (excluding miner_bitcoin_address).
-    ///
-    /// Field order: prev_share_blockhash, uncles, bits, time,
-    /// donation_address, donation, fee_address, fee.
-    ///
-    /// The miner_bitcoin_address is intentionally excluded so that the encoded bytes
-    /// can be reused as a prefix across miners. Each miner only needs to
-    /// append their address script_pubkey. The hash() method appends the
-    /// script_pubkey before hashing.
-    fn consensus_encode<W: Write + ?Sized>(&self, w: &mut W) -> Result<usize, bitcoin::io::Error> {
-        let mut len = 0;
-        len += self.prev_share_blockhash.consensus_encode(w)?;
-        len += self.uncles.consensus_encode(w)?;
-        len += self.bits.consensus_encode(w)?;
-        len += self.time.consensus_encode(w)?;
-
-        len += encode_optional_address(&self.donation_address, w)?;
-        len += self.donation.unwrap_or(0).consensus_encode(w)?;
-        len += encode_optional_address(&self.fee_address, w)?;
-        len += self.fee.unwrap_or(0).consensus_encode(w)?;
-
-        Ok(len)
-    }
-}
-
-/// Build share commitment by querying the database for fields to set.
-///
-/// Computes the share chain target using the ASERT algorithm via
-/// pool_difficulty, based on the current tip height and parent time.
-/// Uses the current timestamp for the share.
-pub(crate) fn build_share_commitment(
-    chain_store_handle: &ChainStoreHandle,
-    template: &Arc<BlockTemplate>,
-    btcaddress: Option<Address>,
-    pool_difficulty: &PoolDifficulty,
-    donation_address: Option<Address>,
-    donation: Option<u16>,
-    fee_address: Option<Address>,
-    fee: Option<u16>,
-) -> Result<Option<ShareCommitment>, Box<dyn Error + Send + Sync>> {
-    let (tip, uncles) = chain_store_handle.get_chain_tip_and_uncles()?;
-
-    let (tip_height, parent_time) = chain_store_handle.get_tip_height_and_time()?;
-    // tip_height is the parent height; ASERT internally adds 1 to height_delta
-    let bitcoin_bits = bitcoin::CompactTarget::from_unprefixed_hex(&template.bits)
-        .map_err(|error| format!("Failed to parse bitcoin bits from block template: {error}"))?;
-    let target = pool_difficulty.calculate_target_clamped(parent_time, tip_height, bitcoin_bits);
-
-    let time = SystemTimeProvider.seconds_since_epoch() as u32;
-
-    match btcaddress {
-        Some(address) => Ok(Some(ShareCommitment {
-            prev_share_blockhash: tip,
-            uncles: uncles.into_iter().collect(),
-            miner_bitcoin_address: address,
-            bits: target,
-            time,
-            donation_address,
-            donation,
-            fee_address,
-            fee,
-            coinbase_value: template.coinbasevalue,
-        })),
-        None => Ok(None),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shares::coinbase_proof::CoinbaseProof;
     use crate::shares::coinbaseaux_flags::CoinbaseAuxFlags;
     use crate::shares::extranonce::Extranonce;
+    use crate::shares::share_block::{ShareHeader, ShareTransaction};
+    use crate::shares::transactions::coinbase::build_sharechain_coinbase_transaction;
+    use crate::shares::transactions::coinbase::compute_non_coinbase_root;
     use crate::shares::witness_commitment::WitnessCommitment;
-    use crate::store::writer::StoreError;
     use crate::stratum::work::block_template::BlockTemplate;
+    use crate::test_utils::create_test_commitment;
+    use crate::test_utils::make_test_share_program;
     use crate::test_utils::test_coinbase_transaction;
-    use crate::test_utils::{TEST_TIP_TIME, create_test_commitment, on_schedule_pool_difficulty};
     use bitcoin::hashes::Hash;
     use bitcoin::{CompressedPublicKey, Network, TxMerkleNode};
-    use std::collections::HashSet;
     use std::str::FromStr;
 
     #[test]
@@ -266,6 +366,37 @@ mod tests {
         assert_ne!(hash1, hash2);
     }
 
+    /// Changing the miner address changes the share coinbase, hence the
+    /// merkle root, hence the commitment hash.
+    #[test]
+    fn test_hash_uniqueness_different_share_address() {
+        let commitment1 = create_test_commitment();
+        let mut commitment2 = create_test_commitment();
+
+        assert_eq!(
+            commitment1.miner_bitcoin_address, commitment2.miner_bitcoin_address,
+            "only the share address may differ for this test to mean anything"
+        );
+        commitment2.miner_address = make_test_share_program(2);
+
+        assert_ne!(commitment1.hash(), commitment2.hash());
+    }
+
+    /// The root is what ties the whole share transaction set to the proof of
+    /// work, so it must reach the hash on its own. Without this an attacker
+    /// could swap a share's transactions, recompute the root, and republish
+    /// under someone else's proof of work.
+    #[test]
+    fn test_hash_uniqueness_different_merkle_root() {
+        let commitment1 = create_test_commitment();
+        let mut commitment2 = create_test_commitment();
+
+        commitment2.non_coinbase_root =
+            compute_non_coinbase_root(&[ShareTransaction(test_coinbase_transaction(3))]);
+
+        assert_ne!(commitment1.hash(), commitment2.hash());
+    }
+
     #[test]
     fn test_hash_uniqueness_different_time() {
         let commitment1 = create_test_commitment();
@@ -293,259 +424,13 @@ mod tests {
         assert_ne!(commitment1.hash(), commitment3.hash());
     }
 
-    #[test]
-    fn test_serialization_with_some_merkle_root() {
-        let commitment = create_test_commitment();
-
-        let mut serialized = Vec::new();
-        commitment.consensus_encode(&mut serialized).unwrap();
-
-        assert!(!serialized.is_empty());
-    }
-
-    #[test]
-    fn test_serialization_without_merkle_root() {
-        let commitment = create_test_commitment();
-
-        let mut serialized = Vec::new();
-        commitment.consensus_encode(&mut serialized).unwrap();
-
-        assert!(!serialized.is_empty());
-    }
-
-    #[test]
-    fn test_serialization_with_uncles() {
-        let mut commitment = create_test_commitment();
-        commitment.uncles.push(
-            BlockHash::from_str("00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6")
-                .unwrap(),
-        );
-        commitment.uncles.push(
-            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4")
-                .unwrap(),
-        );
-
-        let mut serialized = Vec::new();
-        commitment.consensus_encode(&mut serialized).unwrap();
-
-        assert!(!serialized.is_empty());
-    }
-
-    #[test]
-    fn test_build_share_commitment_success() {
-        let mut chain_store_handle = ChainStoreHandle::default();
-
-        // Load template from file
-        let json_content =
-            include_str!("../../../p2poolv2_tests/test_data/validation/stratum/a/template.json");
-        let template = Arc::new(
-            serde_json::from_str::<BlockTemplate>(json_content)
-                .expect("Failed to parse JSON into BlockTemplate"),
-        );
-
-        let pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
-            .parse::<CompressedPublicKey>()
-            .unwrap();
-        let btcaddress = Address::p2wpkh(&pubkey, Network::Signet);
-
-        let pool_difficulty = on_schedule_pool_difficulty();
-
-        let tip_hash =
-            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4")
-                .unwrap();
-
-        // Set up mock expectations
-        chain_store_handle
-            .expect_get_chain_tip_and_uncles()
-            .returning(move || Ok((tip_hash, HashSet::new())));
-
-        chain_store_handle
-            .expect_get_tip_height_and_time()
-            .returning(|| Ok((0, TEST_TIP_TIME)));
-
-        let result = build_share_commitment(
-            &chain_store_handle,
-            &template,
-            Some(btcaddress.clone()),
-            &pool_difficulty,
-            None,
-            None,
-            None,
-            None,
-        );
-
-        assert!(result.is_ok());
-        let commitment = result.unwrap().unwrap();
-
-        // Verify fields are set correctly
-        assert_eq!(
-            commitment.prev_share_blockhash,
-            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4")
-                .unwrap()
-        );
-        assert_eq!(commitment.uncles.len(), 0);
-        assert_eq!(commitment.miner_bitcoin_address, btcaddress);
-        let expected_bits =
-            bitcoin::CompactTarget::from_consensus(crate::shares::share_block::MAX_POOL_TARGET);
-        assert_eq!(commitment.bits, expected_bits);
-        // Time should be current, so just verify it's set
-        assert!(commitment.time > 0);
-    }
-
-    #[test]
-    fn test_build_share_commitment_with_uncles() {
-        let mut chain_store_handle = ChainStoreHandle::default();
-
-        // Load template from file
-        let json_content =
-            include_str!("../../../p2poolv2_tests/test_data/validation/stratum/a/template.json");
-        let template = Arc::new(
-            serde_json::from_str::<BlockTemplate>(json_content)
-                .expect("Failed to parse JSON into BlockTemplate"),
-        );
-
-        let pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
-            .parse::<CompressedPublicKey>()
-            .unwrap();
-        let btcaddress = Address::p2wpkh(&pubkey, Network::Signet);
-
-        let pool_difficulty = on_schedule_pool_difficulty();
-
-        let uncle1 =
-            BlockHash::from_str("00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6")
-                .unwrap();
-        let uncle2 =
-            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4")
-                .unwrap();
-
-        chain_store_handle
-            .expect_get_chain_tip_and_uncles()
-            .returning(move || {
-                let uncles = HashSet::from([uncle1, uncle2]);
-                Ok((BlockHash::all_zeros(), uncles))
-            });
-
-        chain_store_handle
-            .expect_get_tip_height_and_time()
-            .returning(|| Ok((0, TEST_TIP_TIME)));
-
-        let result = build_share_commitment(
-            &chain_store_handle,
-            &template,
-            Some(btcaddress),
-            &pool_difficulty,
-            None,
-            None,
-            None,
-            None,
-        );
-
-        assert!(result.is_ok());
-        let commitment = result.unwrap().unwrap();
-
-        // Verify uncles are set correctly
-        assert_eq!(commitment.uncles.len(), 2);
-        assert!(commitment.uncles.contains(&uncle1));
-        assert!(commitment.uncles.contains(&uncle2));
-    }
-
-    #[test]
-    fn test_build_share_commitment_error_on_chain_tip_failure() {
-        let mut chain_store_handle = ChainStoreHandle::default();
-
-        // Load template from file
-        let json_content =
-            include_str!("../../../p2poolv2_tests/test_data/validation/stratum/a/template.json");
-        let template = Arc::new(
-            serde_json::from_str::<BlockTemplate>(json_content)
-                .expect("Failed to parse JSON into BlockTemplate"),
-        );
-
-        let pubkey = "020202020202020202020202020202020202020202020202020202020202020202"
-            .parse::<CompressedPublicKey>()
-            .unwrap();
-        let btcaddress = Address::p2wpkh(&pubkey, Network::Signet);
-
-        let pool_difficulty = on_schedule_pool_difficulty();
-
-        // Set up mock to return error on chain tip query
-        chain_store_handle
-            .expect_get_chain_tip_and_uncles()
-            .returning(|| Err(StoreError::Database("Failed to get chain tip".to_string())));
-
-        let result = build_share_commitment(
-            &chain_store_handle,
-            &template,
-            Some(btcaddress),
-            &pool_difficulty,
-            None,
-            None,
-            None,
-            None,
-        );
-
-        assert!(result.is_err());
-    }
-
-    #[test_log::test]
-    fn test_build_share_commitment_with_none_btcaddress_returns_none() {
-        let mut chain_store_handle = ChainStoreHandle::default();
-
-        // Load template from file
-        let json_content =
-            include_str!("../../../p2poolv2_tests/test_data/validation/stratum/a/template.json");
-        let template = Arc::new(
-            serde_json::from_str::<BlockTemplate>(json_content)
-                .expect("Failed to parse JSON into BlockTemplate"),
-        );
-
-        let pool_difficulty = on_schedule_pool_difficulty();
-
-        let uncle1 =
-            BlockHash::from_str("00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6")
-                .unwrap();
-        let uncle2 =
-            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4")
-                .unwrap();
-
-        chain_store_handle
-            .expect_get_chain_tip_and_uncles()
-            .returning(move || {
-                let uncles = HashSet::from([uncle1, uncle2]);
-                Ok((BlockHash::all_zeros(), uncles))
-            });
-
-        chain_store_handle
-            .expect_get_tip_height_and_time()
-            .returning(|| Ok((0, TEST_TIP_TIME)));
-
-        let result = build_share_commitment(
-            &chain_store_handle,
-            &template,
-            None,
-            &pool_difficulty,
-            None,
-            None,
-            None,
-            None,
-        );
-
-        assert!(result.is_ok());
-        assert!(result.unwrap().is_none());
-    }
-
-    /// Build a ShareHeader from a commitment and a realistic bitcoin coinbase,
-    /// returning both the header and the bitcoin transactions list.
-    fn header_and_bitcoin_transactions_from_commitment(
-        commitment: ShareCommitment,
-    ) -> (ShareHeader, Vec<bitcoin::Transaction>) {
+    /// Build a ShareBlock from a commitment and a realistic bitcoin coinbase.
+    ///
+    /// Returns the whole block rather than a header because reconstructing a
+    /// commitment needs the transactions: `non_coinbase_root` is recomputed
+    /// from them rather than stored on the header.
+    fn block_from_commitment(commitment: ShareCommitment) -> ShareBlock {
         let coinbase = test_coinbase_transaction(1);
-
-        let share_merkle_root: TxMerkleNode = bitcoin::merkle_tree::calculate_root(
-            [coinbase.clone()].iter().map(|tx| tx.compute_txid()),
-        )
-        .unwrap()
-        .into();
 
         let json_content =
             include_str!("../../../p2poolv2_tests/test_data/validation/stratum/a/template.json");
@@ -574,10 +459,25 @@ mod tests {
             nonce: 0,
         };
 
+        //* The share coinbase depends on the bitcoin header, so it is built
+        //* here and the share merkle root computed from it, mirroring what
+        //* handle_stratum_share does.
+        let share_coinbase = ShareTransaction(build_sharechain_coinbase_transaction(
+            &commitment.miner_address,
+            bitcoin_header.block_hash(),
+            &[],
+        ));
+        let share_transactions = vec![share_coinbase];
+        let share_merkle_root: TxMerkleNode = bitcoin::merkle_tree::calculate_root(
+            share_transactions.iter().map(|tx| tx.compute_txid()),
+        )
+        .unwrap()
+        .into();
+
         let header = ShareHeader::from_commitment_and_header(
             commitment,
-            bitcoin_header,
             share_merkle_root,
+            bitcoin_header,
             template
                 .coinbaseaux
                 .get("flags")
@@ -590,9 +490,14 @@ mod tests {
             template.height as u64,
             0,
             Extranonce::default(),
+            CoinbaseProof::default(),
         );
 
-        (header, bitcoin_transactions)
+        ShareBlock {
+            header,
+            transactions: share_transactions,
+            template_merkle_branches: vec![],
+        }
     }
 
     #[test]
@@ -601,37 +506,31 @@ mod tests {
         let expected_prev = commitment.prev_share_blockhash;
         let expected_uncles = commitment.uncles.clone();
         let expected_address = commitment.miner_bitcoin_address.clone();
+        let expected_share_address = commitment.miner_address;
         let expected_bits = commitment.bits;
         let expected_time = commitment.time;
 
-        let (header, _bitcoin_transactions) =
-            header_and_bitcoin_transactions_from_commitment(commitment);
+        let share_block = block_from_commitment(commitment);
 
-        let reconstructed = ShareCommitment::from_share_header(&header);
+        let reconstructed = ShareCommitment::from_share_block(&share_block);
 
         assert_eq!(reconstructed.prev_share_blockhash, expected_prev);
         assert_eq!(reconstructed.uncles, expected_uncles);
         assert_eq!(reconstructed.miner_bitcoin_address, expected_address);
+        assert_eq!(reconstructed.miner_address, expected_share_address);
         assert_eq!(reconstructed.bits, expected_bits);
         assert_eq!(reconstructed.time, expected_time);
     }
 
     #[test]
     fn test_from_share_header_hash_roundtrip() {
-        // Build a commitment whose merkle_root matches the template transactions,
-        // then verify from_share_header produces the same hash.
-        let json_content =
-            include_str!("../../../p2poolv2_tests/test_data/validation/stratum/a/template.json");
-        let template: BlockTemplate =
-            serde_json::from_str(json_content).expect("Failed to parse template JSON");
-
+        // Build a commitment, then verify from_share_header produces the same hash.
         let commitment = create_test_commitment();
         let expected_hash = commitment.hash();
 
-        let (header, _bitcoin_transactions) =
-            header_and_bitcoin_transactions_from_commitment(commitment);
+        let share_block = block_from_commitment(commitment);
 
-        let reconstructed = ShareCommitment::from_share_header(&header);
+        let reconstructed = ShareCommitment::from_share_block(&share_block);
 
         assert_eq!(reconstructed.hash(), expected_hash);
     }
@@ -684,11 +583,6 @@ mod tests {
 
     #[test]
     fn test_from_share_header_copies_donation_and_fee_fields() {
-        let json_content =
-            include_str!("../../../p2poolv2_tests/test_data/validation/stratum/a/template.json");
-        let template: BlockTemplate =
-            serde_json::from_str(json_content).expect("Failed to parse template JSON");
-
         let donation_pubkey = "02ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d"
             .parse::<CompressedPublicKey>()
             .unwrap();
@@ -707,15 +601,14 @@ mod tests {
 
         let expected_hash = commitment.hash();
 
-        let (header, _bitcoin_transactions) =
-            header_and_bitcoin_transactions_from_commitment(commitment);
+        let share_block = block_from_commitment(commitment);
 
-        assert_eq!(header.donation_address, Some(donation_address));
-        assert_eq!(header.donation, Some(150));
-        assert_eq!(header.fee_address, Some(fee_address));
-        assert_eq!(header.fee, Some(75));
+        assert_eq!(share_block.header.donation_address, Some(donation_address));
+        assert_eq!(share_block.header.donation, Some(150));
+        assert_eq!(share_block.header.fee_address, Some(fee_address));
+        assert_eq!(share_block.header.fee, Some(75));
 
-        let reconstructed = ShareCommitment::from_share_header(&header);
+        let reconstructed = ShareCommitment::from_share_block(&share_block);
 
         assert_eq!(reconstructed.hash(), expected_hash);
     }

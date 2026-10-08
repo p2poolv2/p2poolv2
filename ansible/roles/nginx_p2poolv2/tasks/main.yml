@@ -1,0 +1,104 @@
+---
+# Nginx reverse proxy for P2Poolv2
+#
+# Bootstrap sequence for fresh hosts:
+#   1. Deploy HTTP-only config (no cert references)
+#   2. Start nginx
+#   3. Obtain Let's Encrypt certificates
+#   4. Deploy full SSL config
+#   5. Reload nginx
+
+- name: Install nginx
+  ansible.builtin.apt:
+    name: nginx
+    state: present
+    update_cache: true
+
+- name: Install certbot and nginx plugin
+  ansible.builtin.apt:
+    name:
+      - certbot
+      - python3-certbot-nginx
+    state: present
+  when: p2poolv2_certbot_email | default('') | length > 0
+
+- name: Check if SSL certificate exists
+  ansible.builtin.stat:
+    path: "/etc/letsencrypt/live/{{ p2poolv2_domain }}/fullchain.pem"
+  register: ssl_cert
+
+- name: Remove old nginx site configs
+  ansible.builtin.file:
+    path: "/etc/nginx/sites-enabled/{{ item }}"
+    state: absent
+  loop: "{{ p2poolv2_nginx_remove_sites }}"
+  notify: reload nginx
+
+# --- Bootstrap: HTTP-only config for cert acquisition ---
+
+- name: Deploy HTTP-only nginx config for bootstrap
+  ansible.builtin.template:
+    src: p2poolv2_http.conf.j2
+    dest: /etc/nginx/sites-available/p2poolv2.conf
+    owner: root
+    group: root
+    mode: "0644"
+  when: not ssl_cert.stat.exists
+  notify: reload nginx
+
+- name: Enable nginx site
+  ansible.builtin.file:
+    src: /etc/nginx/sites-available/p2poolv2.conf
+    dest: /etc/nginx/sites-enabled/p2poolv2.conf
+    state: link
+    force: true
+  notify: reload nginx
+
+- name: Enable and start nginx
+  ansible.builtin.systemd:
+    name: nginx
+    enabled: true
+    state: started
+
+- name: Flush handlers to ensure nginx is running
+  ansible.builtin.meta: flush_handlers
+
+- name: Obtain Let's Encrypt certificate for {{ p2poolv2_domain }}
+  ansible.builtin.command:
+    cmd: >
+      certbot certonly --nginx
+      --non-interactive
+      --agree-tos
+      --email {{ p2poolv2_certbot_email }}
+      -d {{ p2poolv2_domain }}
+      {% for d in p2poolv2_redirect_domains %}-d {{ d }} {% endfor %}
+    creates: "/etc/letsencrypt/live/{{ p2poolv2_domain }}/fullchain.pem"
+  when: p2poolv2_certbot_email | default('') | length > 0
+
+- name: Obtain Let's Encrypt certificate for grafana
+  ansible.builtin.command:
+    cmd: >
+      certbot certonly --nginx
+      --non-interactive
+      --agree-tos
+      --email {{ p2poolv2_certbot_email }}
+      -d {{ p2poolv2_grafana_domain }}
+    creates: "/etc/letsencrypt/live/{{ p2poolv2_grafana_domain }}/fullchain.pem"
+  when: p2poolv2_grafana_domain is defined and p2poolv2_certbot_email | default('') | length > 0
+
+# --- Deploy full SSL config (only when certs exist) ---
+
+- name: Re-check if SSL certificate exists
+  ansible.builtin.stat:
+    path: "/etc/letsencrypt/live/{{ p2poolv2_domain }}/fullchain.pem"
+  register: ssl_cert_after
+
+- name: Deploy full nginx config with SSL
+  ansible.builtin.template:
+    src: p2poolv2_site.conf.j2
+    dest: /etc/nginx/sites-available/p2poolv2.conf
+    owner: root
+    group: root
+    mode: "0644"
+  when: ssl_cert_after.stat.exists
+  notify: reload nginx

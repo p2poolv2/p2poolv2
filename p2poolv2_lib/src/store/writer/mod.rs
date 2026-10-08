@@ -1,18 +1,6 @@
-// Copyright (C) 2024-2026 P2Poolv2 Developers (see AUTHORS)
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
 //
-// This file is part of P2Poolv2
-//
-// P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free
-// Software Foundation, either version 3 of the License, or (at your option)
-// any later version.
-//
-// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License along with
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Store writer for serialized database writes.
 //!
@@ -30,7 +18,7 @@ pub use handle::StoreHandle;
 use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::store::Store;
-use bitcoin::BlockHash;
+use bitcoin::{BlockHash, TxMerkleNode};
 use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
@@ -49,6 +37,13 @@ pub enum StoreError {
     ChannelClosed,
     /// Item not found
     NotFound(String),
+    /// A block metadata state transition was requested that violates an
+    /// invariant (for example marking a Pending or Invalid block BlockValid).
+    InvalidStatusTransition(String),
+    /// The store was built on a different share chain than this node is
+    /// compiled for. Raised at startup so a stale store is never mixed
+    /// with a new chain.
+    GenesisMismatch(String),
 }
 
 impl fmt::Display for StoreError {
@@ -58,6 +53,10 @@ impl fmt::Display for StoreError {
             StoreError::ChannelClosed => write!(f, "Channel closed"),
             StoreError::NotFound(msg) => write!(f, "Not found: {msg}"),
             StoreError::Serialization(msg) => write!(f, "Bitcoin en/decoding error: {msg}"),
+            StoreError::InvalidStatusTransition(msg) => {
+                write!(f, "Invalid status transition: {msg}")
+            }
+            StoreError::GenesisMismatch(msg) => write!(f, "Genesis mismatch: {msg}"),
         }
     }
 }
@@ -100,7 +99,7 @@ pub enum WriteCommand {
     /// not organised.
     AddShareBlockAndOrganiseHeader {
         share: ShareBlock,
-        reply: oneshot::Sender<Result<Option<(u32, Vec<(u32, BlockHash)>)>, StoreError>>,
+        reply: oneshot::Sender<Result<Option<u32>, StoreError>>,
     },
 
     /// Setup genesis block
@@ -109,7 +108,7 @@ pub enum WriteCommand {
         reply: oneshot::Sender<Result<(), StoreError>>,
     },
 
-    /// Initialize chain state from store
+    /// Initialise chain state from store
     InitChainStateFromStore {
         genesis_hash: BlockHash,
         reply: oneshot::Sender<Result<(), StoreError>>,
@@ -131,16 +130,39 @@ pub enum WriteCommand {
     SetGenesisBlockHash { hash: BlockHash },
 
     /// Organise a header into the candidate chain.
-    /// Returns the new candidate height and chain if changed.
+    /// Returns the new candidate height.
     OrganiseHeader {
         header: ShareHeader,
-        reply: oneshot::Sender<Result<Option<(u32, Vec<(u32, BlockHash)>)>, StoreError>>,
+        reply: oneshot::Sender<Result<Option<u32>, StoreError>>,
     },
 
     /// Promote candidates to confirmed.
     /// Returns the confirmed chain height after organising, if changed.
+    /// Prefers the candidate chain order. Falls back to any child of
+    /// the confirmed tip with full block and uncle data when no
+    /// candidate blocks can be promoted.
     OrganiseBlock {
         reply: oneshot::Sender<Result<Option<u32>, StoreError>>,
+    },
+
+    /// Mark a block Invalid so it is never promoted to confirmed. Used
+    /// when chain-context validation fails.
+    MarkInvalid {
+        blockhash: BlockHash,
+        reply: oneshot::Sender<Result<(), StoreError>>,
+    },
+
+    /// Mark a block BlockValid after it passes chain-context validation.
+    MarkBlockValid {
+        blockhash: BlockHash,
+        reply: oneshot::Sender<Result<(), StoreError>>,
+    },
+
+    /// Store the coinbase merkle branches of a batch of synced headers, so
+    /// headers held without their bodies can be served on with their proofs.
+    AddHeaderTemplateMerkleBranches {
+        entries: Vec<(BlockHash, Vec<TxMerkleNode>)>,
+        reply: oneshot::Sender<Result<(), StoreError>>,
     },
 }
 
@@ -270,6 +292,33 @@ impl StoreWriter {
                     self.store.commit_batch(batch).map_err(StoreError::from)?;
                     Ok(height)
                 });
+                let _ = reply.send(result);
+            }
+            WriteCommand::MarkInvalid { blockhash, reply } => {
+                let mut batch = Store::get_write_batch();
+                let result = self
+                    .store
+                    .mark_invalid(&blockhash, None, &mut batch)
+                    .and_then(|_| self.store.commit_batch(batch).map_err(StoreError::from));
+                let _ = reply.send(result);
+            }
+            WriteCommand::MarkBlockValid { blockhash, reply } => {
+                let mut batch = Store::get_write_batch();
+                let result = self
+                    .store
+                    .mark_block_valid(&blockhash, &mut batch)
+                    .and_then(|upgraded| {
+                        self.store.commit_batch(batch).map_err(StoreError::from)?;
+                        Ok(upgraded)
+                    });
+                let _ = reply.send(result);
+            }
+            WriteCommand::AddHeaderTemplateMerkleBranches { entries, reply } => {
+                let mut batch = Store::get_write_batch();
+                let result = self
+                    .store
+                    .add_header_template_merkle_branches(&entries, &mut batch)
+                    .and_then(|()| self.store.commit_batch(batch).map_err(StoreError::from));
                 let _ = reply.send(result);
             }
         }

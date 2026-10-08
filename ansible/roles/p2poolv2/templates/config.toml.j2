@@ -1,0 +1,82 @@
+# P2Poolv2 configuration -- managed by Ansible
+# Instance: {{ p2poolv2_instance }}
+
+[network]
+listen_address = "{{ p2poolv2_p2p_listen_address }}"
+dial_peers = {{ p2poolv2_dial_peers | to_json }}
+{% if p2poolv2_blocked_ips | length > 0 %}
+blocked_ips = {{ p2poolv2_blocked_ips | to_json }}
+{% endif %}
+max_pending_incoming = {{ p2poolv2_max_pending_incoming }}
+max_pending_outgoing = {{ p2poolv2_max_pending_outgoing }}
+max_established_incoming = {{ p2poolv2_max_established_incoming }}
+max_established_outgoing = {{ p2poolv2_max_established_outgoing }}
+max_established_per_peer = {{ p2poolv2_max_established_per_peer }}
+max_workbase_per_second = {{ p2poolv2_max_workbase_per_second }}
+max_userworkbase_per_second = {{ p2poolv2_max_userworkbase_per_second }}
+max_miningshare_per_second = {{ p2poolv2_max_miningshare_per_second }}
+max_inventory_per_second = {{ p2poolv2_max_inventory_per_second }}
+max_transaction_per_second = {{ p2poolv2_max_transaction_per_second }}
+max_requests_per_second = {{ p2poolv2_max_requests_per_second }}
+dial_timeout_secs = {{ p2poolv2_dial_timeout_secs }}
+{% if p2poolv2_external_address is defined %}
+external_address = "{{ p2poolv2_external_address }}"
+{% endif %}
+
+[store]
+path = "{{ p2poolv2_store_path }}"
+background_task_frequency_hours = {{ p2poolv2_background_task_frequency_hours }}
+pplns_ttl_days = {{ p2poolv2_pplns_ttl_days }}
+
+[stratum]
+hostname = "{{ p2poolv2_stratum_hostname }}"
+port = {{ p2poolv2_stratum_port }}
+start_difficulty = {{ p2poolv2_start_difficulty }}
+minimum_difficulty = {{ p2poolv2_minimum_difficulty }}
+{% if p2poolv2_maximum_difficulty is defined %}
+maximum_difficulty = {{ p2poolv2_maximum_difficulty }}
+{% endif %}
+solo_address = "{{ p2poolv2_solo_address }}"
+bootstrap_address = "{{ p2poolv2_bootstrap_address }}"
+{% if p2poolv2_donation_address is defined %}
+donation_address = "{{ p2poolv2_donation_address }}"
+donation = {{ p2poolv2_donation | default(0) }}
+{% endif %}
+{% if p2poolv2_fee_address is defined %}
+fee_address = "{{ p2poolv2_fee_address }}"
+fee = {{ p2poolv2_fee | default(0) }}
+{% endif %}
+zmqpubhashblock = "{{ p2poolv2_zmq_endpoint }}"
+network = "{{ p2poolv2_bitcoin_network }}"
+version_mask = "{{ p2poolv2_version_mask }}"
+difficulty_multiplier = {{ p2poolv2_difficulty_multiplier }}
+{% if p2poolv2_pool_signature is defined %}
+pool_signature = "{{ p2poolv2_pool_signature }}"
+{% endif %}
+{% if p2poolv2_max_connections is defined %}
+max_connections = {{ p2poolv2_max_connections }}
+{% endif %}
+wait_for_chain_sync = {{ p2poolv2_wait_for_chain_sync | lower }}
+mode = "{{ p2poolv2_pool_mode }}"
+
+[bitcoinrpc]
+url = "{{ p2poolv2_bitcoin_rpc_url }}"
+username = "{{ p2poolv2_bitcoin_rpc_user }}"
+password = "{{ p2poolv2_bitcoin_rpc_pass }}"
+
+[logging]
+file = "{{ p2poolv2_log_file }}"
+level = "{{ p2poolv2_log_level }}"
+console = {{ p2poolv2_log_console | lower }}
+stats_dir = "{{ p2poolv2_stats_dir }}"
+
+[api]
+hostname = "{{ p2poolv2_api_hostname }}"
+port = {{ p2poolv2_api_port }}
+{% if p2poolv2_api_auth_user is defined %}
+auth_user = "{{ p2poolv2_api_auth_user }}"
+{% endif %}
+{% if p2poolv2_api_auth_token is defined %}
+auth_token = "{{ p2poolv2_api_auth_token }}"
+{% endif %}
+cors_allowed = {{ p2poolv2_api_cors_allowed | lower }}

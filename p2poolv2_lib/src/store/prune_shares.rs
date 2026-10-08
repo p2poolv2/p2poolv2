@@ -1,25 +1,13 @@
-// Copyright (C) 2024-2026 P2Poolv2 Developers (see AUTHORS)
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
 //
-// This file is part of P2Poolv2
-//
-// P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free
-// Software Foundation, either version 3 of the License, or (at your option)
-// any later version.
-//
-// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License along with
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::store::Store;
 use crate::store::column_families::ColumnFamily;
 use crate::store::writer::StoreError;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tracing::info;
+use tracing::debug;
 
 impl Store {
     /// Delete all PPLNS shares older than the given TTL.
@@ -36,7 +24,7 @@ impl Store {
             .as_micros() as u64;
         let cutoff_micros = now.saturating_sub(pplns_ttl.as_micros() as u64);
 
-        info!(
+        debug!(
             "Cleaning up PPLNS shares older than {} seconds (cutoff: {})",
             pplns_ttl.as_secs(),
             cutoff_micros
@@ -53,7 +41,7 @@ impl Store {
         self.db
             .delete_range_cf(&pplns_share_cf, &start_key, &end_key)?;
 
-        info!("Deleted PPLNS shares older than cutoff time");
+        debug!("Deleted PPLNS shares older than cutoff time");
 
         Ok(())
     }

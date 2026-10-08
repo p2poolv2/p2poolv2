@@ -4,8 +4,7 @@
       {
         "builtIn": 1,
         "datasource": {
-          "type": "grafana",
-          "uid": "-- Grafana --"
+          "type": "grafana"
         },
         "enable": true,
         "hide": true,
@@ -18,13 +17,50 @@
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
-  "id": 2,
-  "links": [],
+  "id": null,
+  "links": [
+    {
+      "title": "Pool Stats",
+      "type": "link",
+      "url": "/d/adwz884",
+      "icon": "external link",
+      "tooltip": "Pool-wide hashrate, effort, blocks found, coinbase split",
+      "targetBlank": true,
+      "keepTime": true,
+      "includeVars": false,
+      "asDropdown": false,
+      "tags": []
+    },
+    {
+      "title": "Node",
+      "type": "link",
+      "url": "/d/ad4559x",
+      "icon": "external link",
+      "tooltip": "This node's shares, uptime, best share, connected workers",
+      "targetBlank": true,
+      "keepTime": true,
+      "includeVars": false,
+      "asDropdown": false,
+      "tags": []
+    },
+    {
+      "title": "Users and Workers",
+      "type": "link",
+      "url": "/d/adnhx6x",
+      "icon": "external link",
+      "tooltip": "Per-miner drill-down (pick an address)",
+      "targetBlank": true,
+      "keepTime": true,
+      "includeVars": false,
+      "asDropdown": false,
+      "tags": []
+    }
+  ],
   "panels": [
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "PBFA97CFB590B2093"
+        "uid": "${datasource}"
       },
       "fieldConfig": {
         "defaults": {
@@ -108,7 +144,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "PBFA97CFB590B2093"
+            "uid": "${datasource}"
           },
           "editorMode": "builder",
           "exemplar": false,
@@ -121,7 +157,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "PBFA97CFB590B2093"
+            "uid": "${datasource}"
           },
           "editorMode": "builder",
           "expr": "sum by(btcaddress) (rate(worker_shares_valid_total{btcaddress=\"$user_address\"}[1h]))",
@@ -138,7 +174,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "PBFA97CFB590B2093"
+        "uid": "${datasource}"
       },
       "fieldConfig": {
         "defaults": {
@@ -232,7 +268,7 @@
         {
           "datasource": {
             "type": "prometheus",
-            "uid": "PBFA97CFB590B2093"
+            "uid": "${datasource}"
           },
           "editorMode": "builder",
           "exemplar": false,
@@ -251,7 +287,7 @@
     {
       "datasource": {
         "type": "prometheus",
-        "uid": "PBFA97CFB590B2093"
+        "uid": "${datasource}"
       },
       "fieldConfig": {
         "defaults": {
@@ -325,23 +361,35 @@
   "templating": {
     "list": [
       {
-        "allowCustomValue": false,
         "current": {
-          "text": "bc1qu784gk8czv5kwm9pwssk53e0q9trpkec85r0t2",
-          "value": "bc1qu784gk8czv5kwm9pwssk53e0q9trpkec85r0t2"
+          "selected": true,
+          "text": "Prometheus",
+          "value": "prometheus"
         },
-        "definition": "label_values(worker_shares_valid_total,btcaddress)",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Data source",
+        "multi": false,
+        "name": "datasource",
+        "options": [],
+        "query": "prometheus",
+        "queryValue": "",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "type": "datasource"
+      },
+      {
+        "current": {
+          "text": "",
+          "value": ""
+        },
+        "description": "The user's bitcoin address for searching workers",
         "label": "User's BTC Address",
         "name": "user_address",
         "options": [],
-        "query": {
-          "qryType": 1,
-          "query": "label_values(worker_shares_valid_total,btcaddress)",
-          "refId": "PrometheusVariableQueryEditor-VariableQuery"
-        },
-        "refresh": 1,
-        "regex": "",
-        "type": "query"
+        "query": "",
+        "type": "textbox"
       },
       {
         "allowCustomValue": false,
@@ -366,7 +414,11 @@
         "refresh": 1,
         "regex": "",
         "sort": 5,
-        "type": "query"
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        }
       }
     ]
   },
@@ -376,7 +428,7 @@
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "Users and Workers",
-  "uid": "adnhx6x",
-  "version": 10
+  "title": "Users and Workers (Private)",
+  "uid": "adnhx6xp",
+  "version": 6
 }

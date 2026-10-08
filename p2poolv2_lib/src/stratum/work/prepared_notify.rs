@@ -1,44 +1,105 @@
-// Copyright (C) 2024-2026 P2Poolv2 Developers (see AUTHORS)
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
 //
-// This file is part of P2Poolv2
-//
-// P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free
-// Software Foundation, either version 3 of the License, or (at your option)
-// any later version.
-//
-// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License along with
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 use super::block_template::{BlockTemplate, parse_flags};
-use super::coinbase::{build_coinbase_transaction, get_timestamp_bytes, split_coinbase};
+use super::coinbase::{
+    LOCKTIME_LENGTH, build_bitcoin_coinbase_transaction, get_timestamp_bytes, split_coinbase,
+};
 use super::error::WorkError;
 use super::gbt::build_merkle_branches_for_template;
 use super::tracker::JobTracker;
 use crate::accounting::OutputPair;
-use crate::shares::share_commitment::ShareCommitment;
+use crate::address::Address as P2PoolAddress;
+use crate::shares::share_commitment::{
+    ShareCommitment, build_commitment_prefix, build_commitment_suffix, commitment_digest,
+};
+use crate::shares::transactions::coinbase::compute_non_coinbase_root;
 use crate::shares::witness_commitment::WitnessCommitment;
 use crate::stratum::util::{reverse_four_byte_chunks, to_be_hex};
-use crate::utils::time_provider::SystemTimeProvider;
-use bitcoin::consensus::Encodable;
+use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
+use bitcoin::WitnessProgram;
 use bitcoin::hashes::{self, Hash};
 use bitcoin::transaction::Version;
 use bitcoin::{Address, BlockHash, CompactTarget};
 use std::sync::Arc;
 
+/// Hex characters per byte.
+const HEX_PER_BYTE: usize = 2;
+
+/// Hex of the opcode starting coinbase2: the nsecs push, OP_PUSHBYTES_8.
+const NSECS_PUSH_OPCODE_HEX: &str = "08";
+
+/// Hex length of the nsecs push at the front of coinbase2: the
+/// OP_PUSHBYTES_8 opcode (1 byte) and the 8-byte little-endian nsecs.
+const NSECS_PUSH_HEX_LENGTH: usize = HEX_PER_BYTE * (1 + 8);
+
+/// Hex of the commitment output's script opcodes preceding the hash:
+/// OP_RETURN (0x6a) and OP_PUSHBYTES_32 (0x20).
+const COMMITMENT_SCRIPT_OPCODES_HEX: &str = "6a20";
+
+/// Hex length of the 32-byte commitment hash in the commitment output.
+const COMMITMENT_HASH_HEX_LENGTH: usize = HEX_PER_BYTE * 32;
+
+/// Hex length of the 4-byte locktime ending coinbase2, which follows the
+/// commitment hash.
+const LOCKTIME_HEX_LENGTH: usize = HEX_PER_BYTE * LOCKTIME_LENGTH;
+
+/// Split coinbase2 around its per-miner parts -- the nsecs push at the front
+/// and the commitment hash before the locktime -- into the static middle and
+/// the locktime.
+///
+/// Checks the layout before slicing: the nsecs push opens coinbase2, and the
+/// commitment output's opcodes and `dummy_commitment_hex` sit right before the
+/// locktime. A coinbase built any other way would place each miner's
+/// commitment in the wrong bytes, and every share would then fail validation
+/// with nothing pointing back here.
+fn split_coinbase2(
+    coinbase2: &str,
+    dummy_commitment_hex: &str,
+) -> Result<(String, String), WorkError> {
+    let minimum_length = NSECS_PUSH_HEX_LENGTH
+        + COMMITMENT_SCRIPT_OPCODES_HEX.len()
+        + COMMITMENT_HASH_HEX_LENGTH
+        + LOCKTIME_HEX_LENGTH;
+    if coinbase2.len() < minimum_length {
+        return Err(WorkError {
+            message: format!("coinbase2 of {} hex chars is too short", coinbase2.len()),
+        });
+    }
+    let locktime_start = coinbase2.len() - LOCKTIME_HEX_LENGTH;
+    let commitment_start = locktime_start - COMMITMENT_HASH_HEX_LENGTH;
+    let opcodes_start = commitment_start - COMMITMENT_SCRIPT_OPCODES_HEX.len();
+
+    let has_expected_layout = coinbase2.starts_with(NSECS_PUSH_OPCODE_HEX)
+        && &coinbase2[opcodes_start..commitment_start] == COMMITMENT_SCRIPT_OPCODES_HEX
+        && &coinbase2[commitment_start..locktime_start] == dummy_commitment_hex;
+    if !has_expected_layout {
+        return Err(WorkError {
+            message: "coinbase2 does not start with the nsecs push and end with the commitment output and locktime".to_string(),
+        });
+    }
+
+    Ok((
+        coinbase2[NSECS_PUSH_HEX_LENGTH..commitment_start].to_string(),
+        coinbase2[locktime_start..].to_string(),
+    ))
+}
+
 /// Pre-serialized notify message with placeholders for per-miner fields.
 ///
 /// coinbase1 is static (same for all miners): [height][aux_flags][EXTRANONCE_SEPARATOR]
-/// coinbase2 is built per-miner: [commitment_hash][nsecs][pool_sig][sequence][outputs][locktime]
+/// coinbase2 is built per-miner:
+/// [nsecs][pool_sig][sequence][outputs..][padding output][commitment output][locktime]
+/// where the commitment output is `OP_RETURN OP_PUSHBYTES_32 <commitment_hash>`.
+/// Only the nsecs push and the 32 commitment bytes differ between miners, and
+/// both are fixed size, so the padding that block-aligns the prefix is the same
+/// for every miner on a template.
 ///
 /// The JSON template has fixed-size placeholders for job_id and the full coinbase2.
-/// Also contains pre-serialized commitment binary prefix -- all fields except
-/// miner_bitcoin_address -- so that per-miner hashing only needs to append the
-/// address bytes.
+/// The commitment encoding is split into a prefix (fields before time) and a
+/// suffix (fields after time), so that per-share hashing inserts a fresh 4-byte
+/// timestamp between them without rebuilding the whole commitment.
 pub struct PreparedNotifyParams {
     /// Pre-serialized JSON notify string with placeholder job_id and coinbase2
     json_template: String,
@@ -48,17 +109,18 @@ pub struct PreparedNotifyParams {
     coinbase2_offset: usize,
     /// Length of the coinbase2 placeholder in json_template
     coinbase2_placeholder_len: usize,
-    /// Pre-serialized commitment binary: all fields except miner_bitcoin_address.
-    /// Miner address is appended per-miner to compute the commitment hash.
+    /// Pre-serialized commitment fields before time:
+    /// prev_share_blockhash + uncles + bits
     commitment_prefix: Vec<u8>,
+    /// Pre-serialized commitment fields after time (before miner address):
+    /// donation_address + donation + fee_address + fee
+    commitment_suffix: Vec<u8>,
     /// Previous share block hash (for building ShareCommitment struct)
     prev_share_blockhash: BlockHash,
     /// Uncle block hashes (for building ShareCommitment struct)
     uncles: Vec<BlockHash>,
     /// Share chain difficulty target (for building ShareCommitment struct)
     bits: CompactTarget,
-    /// Commitment timestamp (for building ShareCommitment struct)
-    time: u32,
     /// Donation address for developers
     donation_address: Option<Address>,
     /// Donation in basis points
@@ -71,12 +133,21 @@ pub struct PreparedNotifyParams {
     template: Arc<BlockTemplate>,
     /// Static coinbase1 hex (identical for all miners)
     coinbase1: String,
-    /// Coinbase2 suffix hex: [pool_sig][sequence][outputs][locktime]
-    /// Per-miner coinbase2 = commitment_hash_script + nsecs_script + coinbase2_suffix
-    coinbase2_suffix: String,
+    /// Coinbase2 hex between the nsecs push and the commitment hash bytes:
+    /// [pool_sig][sequence][outputs..][padding output][commitment output header]
+    coinbase2_middle: String,
+    /// Coinbase2 hex after the commitment hash bytes: the locktime.
+    coinbase2_locktime: String,
     /// Merkle branches for the template transactions (excluding coinbase).
     /// Passed through to JobDetails so validators can verify the bitcoin merkle root.
     merkle_branches: Vec<bitcoin::TxMerkleNode>,
+}
+
+impl PreparedNotifyParams {
+    /// The ASERT-computed pool target for shares built on these params.
+    pub fn bits(&self) -> bitcoin::CompactTarget {
+        self.bits
+    }
 }
 
 /// Serialize the merkle branches array as a JSON array string.
@@ -100,6 +171,7 @@ fn serialize_merkle_branches_json(branches: &[String]) -> String {
 /// coinbase1 is static. coinbase2 gets a placeholder that is replaced per-miner.
 /// Returns the JSON string, the byte offset of the job_id placeholder,
 /// the byte offset of the coinbase2 placeholder, and the placeholder length.
+#[allow(clippy::too_many_arguments)] // wiring constructor: each parameter is a distinct collaborator, a params struct would only move the list
 fn build_json_template(
     coinbase1: &str,
     coinbase2_placeholder: &str,
@@ -163,7 +235,6 @@ pub(crate) struct PreparedNotifyParamsBuilder {
     prev_share_blockhash: BlockHash,
     uncles: Vec<BlockHash>,
     bits: CompactTarget,
-    time: u32,
     donation_address: Option<Address>,
     donation: Option<u16>,
     fee_address: Option<Address>,
@@ -186,7 +257,6 @@ impl PreparedNotifyParamsBuilder {
             prev_share_blockhash: BlockHash::all_zeros(),
             uncles: Vec::new(),
             bits: CompactTarget::from_consensus(0),
-            time: 0,
             donation_address: None,
             donation: None,
             fee_address: None,
@@ -206,11 +276,6 @@ impl PreparedNotifyParamsBuilder {
 
     pub fn bits(mut self, bits: CompactTarget) -> Self {
         self.bits = bits;
-        self
-    }
-
-    pub fn time(mut self, time: u32) -> Self {
-        self.time = time;
         self
     }
 
@@ -236,11 +301,11 @@ impl PreparedNotifyParamsBuilder {
 
     /// Build the PreparedNotifyParams by constructing the coinbase transaction
     /// with a dummy commitment hash, splitting it, and constructing the
-    /// Build the PreparedNotifyParams by constructing the coinbase transaction,
-    /// splitting it, and constructing the pre-serialized JSON template.
+    /// pre-serialized JSON template.
     ///
-    /// coinbase1 is static (same for all miners). coinbase2 is split into a
-    /// per-miner prefix (commitment_hash + nsecs) and a static suffix.
+    /// coinbase1 is static (same for all miners). coinbase2 is split around its
+    /// two per-miner parts -- the nsecs push at the front and the commitment
+    /// hash bytes before the locktime -- into a static middle and locktime.
     pub fn build(self) -> Result<PreparedNotifyParams, WorkError> {
         let coinbaseaux = parse_flags(self.template.coinbaseaux.get("flags").cloned())?;
         let witness_commitment = self
@@ -254,11 +319,12 @@ impl PreparedNotifyParamsBuilder {
             })?;
 
         // Build coinbase with dummy commitment hash and dummy nsecs.
-        // After split_coinbase, coinbase1 is fully static and coinbase2 starts
-        // with [commitment_hash_push][nsecs_push][pool_sig_push]...
+        // After split_coinbase, coinbase1 is fully static, coinbase2 starts
+        // with [nsecs_push][pool_sig_push]... and ends with
+        // [commitment_hash][locktime].
         let dummy_commitment_hash = hashes::sha256::Hash::from_byte_array([0xab_u8; 32]);
 
-        let coinbase = build_coinbase_transaction(
+        let coinbase = build_bitcoin_coinbase_transaction(
             Version::TWO,
             self.output_distribution.as_slice(),
             self.template.height as i64,
@@ -272,10 +338,10 @@ impl PreparedNotifyParamsBuilder {
 
         let (coinbase1, coinbase2_full) = split_coinbase(&coinbase)?;
 
-        // Strip the commitment_hash push (33 bytes = 66 hex) and nsecs push
-        // (9 bytes = 18 hex) from the front of coinbase2 to get the static suffix.
-        let per_miner_prefix_hex_len = 66 + 18;
-        let coinbase2_suffix = coinbase2_full[per_miner_prefix_hex_len..].to_string();
+        let (coinbase2_middle, coinbase2_locktime) = split_coinbase2(
+            &coinbase2_full,
+            &hex::encode(dummy_commitment_hash.as_byte_array()),
+        )?;
 
         // Pre-compute merkle branches
         let merkle_branches_raw = build_merkle_branches_for_template(&self.template);
@@ -308,25 +374,15 @@ impl PreparedNotifyParamsBuilder {
                 self.clean_jobs,
             );
 
-        // Pre-serialize commitment prefix for fast per-miner hashing.
-        // ShareCommitment::consensus_encode encodes all fields except
-        // miner_bitcoin_address, which is exactly the shared prefix we need.
-        let commitment_without_address = ShareCommitment {
-            prev_share_blockhash: self.prev_share_blockhash,
-            uncles: self.uncles.clone(),
-            miner_bitcoin_address: self.output_distribution[0].address.clone(),
-            bits: self.bits,
-            time: self.time,
-            donation_address: self.donation_address.clone(),
-            donation: self.donation,
-            fee_address: self.fee_address.clone(),
-            fee: self.fee,
-            coinbase_value: self.template.coinbasevalue,
-        };
-        let mut commitment_prefix = Vec::with_capacity(128);
-        commitment_without_address
-            .consensus_encode(&mut commitment_prefix)
-            .expect("encoding commitment prefix should never fail");
+        let commitment_prefix =
+            build_commitment_prefix(self.prev_share_blockhash, &self.uncles, self.bits);
+        let commitment_suffix = build_commitment_suffix(
+            &self.donation_address,
+            self.donation,
+            &self.fee_address,
+            self.fee,
+            compute_non_coinbase_root(&[]),
+        );
 
         Ok(PreparedNotifyParams {
             json_template,
@@ -334,17 +390,18 @@ impl PreparedNotifyParamsBuilder {
             coinbase2_offset,
             coinbase2_placeholder_len,
             commitment_prefix,
+            commitment_suffix,
             prev_share_blockhash: self.prev_share_blockhash,
             uncles: self.uncles,
             bits: self.bits,
-            time: self.time,
             donation_address: self.donation_address,
             donation: self.donation,
             fee_address: self.fee_address,
             fee: self.fee,
             template: self.template,
             coinbase1,
-            coinbase2_suffix,
+            coinbase2_middle,
+            coinbase2_locktime,
             merkle_branches: merkle_branches_raw
                 .into_iter()
                 .map(bitcoin::TxMerkleNode::from_raw_hash)
@@ -353,47 +410,51 @@ impl PreparedNotifyParamsBuilder {
     }
 }
 
-/// Compute the hex-encoded commitment hash for a miner address.
+/// Hex of the commitment digest for one miner.
 ///
-/// When an address is provided, appends its script pubkey to the
-/// pre-built commitment prefix. When None (solo mode), hashes the
-/// prefix with empty pubkey bytes.
+/// Uses the prefix and suffix pre-built once per template, so the per-miner
+/// cost is a memcpy plus the tail append -- not a re-encode of the shared
+/// fields. With thousands of workers these calls are serial, so the last miner
+/// to be notified pays the sum of all of them; re-encoding the donation and fee
+/// bech32 strings per miner is exactly what this avoids.
 fn get_commitment_hex(
     commitment_prefix: &[u8],
-    miner_address: Option<&Address>,
-) -> Result<String, WorkError> {
-    let mut commitment_binary = Vec::with_capacity(commitment_prefix.len() + 64);
-    commitment_binary.extend_from_slice(commitment_prefix);
-
-    if let Some(address) = miner_address {
-        address
-            .script_pubkey()
-            .consensus_encode(&mut commitment_binary)
-            .map_err(|error| WorkError {
-                message: format!("Failed to encode miner address script_pubkey: {error}"),
-            })?;
-    }
-
-    let commitment_hash = hashes::sha256::Hash::hash(&commitment_binary);
-    Ok(hex::encode(commitment_hash.as_byte_array()))
+    time: u32,
+    commitment_suffix: &[u8],
+    miner_bitcoin_address: Option<&Address>,
+    miner_address: Option<WitnessProgram>,
+) -> String {
+    let digest = commitment_digest(
+        commitment_prefix,
+        time,
+        commitment_suffix,
+        miner_bitcoin_address,
+        miner_address,
+    );
+    hex::encode(digest.as_byte_array())
 }
 
-/// Build a per-miner coinbase2 hex from commitment hash, fresh timestamp,
-/// and the static suffix.
+/// Build a per-miner coinbase2 hex from the commitment hash, a fresh
+/// timestamp, and the static middle and locktime.
 fn build_per_miner_coinbase2(
     commitment_hash_hex: &str,
     nsecs: u64,
-    coinbase2_suffix: &str,
+    coinbase2_middle: &str,
+    coinbase2_locktime: &str,
 ) -> String {
-    // commitment_hash push: 0x20 opcode + 32 bytes hash = 66 hex chars
-    // nsecs push: 0x08 opcode + 8 bytes LE = 18 hex chars
+    // nsecs push: 0x08 opcode + 8 bytes LE
     let nsecs_bytes = nsecs.to_le_bytes();
-    let mut coinbase2 = String::with_capacity(66 + 18 + coinbase2_suffix.len());
-    coinbase2.push_str("20");
-    coinbase2.push_str(commitment_hash_hex);
+    let mut coinbase2 = String::with_capacity(
+        NSECS_PUSH_HEX_LENGTH
+            + coinbase2_middle.len()
+            + COMMITMENT_HASH_HEX_LENGTH
+            + coinbase2_locktime.len(),
+    );
     coinbase2.push_str("08");
     coinbase2.push_str(&hex::encode(nsecs_bytes));
-    coinbase2.push_str(coinbase2_suffix);
+    coinbase2.push_str(coinbase2_middle);
+    coinbase2.push_str(commitment_hash_hex);
+    coinbase2.push_str(coinbase2_locktime);
     coinbase2
 }
 
@@ -401,19 +462,57 @@ fn build_per_miner_coinbase2(
 ///
 /// Computes the miner-specific commitment hash, assembles per-miner coinbase2,
 /// overwrites placeholders in the pre-built JSON, and inserts the job into the tracker.
-/// When miner_address is None (solo mode), a commitment hash is still
-/// computed from the prefix alone.
+/// When either address is None (solo or Hydrapool mode), a commitment hash is
+/// still computed from whatever is available, but no `ShareCommitment` is built:
+/// a share needs both a bitcoin payout identity and a share chain owner.
 pub(crate) fn build_notify_from_prepared(
     prepared: &PreparedNotifyParams,
-    miner_address: Option<&Address>,
+    miner_bitcoin_address: Option<&Address>,
+    miner_address: Option<&P2PoolAddress>,
     tracker_handle: &JobTracker,
 ) -> Result<String, WorkError> {
-    let commitment_hash_hex = get_commitment_hex(&prepared.commitment_prefix, miner_address)?;
+    let fresh_time = SystemTimeProvider.seconds_since_epoch() as u32;
+
     let nsecs = get_timestamp_bytes(&SystemTimeProvider);
 
+    // Build ShareCommitment only when both addresses are available: the share
+    // chain coinbase needs an owner and the bitcoin coinbase needs a payee.
+    let share_commitment = match (miner_bitcoin_address, miner_address) {
+        (Some(bitcoin_address), Some(share_address)) => Some(ShareCommitment {
+            prev_share_blockhash: prepared.prev_share_blockhash,
+            uncles: prepared.uncles.clone(),
+            miner_bitcoin_address: bitcoin_address.clone(),
+            miner_address: share_address.witness_program(),
+            non_coinbase_root: compute_non_coinbase_root(&[]),
+            bits: prepared.bits,
+            time: fresh_time,
+            donation_address: prepared.donation_address.clone(),
+            donation: prepared.donation,
+            fee_address: prepared.fee_address.clone(),
+            fee: prepared.fee,
+            coinbase_value: prepared.template.coinbasevalue,
+        }),
+        _ => None,
+    };
+
+    // The hash the miner embeds in its bitcoin coinbase must be the hash of the
+    // commitment we store, so derive one from the other rather than building
+    // the same digest twice.
+    let commitment_hash_hex = get_commitment_hex(
+        &prepared.commitment_prefix,
+        fresh_time,
+        &prepared.commitment_suffix,
+        miner_bitcoin_address,
+        miner_address.map(|address| address.witness_program()),
+    );
+
     // Build per-miner coinbase2
-    let coinbase2 =
-        build_per_miner_coinbase2(&commitment_hash_hex, nsecs, &prepared.coinbase2_suffix);
+    let coinbase2 = build_per_miner_coinbase2(
+        &commitment_hash_hex,
+        nsecs,
+        &prepared.coinbase2_middle,
+        &prepared.coinbase2_locktime,
+    );
 
     // Get next job_id
     let job_id = tracker_handle.get_next_job_id();
@@ -429,20 +528,6 @@ pub(crate) fn build_notify_from_prepared(
         prepared.coinbase2_offset..prepared.coinbase2_offset + prepared.coinbase2_placeholder_len,
         &coinbase2,
     );
-
-    // Build ShareCommitment only when a miner address is available
-    let share_commitment = miner_address.map(|address| ShareCommitment {
-        prev_share_blockhash: prepared.prev_share_blockhash,
-        uncles: prepared.uncles.clone(),
-        miner_bitcoin_address: address.clone(),
-        bits: prepared.bits,
-        time: prepared.time,
-        donation_address: prepared.donation_address.clone(),
-        donation: prepared.donation,
-        fee_address: prepared.fee_address.clone(),
-        fee: prepared.fee,
-        coinbase_value: prepared.template.coinbasevalue,
-    });
 
     // Insert job into tracker
     tracker_handle.insert_job(
@@ -463,6 +548,8 @@ mod tests {
     use super::*;
     use crate::stratum::work::block_template::BlockTemplate;
     use crate::stratum::work::tracker::{JobId, start_tracker_actor};
+    use crate::test_utils::make_test_share_address;
+    use crate::test_utils::make_test_share_program;
     use bitcoin::{CompressedPublicKey, Network};
 
     fn test_template() -> BlockTemplate {
@@ -494,7 +581,6 @@ mod tests {
         let output_distribution = test_output_distribution(&template);
         PreparedNotifyParamsBuilder::new(template, output_distribution, b"test_pool", clean_jobs)
             .bits(CompactTarget::from_consensus(0x1d00ffff))
-            .time(1700000000u32)
     }
 
     #[test]
@@ -529,8 +615,13 @@ mod tests {
             .build()
             .expect("build should succeed");
 
-        let notify_json = build_notify_from_prepared(&prepared, Some(&address), &tracker_handle)
-            .expect("build_notify_from_prepared should succeed");
+        let notify_json = build_notify_from_prepared(
+            &prepared,
+            Some(&address),
+            Some(&make_test_share_address(1, bitcoin::Network::Signet)),
+            &tracker_handle,
+        )
+        .expect("build_notify_from_prepared should succeed");
 
         // Verify the result is valid JSON
         let parsed: serde_json::Value =
@@ -566,7 +657,6 @@ mod tests {
         let template = Arc::new(test_template());
         let address = test_address();
         let bits = CompactTarget::from_consensus(0x1d00ffff);
-        let time = 1700000000u32;
         let tracker_handle = start_tracker_actor();
         let coinbase_value = template.coinbasevalue;
 
@@ -574,8 +664,13 @@ mod tests {
             .build()
             .expect("build should succeed");
 
-        let notify_json = build_notify_from_prepared(&prepared, Some(&address), &tracker_handle)
-            .expect("build_notify_from_prepared should succeed");
+        let notify_json = build_notify_from_prepared(
+            &prepared,
+            Some(&address),
+            Some(&make_test_share_address(1, bitcoin::Network::Signet)),
+            &tracker_handle,
+        )
+        .expect("build_notify_from_prepared should succeed");
 
         // Parse job_id from JSON to look up the tracker entry
         let parsed: serde_json::Value = serde_json::from_str(&notify_json).unwrap();
@@ -584,13 +679,16 @@ mod tests {
         let details = tracker_handle.get_job(job_id).unwrap();
         let commitment = details.share_commitment.as_ref().unwrap();
 
-        // Build the same commitment directly and compare hashes
+        // Build the same commitment directly using the fresh time that
+        // build_notify_from_prepared stored in the tracker.
         let direct_commitment = ShareCommitment {
             prev_share_blockhash: BlockHash::all_zeros(),
             uncles: Vec::new(),
             miner_bitcoin_address: address,
+            miner_address: make_test_share_program(1),
+            non_coinbase_root: compute_non_coinbase_root(&[]),
             bits,
-            time,
+            time: commitment.time,
             donation_address: None,
             donation: None,
             fee_address: None,
@@ -601,11 +699,9 @@ mod tests {
         assert_eq!(commitment.hash(), direct_commitment.hash());
     }
 
-    #[tokio::test]
-    async fn test_different_addresses_produce_different_hashes() {
+    #[test]
+    fn test_different_addresses_produce_different_hashes() {
         let template = Arc::new(test_template());
-        let tracker_handle = start_tracker_actor();
-
         let prepared = test_notify_params_builder(template, false)
             .build()
             .expect("build should succeed");
@@ -616,14 +712,113 @@ mod tests {
                 .parse()
                 .unwrap();
         let address2 = Address::p2wpkh(&other_pubkey, Network::Signet);
+        let share_address = make_test_share_program(1);
 
-        let notify1 =
-            build_notify_from_prepared(&prepared, Some(&address1), &tracker_handle).unwrap();
-        let notify2 =
-            build_notify_from_prepared(&prepared, Some(&address2), &tracker_handle).unwrap();
+        let time = 1_700_000_000;
+        let hash1 = get_commitment_hex(
+            &prepared.commitment_prefix,
+            time,
+            &prepared.commitment_suffix,
+            Some(&address1),
+            Some(share_address),
+        );
+        let hash2 = get_commitment_hex(
+            &prepared.commitment_prefix,
+            time,
+            &prepared.commitment_suffix,
+            Some(&address2),
+            Some(share_address),
+        );
 
-        // Different addresses must produce different notify JSON (different coinbase2 content)
-        assert_ne!(notify1, notify2);
+        assert_ne!(
+            hash1, hash2,
+            "the bitcoin address must reach the commitment hash"
+        );
+    }
+
+    /// Mirror of `test_different_addresses_produce_different_hashes`: hold the
+    /// bitcoin address fixed and vary the share address instead.
+    ///
+    /// Both assert on the commitment hash rather than the notify JSON, because
+    /// the JSON carries a fresh job id and timestamp per call and so always
+    /// differs -- which would make either test pass even if the address were
+    /// ignored entirely.
+    /// The two callers of `commitment_digest` must agree: the notify path uses
+    /// a prefix and suffix pre-built per template, while `ShareCommitment::hash`
+    /// serializes its own fields per share. A miner mines the first and every
+    /// validator reconstructs the second, so a divergence means no share is
+    /// ever accepted.
+    #[test]
+    fn notify_hash_matches_share_commitment_hash() {
+        let template = Arc::new(test_template());
+        let prepared = test_notify_params_builder(template, false)
+            .build()
+            .expect("build should succeed");
+
+        let bitcoin_address = test_address();
+        let share_address = make_test_share_program(1);
+        let non_coinbase_root = compute_non_coinbase_root(&[]);
+        let time = 1_700_000_000;
+
+        let from_notify = get_commitment_hex(
+            &prepared.commitment_prefix,
+            time,
+            &prepared.commitment_suffix,
+            Some(&bitcoin_address),
+            Some(share_address),
+        );
+
+        let commitment = ShareCommitment {
+            prev_share_blockhash: prepared.prev_share_blockhash,
+            uncles: prepared.uncles.clone(),
+            miner_bitcoin_address: bitcoin_address,
+            miner_address: share_address,
+            non_coinbase_root,
+            bits: prepared.bits,
+            time,
+            donation_address: prepared.donation_address.clone(),
+            donation: prepared.donation,
+            fee_address: prepared.fee_address.clone(),
+            fee: prepared.fee,
+            coinbase_value: prepared.template.coinbasevalue,
+        };
+        let from_struct = hex::encode(commitment.hash().as_byte_array());
+
+        assert_eq!(from_notify, from_struct);
+    }
+
+    #[test]
+    fn test_different_share_addresses_produce_different_hashes() {
+        let template = Arc::new(test_template());
+        let prepared = test_notify_params_builder(template, false)
+            .build()
+            .expect("build should succeed");
+
+        let bitcoin_address = test_address();
+        let share_address1 = make_test_share_program(1);
+        let share_address2 = make_test_share_program(2);
+        assert_ne!(share_address1, share_address2);
+
+        let time = 1_700_000_000;
+        let hash1 = get_commitment_hex(
+            &prepared.commitment_prefix,
+            time,
+            &prepared.commitment_suffix,
+            Some(&bitcoin_address),
+            Some(share_address1),
+        );
+        let hash2 = get_commitment_hex(
+            &prepared.commitment_prefix,
+            time,
+            &prepared.commitment_suffix,
+            Some(&bitcoin_address),
+            Some(share_address2),
+        );
+
+        assert_ne!(
+            hash1, hash2,
+            "the share address must reach the commitment hash"
+        );
     }
 
     #[test]
@@ -668,7 +863,7 @@ mod tests {
             .build()
             .expect("build should succeed");
 
-        let notify_json = build_notify_from_prepared(&prepared, None, &tracker_handle)
+        let notify_json = build_notify_from_prepared(&prepared, None, None, &tracker_handle)
             .expect("build_notify_from_prepared with None address should succeed");
 
         // Verify the result is valid JSON
@@ -681,13 +876,18 @@ mod tests {
         let job_id_str = params[0].as_str().unwrap();
         assert_ne!(job_id_str, "0000000000000000");
 
-        // Verify commitment hash was computed and placed in coinbase2.
-        // The per-miner coinbase2 starts with [commitment_hash_push][nsecs_push]...
+        // Verify nsecs and the commitment output were placed in coinbase2.
+        // Format: "08" + 16 hex nsecs + middle + "6a20" + 64 hex hash + 8 hex locktime
         let coinbase2 = params[3].as_str().unwrap();
-        let expected_hash = get_commitment_hex(&prepared.commitment_prefix, None).unwrap();
         assert!(
-            coinbase2.contains(&expected_hash),
-            "coinbase2 should contain the commitment hash for None address"
+            coinbase2.starts_with("08"),
+            "coinbase2 should start with the nsecs push opcode"
+        );
+        let commitment_script_start = coinbase2.len() - 8 - 64 - 4;
+        assert_eq!(
+            &coinbase2[commitment_script_start..commitment_script_start + 4],
+            "6a20",
+            "coinbase2 should end with the OP_RETURN commitment output and locktime"
         );
 
         // Verify job was inserted in tracker with no share_commitment
@@ -699,5 +899,71 @@ mod tests {
             details.share_commitment.is_none(),
             "share_commitment should be None for solo mode"
         );
+    }
+
+    #[test]
+    fn test_split_coinbase2_separates_middle_and_locktime() {
+        let dummy_commitment_hash = hashes::sha256::Hash::from_byte_array([0xab_u8; 32]);
+        let coinbase = build_bitcoin_coinbase_transaction(
+            Version::TWO,
+            &[OutputPair {
+                address: test_address(),
+                amount: bitcoin::Amount::from_sat(5_000_000_000),
+            }],
+            100,
+            bitcoin::script::PushBytesBuf::from(&[0u8]),
+            None,
+            b"P2Poolv2",
+            Some(dummy_commitment_hash),
+            0,
+            None,
+        )
+        .unwrap();
+        let (_coinbase1, coinbase2) = split_coinbase(&coinbase).unwrap();
+        let dummy_commitment_hex = hex::encode(dummy_commitment_hash.as_byte_array());
+
+        let (middle, locktime) = split_coinbase2(&coinbase2, &dummy_commitment_hex).unwrap();
+
+        assert_eq!(
+            format!(
+                "{}{middle}{dummy_commitment_hex}{locktime}",
+                &coinbase2[..18]
+            ),
+            coinbase2
+        );
+        assert_eq!(locktime, hex::encode(99u32.to_le_bytes()));
+        assert!(middle.ends_with("6a20"));
+    }
+
+    /// A coinbase without the commitment output cannot carry a per-miner
+    /// commitment, so the split refuses it rather than slicing payout bytes.
+    #[test]
+    fn test_split_coinbase2_rejects_coinbase_without_commitment_output() {
+        let coinbase = build_bitcoin_coinbase_transaction(
+            Version::TWO,
+            &[OutputPair {
+                address: test_address(),
+                amount: bitcoin::Amount::from_sat(5_000_000_000),
+            }],
+            100,
+            bitcoin::script::PushBytesBuf::from(&[0u8]),
+            None,
+            b"P2Poolv2",
+            None,
+            0,
+            None,
+        )
+        .unwrap();
+        let (_coinbase1, coinbase2) = split_coinbase(&coinbase).unwrap();
+
+        let result = split_coinbase2(&coinbase2, &hex::encode([0xab_u8; 32]));
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_split_coinbase2_rejects_short_coinbase2() {
+        let result = split_coinbase2("08", &hex::encode([0xab_u8; 32]));
+        assert!(result.unwrap_err().message.contains("too short"));
     }
 }

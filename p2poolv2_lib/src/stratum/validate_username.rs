@@ -1,18 +1,6 @@
-// Copyright (C) 2024-2026 P2Poolv2 Developers (see AUTHORS)
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
 //
-// This file is part of P2Poolv2
-//
-// P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free
-// Software Foundation, either version 3 of the License, or (at your option)
-// any later version.
-//
-// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License along with
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 use bitcoin::Address;
 
@@ -180,7 +168,7 @@ mod tests {
     #[test]
     fn test_multiple_dots_in_username() {
         let mainnet_address = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa";
-        let multiple_dots = format!("{}.worker.with.dots", mainnet_address);
+        let multiple_dots = format!("{mainnet_address}.worker.with.dots");
         let result = validate(&multiple_dots, true, Network::Bitcoin);
         assert!(result.is_ok());
         let validated = result.unwrap();

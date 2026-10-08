@@ -1,18 +1,6 @@
-// Copyright (C) 2024-2026 P2Poolv2 Developers (see AUTHORS)
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
 //
-// This file is part of P2Poolv2
-//
-// P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free
-// Software Foundation, either version 3 of the License, or (at your option)
-// any later version.
-//
-// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License along with
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 use crate::api::error::ApiError;
 use crate::api::server::AppState;
@@ -20,9 +8,9 @@ use axum::{
     Json,
     extract::{Query, State},
 };
-use bitcoin::BlockHash;
+use bitcoin::{BlockHash, Network};
+use p2poolv2_lib::address::witness_program_codec::to_address_string;
 use p2poolv2_lib::shares::chain::chain_store_handle::ChainStoreHandle;
-use p2poolv2_lib::store::block_tx_metadata::Status;
 use p2poolv2_lib::store::dag_store::MAX_UNCLES_DEPTH;
 use p2poolv2_lib::store::writer::StoreError;
 use p2poolv2_lib::utils::time_provider::format_timestamp;
@@ -58,9 +46,12 @@ pub struct BitcoinHeaderOutput {
 pub struct ShareLookupOutput {
     pub blockhash: String,
     pub height: Option<u32>,
-    pub status: String,
+    /// Validation state only. Chain position is reported separately in `chain`.
+    pub validation_status: String,
+    pub chain: String,
     pub parent: String,
     pub uncles: Vec<String>,
+    pub miner_bitcoin_address: String,
     pub miner_address: String,
     pub merkle_root: String,
     pub bits: String,
@@ -71,23 +62,12 @@ pub struct ShareLookupOutput {
     pub transactions: Option<Vec<String>>,
 }
 
-/// Format a Status enum value as a human-readable string.
-fn format_status(status: &Status) -> &'static str {
-    match status {
-        Status::Pending => "Pending",
-        Status::HeaderValid => "HeaderValid",
-        Status::Invalid => "Invalid",
-        Status::Candidate => "Candidate",
-        Status::BlockValid => "BlockValid",
-        Status::Confirmed => "Confirmed",
-    }
-}
-
 /// Build the JSON output for a single share identified by its blockhash.
 fn build_share_output(
     chain_store_handle: &ChainStoreHandle,
     blockhash: &BlockHash,
     full: bool,
+    network: Network,
 ) -> Result<ShareLookupOutput, ApiError> {
     let store = chain_store_handle.store_handle().store();
 
@@ -111,7 +91,11 @@ fn build_share_output(
         .and_then(|metadata| metadata.expected_height);
     let status = metadata
         .as_ref()
-        .map(|metadata| format_status(&metadata.status))
+        .map(|metadata| metadata.status.as_str())
+        .unwrap_or("Unknown");
+    let chain = metadata
+        .as_ref()
+        .map(|metadata| metadata.chain.as_str())
         .unwrap_or("Unknown");
 
     let bitcoin_header = &share_header.bitcoin_header;
@@ -149,14 +133,16 @@ fn build_share_output(
     Ok(ShareLookupOutput {
         blockhash: blockhash.to_string(),
         height,
-        status: status.to_string(),
+        validation_status: status.to_string(),
+        chain: chain.to_string(),
         parent: share_header.prev_share_blockhash.to_string(),
         uncles: share_header
             .uncles
             .iter()
             .map(|uncle| uncle.to_string())
             .collect(),
-        miner_address: share_header.miner_bitcoin_address.to_string(),
+        miner_bitcoin_address: share_header.miner_bitcoin_address.to_string(),
+        miner_address: to_address_string(&share_header.miner_address, network),
         merkle_root: share_header.merkle_root.to_string(),
         bits: format!("{:#x}", share_header.bits.to_consensus()),
         time: format_timestamp(share_header.time as u64),
@@ -182,10 +168,17 @@ pub(crate) async fn share(
             let blockhash = BlockHash::from_str(&hash_string).map_err(|error| {
                 ApiError::BadRequest(format!("Invalid blockhash '{hash_string}': {error}"))
             })?;
-            let output = build_share_output(chain_store_handle, &blockhash, full)?;
+            let output = build_share_output(
+                chain_store_handle,
+                &blockhash,
+                full,
+                state.app_config.network,
+            )?;
             Ok(Json(vec![output]))
         }
-        (None, Some(height)) => lookup_by_height(chain_store_handle, height, full),
+        (None, Some(height)) => {
+            lookup_by_height(chain_store_handle, height, full, state.app_config.network)
+        }
         _ => Err(ApiError::BadRequest(
             "Exactly one of hash or height must be provided".to_string(),
         )),
@@ -198,6 +191,7 @@ fn lookup_by_height(
     chain_store_handle: &ChainStoreHandle,
     height: u32,
     full: bool,
+    network: Network,
 ) -> Result<Json<Vec<ShareLookupOutput>>, ApiError> {
     let store = chain_store_handle.store_handle().store();
     let mut blockhashes = Vec::with_capacity(4);
@@ -243,7 +237,12 @@ fn lookup_by_height(
 
     let mut outputs = Vec::with_capacity(blockhashes.len());
     for blockhash in &blockhashes {
-        outputs.push(build_share_output(chain_store_handle, blockhash, full)?);
+        outputs.push(build_share_output(
+            chain_store_handle,
+            blockhash,
+            full,
+            network,
+        )?);
     }
     Ok(Json(outputs))
 }
@@ -256,7 +255,6 @@ mod tests {
     use p2poolv2_lib::accounting::stats::metrics;
     use p2poolv2_lib::monitoring_events::create_monitoring_event_channel;
     use p2poolv2_lib::node::actor::NodeHandle;
-    use p2poolv2_lib::store::block_tx_metadata::Status;
     use p2poolv2_lib::stratum::work::tracker::start_tracker_actor;
     use p2poolv2_lib::test_utils::{genesis_for_tests, setup_test_chain_store_handle};
 
@@ -272,6 +270,7 @@ mod tests {
             app_config: AppConfig {
                 pool_signature_length: 0,
                 network: bitcoin::Network::Signet,
+                cors_allowed: false,
             },
             chain_store_handle,
             metrics_handle,
@@ -282,16 +281,6 @@ mod tests {
             auth_token: None,
         });
         (state, temp_dir)
-    }
-
-    #[test]
-    fn test_format_status_all_variants() {
-        assert_eq!(format_status(&Status::Pending), "Pending");
-        assert_eq!(format_status(&Status::HeaderValid), "HeaderValid");
-        assert_eq!(format_status(&Status::Invalid), "Invalid");
-        assert_eq!(format_status(&Status::Candidate), "Candidate");
-        assert_eq!(format_status(&Status::BlockValid), "BlockValid");
-        assert_eq!(format_status(&Status::Confirmed), "Confirmed");
     }
 
     #[tokio::test]

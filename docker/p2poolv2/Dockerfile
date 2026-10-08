@@ -1,5 +1,8 @@
 # syntax=docker/dockerfile:1.20
-FROM rust:1.88-slim-bullseye AS builder
+# The builder and runner stages must stay on the same Debian release. A builder
+# on a newer release links the binaries against a newer glibc than the runner
+# provides, and they fail to start with "GLIBC_2.xx not found".
+FROM rust:1.99-slim-trixie AS builder
 
 # Install required build dependencies
 RUN apt-get update && \
@@ -35,14 +38,16 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/p2poolv2/target \
     cargo fetch --locked
 
+# Every workspace crate in the p2poolv2_node dependency graph.
 COPY --parents bitcoindrpc/ .
-COPY --parents p2poolv2_cli/ .
-COPY --parents p2poolv2_node/ .
-COPY --parents p2poolv2_lib/ .
+COPY --parents p2poolv2_wallet/ .
 COPY --parents p2poolv2_api/ .
+COPY --parents p2poolv2_cli/ .
+COPY --parents p2poolv2_config/ .
+COPY --parents p2poolv2_lib/ .
+COPY --parents p2poolv2_node/ .
 
 ENV RUST_LOG=info
-ENV RUSTFLAGS='-C target-cpu=native'
 
 # Build and install
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
@@ -51,9 +56,15 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/p2poolv2/target \
     cargo install --locked --offline --path ./p2poolv2_node
 
-FROM debian:bullseye-slim AS runner
+# Must match the builder's Debian release. See the note above.
+FROM debian:trixie-slim AS runner
 
-RUN apt-get update && apt-get install -y --no-install-recommends curl
+# ca-certificates is required, not optional: reqwest builds its HTTPS client
+# through rustls-platform-verifier, which loads the platform trust store when
+# the client is constructed. Without it every client build fails, so the node
+# cannot reach bitcoind even over plain http. curl needs it too.
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /p2poolv2
 VOLUME /p2poolv2
@@ -66,12 +77,20 @@ EXPOSE 3333 \
 # Set sane container defaults
 ENV RUST_BACKTRACE=full \
     RUST_LOG=debug \
-    P2POOL_LOGGING_CONSOLE=1 \
+    P2POOL_LOGGING__CONSOLE=1 \
     P2POOL_CONFIG=/etc/p2poolv2/config.toml
 
 COPY --from=builder /usr/local/cargo/bin/p2poolv2 /usr/local/bin/p2poolv2
 COPY --from=builder /usr/local/cargo/bin/p2poolv2_cli /usr/local/bin/p2poolv2_cli
 COPY config-docker.sample.toml /etc/p2poolv2/config.toml
+
+# Set up dashboard
+COPY p2poolv2_api/static /var/www/dashboard
+ENV P2POOL_STATIC_DIR=/var/www/dashboard
+
+LABEL org.opencontainers.image.source=https://github.com/p2poolv2/p2poolv2
+LABEL org.opencontainers.image.description="P2Poolv2 is a peer-to-peer Bitcoin mining pool where miners coordinate directly and verify their rewards without centralized operators."
+LABEL org.opencontainers.image.licenses="MIT OR Apache-2.0"
 
 # TODO: add non-root user
 

@@ -11,13 +11,20 @@ repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
 rust-version.workspace = true
+publish.workspace = true
 
 [features]
+hydrapool-pplns-accounting = []
 test-utils = ["dep:rand", "dep:tempfile", "p2poolv2_config/test-utils"]
+# No-PoW load-test simulation. Stubs out proof-of-work verification on the
+# share-validation path and disables auto block-submission so synthetic shares
+# can be emitted without hashing. MUST NEVER be enabled in a release build.
+# See docs/simulation/load-test-plan.md.
+sim = ["dep:rand"]
 
 [dependencies]
 # Optional test utilities dependencies
-rand = { version = "0.8", optional = true }
+rand = { workspace = true, optional = true }
 tempfile = { workspace = true, optional = true }
 libp2p = { workspace = true }
 tokio = { workspace = true }
@@ -33,14 +40,12 @@ rocksdb = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
 serde_json = { workspace = true }
-rust_decimal = { workspace = true }
-rust_decimal_macros = { workspace = true }
 zmq = { workspace = true }
 bitcoin = { workspace = true }
+p2poolv2_wallet = { workspace = true }
 bitcoinconsensus = { workspace = true }
 base64 = { workspace = true }
-void = { workspace = true }
-tower = { version = "0.5", features = ["util", "limit"] }
+tower = { workspace = true, features = ["util", "limit"] }
 tokio-util = { workspace = true }
 tokio-stream = { workspace = true }
 tracing-appender = { workspace = true }
@@ -49,18 +54,19 @@ p2poolv2_config = { path = "../p2poolv2_config" }
 chrono = { workspace = true }
 dashmap = { workspace = true }
 uint = { workspace = true }
+rlimit = "0.11.0"
 
 [dev-dependencies]
 bitcoindrpc = { path = "../bitcoindrpc", features = ["test-utils"] }
 p2poolv2_config = { path = "../p2poolv2_config", features = ["test-utils"] }
 tempfile.workspace = true
-test-log = { version = "0.2.17", features = ["trace"] }
-tokio = { version = "1.0", features = ["full", "test-util"] }
-rand = "0.8"
-wiremock = "0.6.2"
+test-log = { workspace = true }
+tokio = { workspace = true, features = ["full", "test-util"] }
+rand = { workspace = true }
+wiremock = { workspace = true }
 mockall.workspace = true
 mockall_double.workspace = true
-temp-env = "0.3.6"
+temp-env = { workspace = true }
 tokio-test.workspace = true
 criterion.workspace = true
 

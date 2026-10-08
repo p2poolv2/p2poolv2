@@ -3,6 +3,10 @@ name: Chain Store RocksDB Schema
 description: Captures the rocksdb schema design currently in use
 ---
 
+**The architecture files are LLM generated. The goal is make it easier
+for new comers to the code base and other LLMs to quickly understand
+the design and remain consistent with the design choices.**
+
 # Chain Store RocksDB Schema
 
 This document captures the RocksDB storage schema used by `Store` and `ChainStore` in P2Poolv2.
@@ -60,6 +64,17 @@ Stores share headers independently, enabling header-first sync before full block
 | Key                    | Value                        | Notes                                |
 |------------------------|------------------------------|--------------------------------------|
 | `blockhash` (32 bytes) | `ShareHeader` (serialized)   | Written during header sync and block storage |
+
+The serialized header carries its `CoinbaseProof` and encodes each address as a
+one-byte network class (main, test, regtest) followed by its script pubkey.
+
+### 1c. `TemplateMerkleBranches` - Coinbase Merkle Branches
+
+The coinbase merkle branch a header's `CoinbaseProof` is checked against.
+
+| Key                    | Value                                  | Notes |
+|------------------------|----------------------------------------|-------|
+| `blockhash` (32 bytes) | `MerkleBranches` (count + 32-byte nodes) | Written with a full block, and during header sync for headers held without their body, so they can be served on |
 
 ---
 

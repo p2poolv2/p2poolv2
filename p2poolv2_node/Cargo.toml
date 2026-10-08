@@ -11,7 +11,12 @@ repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
 rust-version.workspace = true
+publish.workspace = true
 default-run = "p2poolv2"
+
+[lib]
+name = "p2poolv2_node"
+path = "src/lib.rs"
 
 [dependencies]
 tokio = { workspace = true }
@@ -34,8 +39,20 @@ path = "src/main.rs"
 name = "p2poolv2_cli"
 path = "src/cli_main.rs"
 
+[[bin]]
+name = "verify_chain"
+path = "src/verify_chain.rs"
+required-features = ["debug-tools"]
+
+[features]
+debug-tools = []
+
 [dev-dependencies]
 p2poolv2_lib = { workspace = true, features = ["test-utils"] }
 mockall.workspace = true
 mockall_double.workspace = true
 tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+wiremock = { workspace = true }
+base64 = { workspace = true }
+serde_json = { workspace = true }

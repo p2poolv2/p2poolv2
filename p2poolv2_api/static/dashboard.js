@@ -1,5 +1,13 @@
 // Convert Bitcoin compact target (bits) to work.
 // Work = 2^256 / (target + 1) where target is decoded from the compact format.
+function updateTitleWithHeight(height, tipHash) {
+    if (height != null) {
+        var tip = tipHash ? tipHash.substring(0, 3) : "";
+        var label = tip ? height + " \u00b7 " + tip : "" + height;
+        document.title = label + "\u00b7 P2Poolv2 Dashboard";
+    }
+}
+
 function workFromBits(bits) {
     var exponent = bits >> 24;
     var mantissa = BigInt(bits & 0x7fffff);
@@ -20,13 +28,32 @@ function difficultyFromBits(bits) {
     var target =
         shift >= 0 ? mantissa << BigInt(shift) : mantissa >> BigInt(-shift);
     if (target === 0n) return "0";
-    var diff1Target = 0xFFFFn << 208n;
+    var diff1Target = 0xffffn << 208n;
     var difficulty = diff1Target / target;
-    return difficulty.toLocaleString();
+    return formatDifficulty(Number(difficulty));
+}
+
+function formatDifficulty(value) {
+    var suffixes = ["", "K", "M", "G", "T", "P", "E"];
+    if (value < 10000) return value.toLocaleString();
+    var tier = 0;
+    var scaled = value;
+    while (scaled >= 1000 && tier < suffixes.length - 1) {
+        scaled = scaled / 1000;
+        tier = tier + 1;
+    }
+    var formatted =
+        scaled >= 100
+            ? scaled.toFixed(0)
+            : scaled >= 10
+              ? scaled.toFixed(1)
+              : scaled.toFixed(2);
+    return formatted + suffixes[tier];
 }
 
 function dashboard() {
     return {
+        menuOpen: false,
         username: "",
         password: "",
         error: "",
@@ -50,6 +77,10 @@ function dashboard() {
                 var response = await fetch("/chain_info");
                 if (response.ok) {
                     this.chainInfo = await response.json();
+                    updateTitleWithHeight(
+                        this.chainInfo.chain_tip_height,
+                        this.chainInfo.chain_tip_blockhash,
+                    );
                     this.authenticated = true;
                     this.checking = false;
                     this.fetchShares();
@@ -84,6 +115,10 @@ function dashboard() {
                 }
 
                 this.chainInfo = await response.json();
+                updateTitleWithHeight(
+                    this.chainInfo.chain_tip_height,
+                    this.chainInfo.chain_tip_blockhash,
+                );
                 this.authenticated = true;
                 this.password = "";
                 this.fetchShares();
@@ -137,6 +172,7 @@ function dashboard() {
                 if (this.chainInfo) {
                     this.chainInfo.chain_tip_height = share.height;
                     this.chainInfo.chain_tip_blockhash = share.blockhash;
+                    updateTitleWithHeight(share.height, share.blockhash);
                     var work = workFromBits(share.bits);
                     var currentWork = BigInt(this.chainInfo.total_work);
                     this.chainInfo.total_work =
@@ -213,6 +249,10 @@ function dashboard() {
                 }
 
                 this.chainInfo = await response.json();
+                updateTitleWithHeight(
+                    this.chainInfo.chain_tip_height,
+                    this.chainInfo.chain_tip_blockhash,
+                );
             } catch (err) {
                 this.chainError = "Connection failed: " + err.message;
             }
@@ -241,10 +281,18 @@ function dashboard() {
 
         formatHash(hash) {
             if (!hash) return "N/A";
-            if (hash.length <= 16) return hash;
-            return (
-                hash.substring(0, 8) + "..." + hash.substring(hash.length - 8)
-            );
+            if (hash.length <= 12) return hash;
+            return hash.substring(0, 10);
+        },
+
+        // Addresses are truncated head and tail rather than head only. A
+        // p2pool address spends its first 8 characters on the "sp2pool1"
+        // human readable part, so a leading slice alone would render every
+        // miner on a network identically.
+        formatAddress(address) {
+            if (!address) return "N/A";
+            if (address.length <= 20) return address;
+            return address.substring(0, 10) + "..." + address.slice(-6);
         },
 
         formatTimestamp(timestamp) {

@@ -3,6 +3,10 @@ name: Share Processing Pipeline
 description: Documents the data flow for processing shares from stratum submission through storage and organisation
 ---
 
+**The architecture files are LLM generated. The goal is make it easier
+for new comers to the code base and other LLMs to quickly understand
+the design and remain consistent with the design choices.**
+
 # Share Processing Pipeline
 
 This document describes the data flow for processing shares in p2pool-v2.
@@ -31,11 +35,11 @@ The share processing pipeline is designed to:
 | (tokio task)           |     | (p2p message handler)     |
 |                        |     |                           |
 | - handle_stratum_share |     | - Stores share block      |
-| - Sends Header event   |     | - Checks missing deps     |
-|   to organise          |     |   (parent, uncles)        |
-| - Sends ValidateBlock  |     | - If deps missing:        |
-|   to validation        |     |   sends FetchBlocks,      |
-| - Broadcasts to peers  |     |   defers validation       |
+|   stores share,        |     | - Checks missing deps     |
+|   organises header     |     |   (parent, uncles)        |
+| - Sends ValidateShare  |     | - If deps missing:        |
+|   Block to validation  |     |   sends FetchBlocks,      |
+|                        |     |   defers validation       |
 +---+----------+---------+     | - If deps present:        |
     |          |               |   sends ValidateBlock     |
     |          |               +----------+----------------+
@@ -55,9 +59,11 @@ The share processing pipeline is designed to:
     |   | - On success:                            |
     |   |   sends Block to organise                |
     |   |   sends Inv to swarm                     |
-    |   |   schedule_dependents: sends             |
-    |   |   ValidateBlock for children/nephews     |
-    |   |   back through validation channel        |
+    |   | - On Consensus failure:                  |
+    |   |   sends InvalidBlock to organise         |
+    |   | - On Recoverable failure:                |
+    |   |   nothing (see "Retrying a block that    |
+    |   |   failed without a verdict" below)       |
     |   +----+-----------------+-------------------+
     |        |                 |
     |        | organise_tx     | swarm_tx
@@ -68,20 +74,20 @@ The share processing pipeline is designed to:
 |                   |       | - Receives      |
 | Two event types:  |       |   SwarmSend::   |
 |                   |       |   Inv/Broadcast |
-| Header(ShareHdr): |       | - Relays inv to |
-|   organise_header |       |   peers via     |
-|   -> candidate    |       |   peer knowledge|
-|   chain updates   |       +-----------------+
+| Block(ShareBlock):|       | - Relays inv to |
+|   organise_block  |       |   peers via     |
+|   -> confirmed    |       |   peer knowledge|
+|   promotion       |       +-----------------+
 |                   |
-| Block(ShareBlock):|
-|   organise_block  |
-|   -> confirmed    |
-|   promotion       |
+| InvalidBlock(hash)|
+|   mark_invalid,   |
+|   then catch the  |
+|   confirmed chain |
+|   up              |
 |                   |
 | Fatal errors      |
 | stop the node     |
 +--------+----------+
-         | WriteCommand::OrganiseHeader
          | WriteCommand::OrganiseBlock
          | (via StoreHandle oneshot pattern)
          v
@@ -118,12 +124,67 @@ The share processing pipeline is designed to:
 
 The organisation pipeline processes two distinct event types:
 
-### OrganiseEvent::Header(ShareHeader)
-- **Purpose**: Update the candidate chain
-- **Called by**: `Store::organise_header(header, batch)`
-- **Behavior**: Extends or reorgs the candidate chain based on the new header.
-  Only requires a `ShareHeader`, not a full `ShareBlock`.
-- **Does NOT**: Touch the confirmed chain
+### Header organisation is not an organise event
+
+Candidate chain updates do not go through the organise worker. Callers invoke
+`ChainStoreHandle::organise_header` directly and await it: `handle_share_headers`
+during header sync, and `add_share_block_and_organise_header` on the block
+paths. Both reach `WriteCommand::OrganiseHeader` on the StoreWriter thread, so
+header and block writes are already serialised there without a second queue.
+
+Routing headers through the worker would buy nothing. It would not change
+ordering, and it would not unblock anything in `pending_blocks` -- those blocks
+wait on a parent reaching `BlockValid`, which no arriving header supplies.
+
+### Retrying a block that failed without a verdict
+
+A `Recoverable` or `StoreAccess` validation failure leaves the block at
+`HeaderValid`, never `Invalid`. Only re-delivery revalidates it:
+`handle_share_block` re-sends `ValidationEvent::ValidateBlockHash` for any block
+already in the store that is not yet confirmed (`share_blocks.rs`), and that
+handler serves both peer broadcasts and `GetData` responses. Nothing else does:
+a candidate reorg never re-validates, and the block fetcher will not re-request
+the body since `share_block_exists` is true. The retry is therefore
+opportunistic -- it depends on a peer sending the block again, which this node
+does not solicit.
+
+The BlockReceiver's ancestry gate (below) makes the common causes unreachable,
+but not all of them: `collect_recent_ancestors` walks `MAX_UNCLES_DEPTH` of
+ancestry, and an uncle's `expected_height` may be absent. Until a re-delivery
+arrives, such a block stalls, and in the PPLNS zone a stalled candidate stops
+confirmation at its height.
+
+### BlockReceiver ancestry gate
+
+`process_share_block` holds a block in `pending` until its parent and every
+uncle either has its **block body** stored or sits below `prune_height`
+(`candidate tip - PRUNE_DEPTH`), checked by
+`ChainStoreHandle::all_block_and_uncle_data_available`. `drive_descendants`
+re-checks and releases buffered blocks each time one commits.
+
+Gating on bodies rather than header status is what makes ancestry data an
+induction: every ancestor down to the prune boundary has its body, so the
+Outputs CF holds the transactions of every block a descendant may spend from.
+Header status would not give this -- header sync marks a whole range
+`HeaderValid` via `organise_header` before any body is fetched, so a child
+could otherwise be validated while its parent's transactions are still missing,
+and `collect_spent_outputs` would fail on a block that is perfectly valid.
+
+Blocks below `prune_height` are exempt because their bodies are never fetched;
+requiring one would stall the chain permanently at the boundary. Spends cannot
+reach below it either: `min_coinbase_root_height` caps them one window back
+(`MAX_PPLNS_WINDOW_SHARES`) while bodies are retained for two (`PRUNE_DEPTH`).
+
+### OrganiseEvent::InvalidBlock(BlockHash)
+- **Purpose**: Record that a block failed pre-context validation
+- **Sent by**: the ValidationWorker, on a `Consensus` failure from
+  `validate_share_block` / `validate_below_pplns_depth`
+- **Behavior**: `mark_invalid` (which rebuilds the candidate chain from the
+  invalid block's parent onto the best surviving branch), then `organise_block`
+  to catch the confirmed chain up
+- **Why**: the block's header may already be on the candidate chain. Left
+  `HeaderValid`, it stops `contiguous_candidates_with_block_data` at its height
+  and confirmation stalls there, with nothing to re-fetch or re-queue it.
 
 ### OrganiseEvent::Block(ShareBlock)
 - **Purpose**: Promote candidates to confirmed
@@ -132,36 +193,80 @@ The organisation pipeline processes two distinct event types:
   RocksDB, then extends or reorgs the confirmed chain if conditions are met.
 - **Does NOT**: Modify the candidate chain
 
-This separation enables future use where header sync sends Header events
-(building the candidate chain) and block fetch sends Block events (promoting
-to confirmed), operating independently.
+Both events concern the confirmed chain only. The candidate chain is maintained
+outside the worker, by the direct `organise_header` calls described above.
 
 ## Key Components
 
 ### EmissionWorker (`node/emission_worker.rs`)
 - Runs in dedicated tokio task, spawned by NodeActor
 - Receives `Emission` from stratum server via `EmissionReceiver`
-- Calls `handle_stratum_share()` which builds and stores the share
-- On success with `Some(ShareBlock)`:
-  - Sends `OrganiseEvent::Header(header)` for candidate chain building
-  - Sends `OrganiseEvent::Block(share_block)` for confirmed promotion
-  - Sends original to `swarm_tx` for peer broadcast
+- Calls `handle_stratum_share()` which builds the share, stores it, and
+  organises its header onto the candidate chain
+- On success with `Some(ShareBlock)`: sends
+  `ValidationEvent::ValidateShareBlock(share_block)` straight to the
+  ValidationWorker (avoiding a redundant store read). The ValidationWorker
+  emits `OrganiseEvent::Block` for confirmed promotion and broadcasts to peers
+  after validation succeeds, and `OrganiseEvent::InvalidBlock` when validation
+  fails with `FailureKind::Consensus`.
 - On success with `None`: solo mode, no broadcast or organisation needed
 
 ### handle_stratum_share (`shares/handle_stratum_share.rs`)
 - Async function that processes emissions
-- P2P mode (share commitment present): builds `ShareBlock`, stores via `ChainStoreHandle::add_share()`, returns `Some(ShareBlock)`
+- P2P mode (share commitment present): builds `ShareBlock`, persists it and
+  organises its header onto the candidate chain in one atomic write via
+  `ChainStoreHandle::add_share_block_and_organise_header()`, and returns
+  `Some(ShareBlock)`
 - Solo mode (no commitment): stores PPLNS share via `ChainStoreHandle::add_pplns_share()`, returns `None`
+
+Locally-mined blocks are not validated or marked `BlockValid` here. Like peer
+blocks, they are enqueued for validation (see EmissionWorker), and the organise
+worker's `validate_mark_promote` marks them `BlockValid` after chain-context
+validation, just before confirmation.
+
+#### Two addresses, two chains
+
+A `ShareHeader` carries `miner_bitcoin_address` (a `bitcoin::Address`,
+receiving the PPLNS payout from a found block's coinbase) and `miner_address`
+(a `p2poolv2_address::Address`, owning the share coinbase output). They are
+never derived from one another, and every stage below treats them separately:
+
+- `build_sharechain_coinbase_transaction` pays `miner_address`, so the share
+  coinbase and therefore `merkle_root` depend on it.
+- `validate_share_coinbase` rejects a share whose coinbase output 0 does not
+  pay the header's `miner_address`.
+- The PPLNS window, `append_proportional_distribution` and
+  `validate_bitcoin_payout` use `miner_bitcoin_address` only.
+
+`ShareCommitment::hash()` digests `miner_address` directly, together with
+`non_coinbase_root`, the root of the share's non-coinbase transactions. The
+share coinbase carries the bitcoin weak block hash, so it is unique per share
+and cannot be in the commitment; it is bound by being rebuilt during
+validation. See `docs/architecture/address-format.md`.
 
 ### OrganiseWorker (`node/organise_worker.rs`)
 - Runs in dedicated tokio task, spawned by NodeActor
-- Receives `OrganiseEvent` via bounded mpsc channel (capacity 8192)
+- Receives `OrganiseEvent` via bounded mpsc channel (capacity 512)
 - Matches on event type:
-  - `Header(header)`: calls `ChainStoreHandle::organise_header(header)`
-  - `Block(share_block)`: calls `ChainStoreHandle::organise_block()`
-- Error handling:
-  - `StoreError::ChannelClosed` is fatal -- returns `Err(OrganiseError)`, triggers node shutdown
-  - Other errors are logged, worker continues
+  - `Block(share_block)`: gated on its parent's validation state before any
+    chain-context validation runs (see "Parent-gated block processing" under
+    Organisation Logic)
+  - `InvalidBlock(blockhash)`: marks the block `Invalid` and advances the
+    confirmed chain; no validation or promotion runs for it
+- Error handling reacts to the validation failure kind (`FailureKind`):
+  - `Consensus` (a rule broken with all data present): mark the block `Invalid`
+    and continue; confirmation can then advance onto a valid sibling.
+  - `StoreAccess` (the store read itself failed, or data whose absence can only
+    mean corruption is gone) and `StoreError::ChannelClosed`: both fatal --
+    return `Err(OrganiseError)`, triggering node shutdown. No verdict a
+    peer-supplied block can provoke may be classified this way, or any peer
+    could shut the node down: a prevout that is missing or outside the payout
+    window is `Consensus`, and an ancestor header or PPLNS anchor this node
+    cannot resolve locally is `Recoverable`.
+  - `Recoverable` (data the check needs is unavailable, so the block cannot be
+    judged now -- a pre-context dependency that can still arrive, a missing
+    ancestor header, or an unresolvable PPLNS anchor): leave the block for a
+    later retry; never `Invalid`, never fatal.
   - Channel close (all senders dropped) is clean shutdown
 
 ### NodeActor (`node/actor.rs`)
@@ -189,10 +294,21 @@ to confirmed), operating independently.
 |---------|------|----------|---------|
 | emissions_rx | tokio mpsc | 100 | Stratum server -> EmissionWorker |
 | validation_tx/rx | tokio mpsc | 8192 | Share handlers -> ValidationWorker |
-| organise_tx/rx | tokio mpsc | 8192 | ValidationWorker/EmissionWorker -> OrganiseWorker |
+| organise_tx/rx | tokio mpsc | 512 | ValidationWorker/EmissionWorker -> OrganiseWorker |
 | swarm_tx/rx | tokio mpsc | 100 | ValidationWorker/EmissionWorker -> NodeActor |
 | block_fetcher_tx/rx | tokio mpsc | 8192 | Share handlers -> BlockFetcher |
 | write_tx/rx | std::sync mpsc | unbounded | StoreHandle -> StoreWriter (serialized writes) |
+
+The organise channel and the organise worker's `pending_blocks` buffer both
+hold whole `ShareBlock`s, each bounded at `BLOCK_TXS_SIZE_LIMIT` (200 KB) by
+`handle_share_block`, so their capacities set the worst-case memory of the
+organise path -- 512 + 1024 entries, rather than the 8192 + 16384 they held
+before, which allowed several GB of bodies in flight. The channel is pure
+backpressure between the parallel validation tasks and the serial organise
+worker, so a deeper queue buys no throughput and only widens the zone-tiering
+window. `PENDING_BLOCKS_CAPACITY` is sized at twice the channel because a child
+can sit a full channel ahead of its parent, and overflow there drops a block
+that is already stored and will not be re-fetched.
 
 ## BlockHeight Column Family Key Schema
 
@@ -231,10 +347,10 @@ const TOP_CONFIRMED_KEY: &str = "meta:top_confirmed_height";
 1. **Extend candidate chain** (`extends_chain`): If the header's `prev_share_blockhash` matches the top candidate (or top confirmed as fallback), height is consecutive, and chain work is greater, it appends to the candidate index via `append_to_candidates`.
 
 2. **Reorg candidate chain** (`should_reorg_candidate` / `reorg_candidate`): If the header has more cumulative work than the current top candidate but doesn't extend it, the candidate chain is replaced:
-   - `get_branch_to_candidates` walks backward from the new share to find the branch point (first ancestor with `Candidate` status)
+   - `get_branch_to_chain` walks backward from the new share to find the branch point (the first ancestor already on the candidate or confirmed chain)
    - `get_candidates_chain` fetches the old candidate entries from the branch point to the top
-   - Old entries are deleted and reorged-out shares have their metadata set to `Status::Valid` (so `is_candidate()` stays correct for future branch point lookups)
-   - New branch entries are written and their metadata set to `Status::Candidate`
+   - Old entries are deleted and reorged-out shares have their membership cleared to `ChainMembership::None` (so `is_candidate()` stays correct for future branch point lookups). Their `Status` is left untouched: status records validation only, so a reorged-out block stays `BlockValid`
+   - New branch entries are written and their membership set to `ChainMembership::Candidate`
    - Top candidate height is set once at the end
 
 3. **No-op**: Header doesn't extend or outwork the current candidate chain.
@@ -249,7 +365,78 @@ const TOP_CONFIRMED_KEY: &str = "meta:top_confirmed_height";
 
 3. **No-op**: No promotion conditions met.
 
+Confirmation only ever follows the candidate chain; there is no forward-by-height
+fallback. A block that could not yet reorg the candidate chain (for example a
+locally-mined block whose parent is not yet validated) is not chased by height --
+it advances only once the candidate chain incorporates it and its parent is
+`BlockValid` (see "Parent-gated block processing").
+
 All writes go into a single `WriteBatch` for atomicity.
+
+**Validated-only promotion**: inside the PPLNS zone, promotion accepts only
+*validated* blocks. `contiguous_candidates_with_block_data` (the candidate-chain
+scan) gates on `Store::is_candidate_and_block_valid`, which requires both
+`Candidate` membership and `BlockValid` status -- rejecting `HeaderValid`
+(PoW-valid but not chain-context validated), `Pending`, and `Invalid` blocks. So
+an unvalidated or rejected block is never promoted, even when its body is stored.
+The organise worker's `validate_mark_promote` marks a block `BlockValid` after
+chain-context validation and *before* it calls `organise_block`, so the block is
+already validated by the time this promotion path sees it.
+
+**Prevout checks at confirmation**: `BlockValid` is not sufficient on its own.
+Two of the prevout rules -- is the spent output's source on the confirmed chain,
+and is the output already spent -- are answered relative to whichever branch this
+node has confirmed, and a reorg changes both answers. `validate_prevouts` at
+ingest therefore does not judge them at all; it enforces only what the block
+itself fixes (the output exists, its coinbase root is within the payout window,
+a coinbase output is mature at this block's height, and no output is spent twice
+within the block), so its verdicts stay true under any reorg. Deciding the other
+two at ingest would mark a fork block `Invalid` for spending an output the
+winning branch also spent -- the ordinary situation when the same transaction
+appears on both sides of a fork -- and `reorg_branch_has_invalid` would then bar
+that fork forever, however much work it accumulated. So `extend_confirmed` and
+`reorg_confirmed` check each block's prevouts as they promote it, against the
+confirmed state *the batch itself is building* -- a `WriteBatch` is opaque to
+reads, so the deltas are carried in a `ConfirmationOverlay` (blocks leaving the
+confirmed chain, the spends they release, and the spends applied so far in this
+batch). Only the leading run that passes is confirmed; the first block that fails
+is marked `Invalid`, which rebuilds the candidate chain from its parent. On a
+reorg the re-check and the work comparison both run *before* the rewind, so a
+fork whose surviving prefix no longer outweighs the confirmed chain leaves it
+untouched rather than regressing the tip. Coinbase maturity needs no re-check: it
+is measured at ingest against the block's own height (parent height + 1), which
+is fixed by chain position and so is reorg-invariant.
+
+### Parent-gated block processing
+
+`OrganiseEvent::Block`s arrive in validation-completion order, not parent-child
+order (the validation worker runs one task per block). To validate each block
+exactly once with all its dependencies present, `process_share_block` gates a
+block on its parent's state (`parent_state`) *before* any chain-context
+validation:
+
+- **Parent `Invalid`** -- the block is invalid by descent; drop it.
+- **Parent metadata `Unknown`** -- drop it; it re-arrives when its parent does.
+- **Parent `Pending`** (stored but not yet `BlockValid`) -- buffer the block in
+  `pending_blocks`, keyed by the parent's height. This is the only wait-and-retry
+  state, and the decision is a cheap metadata read, not a validation attempt.
+- **Parent `Valid`** (`BlockValid` or `Confirmed`) -- run `validate_mark_promote`.
+  Because the parent is validated, every dependency the checks need is present, so
+  a failure is classified by `FailureKind` and handled as above (Consensus ->
+  Invalid, StoreAccess -> fatal, Recoverable -> retry).
+
+Deferral is driven purely by *parent validation state*, not by the block's height
+relative to the confirmed tip. There is no forward-by-height scan chasing children
+of the confirmed tip -- the removed `try_fallback_confirmation`.
+
+When a block becomes `BlockValid` (or is promoted), `drain_pending_blocks`
+re-attempts the blocks buffered under that height and walks contiguously upward,
+stopping as soon as a height advances nothing. The parent height is only an index
+for locating a validated parent's waiting children; a re-attempted block whose
+parent is still `Pending` cheaply re-buffers. This keeps a full sync linear rather
+than quadratic. The BlockReceiver buffers separately and by pointer, releasing
+blocks through `drive_descendants` as each ancestor commits (see "Dependency
+handling").
 
 ### WriteBatch stale-read pattern
 
@@ -259,54 +446,238 @@ Within a single `WriteBatch`, reads from the DB return pre-batch (committed) sta
 
 ### ValidationWorker (`node/validation_worker.rs`)
 - Runs in dedicated tokio task, spawned by NodeActor
-- Receives `ValidationEvent::ValidateBlock(BlockHash)` via bounded mpsc channel (capacity 8192)
+- Receives `ValidationEvent::ValidateBlockHash(BlockHash)` (peer blocks) or
+  `ValidationEvent::ValidateShareBlock(ShareBlock)` (locally mined, already in
+  hand) via bounded mpsc channel (capacity 8192)
 - Spawns capped concurrent validation tasks (semaphore sized to available CPUs)
 - Each task:
-  1. Reads the share block from the chain store
-  2. Calls `validate_share_block()` which returns Ok early if the block
-     already has `BlockValid` status (avoids redundant work for re-scheduled blocks)
-  3. On success: sends `OrganiseEvent::Block` and `SwarmSend::Inv`
-  4. Calls `schedule_dependents()` which looks up children (via
-     `get_children_blockhashes`) and nephews (via `get_nephews`) and sends
-     `ValidateBlock` events back through the validation channel
-- The worker holds a `ValidationSender` clone so `schedule_dependents` can
-  send events. The worker is shut down by cancelling its task.
+  1. Reads the share block from the chain store, unless the event carried it
+  2. Picks the validation tier from `check_pplns_zone` (see "PPLNS zone
+     tiering"), then calls `validate_share_block()` or
+     `validate_below_pplns_depth()`. Both return Ok early if the block already
+     has `BlockValid` status
+  3. On success: sends `OrganiseEvent::Block` always. Sends
+     `SwarmSend::BroadcastBlock` for locally mined blocks always, and for
+     blocks from peers only when `is_current()` is true (suppresses relay of
+     historic blocks during initial sync). The task holds its semaphore
+     permit through the broadcast, so the permits also bound how many
+     validated blocks can wait on `swarm_tx`; the node actor loop always
+     drains `swarm_tx` without blocking, so that wait is ordinary
+     backpressure and always completes
+  4. On failure, branches on `FailureKind` (see the error-handling list under
+     the Two-Event Model)
 
-### Hole-filling cascade
-When a missing block arrives and validates, `schedule_dependents` enqueues
-its children and nephews for validation. Each of those, on success, enqueues
-their own dependents. This cascades from the filled hole all the way to the
-tip without explicit forward-walk logic.
+### Dependency handling
+Dependencies are resolved *before* validation, not after it. The BlockReceiver
+holds a block in `pending` until its ancestry is available (see "BlockReceiver
+ancestry gate") and `drive_descendants` releases buffered blocks as each
+ancestor commits. Separately, the organise worker buffers blocks whose parent
+is not yet `BlockValid` in `pending_blocks`, draining them by height as
+confirmation advances.
 
-Blocks that were already validated (status `BlockValid`) but could not be
-promoted because their parent was not yet confirmed will be re-scheduled.
-`validate_share_block` returns Ok immediately for these, and `organise_block`
-gets another chance to promote them.
+There is no cascade back through the validation channel: a block that reaches
+the validation worker and fails is not re-enqueued by anything (see "Retrying a
+block that failed without a verdict").
 
-### Dependency fetching
-When a share block arrives from a peer (`handle_share_block`), its parent
-and uncle references are checked against the store. If any dependency is
-missing, a `FetchBlocks` event is sent to the block fetcher and validation
-is deferred. Once the dependency arrives and validates, `schedule_dependents`
-picks up the waiting block.
+### PPLNS zone tiering
 
-## Future Additions
+`is_in_pplns_zone(H, tip) = H > tip - MAX_PPLNS_WINDOW_SHARES` splits blocks
+into two tiers, and `check_pplns_zone` is called independently by the
+validation worker (choosing full content validation vs PoW-only) and by the
+organise worker (choosing whether `validate_with_chain_context` runs).
 
-### Header Sync / Block Fetch Separation
-- Header sync can send `OrganiseEvent::Header` events to build the candidate chain
-- Block fetch can send `OrganiseEvent::Block` events to promote candidates to confirmed
-- These can operate independently and concurrently
+**The tip is the candidate tip, deliberately.** Measuring against the confirmed
+tip would break initial sync: with the candidate chain at the network tip and
+the confirmed chain still near genesis, `H > 0.saturating_sub(W)` puts *every*
+block in the zone, demanding full validation of the whole chain -- which is
+what the two-window design exists to avoid, and is not even possible, since
+bodies are only fetched within `PRUNE_DEPTH` of the candidate tip. The same
+applies to a long candidate fork that may later be reorged onto the confirmed
+chain: those blocks belong to the candidate chain and must be tiered against
+it.
+
+**Blocks below the zone never get their coinbase validated, and that is
+sound.** The PPLNS window credits each share by the miner *bitcoin* address
+and difficulty in its *header*, which PoW validation already covers. A share's
+coinbase only matters if that share won a bitcoin block, and a block more than
+one window (~14 days at one share per 10s) below the tip has long since had any
+such block settled on the bitcoin chain. This is the same trade as Bitcoin
+Core's `assumevalid`: old blocks are accepted on accumulated work rather than
+re-verified.
+
+**Because the tip moves between the two reads, a block can change tier
+mid-flight.** Exposure is `gap / 10s` per boundary block, where `gap` is the
+stage-1 to stage-2 latency. In steady state it is zero -- blocks are validated
+at `H ~ candidate_tip`, a full window above the boundary. It is systematic only
+for a node chronically ~1 window behind and syncing at roughly the network
+rate, whose frontier sits on the boundary. The organise channel bounds that
+gap: it is deliberately shallow (512) so a queued block waits behind at most a
+few hundred others rather than thousands.
+
+In that regime the tip only advances, so the flip is always in-zone ->
+below-zone: full content validation ran, chain context is skipped, and the
+block is marked `BlockValid`. That is exactly the treatment the design gives
+every below-zone block, and it is sound for the reason above.
+
+The reverse flip -- below-zone at stage 1, in-zone at stage 2 -- is the case
+with real consequence: the block skipped merkle root, coinbase structure and
+script/value/sigop checks, yet would be marked `BlockValid`. It needs the
+candidate tip to *shorten* across the boundary, which `write_branch_as_candidates`
+does on a reorg onto a shorter branch and `set_top_candidate_height_after_rebuild`
+does when an invalidation leaves nothing above the confirmed tip.
+
+It is closed by recording the tier rather than re-deriving it: the validation
+worker reports which tier it ran as `content_validated` on
+`OrganiseEvent::Block`, the organise worker carries that through its pending
+buffer, and `validate_mark_promote` runs the skipped content checks before the
+chain-context ones when a block arrives in the zone without them. The forward
+flip needs no handling, so the two tiers stay asymmetric: `content_validated`
+governs only whether content validation still owes a run, while the live
+`check_pplns_zone` read continues to govern whether chain context applies.
+
+### Payout (coinbase) validation
+Chain-context validation (`validate_bitcoin_payout` in
+`shares/validation/mod.rs`) reconstructs the expected coinbase from the PPLNS
+window and checks it against the share's bitcoin merkle root. Success is what
+transitions a block from `HeaderValid` to `BlockValid`.
+
+The window is anchored on the share's declared `prev_share_blockhash`, not the
+live confirmed tip, via `PplnsWindow::get_distribution_from_start_hash`. The
+work-building path (notify) anchors the coinbase it hands to miners on the same
+`prev`, so producer and validator compute the identical distribution for the
+same parent -- closing a race where a confirmation advancing between reads made
+a mined share's coinbase inconsistent with its declared parent.
+
+Resolving the window walks parent pointers back to a confirmed ancestor and:
+- follows `prev_share_blockhash` with no status or membership filter, stopping at
+  the first ancestor already inside the cached confirmed window. The blocks it
+  steps through are validated in practice because chain-context validation is
+  parent-gated, not because the walk itself checks;
+- returns an `Err` -- rather than a bootstrap or empty distribution -- on a
+  store failure or an unresolvable anchor, so a transient read error cannot
+  silently misdirect the reward. The producer pays the bootstrap address only
+  for the explicit empty/genesis case (`PplnsWindow::is_empty`).
+
+### Header proof-of-work binding
+
+A share header's proof of work is over its `bitcoin_header` alone. The share
+fields are bound to it only through the `ShareCommitment` hash in the bitcoin
+coinbase. Without checking that binding, one bitcoin header -- and any real
+bitcoin block header meets every share target -- replays under unlimited share
+fields, each credited the work its declared `bits` claim.
+
+The binding is checkable from the header alone because of where the
+commitment sits. The bitcoin coinbase ends with
+`[padding output][OP_RETURN OP_PUSHBYTES_32 <commitment> output][locktime]`
+(`stratum/work/coinbase.rs`). The commitment output comes after the BIP141
+witness commitment, whose pattern it does not match. The zero-padding output
+makes everything before the commitment output a whole number of SHA256 blocks.
+
+`ShareHeader.coinbase_proof` (`shares/coinbase_proof.rs`) carries the SHA256
+midstate of that prefix, its length, and `non_coinbase_root`. A verifier:
+
+1. rebuilds the commitment from the header fields and `non_coinbase_root`;
+2. resumes SHA256 from the midstate over the commitment output and locktime,
+   and hashes again, giving the coinbase txid;
+3. folds the coinbase merkle branch, giving the bitcoin merkle root, and
+   requires it to match the bitcoin header.
+
+No body, store or PPLNS read is needed. The merkle root is fixed by the proof
+of work, so a forged proof would need a SHA256 collision. The genesis share is
+exempt, because its coinbase predates the share chain.
+
+`validate_coinbase_proof` runs:
+
+- at header sync, per header, before anything is stored;
+- at the block admission gate in `handle_share_block`, before buffering;
+- in `validate_share_block` and `validate_below_pplns_depth`.
+
+Both `validate_share_block` and `validate_below_pplns_depth` also check the
+proof's `non_coinbase_root` against the block's own transactions.
+
+The coinbase merkle branch travels separately from the header, because shares
+mined on one template share a branch:
+
+- in a `ShareBlock` body as `template_merkle_branches`;
+- in a `ShareHeaders` response (`ShareHeaderBatch`) as a per-message table of
+  distinct branches, with each header naming its branch by index. The table
+  never spans messages, so dropped or retried responses cannot strand a
+  header.
+
+Header sync stores each header's branch, so a node can serve headers it holds
+without bodies. A batch also leaves out each header's bitcoin merkle root when
+the proof and branch give it back; the receiver derives it, and a forged proof
+derives a root whose header fails proof of work. `MAX_HEADERS_IN_RESPONSE`
+(900) is sized so the worst case still fits `MAX_P2P_MESSAGE_SIZE`: a distinct
+16-deep branch per header with its root included.
+
+### Uncle selection vs uncle acceptance
+
+These are deliberately different rules, and the asymmetry is intentional.
+
+**Acceptance** (`validate_uncles`, `validate_uncle_positions`) is a pure
+function of chain shape: count, no duplicates, and the structural position
+rules (an uncle is below the nephew, within `MAX_UNCLES_DEPTH`, and not on the
+nephew's own ancestry). It deliberately does **not** consult mutable per-node
+state.
+
+Whether an uncle's block body is stored is exactly that kind of state, so it is
+checked separately (`validate_uncle_bodies_present`) and only for blocks inside
+the PPLNS zone. Below the zone a block is validated on PoW alone -- its own
+transactions are never read -- so requiring its uncles' transactions would hold
+it to a stricter standard than the block itself. Tiering it is also what keeps
+this in step with the BlockReceiver's admission gate, which exempts uncles below
+`prune_height` because those bodies are never fetched: an uncle sits at most
+`MAX_UNCLES_DEPTH` below its nephew, so a nephew with an exempt uncle is a full
+window below the zone boundary and never reaches the check. Requiring the body
+in both tiers left such a block admitted, stored, and permanently
+unvalidatable. An earlier rule -- "an uncle must not be on the confirmed
+chain" -- was removed for exactly this reason after it deadlocked nodes in the
+sim (SYNC_ISSUES, August 15th): two nodes at different confirmation heights
+disagreed about the same block, and the nephew that would have healed the split
+was the one being rejected.
+
+For the same reason, acceptance does not reject a nephew whose uncle this node
+holds as `Invalid`. `Invalid` is a consensus verdict, but *when* a node reaches
+it depends on validation progress, which differs across nodes and lags far
+behind header sync during catchup. A node that had not yet validated the uncle
+would accept the nephew while a node that had would reject it, and since
+`Invalid` is terminal, that split is permanent. The rule would also make payouts
+*less* consistent, not more: the distribution is derived from chain shape, so
+nodes agree as long as they agree on which blocks are in the chain.
+
+**Selection** (`Store::find_uncles`) is node-local policy and carries none of
+that risk, so it is stricter: candidates must be at least header-validated,
+skipping `Invalid` and `Pending`. Every node validates our produced share the
+same way regardless of what we chose, so declining to reference a block we
+judged invalid cannot diverge anything.
+
+The cost of the gap this leaves is bounded, because an uncle contributes
+**nothing to chain state**. `put_confirmed_entry` applies `add_spends_for_block`
+only for the block being confirmed, never for its uncles, and an uncle's outputs
+are unspendable anyway since `recheck_block_prevouts_with_overlay` requires the
+source txid to be confirmed before any spender of it can be confirmed. Referencing an uncle only pays PPLNS weight
+(`UNCLE_SCALED_WEIGHT`, plus the nephew's `NEPHEW_SCALED_BONUS`). So the worst
+case is that a peer's nephew credits a block we consider invalid -- for work
+that was really done, since the block passed PoW at pool difficulty and was
+rejected over its contents.
+
+Closing that gap safely would need invalidation to cascade: `mark_invalid`
+would also invalidate the block's nephews via the `Uncles` index, so every node
+converges on the same verdict whenever it learns. That makes invalidation
+recursive over the DAG and needs its own bounding; it is not implemented.
 
 ## Files
 
 - `p2poolv2_lib/src/node/emission_worker.rs`
-- `p2poolv2_lib/src/node/validation_worker.rs` (ValidationWorker, schedule_dependents)
+- `p2poolv2_lib/src/node/validation_worker.rs` (ValidationWorker)
 - `p2poolv2_lib/src/node/organise_worker.rs`
 - `p2poolv2_lib/src/node/actor.rs`
 - `p2poolv2_lib/src/node/request_response_handler/block_fetcher.rs` (BlockFetcher)
 - `p2poolv2_lib/src/node/p2p_message_handlers/receivers/share_blocks.rs` (handle_share_block, dependency fetching)
 - `p2poolv2_lib/src/shares/handle_stratum_share.rs`
-- `p2poolv2_lib/src/shares/validation/mod.rs` (validate_share_block, validate_uncles)
+- `p2poolv2_lib/src/shares/validation/mod.rs` (validate_share_block, validate_uncles, validate_bitcoin_payout)
+- `p2poolv2_lib/src/accounting/payout/sharechain_pplns/pplns_window.rs` (PplnsWindow, get_distribution_from_start_hash, prev-anchored payout walk)
 - `p2poolv2_lib/src/shares/chain/chain_store_handle.rs`
 - `p2poolv2_lib/src/store/writer/mod.rs` (StoreWriter + WriteCommand)
 - `p2poolv2_lib/src/store/writer/handle.rs` (StoreHandle)

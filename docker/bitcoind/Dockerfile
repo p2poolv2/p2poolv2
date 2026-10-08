@@ -29,11 +29,12 @@ RUN cmake -B build \
     -DBUILD_GUI=OFF \
     -DBUILD_TESTS=OFF \
     -DBUILD_BENCH=OFF \
-    -DENABLE_WALLET=OFF \
+    -DENABLE_WALLET=ON \
     -DBUILD_FUZZ_BINARY=OFF \
     -DENABLE_IPC=ON \
     -DWITH_ZMQ=ON \
     -DBUILD_CLI=ON \
+    -DBUILD_UTIL=ON \
     -DCMAKE_BUILD_TYPE=RelWithDebInfo
 RUN cmake --build build -j$(nproc)
 

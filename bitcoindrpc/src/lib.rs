@@ -1,18 +1,6 @@
-// Copyright (C) 2024-2026 P2Poolv2 Developers (see AUTHORS)
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
 //
-// This file is part of P2Poolv2
-//
-// P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free
-// Software Foundation, either version 3 of the License, or (at your option)
-// any later version.
-//
-// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License along with
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use bitcoin::consensus::encode::serialize_hex;
@@ -107,6 +95,12 @@ impl fmt::Display for BitcoindRpcError {
             BitcoindRpcError::Other(msg) => write!(f, "{msg}"),
         }
     }
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+pub struct GetBlockchainInfo {
+    #[serde(rename = "initialblockdownload")]
+    pub initial_block_download: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -211,6 +205,10 @@ impl BitcoindRpcClient {
         let params: Vec<serde_json::Value> = vec![];
         let result: serde_json::Value = self.request("getdifficulty", params).await?;
         Ok(result.as_f64().unwrap())
+    }
+
+    pub async fn getblockchaininfo(&self) -> Result<GetBlockchainInfo, BitcoindRpcError> {
+        self.request("getblockchaininfo", vec![]).await
     }
 
     /// Get current bitcoin block count from bitcoind rpc
@@ -420,6 +418,39 @@ mod tests {
         let difficulty = client.get_difficulty().await.unwrap();
 
         assert_eq!(difficulty, 1234.56);
+    }
+
+    #[tokio::test]
+    async fn test_getblockchaininfo() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(header("Authorization", "Basic cDJwb29sOnAycG9vbA=="))
+            .and(body_json(serde_json::json!({
+                "method": "getblockchaininfo",
+                "params": [],
+                "id": 0
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": {
+                    "initialblockdownload": true,
+                },
+                "error": null,
+                "id": 0
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
+        let info = client.getblockchaininfo().await.unwrap();
+
+        assert_eq!(
+            info,
+            GetBlockchainInfo {
+                initial_block_download: true,
+            }
+        );
     }
 
     #[tokio::test]

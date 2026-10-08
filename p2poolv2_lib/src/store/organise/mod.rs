@@ -1,18 +1,6 @@
-// Copyright (C) 2024-2026 P2Poolv2 Developers (see AUTHORS)
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
 //
-// This file is part of P2Poolv2
-//
-// P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free
-// Software Foundation, either version 3 of the License, or (at your option)
-// any later version.
-//
-// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License along with
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 use super::{ColumnFamily, Store, writer::StoreError};
 use bitcoin::{BlockHash, Work, consensus::encode};
@@ -182,18 +170,14 @@ mod tests {
             .prev_share_blockhash(share1.block_hash().to_string())
             .nonce(0xe9695793)
             .build();
-        let mut batch = Store::get_write_batch();
-        store.add_share_block(&share2, &mut batch).unwrap();
-        store.commit_batch(batch).unwrap();
+        store.store_with_valid_metadata(&share2);
 
         // share3 extends share2 and is NOT on candidate chain
         let share3 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share2.block_hash().to_string())
             .nonce(0xe9695794)
             .build();
-        let mut batch = Store::get_write_batch();
-        store.add_share_block(&share3, &mut batch).unwrap();
-        store.commit_batch(batch).unwrap();
+        store.store_with_valid_metadata(&share3);
 
         // Branch from share3 should be [share1, share2, share3]
         let branch = store
@@ -227,9 +211,7 @@ mod tests {
             .prev_share_blockhash(share1.block_hash().to_string())
             .nonce(0xe9695793)
             .build();
-        let mut batch = Store::get_write_batch();
-        store.add_share_block(&share2, &mut batch).unwrap();
-        store.commit_batch(batch).unwrap();
+        store.store_with_valid_metadata(&share2);
 
         // Branch from share2 should be just [share1, share2]
         let branch = store

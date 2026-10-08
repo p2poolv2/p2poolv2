@@ -16,6 +16,8 @@ tools/log_dashboard/last_processed.txt
 
 config.toml
 config-dev.toml
+config-*-copy.toml
+
 
 spec/**/*pdf
 spec/**/*dvi
@@ -26,9 +28,15 @@ spec/**/*out
 spec/**/*ps
 spec/**/states
 
+# Ansible inventory and vault (contain hostnames, credentials)
+ansible/inventory/hosts.yml
+ansible/inventory/group_vars/all/vault.yml
+
 # Editors
 .zed/
 .vscode/
 .idea/
 
 perf.data
+# matplotlib venv for sim plotting
+load-tests/sim/.venv/

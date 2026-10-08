@@ -1,0 +1,216 @@
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
+//
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+use crate::api::endpoints::MAX_NUM_SHARES_IN_RESPONSE;
+use crate::api::error::ApiError;
+use crate::api::server::AppState;
+use axum::{
+    Json,
+    extract::{Query, State},
+};
+use p2poolv2_lib::address_display::DagEntryDisplay;
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+
+/// Query parameters for the /dag endpoint.
+#[derive(Deserialize)]
+pub struct DagQuery {
+    /// Height to query up to (inclusive). Defaults to confirmed chain tip.
+    pub to: Option<u32>,
+    /// Number of heights going back from `to`. Defaults to 10.
+    pub num: Option<u32>,
+}
+
+/// JSON response for the /dag endpoint.
+#[derive(Serialize)]
+pub struct DagResponse {
+    pub from_height: u32,
+    pub to_height: u32,
+    pub entries: Vec<DagEntryDisplay>,
+}
+
+/// Returns all share headers in the height index for a range of heights.
+///
+/// Unlike /shares and /candidates which only return confirmed or candidate
+/// chain entries, this returns every block at each height regardless of
+/// status (Confirmed, Candidate, HeaderValid, etc.).
+pub(crate) async fn dag(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<DagQuery>,
+) -> Result<Json<DagResponse>, ApiError> {
+    let chain_store_handle = &state.chain_store_handle;
+    let num = query.num.unwrap_or(10);
+
+    if !(1..=MAX_NUM_SHARES_IN_RESPONSE).contains(&num) {
+        return Err(ApiError::BadRequest(format!(
+            "num must be between 1 and {MAX_NUM_SHARES_IN_RESPONSE}, got {num}"
+        )));
+    }
+
+    let confirmed_height = chain_store_handle
+        .get_tip_height()
+        .map_err(|error| ApiError::ServerError(format!("Failed to get tip height: {error}")))?;
+    let candidate_height = chain_store_handle
+        .get_candidate_tip_height()
+        .map_err(|error| {
+            ApiError::ServerError(format!("Failed to get candidate tip height: {error}"))
+        })?;
+
+    let max_height = match (confirmed_height, candidate_height) {
+        (Some(confirmed), Some(candidate)) => confirmed.max(candidate),
+        (Some(confirmed), None) => confirmed,
+        (None, Some(candidate)) => candidate,
+        (None, None) => {
+            return Err(ApiError::ServerError(
+                "No confirmed or candidate chain found".to_string(),
+            ));
+        }
+    };
+
+    let to_height = match query.to {
+        Some(height) if height > max_height => max_height,
+        Some(height) => height,
+        None => max_height,
+    };
+
+    let from_height = to_height.saturating_sub(num.saturating_sub(1));
+
+    let entries = chain_store_handle
+        .store_handle()
+        .store()
+        .query_dag(from_height, to_height);
+
+    Ok(Json(DagResponse {
+        from_height,
+        to_height,
+        entries: DagEntryDisplay::from_dag_entries(&entries, Some(state.app_config.network)),
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::server::{AppConfig, AppState};
+    use axum::extract::{Query, State};
+    use bitcoin::Network;
+    use p2poolv2_lib::accounting::stats::metrics;
+    use p2poolv2_lib::address::witness_program_codec::to_address_string;
+    use p2poolv2_lib::monitoring_events::create_monitoring_event_channel;
+    use p2poolv2_lib::node::actor::NodeHandle;
+    use p2poolv2_lib::stratum::work::tracker::start_tracker_actor;
+    use p2poolv2_lib::test_utils::{genesis_for_tests, setup_test_chain_store_handle};
+
+    async fn build_test_state(node_handle: NodeHandle) -> (Arc<AppState>, tempfile::TempDir) {
+        let (chain_store_handle, temp_dir) = setup_test_chain_store_handle(true).await;
+        let metrics_temp = tempfile::tempdir().unwrap();
+        let metrics_handle =
+            metrics::start_metrics(metrics_temp.path().to_str().unwrap().to_string())
+                .await
+                .unwrap();
+        let tracker_handle = start_tracker_actor();
+        let state = Arc::new(AppState {
+            app_config: AppConfig {
+                pool_signature_length: 0,
+                network: bitcoin::Network::Signet,
+                cors_allowed: false,
+            },
+            chain_store_handle,
+            metrics_handle,
+            tracker_handle,
+            node_handle,
+            monitoring_event_sender: create_monitoring_event_channel().0,
+            auth_user: None,
+            auth_token: None,
+        });
+        (state, temp_dir)
+    }
+
+    #[tokio::test]
+    async fn test_dag_rejects_num_zero() {
+        let node_handle = NodeHandle::new_for_test();
+        let (state, _temp_dir) = build_test_state(node_handle).await;
+
+        let query = Query(DagQuery {
+            to: None,
+            num: Some(0),
+        });
+
+        let result = dag(State(state), query).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_dag_rejects_num_above_max() {
+        let node_handle = NodeHandle::new_for_test();
+        let (state, _temp_dir) = build_test_state(node_handle).await;
+
+        let query = Query(DagQuery {
+            to: None,
+            num: Some(1001),
+        });
+
+        let result = dag(State(state), query).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_dag_returns_genesis_entries() {
+        let node_handle = NodeHandle::new_for_test();
+        let (state, _temp_dir) = build_test_state(node_handle).await;
+
+        let genesis = genesis_for_tests();
+        state
+            .chain_store_handle
+            .init_or_setup_genesis(genesis.clone())
+            .await
+            .unwrap();
+
+        let query = Query(DagQuery {
+            to: Some(0),
+            num: Some(1),
+        });
+
+        let result = dag(State(state), query).await;
+        assert!(result.is_ok());
+        let response = result.unwrap().0;
+        assert_eq!(response.from_height, 0);
+        assert_eq!(response.to_height, 0);
+        assert_eq!(response.entries.len(), 1);
+        assert_eq!(response.entries[0].blockhash, genesis.block_hash());
+        assert_eq!(response.entries[0].validation_status, "HeaderValid");
+        assert_eq!(response.entries[0].chain, "Confirmed");
+        assert!(response.entries[0].has_block_data);
+    }
+    /// The miner address must reach the wire in bech32m form for the pool's
+    /// network, not as the witness program hex the store serializes. Nothing
+    /// in the type system separates the two: both are strings, so only a test
+    /// keeps the rendering from silently regressing.
+    #[tokio::test]
+    async fn test_dag_renders_miner_addresses() {
+        let node_handle = NodeHandle::new_for_test();
+        let (state, _temp_dir) = build_test_state(node_handle).await;
+
+        let genesis = genesis_for_tests();
+        let expected = to_address_string(&genesis.header.miner_address, Network::Signet);
+        state
+            .chain_store_handle
+            .init_or_setup_genesis(genesis)
+            .await
+            .unwrap();
+
+        let query = Query(DagQuery {
+            to: Some(0),
+            num: Some(1),
+        });
+
+        let response = dag(State(state), query).await.unwrap().0;
+        let miner_address = response.entries[0].miner_address.as_deref();
+
+        assert_eq!(miner_address, Some(expected.as_str()));
+        assert!(
+            miner_address.unwrap().starts_with("sp2pool1"),
+            "expected a signet share address, got {miner_address:?}"
+        );
+    }
+}

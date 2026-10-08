@@ -11,9 +11,17 @@ repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
 rust-version.workspace = true
+publish.workspace = true
+
+[features]
+# Passthrough so this crate can see, and skip, tests that a sim-enabled
+# p2poolv2_lib invalidates. Nothing here needs sim behaviour; the feature
+# exists only so `--all-features` (which enables p2poolv2_lib/sim workspace
+# wide) sets a cfg the test code can gate on. See node_swarm_test.rs.
+sim = ["p2poolv2_lib/sim"]
 
 [dev-dependencies]
-p2poolv2_lib = { workspace = true, features = ["test-utils"] }
+p2poolv2_lib = { workspace = true, features = ["test-utils", "hydrapool-pplns-accounting"] }
 p2poolv2_api = { workspace = true }
 mockall.workspace = true
 mockall_double.workspace = true
@@ -26,19 +34,8 @@ tempfile = { workspace = true }
 tokio-test = { workspace = true }
 zmq = { workspace = true }
 tracing = { workspace = true }
-libp2p = { workspace = true, features = [
-        "tcp",
-        "dns",
-        "tokio",
-        "noise",
-        "yamux",
-        "identify",
-        "macros",
-        "kad",
-        "secp256k1",
-        "request-response",
-] }
+libp2p = { workspace = true }
 reqwest = { workspace = true, features = ["json", "blocking"] }
 bitcoindrpc = { workspace = true, features = ["test-utils"] }
 chrono.workspace = true
-test-log = { version = "0.2.17", features = ["trace"] }
+test-log = { workspace = true }

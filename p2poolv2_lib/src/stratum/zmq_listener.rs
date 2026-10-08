@@ -1,20 +1,8 @@
-// Copyright (C) 2024-2026 P2Poolv2 Developers (see AUTHORS)
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
 //
-// This file is part of P2Poolv2
-//
-// P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free
-// Software Foundation, either version 3 of the License, or (at your option)
-// any later version.
-//
-// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License along with
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
-use tracing::info;
+use tracing::error;
 
 const BLOCK_HASH_SIZE: usize = 32;
 
@@ -76,12 +64,12 @@ impl ZmqListenerTrait for ZmqListener {
                             continue; // Skip empty messages
                         }
                         if let Err(e) = rt.block_on(tx.send(())) {
-                            info!("Failed to send ZMQ message: {}", e);
+                            error!("Failed to send ZMQ message: {}", e);
                             break; // Exit if the channel is closed
                         }
                     }
                     Err(e) => {
-                        info!("Failed to receive ZMQ message: {}", e);
+                        error!("Failed to receive ZMQ message: {}", e);
                     }
                 }
             }
@@ -103,7 +91,7 @@ mod zmq_tests {
         let err = ZmqError {
             message: "test error".to_string(),
         };
-        assert_eq!(format!("{}", err), "ZMQ Error: test error");
+        assert_eq!(format!("{err}"), "ZMQ Error: test error");
     }
 
     #[test_log::test]
@@ -118,7 +106,7 @@ mod zmq_tests {
         let publisher_thread = thread::spawn(move || {
             let ctx = zmq::Context::new();
             let publisher = ctx.socket(zmq::PUB).unwrap();
-            publisher.bind(&address).unwrap();
+            publisher.bind(address).unwrap();
 
             // Signal that we're ready
             ready_tx.send(()).unwrap();
@@ -136,7 +124,7 @@ mod zmq_tests {
 
             // Send the multipart message
             publisher
-                .send_multipart(&[topic.as_bytes(), &hash[..], &seq[..]], 0)
+                .send_multipart([topic.as_bytes(), &hash[..], &seq[..]], 0)
                 .unwrap();
 
             // Keep the socket alive for a bit

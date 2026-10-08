@@ -1,26 +1,14 @@
-// Copyright (C) 2024-2026 P2Poolv2 Developers (see AUTHORS)
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
 //
-// This file is part of P2Poolv2
-//
-// P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free
-// Software Foundation, either version 3 of the License, or (at your option)
-// any later version.
-//
-// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License along with
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 use crate::shares::share_block::ShareBlock;
-use crate::store::block_tx_metadata::{BlockMetadata, Status};
+use crate::store::block_tx_metadata::{BlockMetadata, ChainMembership, Status};
 use crate::store::column_families::ColumnFamily;
+use crate::store::dag_store::{MAX_BLOCKS_PER_HEIGHT, MAX_UNCLES_DEPTH};
 use bitcoin::consensus::{Encodable, encode};
 use bitcoin::{BlockHash, Work};
-use rocksdb::{ColumnFamilyDescriptor, DB, Options as RocksDbOptions};
-use std::collections::HashSet;
+use rocksdb::{BlockBasedOptions, ColumnFamilyDescriptor, DB, Options as RocksDbOptions};
 use std::sync::{Arc, RwLock};
 use tracing::debug;
 use writer::StoreError;
@@ -53,60 +41,108 @@ pub struct Store {
     genesis_blockhash: Arc<RwLock<Option<BlockHash>>>,
 }
 
-/// Merge operator for appending BlockHashes to a Vec<BlockHash>
-/// This allows atomic append operations without read-modify-write cycles
+/// Merge operator for appending BlockHashes to a Vec<BlockHash>.
+///
+/// This allows atomic append operations without read-modify-write cycles.
+///
+/// Registered via `set_merge_operator_associative`, so the same function
+/// handles both full merge and partial merge:
+/// - Full merge: `existing_val` is the base value from a prior Put/merge
+///   result (a serialized `Vec<BlockHash>`) or `None`.
+/// - Partial merge: `existing_val` is `Some(left_operand)` where the left
+///   operand may be a raw 32-byte `BlockHash` OR a previously merged
+///   `Vec<BlockHash>`. Operands may also be either format.
+///
+/// Each value passed in (existing_val or operand) is parsed by trying
+/// `Vec<BlockHash>` first, then falling back to a single `BlockHash`.
 fn blockhash_list_merge(
     _key: &[u8],
     existing_val: Option<&[u8]>,
     operands: &rocksdb::MergeOperands,
 ) -> Option<Vec<u8>> {
-    // Deserialize existing vector or start with empty
-    let mut blockhashes: Vec<BlockHash> = existing_val
-        .and_then(|bytes| encode::deserialize(bytes).ok())
-        .unwrap_or_default();
+    let mut blockhashes: Vec<BlockHash> = match existing_val {
+        Some(bytes) => parse_blockhash_bytes(bytes)?,
+        None => Vec::new(),
+    };
 
-    // Process each merge operand (each is a single BlockHash to append)
     for op in operands {
-        if let Ok(new_hash) = encode::deserialize::<BlockHash>(op) {
-            // Only add if not already present
-            if !blockhashes.contains(&new_hash) {
-                blockhashes.push(new_hash);
+        for hash in parse_blockhash_bytes(op)? {
+            if !blockhashes.contains(&hash) {
+                blockhashes.push(hash);
             }
         }
     }
 
-    // Serialize the result
     let mut result = Vec::new();
     blockhashes.consensus_encode(&mut result).ok()?;
     Some(result)
+}
+
+/// Parse bytes as either a single raw 32-byte `BlockHash` or a
+/// serialized `Vec<BlockHash>` (compact_size length prefix + N hashes).
+///
+/// Disambiguation is by length: a raw `BlockHash` is always exactly
+/// 32 bytes, while a serialized `Vec<BlockHash>` is never 32 bytes
+/// (0 elements = 1 byte, 1 element = 33 bytes, 2 elements = 65 bytes,
+/// etc.). This avoids relying on `encode::deserialize` trial order,
+/// which is unsafe because `deserialize` does not require full input
+/// consumption -- a 32-byte hash starting with 0x00 would decode as
+/// an empty Vec, silently losing the hash.
+///
+/// Returns `None` on unrecognised input so the merge operator can
+/// propagate the failure to RocksDB instead of silently discarding data.
+fn parse_blockhash_bytes(bytes: &[u8]) -> Option<Vec<BlockHash>> {
+    const BLOCKHASH_LEN: usize = 32;
+    if bytes.len() == BLOCKHASH_LEN {
+        let hash = encode::deserialize::<BlockHash>(bytes).ok()?;
+        return Some(vec![hash]);
+    }
+    let hashes = encode::deserialize::<Vec<BlockHash>>(bytes).ok()?;
+    Some(hashes)
 }
 
 /// A rocksdb based store for share blocks.
 /// We use column families to store different types of data, so that compactions are independent for each type.
 #[allow(dead_code)]
 impl Store {
+    /// Build CF options with a 10-bit bloom filter for point-lookup CFs.
+    /// Bloom filters eliminate disk reads for keys that don't exist,
+    /// which speeds up existence checks and negative lookups during sync.
+    fn cf_options_with_bloom() -> RocksDbOptions {
+        let mut block_opts = BlockBasedOptions::default();
+        block_opts.set_bloom_filter(10.0, false);
+        let mut opts = RocksDbOptions::default();
+        opts.set_block_based_table_factory(&block_opts);
+        opts
+    }
+
     /// Create a new share store
     pub fn new(path: String, read_only: bool) -> Result<Self, StoreError> {
-        // for now we use default options for all column families, we can tweak this later based on performance testing
+        // Point-lookup CFs get bloom filters to speed up existence checks
+        // and reject negative lookups without disk I/O.
+        // Merge/iterator CFs (BlockIndex, BlockHeight, TxidsBlocks, Uncles)
+        // skip bloom filters since they primarily use range scans or merges.
         let block_metadata_cf_descriptor =
-            ColumnFamilyDescriptor::new(ColumnFamily::BlockMetadata, RocksDbOptions::default());
+            ColumnFamilyDescriptor::new(ColumnFamily::BlockMetadata, Self::cf_options_with_bloom());
         let block_txids_cf =
             ColumnFamilyDescriptor::new(ColumnFamily::BlockTxids, RocksDbOptions::default());
         let inputs_cf =
-            ColumnFamilyDescriptor::new(ColumnFamily::Inputs, RocksDbOptions::default());
+            ColumnFamilyDescriptor::new(ColumnFamily::Inputs, Self::cf_options_with_bloom());
         let outputs_cf =
-            ColumnFamilyDescriptor::new(ColumnFamily::Outputs, RocksDbOptions::default());
-        let tx_cf = ColumnFamilyDescriptor::new(ColumnFamily::Tx, RocksDbOptions::default());
+            ColumnFamilyDescriptor::new(ColumnFamily::Outputs, Self::cf_options_with_bloom());
+        let tx_cf = ColumnFamilyDescriptor::new(ColumnFamily::Tx, Self::cf_options_with_bloom());
 
-        // Configure BlockIndex column family with merge operator for efficient appends
-        let mut block_index_opts = RocksDbOptions::default();
+        // Configure BlockIndex column family with merge operator for efficient appends.
+        // Bloom filter helps point lookups in get_children_blockhashes.
+        let mut block_index_opts = Self::cf_options_with_bloom();
         block_index_opts
             .set_merge_operator_associative("blockhash_list_merge", blockhash_list_merge);
         let block_index_cf =
             ColumnFamilyDescriptor::new(ColumnFamily::BlockIndex, block_index_opts);
 
-        // Configure BlockHeight column family with merge operator for efficient appends
-        let mut block_height_opts = RocksDbOptions::default();
+        // Configure BlockHeight column family with merge operator for efficient appends.
+        // Bloom filter helps point lookups for TOP_CANDIDATE/TOP_CONFIRMED keys.
+        let mut block_height_opts = Self::cf_options_with_bloom();
         block_height_opts
             .set_merge_operator_associative("blockhash_list_merge", blockhash_list_merge);
         let block_height_cf =
@@ -131,17 +167,18 @@ impl Store {
             ColumnFamilyDescriptor::new(ColumnFamily::BitcoinTxids, RocksDbOptions::default());
 
         let share_cf = ColumnFamilyDescriptor::new(ColumnFamily::Share, RocksDbOptions::default());
-        let user_cf = ColumnFamilyDescriptor::new(ColumnFamily::User, RocksDbOptions::default());
+        let user_cf =
+            ColumnFamilyDescriptor::new(ColumnFamily::User, Self::cf_options_with_bloom());
         let user_index_cf =
             ColumnFamilyDescriptor::new(ColumnFamily::UserIndex, RocksDbOptions::default());
         let metadata_cf =
             ColumnFamilyDescriptor::new(ColumnFamily::Metadata, RocksDbOptions::default());
 
         let spends_index_cf =
-            ColumnFamilyDescriptor::new(ColumnFamily::SpendsIndex, RocksDbOptions::default());
+            ColumnFamilyDescriptor::new(ColumnFamily::SpendsIndex, Self::cf_options_with_bloom());
 
         let header_cf =
-            ColumnFamilyDescriptor::new(ColumnFamily::Header, RocksDbOptions::default());
+            ColumnFamilyDescriptor::new(ColumnFamily::Header, Self::cf_options_with_bloom());
 
         let template_merkle_branches_cf = ColumnFamilyDescriptor::new(
             ColumnFamily::TemplateMerkleBranches,
@@ -180,7 +217,7 @@ impl Store {
         let store = Self {
             path,
             db,
-            // Initialize chain state fields
+            // Initialise chain state fields
             genesis_blockhash: Arc::new(RwLock::new(None)),
         };
         Ok(store)
@@ -197,13 +234,26 @@ impl Store {
         self.db.write(batch)
     }
 
-    /// Get confirmed chain blockhashes descending from a given blockhash,
-    /// including uncle blockhashes referenced by each confirmed block.
+    /// Get all blockhashes from locator height up to top confirmed
+    /// height.
     ///
-    /// Walks the confirmed chain from the starting block's height + 1 up
-    /// to the top confirmed height. For each confirmed block, its uncle
-    /// blockhashes are inserted before the confirmed blockhash so that a
-    /// peer receives uncle data before the share that depends on it.
+    /// Walks the height index and collects all valid blocks at each
+    /// height (confirmed, candidate, header-valid, block-valid).
+    /// Pending and invalid blocks are excluded. Within each height,
+    /// blocks are sorted lexicographically by blockhash for
+    /// deterministic ordering. Heights are never split across batches
+    /// -- all blocks at a height are included atomically.
+    ///
+    /// Starts MAX_UNCLES_DEPTH heights before the locator match so
+    /// that fork blocks near the boundary have their parents included
+    /// in the batch. The overlap is small and duplicate headers are
+    /// handled as no-ops by organise_header on the receiver. This
+    /// prevents in the common case starting to fetch from a locator
+    /// much deeper down.
+    ///
+    /// This produces a topologically sorted DAG subgraph because every
+    /// block's parent is at height H-1, which is either in this batch
+    /// or was sent in a previous batch.
     fn get_descendant_blockhashes(
         &self,
         blockhash: &BlockHash,
@@ -211,43 +261,42 @@ impl Store {
         limit: usize,
     ) -> Result<Vec<BlockHash>, StoreError> {
         let mut blockhashes = Vec::with_capacity(limit);
-        let mut seen = HashSet::with_capacity(limit);
 
-        let start_height = match self.get_block_metadata(blockhash) {
+        let locator_height = match self.get_block_metadata(blockhash) {
             Ok(metadata) => metadata.expected_height.unwrap_or(0),
             Err(_) => 0,
         };
+        let start_height = locator_height.saturating_sub(MAX_UNCLES_DEPTH as u32) + 1;
 
         let top_confirmed_height = match self.get_top_confirmed_height() {
             Ok(height) => height,
             Err(_) => return Ok(blockhashes),
         };
 
-        let mut height = start_height + 1;
-        while height <= top_confirmed_height && blockhashes.len() < limit {
-            let confirmed_hash = self.get_confirmed_at_height(height)?;
+        let end_height = std::cmp::min(
+            start_height.saturating_add(limit as u32),
+            top_confirmed_height,
+        );
+        let height_entries = self.get_blockhashes_for_height_range(start_height, end_height);
 
-            // Insert uncle blockhashes before the confirmed block
-            if let Ok(Some(header)) = self.get_share_header(&confirmed_hash) {
-                for uncle_blockhash in &header.uncles {
-                    if blockhashes.len() >= limit {
-                        return Ok(blockhashes);
-                    }
-                    if seen.insert(*uncle_blockhash) {
-                        blockhashes.push(*uncle_blockhash);
-                    }
-                }
-            }
+        for (_height, raw_hashes) in height_entries {
+            let mut hashes_at_height: Vec<BlockHash> = self
+                .get_block_metadata_batch(&raw_hashes)?
+                .into_iter()
+                .filter(|(_, metadata)| {
+                    metadata.status != Status::Pending && metadata.status != Status::Invalid
+                })
+                .map(|(hash, _)| hash)
+                .collect();
+            hashes_at_height.sort();
+            hashes_at_height.truncate(MAX_BLOCKS_PER_HEIGHT);
 
-            if blockhashes.len() < limit && seen.insert(confirmed_hash) {
-                blockhashes.push(confirmed_hash);
-            }
+            let found_stop = hashes_at_height.contains(stop_blockhash);
+            blockhashes.extend(hashes_at_height);
 
-            if confirmed_hash == *stop_blockhash {
+            if found_stop || blockhashes.len() >= limit {
                 return Ok(blockhashes);
             }
-
-            height += 1;
         }
 
         Ok(blockhashes)
@@ -295,6 +344,7 @@ impl Store {
             expected_height: Some(0),
             chain_work: genesis_work,
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
         self.update_block_metadata(&blockhash, &metadata, batch)?;
 
@@ -311,12 +361,12 @@ impl Store {
         Ok(())
     }
 
-    /// Initialize chain state from existing data in the store.
+    /// Initialise chain state from existing data in the store.
     /// Sets the genesis blockhash so chain tip and total work can be read from the confirmed chain index.
     pub fn init_chain_state_from_store(&self, genesis_hash: BlockHash) -> Result<(), StoreError> {
         self.set_genesis_blockhash(genesis_hash);
         debug!(
-            "Initialized chain state: tip={}, height={}, work={}",
+            "Initialised chain state: tip={}, height={}, work={}",
             self.get_chain_tip()?,
             self.get_top_confirmed_height()?,
             self.get_total_work()?,
@@ -331,11 +381,8 @@ impl Store {
     ///
     /// Computes height and chain_work from parent metadata, creates
     /// BlockMetadata, and updates the candidate chain.
-    /// Returns the new candidate height and chain if changed, or None.
-    pub fn push_to_candidate_chain(
-        &self,
-        share: &ShareBlock,
-    ) -> Result<Option<(u32, Vec<(u32, BlockHash)>)>, StoreError> {
+    /// Returns the new candidate height, or None.
+    pub fn push_to_candidate_chain(&self, share: &ShareBlock) -> Result<Option<u32>, StoreError> {
         let mut batch = Store::get_write_batch();
         let result = self.organise_header(&share.header, &mut batch)?;
         self.commit_batch(batch)?;
@@ -345,36 +392,65 @@ impl Store {
     /// Push a share to the confirmed chain: organise header, store
     /// the full block, then promote candidates to confirmed.
     /// Returns the new confirmed height if changed, or None.
+    ///
+    /// In-PPLNS-zone promotion requires the candidate prefix to be
+    /// BlockValid, so this marks the whole candidate chain validated before
+    /// promoting -- simulating candidates that have completed chain-context
+    /// validation.
     pub fn push_to_confirmed_chain(&self, share: &ShareBlock) -> Result<Option<u32>, StoreError> {
         self.push_to_candidate_chain(share)?;
         let mut batch = Store::get_write_batch();
         self.add_share_block(share, &mut batch)?;
         self.commit_batch(batch)?;
+        self.mark_candidate_chain_block_valid();
         let mut batch = Store::get_write_batch();
         let result = self.organise_block(&mut batch)?;
         self.commit_batch(batch)?;
         Ok(result)
     }
 
+    /// Mark every block currently on the candidate chain BlockValid.
+    ///
+    /// Test helper for promotion scenarios: in-PPLNS-zone confirmation
+    /// requires `is_candidate_and_block_valid`, so tests that build a
+    /// candidate chain and expect it confirmed must first mark it validated.
+    /// Already-BlockValid entries are left unchanged.
+    pub fn mark_candidate_chain_block_valid(&self) {
+        let top = match self.get_top_candidate_height() {
+            Ok(top) => top,
+            Err(_) => return,
+        };
+        let mut batch = Store::get_write_batch();
+        for height in 1..=top {
+            if let Ok(hash) = self.get_candidate_at_height(height) {
+                let _ = self.mark_block_valid(&hash, &mut batch);
+            }
+        }
+        self.commit_batch(batch).unwrap();
+    }
+
     /// Store a share block and create Valid metadata for it.
     ///
-    /// Used for shares that arrive out of order and need to be
-    /// discoverable by forward walks and uncle lookups. The metadata
-    /// height and chain_work are computed from the parent if available,
-    /// or default to height 1 with just the share's own work.
+    /// Used in tests for shares that need to be discoverable by
+    /// forward walks and uncle lookups. The metadata height and
+    /// chain_work are computed from the parent. Panics if the parent
+    /// is not in the store -- missing parent in test setup is a bug.
     /// Does NOT go through organise_header, so it avoids candidate
     /// chain side effects.
     pub fn store_with_valid_metadata(&self, share: &ShareBlock) {
         let blockhash = share.block_hash();
         let share_work = share.header.get_work();
-        let (height, chain_work) = match self.get_block_metadata(&share.header.prev_share_blockhash)
-        {
-            Ok(parent_metadata) => {
-                let parent_height = parent_metadata.expected_height.unwrap_or_default();
-                (parent_height + 1, parent_metadata.chain_work + share_work)
-            }
-            Err(_) => (1, share_work),
-        };
+        let parent_metadata = self
+            .get_block_metadata(&share.header.prev_share_blockhash)
+            .unwrap_or_else(|_| {
+                panic!(
+                    "Parent {} not found for block {blockhash} in test setup",
+                    share.header.prev_share_blockhash
+                )
+            });
+        let parent_height = parent_metadata.expected_height.unwrap_or_default();
+        let height = parent_height + 1;
+        let chain_work = parent_metadata.chain_work + share_work;
         let mut batch = Store::get_write_batch();
         self.add_share_block(share, &mut batch).unwrap();
         self.set_height_to_blockhash(&blockhash, height, &mut batch)
@@ -383,6 +459,7 @@ impl Store {
             expected_height: Some(height),
             chain_work,
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
         self.update_block_metadata(&blockhash, &metadata, &mut batch)
             .unwrap();
@@ -392,22 +469,23 @@ impl Store {
     /// Create Valid metadata for a share without storing its block data.
     ///
     /// Also stores the header in the Header CF so that downstream
-    /// children can look up parent timestamps and heights. Used to set
-    /// up metadata for intermediate shares so that downstream children
-    /// can compute their cumulative height and work correctly, even
-    /// when the intermediate share has not arrived yet in the test
-    /// scenario.
+    /// children can look up parent timestamps and heights. Panics if
+    /// the parent is not in the store -- missing parent in test setup
+    /// is a bug.
     pub fn create_valid_metadata_only(&self, share: &ShareBlock) {
         let blockhash = share.block_hash();
         let share_work = share.header.get_work();
-        let (height, chain_work) = match self.get_block_metadata(&share.header.prev_share_blockhash)
-        {
-            Ok(parent_metadata) => {
-                let parent_height = parent_metadata.expected_height.unwrap_or_default();
-                (parent_height + 1, parent_metadata.chain_work + share_work)
-            }
-            Err(_) => (1, share_work),
-        };
+        let parent_metadata = self
+            .get_block_metadata(&share.header.prev_share_blockhash)
+            .unwrap_or_else(|_| {
+                panic!(
+                    "Parent {} not found for block {blockhash} in test setup",
+                    share.header.prev_share_blockhash
+                )
+            });
+        let parent_height = parent_metadata.expected_height.unwrap_or_default();
+        let height = parent_height + 1;
+        let chain_work = parent_metadata.chain_work + share_work;
         let mut batch = Store::get_write_batch();
         self.add_share_header(&share.header, &mut batch).unwrap();
         self.set_height_to_blockhash(&blockhash, height, &mut batch)
@@ -416,6 +494,7 @@ impl Store {
             expected_height: Some(height),
             chain_work,
             status: Status::HeaderValid,
+            chain: ChainMembership::None,
         };
         self.update_block_metadata(&blockhash, &metadata, &mut batch)
             .unwrap();
@@ -428,6 +507,7 @@ mod tests {
     use super::*;
     use crate::test_utils::TestShareBlockBuilder;
     use crate::test_utils::multiplied_compact_target_as_work;
+    use bitcoin::consensus;
     use bitcoin::hashes::Hash;
     use tempfile::tempdir;
 
@@ -577,6 +657,121 @@ mod tests {
         assert!(hashes.contains(&hash1));
         assert!(hashes.contains(&hash2));
         assert!(hashes.contains(&hash3));
+    }
+
+    /// Tests parse_blockhash_bytes handles both formats correctly.
+    ///
+    /// In partial merge mode, RocksDB passes raw 32-byte BlockHash
+    /// operands. In full merge mode, existing_val is a serialized
+    /// Vec<BlockHash>. The parse function must handle both.
+    #[test]
+    fn test_parse_blockhash_bytes_handles_raw_and_vec_formats() {
+        let hash1 = BlockHash::from_byte_array([0xAAu8; 32]);
+        let hash2 = BlockHash::from_byte_array([0xBBu8; 32]);
+
+        // Raw 32-byte operand (as seen in partial merge)
+        let raw_operand = consensus::serialize(&hash1);
+        assert_eq!(raw_operand.len(), 32);
+        let parsed = parse_blockhash_bytes(&raw_operand).expect("raw 32-byte operand should parse");
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0], hash1);
+
+        // Serialized Vec<BlockHash> (as seen in full merge existing_val)
+        let vec_value = consensus::serialize(&vec![hash1, hash2]);
+        assert_eq!(vec_value.len(), 65); // compact_size(2) + 32 + 32
+        let parsed = parse_blockhash_bytes(&vec_value).expect("serialized Vec should parse");
+        assert_eq!(parsed.len(), 2);
+        assert!(parsed.contains(&hash1));
+        assert!(parsed.contains(&hash2));
+
+        // Hash with 0x00 first byte must NOT be misread as empty Vec
+        let mut zero_prefix_bytes = [0x00u8; 32];
+        zero_prefix_bytes[31] = 0x42;
+        let zero_prefix_hash = BlockHash::from_byte_array(zero_prefix_bytes);
+        let raw_zero = consensus::serialize(&zero_prefix_hash);
+        let parsed = parse_blockhash_bytes(&raw_zero).expect("0x00-prefixed hash should parse");
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0], zero_prefix_hash);
+
+        // Empty input returns None (unrecognised format)
+        assert!(parse_blockhash_bytes(&[]).is_none());
+
+        // Garbage input returns None
+        assert!(parse_blockhash_bytes(&[0xFF, 0xFF, 0xFF]).is_none());
+    }
+
+    /// Tests the merge operator with compaction forcing SST-level merges.
+    ///
+    /// Writes two hashes at the same height in separate flushes, then
+    /// compacts. In a fresh DB compaction reaches the bottommost level
+    /// (full merge with existing_val=None), so both hashes survive.
+    /// This test verifies the baseline full-merge path works.
+    #[test]
+    fn test_merge_operator_survives_compaction() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let height = 3224u32;
+        let hash1 = BlockHash::from_byte_array([0xAAu8; 32]);
+        let hash2 = BlockHash::from_byte_array([0xBBu8; 32]);
+
+        // Write hash1 in its own batch and flush to an SST file
+        let mut batch = Store::get_write_batch();
+        store
+            .set_height_to_blockhash(&hash1, height, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+        let block_height_cf = store.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
+        store
+            .db
+            .flush_cf(&block_height_cf)
+            .expect("flush should succeed");
+
+        // Write hash2 in a separate batch and flush to a second SST file
+        let mut batch = Store::get_write_batch();
+        store
+            .set_height_to_blockhash(&hash2, height, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+        store
+            .db
+            .flush_cf(&block_height_cf)
+            .expect("flush should succeed");
+
+        // Force compaction -- this triggers partial merge on the two
+        // merge operands sitting in separate SST files
+        store
+            .db
+            .compact_range_cf(&block_height_cf, None::<&[u8]>, None::<&[u8]>);
+
+        // After compaction, both hashes must still be present
+        let hashes = store.get_blockhashes_for_height(height);
+        assert_eq!(
+            hashes.len(),
+            2,
+            "Both hashes should survive compaction, got: {hashes:?}"
+        );
+        assert!(hashes.contains(&hash1), "hash1 lost after compaction");
+        assert!(hashes.contains(&hash2), "hash2 lost after compaction");
+    }
+
+    /// Verifies that parse_blockhash_bytes correctly handles a
+    /// partial-merge result (serialized Vec) appearing as an operand.
+    #[test]
+    fn test_parse_blockhash_bytes_handles_partial_merge_result_as_operand() {
+        let hash1 = BlockHash::from_byte_array([0xCCu8; 32]);
+        let hash2 = BlockHash::from_byte_array([0xDDu8; 32]);
+
+        // A partial merge result is a serialized Vec<BlockHash>
+        let partial_merge_result = consensus::serialize(&vec![hash1, hash2]);
+        assert_eq!(partial_merge_result.len(), 65);
+
+        // parse_blockhash_bytes must extract both hashes
+        let parsed = parse_blockhash_bytes(&partial_merge_result)
+            .expect("partial merge result should parse");
+        assert_eq!(parsed.len(), 2);
+        assert!(parsed.contains(&hash1));
+        assert!(parsed.contains(&hash2));
     }
 
     #[test]

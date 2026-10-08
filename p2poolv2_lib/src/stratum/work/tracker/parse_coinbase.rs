@@ -1,22 +1,8 @@
-// Copyright (C) 2024-2026 P2Poolv2 Developers (see AUTHORS)
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
 //
-// This file is part of P2Poolv2
-//
-// P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free
-// Software Foundation, either version 3 of the License, or (at your option)
-// any later version.
-//
-// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License along with
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
-use crate::stratum::work::coinbase::{
-    detect_commitment_hash_len_from_coinbase2, extract_outputs_from_coinbase2,
-};
+use crate::stratum::work::coinbase::extract_outputs_from_coinbase2;
 use crate::stratum::work::tracker::JobTracker;
 use bitcoin::Amount;
 use std::sync::Arc;
@@ -30,12 +16,7 @@ pub fn get_distribution(
     let job_id = tracker.get_latest_job_id();
     let job_details = tracker.get_job(job_id)?;
 
-    let commitment_hash_len = detect_commitment_hash_len_from_coinbase2(&job_details.coinbase2);
-    match extract_outputs_from_coinbase2(
-        &job_details.coinbase2,
-        commitment_hash_len,
-        pool_signature_length,
-    ) {
+    match extract_outputs_from_coinbase2(&job_details.coinbase2, pool_signature_length) {
         Ok(outputs) => {
             let total_value = job_details.blocktemplate.coinbasevalue;
             let mut exposition = String::new();

@@ -1,22 +1,10 @@
-// Copyright (C) 2024-2026 P2Poolv2 Developers (see AUTHORS)
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
 //
-// This file is part of P2Poolv2
-//
-// P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free
-// Software Foundation, either version 3 of the License, or (at your option)
-// any later version.
-//
-// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License along with
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 pub mod request_response;
 use crate::config::Config;
-use crate::node::messages::network_magic;
+use bitcoin::BlockHash;
 use libp2p::connection_limits;
 use libp2p::ping;
 use libp2p::request_response::ProtocolSupport;
@@ -26,11 +14,13 @@ use libp2p::{
     kad::{self, store::MemoryStore},
     swarm::NetworkBehaviour,
 };
-use request_response::{ConsensusCodec, P2PoolRequestResponseProtocol};
+use request_response::{
+    ConsensusCodec, P2PoolRequestResponseProtocol, kad_protocol_string, protocol_string,
+};
 use request_response::{RequestResponseBehaviour, RequestResponseEvent};
+use std::convert::Infallible;
 use std::error::Error;
 use std::time::Duration;
-use void;
 
 /// Interval between ping probes sent to each connected peer
 const PING_INTERVAL_SECS: u64 = 30;
@@ -49,6 +39,9 @@ pub struct P2PoolBehaviour {
 // Define the events that can be emitted by our behavior
 #[derive(Debug)]
 #[allow(dead_code)]
+// Variant sizes are set by the libp2p event types we wrap; boxing them would
+// force an allocation on every swarm event.
+#[allow(clippy::large_enum_variant)]
 pub enum P2PoolBehaviourEvent {
     Kademlia(kad::Event),
     Identify(identify::Event),
@@ -58,20 +51,32 @@ pub enum P2PoolBehaviourEvent {
 
 #[allow(dead_code)]
 impl P2PoolBehaviour {
-    pub fn new(local_key: &Keypair, config: &Config) -> Result<Self, Box<dyn Error>> {
-        // Initialize Kademlia
+    /// Build the swarm behaviour for the share chain identified by
+    /// `genesis_hash`. The hash is carried in every protocol name so peers on
+    /// another share chain cannot negotiate with this node.
+    pub fn new(
+        local_key: &Keypair,
+        config: &Config,
+        genesis_hash: BlockHash,
+    ) -> Result<Self, Box<dyn Error>> {
+        // Initialise Kademlia
         let store = MemoryStore::new(local_key.public().to_peer_id());
-        let mut kad_config = kad::Config::default();
+        let mut kad_config = kad::Config::new(libp2p::StreamProtocol::try_from_owned(
+            kad_protocol_string(config.stratum.network, genesis_hash),
+        )?);
         kad_config.set_query_timeout(tokio::time::Duration::from_secs(60));
-        kad_config.set_protocol_names(vec![libp2p::StreamProtocol::new("/p2pool/kad/1.0.0")]);
 
-        let kademlia_behaviour =
+        let mut kademlia_behaviour =
             kad::Behaviour::with_config(local_key.public().to_peer_id(), store, kad_config);
+        kademlia_behaviour.set_mode(Some(kad::Mode::Server));
 
-        let identify_behaviour = identify::Behaviour::new(identify::Config::new(
-            "/p2pool/1.0.0".to_string(),
+        let identify_config = identify::Config::new(
+            protocol_string(config.stratum.network, genesis_hash),
             local_key.public(),
-        ));
+        )
+        .with_agent_version(format!("p2poolv2/{}", env!("CARGO_PKG_VERSION")))
+        .with_push_listen_addr_updates(true);
+        let identify_behaviour = identify::Behaviour::new(identify_config);
 
         let limits_config = connection_limits::ConnectionLimits::default()
             .with_max_pending_incoming(Some(config.network.max_pending_incoming))
@@ -80,17 +85,6 @@ impl P2PoolBehaviour {
             .with_max_established_outgoing(Some(config.network.max_established_outgoing))
             .with_max_established_per_peer(Some(config.network.max_established_per_peer));
         let limits = connection_limits::Behaviour::new(limits_config);
-
-        // Select the appropriate network magic based on the bitcoin network
-        let magic = match config.stratum.network {
-            bitcoin::Network::Bitcoin => network_magic::MAINNET,
-            bitcoin::Network::Testnet => network_magic::TESTNET,
-            bitcoin::Network::Signet => network_magic::SIGNET,
-            bitcoin::Network::Regtest => network_magic::REGTEST,
-            _ => network_magic::REGTEST, // Default to regtest for unknown networks
-        };
-
-        let codec = ConsensusCodec::new(magic);
 
         let ping_config =
             ping::Config::new().with_interval(Duration::from_secs(PING_INTERVAL_SECS));
@@ -101,8 +95,11 @@ impl P2PoolBehaviour {
             identify: identify_behaviour,
             ping: ping_behaviour,
             request_response: RequestResponseBehaviour::with_codec(
-                codec,
-                std::iter::once((P2PoolRequestResponseProtocol::new(), ProtocolSupport::Full)),
+                ConsensusCodec,
+                std::iter::once((
+                    P2PoolRequestResponseProtocol::new(config.stratum.network, genesis_hash),
+                    ProtocolSupport::Full,
+                )),
                 libp2p::request_response::Config::default(),
             ),
             limits,
@@ -147,11 +144,10 @@ impl From<RequestResponseEvent> for P2PoolBehaviourEvent {
     }
 }
 
-// Provide From for the void (unreachable) type for connection_limits behaviour
-impl From<void::Void> for P2PoolBehaviourEvent {
-    fn from(void: void::Void) -> Self {
-        // Since void::Void is uninhabited (can never be constructed),
-        // we can safely make this unreachable
-        match void {}
+// Provide From for the uninhabited type the connection_limits behaviour emits.
+impl From<Infallible> for P2PoolBehaviourEvent {
+    fn from(event: Infallible) -> Self {
+        // Infallible can never be constructed, so this is unreachable.
+        match event {}
     }
 }

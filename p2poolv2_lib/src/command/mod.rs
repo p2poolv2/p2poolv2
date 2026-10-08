@@ -1,22 +1,13 @@
-// Copyright (C) 2024-2026 P2Poolv2 Developers (see AUTHORS)
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
 //
-// This file is part of P2Poolv2
-//
-// P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free
-// Software Foundation, either version 3 of the License, or (at your option)
-// any later version.
-//
-// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License along with
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 use crate::accounting::payout::simple_pplns::SimplePplnsShare;
+use crate::node::connection_tracker::PeerInfoResponse;
 use crate::node::messages::Message;
+use crate::node::p2p_health::P2pHealth;
 use std::error::Error;
+use std::net::IpAddr;
 use tokio::sync::oneshot;
 
 /// Struct for queruying the PPLNS shares from the node
@@ -49,4 +40,14 @@ pub enum Command {
     Shutdown(oneshot::Sender<()>),
     /// Get PPLNS shares from the node with optional filtering
     GetPplnsShares(GetPplnsShareQuery, oneshot::Sender<Vec<SimplePplnsShare>>),
+    /// Get enriched info for all connected peers
+    GetPeerInfos(oneshot::Sender<Vec<PeerInfoResponse>>),
+    /// Add an IP to the runtime blocklist
+    BlockIp(IpAddr, oneshot::Sender<()>),
+    /// Remove an IP from the runtime blocklist
+    UnblockIp(IpAddr, oneshot::Sender<()>),
+    /// List all blocked IPs
+    GetBlockedIps(oneshot::Sender<Vec<IpAddr>>),
+    /// Snapshot of P2P health counters, read at `/metrics` scrape time
+    GetP2pHealth(oneshot::Sender<P2pHealth>),
 }

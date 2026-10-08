@@ -11,18 +11,20 @@ repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
 rust-version.workspace = true
+publish.workspace = true
 
 [features]
 test-utils = []
 
 [dependencies]
 bitcoin = { workspace = true }
+p2poolv2_wallet = { workspace = true }
 bitcoindrpc = { workspace = true }
 config = { workspace = true }
 serde = { workspace = true }
 
 [dev-dependencies]
-temp-env = "0.3.6"
+temp-env = { workspace = true }
 tokio-test = { workspace = true }
 
 [lib]

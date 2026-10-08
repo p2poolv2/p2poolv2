@@ -1,20 +1,9 @@
-// Copyright (C) 2024-2026 P2Poolv2 Developers (see AUTHORS)
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
 //
-// This file is part of P2Poolv2
-//
-// P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free
-// Software Foundation, either version 3 of the License, or (at your option)
-// any later version.
-//
-// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License along with
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 use crate::accounting::payout::simple_pplns::SimplePplnsShare;
+use crate::shares::coinbase_proof::CoinbaseProof;
 use crate::shares::extranonce::Extranonce;
 use crate::shares::share_commitment::ShareCommitment;
 use crate::stratum::work::block_template::BlockTemplate;
@@ -27,7 +16,6 @@ use tokio::sync::mpsc;
 pub struct Emission {
     pub pplns: SimplePplnsShare,
     pub header: Header,
-    pub coinbase: bitcoin::Transaction,
     pub blocktemplate: Arc<BlockTemplate>,
     pub share_commitment: Option<ShareCommitment>,
     /// Nanosecond timestamp embedded in the coinbase scriptSig.
@@ -36,6 +24,10 @@ pub struct Emission {
     pub template_merkle_branches: Vec<bitcoin::TxMerkleNode>,
     /// Combined extranonce (enonce1 || enonce2) from the stratum submission.
     pub extranonce: Extranonce,
+    /// Midstate proof of the commitment in the bitcoin coinbase, present
+    /// exactly when `share_commitment` is: built where the full coinbase is
+    /// still in hand, at submission.
+    pub coinbase_proof: Option<CoinbaseProof>,
 }
 
 pub type EmissionSender = mpsc::Sender<Emission>;

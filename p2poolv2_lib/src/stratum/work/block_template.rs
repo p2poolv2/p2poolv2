@@ -1,22 +1,9 @@
-// Copyright (C) 2024-2026 P2Poolv2 Developers (see AUTHORS)
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
 //
-// This file is part of P2Poolv2
-//
-// P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free
-// Software Foundation, either version 3 of the License, or (at your option)
-// any later version.
-//
-// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License along with
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 use crate::stratum::work::error::WorkError;
 use bitcoin::script::PushBytesBuf;
-use bitcoin::{TxMerkleNode, merkle_tree};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -76,16 +63,6 @@ impl From<TemplateTransaction> for bitcoin::Transaction {
 }
 
 impl BlockTemplate {
-    /// Get the merkle root for block template without the coinbase
-    /// We need this to build the ShareCommitment to capture the hash of all transactions from the block
-    pub(crate) fn get_merkle_root_without_coinbase(&self) -> Option<TxMerkleNode> {
-        let hashes = self
-            .transactions
-            .iter()
-            .map(|obj| obj.txid.parse().unwrap());
-        merkle_tree::calculate_root(hashes)
-    }
-
     /// Decode all transactions from the template into bitcoin::Transaction
     /// Uses the From<&TemplateTransaction> implementation
     pub fn decode_transactions(&self) -> Vec<bitcoin::Transaction> {
@@ -116,7 +93,6 @@ pub(crate) fn parse_flags(flags: Option<String>) -> Result<PushBytesBuf, WorkErr
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bitcoin::hashes::Hash;
 
     #[test]
     fn test_parse_flags() {
@@ -170,7 +146,7 @@ mod tests {
 
         // Parse the JSON into BlockTemplate
         let block_template: BlockTemplate =
-            serde_json::from_str(&json_content).expect("Failed to parse JSON into BlockTemplate");
+            serde_json::from_str(json_content).expect("Failed to parse JSON into BlockTemplate");
 
         // Verify we have transactions
         assert!(!block_template.transactions.is_empty());
@@ -195,54 +171,5 @@ mod tests {
             btc_tx.output[0].value,
             bitcoin::Amount::from_btc(49.98985900).unwrap()
         );
-    }
-
-    #[test]
-    fn test_get_merkle_root_with_transactions() {
-        // Load template with 4 transactions
-        let json_content = include_str!(
-            "../../../../p2poolv2_tests/test_data/validation/stratum/gbt_with_transactions.json"
-        );
-        let block_template: BlockTemplate =
-            serde_json::from_str(&json_content).expect("Failed to parse JSON into BlockTemplate");
-
-        // Get merkle root
-        let merkle_root = block_template.get_merkle_root_without_coinbase();
-
-        // Should be Some since we have transactions
-        assert!(merkle_root.is_some());
-        let root = merkle_root.unwrap();
-
-        // Verify it's not all zeros
-        assert_ne!(root, TxMerkleNode::all_zeros());
-
-        // Manually verify merkle root calculation from the 4 transaction txids
-        let expected_root = merkle_tree::calculate_root(
-            block_template
-                .transactions
-                .iter()
-                .map(|tx| tx.txid.parse().unwrap()),
-        )
-        .unwrap();
-
-        assert_eq!(root, expected_root);
-    }
-
-    #[test]
-    fn test_get_merkle_root_without_transactions() {
-        // Load template with no transactions
-        let json_content =
-            include_str!("../../../../p2poolv2_tests/test_data/validation/stratum/a/template.json");
-        let block_template: BlockTemplate =
-            serde_json::from_str(&json_content).expect("Failed to parse JSON into BlockTemplate");
-
-        // Verify template has no transactions
-        assert!(block_template.transactions.is_empty());
-
-        // Get merkle root
-        let merkle_root = block_template.get_merkle_root_without_coinbase();
-
-        // Should be None when there are no transactions
-        assert!(merkle_root.is_none());
     }
 }

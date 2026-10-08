@@ -1,18 +1,6 @@
-// Copyright (C) 2024-2026 P2Poolv2 Developers (see AUTHORS)
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
 //
-// This file is part of P2Poolv2
-//
-// P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free
-// Software Foundation, either version 3 of the License, or (at your option)
-// any later version.
-//
-// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License along with
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 pub mod receivers;
 pub mod senders;
@@ -20,7 +8,7 @@ pub mod senders;
 use crate::node::SwarmSend;
 use crate::node::messages::{GetData, Message};
 use crate::node::p2p_message_handlers::receivers::block_receiver::BlockReceiverHandle;
-use crate::node::request_response_handler::block_fetcher::BlockFetcherHandle;
+use crate::node::request_response_handler::block_fetcher::{BlockFetcherEvent, BlockFetcherHandle};
 use crate::node::validation_worker::ValidationSender;
 use crate::service::p2p_service::RequestContext;
 #[cfg(test)]
@@ -33,21 +21,32 @@ use crate::utils::time_provider::TimeProvider;
 use receivers::getblocks::handle_getblocks;
 use receivers::getdata::handle_getdata_block;
 use receivers::getheaders::handle_getheaders;
+use receivers::handshake::handle_handshake;
 use receivers::inventory::handle_inventory;
+use receivers::request_missing_blocks::request_headers_for_missing_blocks;
 use receivers::share_blocks::handle_share_block;
 use receivers::share_headers::handle_share_headers;
 use std::error::Error;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{error, info};
+use tracing::{debug, error};
 
-const MAX_HEADERS_IN_RESPONSE: usize = 2000;
+/// Most headers a `ShareHeaders` response carries (before completing the
+/// last height).
+///
+/// Sized so the worst case fits `MAX_P2P_MESSAGE_SIZE`: every header with
+/// worst-case fields, its bitcoin merkle root included, and its own coinbase
+/// branch of `MAX_COINBASE_MERKLE_BRANCH_LENGTH` entries -- about 1.1 KB a
+/// header. Real batches omit the root and share a branch per block template,
+/// at well under 1 KB a header.
+/// `test_full_share_headers_response_fits_max_message_size` guards it.
+pub(crate) const MAX_HEADERS_IN_RESPONSE: usize = 900;
 
 /// The Tower service that processes inbound P2P requests.
 pub async fn handle_request<C: Send + Sync, T: TimeProvider + Send + Sync>(
     ctx: RequestContext<C, T>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    info!("Received request {} from peer: {}", ctx.request, ctx.peer);
+    debug!("Received request {} from peer: {}", ctx.request, ctx.peer);
     match ctx.request {
         Message::GetShareHeaders(block_hashes, stop_block_hash) => {
             handle_getheaders(
@@ -70,14 +69,21 @@ pub async fn handle_request<C: Send + Sync, T: TimeProvider + Send + Sync>(
             .await
         }
         Message::Inventory(inventory) => {
-            handle_inventory(inventory, ctx.peer, ctx.chain_store_handle, ctx.swarm_tx).await
+            handle_inventory(
+                inventory,
+                ctx.peer,
+                ctx.chain_store_handle,
+                ctx.response_channel,
+                ctx.swarm_tx,
+            )
+            .await
         }
         Message::NotFound(_) => {
-            info!("Received not found message");
+            debug!("Received not found message");
             Ok(())
         }
         Message::GetData(get_data) => {
-            info!("Received get data: {:?}", get_data);
+            debug!("Received get data: {:?}", get_data);
             match get_data {
                 GetData::Block(block_hash) => {
                     handle_getdata_block(
@@ -89,30 +95,54 @@ pub async fn handle_request<C: Send + Sync, T: TimeProvider + Send + Sync>(
                     .await
                 }
                 GetData::Txid(txid) => {
-                    info!("Received txid: {:?}", txid);
+                    debug!("Received txid: {:?}", txid);
                     Ok(())
                 }
             }
         }
         Message::Transaction(transaction) => {
-            info!("Received transaction: {:?}", transaction);
+            debug!("Received transaction: {:?}", transaction);
             Ok(())
         }
-        Message::ShareBlock(share_block) => handle_share_block(
-            ctx.peer,
-            share_block,
-            &ctx.chain_store_handle,
-            ctx.validation_tx,
-            &ctx.block_receiver_handle,
-            ctx.share_validator.as_ref(),
-        )
-        .await
-        .map_err(|e| {
-            error!("Failed to add share from request: {}", e);
-            format!("Failed to add share from request: {e}").into()
-        }),
+        Message::Handshake(handshake_data) => {
+            handle_handshake(
+                handshake_data,
+                ctx.peer,
+                ctx.chain_store_handle,
+                ctx.response_channel,
+                ctx.swarm_tx,
+            )
+            .await
+        }
+        Message::ShareBlock(share_block) => {
+            if let Err(err) = ctx
+                .swarm_tx
+                .send(SwarmSend::Response(ctx.response_channel, Message::Ack))
+                .await
+            {
+                error!("Failed to send ShareBlock ack to peer {}: {err}", ctx.peer);
+                return Err(format!("Failed to send ShareBlock ack: {err}").into());
+            }
+            let parent_hash = share_block.header.prev_share_blockhash;
+            handle_share_block(
+                share_block,
+                &ctx.chain_store_handle,
+                ctx.validation_tx,
+                &ctx.block_receiver_handle,
+                &ctx.block_fetcher_handle,
+                ctx.share_validator.as_ref(),
+            )
+            .await?;
+            request_headers_for_missing_blocks(
+                &[parent_hash],
+                ctx.peer,
+                ctx.chain_store_handle,
+                ctx.swarm_tx,
+            )
+            .await
+        }
         other => {
-            info!("Unexpected request type {other}");
+            debug!("Unexpected request type {other}");
             Ok(())
         }
     }
@@ -128,6 +158,7 @@ pub async fn handle_request<C: Send + Sync, T: TimeProvider + Send + Sync>(
 /// The swarm_tx channel is provided so that individual response handlers can
 /// send follow-up messages (e.g. GetShareBlocks after receiving ShareHeaders)
 /// back to the peer.
+#[allow(clippy::too_many_arguments)] // wiring constructor: each parameter is a distinct collaborator, a params struct would only move the list
 pub async fn handle_response<C: Send + Sync>(
     peer: libp2p::PeerId,
     response: Message,
@@ -138,7 +169,7 @@ pub async fn handle_response<C: Send + Sync>(
     block_receiver_handle: BlockReceiverHandle,
     share_validator: Arc<dyn ShareValidator + Send + Sync>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    info!("Received response {} from peer: {}", response, peer);
+    debug!("Received response {} from peer: {}", response, peer);
     match response {
         Message::ShareHeaders(share_headers) => handle_share_headers(
             peer,
@@ -154,11 +185,11 @@ pub async fn handle_response<C: Send + Sync>(
             e
         }),
         Message::ShareBlock(share_block) => handle_share_block(
-            peer,
             share_block,
             &chain_store_handle,
             validation_tx,
             &block_receiver_handle,
+            &block_fetcher_handle,
             share_validator.as_ref(),
         )
         .await
@@ -166,12 +197,24 @@ pub async fn handle_response<C: Send + Sync>(
             error!("Failed to add share from response: {}", e);
             format!("Failed to add share from response: {e}").into()
         }),
-        Message::NotFound(_) => {
-            info!("Received not found response from peer: {}", peer);
+        Message::NotFound(get_data) => {
+            debug!("Received not found response from peer: {}", peer);
+            match get_data {
+                GetData::Block(block_hash) => {
+                    let _ = block_fetcher_handle
+                        .send(BlockFetcherEvent::BlockRequestCompleted(block_hash))
+                        .await;
+                }
+                GetData::Txid(_) => {}
+            }
+            Ok(())
+        }
+        Message::Ack => {
+            debug!("Received Ack response from peer: {}", peer);
             Ok(())
         }
         other => {
-            info!("Unexpected response type from peer {}: {}", peer, other);
+            debug!("Unexpected response type from peer {}: {}", peer, other);
             Ok(())
         }
     }
@@ -182,7 +225,6 @@ mod tests {
     use super::*;
     use crate::node::SwarmSend;
     use crate::node::messages::InventoryMessage;
-    use crate::node::p2p_message_handlers::receivers::block_receiver::BlockReceiverEvent::ShareBlockReceived;
     use crate::node::p2p_message_handlers::receivers::block_receiver::create_block_receiver_channel;
     use crate::node::request_response_handler::block_fetcher::BlockFetcherHandle;
     use crate::node::request_response_handler::block_fetcher::create_block_fetcher_channel;
@@ -195,12 +237,14 @@ mod tests {
     use crate::shares::share_block::Txids;
     use crate::shares::validation::MockDefaultShareValidator;
     use crate::test_utils::setup_header_chain_validation_mocks;
+    use crate::test_utils::share_header_batch_with_empty_branches;
     use crate::test_utils::{
         TestShareBlockBuilder, test_coinbase_transaction, valid_share_block_from_fixture,
     };
     use crate::utils::time_provider::TestTimeProvider;
     use bitcoin::hashes::Hash as _;
     use bitcoin::{BlockHash, CompactTarget};
+    use mockall::predicate::*;
     use std::sync::Arc;
     use std::time::SystemTime;
     use tokio::sync::mpsc;
@@ -236,6 +280,10 @@ mod tests {
             .expect_get_headers_for_locator()
             .returning(move |_, _, _| Ok(response_headers.clone()));
 
+        chain_store_handle
+            .expect_get_template_merkle_branches()
+            .returning(|_| Ok(Vec::new()));
+
         let ctx = RequestContext {
             peer: peer_id,
             request: Message::GetShareHeaders(block_hashes, stop_block_hash),
@@ -257,7 +305,10 @@ mod tests {
             swarm_rx.recv().await
         {
             assert_eq!(channel, response_channel);
-            assert_eq!(headers, vec![block1.header, block2.header]);
+            assert_eq!(
+                headers.headers().to_vec(),
+                vec![block1.header, block2.header]
+            );
         } else {
             panic!("Expected SwarmSend::Response with ShareHeaders message");
         }
@@ -332,9 +383,13 @@ mod tests {
         let block_hashes = vec![block_hash1, block_hash2];
         let missing = vec![block_hash1];
 
+        chain_store_handle.expect_is_current().returning(|| true);
         chain_store_handle
             .expect_get_missing_blockhashes()
             .returning(move |_| missing.clone());
+        chain_store_handle
+            .expect_build_locator()
+            .return_once(|_| Ok(vec![BlockHash::all_zeros()]));
 
         let inventory = InventoryMessage::BlockHashes(block_hashes);
 
@@ -354,13 +409,17 @@ mod tests {
         let result = handle_request(ctx).await;
         assert!(result.is_ok());
 
-        if let Some(SwarmSend::Request(sent_peer, Message::GetData(GetData::Block(hash)))) =
+        if let Some(SwarmSend::Response(_, Message::Ack)) = swarm_rx.recv().await {
+        } else {
+            panic!("Expected SwarmSend::Response with Ack message");
+        }
+
+        if let Some(SwarmSend::Request(sent_peer, Message::GetShareHeaders(_, _))) =
             swarm_rx.recv().await
         {
             assert_eq!(sent_peer, peer_id);
-            assert_eq!(hash, block_hash1);
         } else {
-            panic!("Expected SwarmSend::Request with GetData::Block message");
+            panic!("Expected SwarmSend::Request with GetShareHeaders message");
         }
 
         assert!(
@@ -404,9 +463,14 @@ mod tests {
         let result = handle_request(ctx).await;
         assert!(result.is_ok());
 
+        if let Some(SwarmSend::Response(_, Message::Ack)) = swarm_rx.recv().await {
+        } else {
+            panic!("Expected SwarmSend::Response with Ack message");
+        }
+
         assert!(
             swarm_rx.try_recv().is_err(),
-            "No messages expected for TransactionHashes inventory"
+            "No additional messages expected for TransactionHashes inventory"
         );
     }
 
@@ -421,7 +485,7 @@ mod tests {
 
         let ctx = RequestContext {
             peer: peer_id,
-            request: Message::NotFound(()),
+            request: Message::NotFound(GetData::Block(BlockHash::all_zeros())),
             chain_store_handle,
             response_channel: response_channel_tx,
             swarm_tx,
@@ -518,8 +582,11 @@ mod tests {
         let result = handle_request(ctx).await;
         assert!(result.is_ok());
 
-        if let Some(SwarmSend::Response(channel, Message::NotFound(()))) = swarm_rx.recv().await {
+        if let Some(SwarmSend::Response(channel, Message::NotFound(GetData::Block(hash)))) =
+            swarm_rx.recv().await
+        {
             assert_eq!(channel, response_channel);
+            assert_eq!(hash, block_hash);
         } else {
             panic!("Expected SwarmSend::Response with NotFound message");
         }
@@ -607,10 +674,13 @@ mod tests {
         chain_store_handle
             .expect_get_headers_for_locator()
             .returning(|_, _, _| Ok(vec![]));
+        chain_store_handle
+            .expect_get_template_merkle_branches()
+            .returning(|_| Ok(Vec::new()));
 
         let ctx = RequestContext {
             peer: peer_id,
-            request: Message::ShareHeaders(share_headers),
+            request: Message::ShareHeaders(share_header_batch_with_empty_branches(share_headers)),
             chain_store_handle,
             response_channel: response_channel_tx,
             swarm_tx,
@@ -627,82 +697,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_request_share_block() {
+    async fn test_handle_request_share_block_sends_ack_and_processes() {
         let peer_id = libp2p::PeerId::random();
-        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
+        let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
         let response_channel = 1u32;
         let mut chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
-        let (block_fetcher_tx, _) = create_block_fetcher_channel();
-        let (validation_tx, _validation_rx) = create_validation_channel();
-        let (block_receiver_handle, mut block_receiver_rx) = create_block_receiver_channel();
+        let (block_fetcher_handle, validation_tx, block_receiver_handle) = test_handles();
 
         let share_block = valid_share_block_from_fixture();
 
-        // Block not yet in store
+        // Block already confirmed -- simplest path through handle_share_block
         chain_store_handle
             .expect_share_block_exists()
-            .returning(|_| false);
-
-        // Mock share validator to accept the share header
-        let mut mock_validator = MockDefaultShareValidator::default();
-        mock_validator
-            .expect_validate_share_header()
-            .returning(|_| Ok(()));
-
-        // Spawn a task to handle the BlockReceiver event and respond Ok
-        tokio::spawn(async move {
-            if let Some(ShareBlockReceived { result_tx, .. }) = block_receiver_rx.recv().await {
-                let _ = result_tx.send(Ok(()));
-            }
-        });
-
-        let ctx = RequestContext {
-            peer: peer_id,
-            request: Message::ShareBlock(share_block),
-            chain_store_handle,
-            response_channel,
-            swarm_tx,
-            time_provider,
-            block_fetcher_handle: block_fetcher_tx,
-            validation_tx,
-            block_receiver_handle,
-            share_validator: Arc::new(mock_validator),
-        };
-
-        let result = handle_request(ctx).await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_handle_request_share_block_store_error() {
-        let peer_id = libp2p::PeerId::random();
-        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
-        let response_channel = 1u32;
-        let mut chain_store_handle = ChainStoreHandle::default();
-        let time_provider = TestTimeProvider::new(SystemTime::now());
-        let (block_fetcher_handle, validation_tx, _) = test_handles();
-        let (block_receiver_handle, mut block_receiver_rx) = create_block_receiver_channel();
-
-        let share_block = valid_share_block_from_fixture();
-
-        // Block not yet in store
+            .returning(|_| true);
         chain_store_handle
-            .expect_share_block_exists()
-            .returning(|_| false);
-
-        // Mock share validator to accept the share header
-        let mut mock_validator = MockDefaultShareValidator::default();
-        mock_validator
-            .expect_validate_share_header()
-            .returning(|_| Ok(()));
-
-        // Spawn a task to handle the BlockReceiver event and respond with error
-        tokio::spawn(async move {
-            if let Some(ShareBlockReceived { result_tx, .. }) = block_receiver_rx.recv().await {
-                let _ = result_tx.send(Err("test store error".into()));
-            }
-        });
+            .expect_is_block_confirmed()
+            .returning(|_| true);
+        // Chain not current, so request_headers_for_missing_blocks is a no-op
+        chain_store_handle.expect_is_current().returning(|| false);
 
         let ctx = RequestContext {
             peer: peer_id,
@@ -714,11 +727,95 @@ mod tests {
             block_fetcher_handle,
             validation_tx,
             block_receiver_handle,
-            share_validator: Arc::new(mock_validator),
+            share_validator: Arc::new(MockDefaultShareValidator::default()),
         };
 
         let result = handle_request(ctx).await;
-        assert!(result.is_err());
+        assert!(result.is_ok());
+
+        let ack_message = swarm_rx.recv().await.unwrap();
+        match ack_message {
+            SwarmSend::Response(channel, Message::Ack) => {
+                assert_eq!(channel, 1u32);
+            }
+            _ => panic!("Expected SwarmSend::Response with Ack"),
+        }
+
+        assert!(
+            swarm_rx.try_recv().is_err(),
+            "No additional messages expected"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handle_request_share_block_missing_parent_sends_getheaders() {
+        let peer_id = libp2p::PeerId::random();
+        let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
+        let response_channel = 5u32;
+        let mut chain_store_handle = ChainStoreHandle::default();
+        let time_provider = TestTimeProvider::new(SystemTime::now());
+        let (block_fetcher_handle, validation_tx, block_receiver_handle) = test_handles();
+
+        let share_block = valid_share_block_from_fixture();
+        let parent_hash = share_block.header.prev_share_blockhash;
+
+        // Block already confirmed -- simplest path through handle_share_block
+        chain_store_handle
+            .expect_share_block_exists()
+            .returning(|_| true);
+        chain_store_handle
+            .expect_is_block_confirmed()
+            .returning(|_| true);
+
+        // Chain is current and parent is missing -- should trigger getheaders
+        chain_store_handle.expect_is_current().returning(|| true);
+        let missing = vec![parent_hash];
+        chain_store_handle
+            .expect_get_missing_blockhashes()
+            .with(eq(vec![parent_hash]))
+            .returning(move |_| missing.clone());
+        chain_store_handle
+            .expect_build_locator()
+            .return_once(|_| Ok(vec![BlockHash::all_zeros()]));
+
+        let ctx = RequestContext {
+            peer: peer_id,
+            request: Message::ShareBlock(share_block),
+            chain_store_handle,
+            response_channel,
+            swarm_tx,
+            time_provider,
+            block_fetcher_handle,
+            validation_tx,
+            block_receiver_handle,
+            share_validator: Arc::new(MockDefaultShareValidator::default()),
+        };
+
+        let result = handle_request(ctx).await;
+        assert!(result.is_ok());
+
+        let ack_message = swarm_rx.recv().await.unwrap();
+        match ack_message {
+            SwarmSend::Response(channel, Message::Ack) => {
+                assert_eq!(channel, 5u32);
+            }
+            _ => panic!("Expected SwarmSend::Response with Ack"),
+        }
+
+        let getheaders_message = swarm_rx.recv().await.unwrap();
+        match getheaders_message {
+            SwarmSend::Request(sent_peer, Message::GetShareHeaders(locator, stop_hash)) => {
+                assert_eq!(sent_peer, peer_id);
+                assert_eq!(locator, vec![BlockHash::all_zeros()]);
+                assert_eq!(stop_hash, BlockHash::all_zeros());
+            }
+            _ => panic!("Expected SwarmSend::Request with GetShareHeaders"),
+        }
+
+        assert!(
+            swarm_rx.try_recv().is_err(),
+            "No additional messages expected"
+        );
     }
 
     #[tokio::test]
@@ -730,10 +827,13 @@ mod tests {
         mock_validator
             .expect_validate_header_minimum_difficulty()
             .returning(|_| Ok(()));
+        mock_validator
+            .expect_validate_coinbase_proof()
+            .returning(|_, _| Ok(()));
         let mut pool_difficulty = PoolDifficulty::default();
         pool_difficulty
             .expect_calculate_target_clamped()
-            .returning(|_, _, _| {
+            .returning(|_, _| {
                 CompactTarget::from_consensus(crate::shares::share_block::MAX_POOL_TARGET)
             });
         mock_validator
@@ -743,9 +843,16 @@ mod tests {
         chain_store_handle
             .expect_organise_header()
             .returning(|_| Ok(None));
+
+        chain_store_handle
+            .expect_add_header_template_merkle_branches()
+            .returning(|_| Ok(()));
+        chain_store_handle
+            .expect_find_fork_point_height()
+            .returning(|_| Ok(Some(0)));
         chain_store_handle
             .expect_get_candidate_blocks_missing_data()
-            .returning(|| Ok(Vec::new()));
+            .returning(|_| Ok(Vec::new()));
         setup_header_chain_validation_mocks(&mut chain_store_handle);
 
         let (swarm_tx, _swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
@@ -763,7 +870,7 @@ mod tests {
         let (block_fetcher_handle, validation_tx, block_receiver_handle) = test_handles();
         let result = handle_response(
             peer_id,
-            Message::ShareHeaders(share_headers),
+            Message::ShareHeaders(share_header_batch_with_empty_branches(share_headers)),
             chain_store_handle,
             swarm_tx,
             block_fetcher_handle,
@@ -777,15 +884,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_response_not_found() {
+    async fn test_handle_response_not_found_notifies_block_fetcher() {
         let peer_id = libp2p::PeerId::random();
         let chain_store_handle = ChainStoreHandle::default();
         let (swarm_tx, _swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
 
-        let (block_fetcher_handle, validation_tx, block_receiver_handle) = test_handles();
+        let (block_fetcher_handle, mut block_fetcher_rx) = create_block_fetcher_channel();
+        let (validation_tx, _) = create_validation_channel();
+        let (block_receiver_handle, _) = create_block_receiver_channel();
+
+        let block_hash = BlockHash::all_zeros();
         let result = handle_response(
             peer_id,
-            Message::NotFound(()),
+            Message::NotFound(GetData::Block(block_hash)),
             chain_store_handle,
             swarm_tx,
             block_fetcher_handle,
@@ -796,6 +907,16 @@ mod tests {
         .await;
 
         assert!(result.is_ok());
+
+        let event = block_fetcher_rx
+            .try_recv()
+            .expect("Expected BlockRequestCompleted event from NotFound handler");
+        match event {
+            BlockFetcherEvent::BlockRequestCompleted(hash) => {
+                assert_eq!(hash, block_hash);
+            }
+            other => panic!("Expected BlockRequestCompleted, got: {other}"),
+        }
     }
 
     #[tokio::test]

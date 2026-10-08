@@ -1,18 +1,6 @@
-// Copyright (C) 2024-2026 P2Poolv2 Developers (see AUTHORS)
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
 //
-// This file is part of P2Poolv2
-//
-// P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free
-// Software Foundation, either version 3 of the License, or (at your option)
-// any later version.
-//
-// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License along with
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 use base64::Engine;
 use hmac::{Hmac, Mac};
@@ -53,6 +41,32 @@ mod tests {
         // Verify deterministic (same inputs produce same output)
         let hmac2 = password_to_hmac(salt, password).unwrap();
         assert_eq!(hmac, hmac2);
+    }
+
+    /// Known-answer test pinning the exact HMAC-SHA256 output.
+    ///
+    /// `password_to_hmac` output is persisted in operator config files as
+    /// `auth_token`, so a change here silently invalidates every deployed
+    /// token. The expected value is derived from the HMAC-SHA256 specification
+    /// independently of this implementation, not captured from it.
+    #[test]
+    fn test_password_to_hmac_known_answer() {
+        let salt = "0123456789abcdef0123456789abcdef";
+        let password = "testpassword123";
+        assert_eq!(
+            password_to_hmac(salt, password).unwrap(),
+            "e6eb13e97ec482011d014112984f4b4e2ff82c25117f07bf4b616257df1923b7"
+        );
+    }
+
+    /// Known-answer test for the Basic auth header, which is sent on the wire
+    /// to bitcoind and to the P2Poolv2 API.
+    #[test]
+    fn test_build_basic_auth_header_known_answer() {
+        assert_eq!(
+            build_basic_auth_header("admin", "secret"),
+            "Basic YWRtaW46c2VjcmV0"
+        );
     }
 
     #[test]

@@ -1,18 +1,6 @@
-// Copyright (C) 2024-2026 P2Poolv2 Developers (see AUTHORS)
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
 //
-// This file is part of P2Poolv2
-//
-// P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free
-// Software Foundation, either version 3 of the License, or (at your option)
-// any later version.
-//
-// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License along with
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 use crate::api::endpoints::MAX_NUM_SHARES_IN_RESPONSE;
 use crate::api::error::ApiError;
@@ -21,7 +9,7 @@ use axum::{
     Json,
     extract::{Query, State},
 };
-use p2poolv2_lib::store::dag_store::ShareInfo;
+use p2poolv2_lib::address_display::ShareInfoDisplay;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -39,7 +27,7 @@ pub struct SharesQuery {
 pub struct SharesResponse {
     pub from_height: u32,
     pub to_height: u32,
-    pub shares: Vec<ShareInfo>,
+    pub shares: Vec<ShareInfoDisplay>,
 }
 
 /// Returns confirmed shares and their uncles for a height range.
@@ -54,7 +42,7 @@ pub(crate) async fn shares(
     let chain_store_handle = &state.chain_store_handle;
     let num = query.num.unwrap_or(10);
 
-    if num < 1 || num > MAX_NUM_SHARES_IN_RESPONSE {
+    if !(1..=MAX_NUM_SHARES_IN_RESPONSE).contains(&num) {
         return Err(ApiError::BadRequest(format!(
             "num must be between 1 and {MAX_NUM_SHARES_IN_RESPONSE}, got {num}"
         )));
@@ -86,7 +74,7 @@ pub(crate) async fn shares(
     Ok(Json(SharesResponse {
         from_height,
         to_height,
-        shares,
+        shares: ShareInfoDisplay::from_share_infos(&shares, Some(state.app_config.network)),
     }))
 }
 
@@ -95,7 +83,9 @@ mod tests {
     use super::*;
     use crate::api::server::{AppConfig, AppState};
     use axum::extract::{Query, State};
+    use bitcoin::Network;
     use p2poolv2_lib::accounting::stats::metrics;
+    use p2poolv2_lib::address::witness_program_codec::to_address_string;
     use p2poolv2_lib::monitoring_events::create_monitoring_event_channel;
     use p2poolv2_lib::node::actor::NodeHandle;
     use p2poolv2_lib::stratum::work::tracker::start_tracker_actor;
@@ -113,6 +103,7 @@ mod tests {
             app_config: AppConfig {
                 pool_signature_length: 0,
                 network: bitcoin::Network::Signet,
+                cors_allowed: false,
             },
             chain_store_handle,
             metrics_handle,
@@ -262,5 +253,36 @@ mod tests {
         let response = result.unwrap().0;
         // to_height should be clamped to tip (0)
         assert_eq!(response.to_height, 0);
+    }
+    /// The miner address must reach the wire in bech32m form for the pool's
+    /// network, not as the witness program hex the store serializes. Nothing
+    /// in the type system separates the two: both are strings, so only a test
+    /// keeps the rendering from silently regressing.
+    #[tokio::test]
+    async fn test_shares_renders_miner_addresses() {
+        let node_handle = NodeHandle::new_for_test();
+        let (state, _temp_dir) = build_test_state(node_handle).await;
+
+        let genesis = genesis_for_tests();
+        let expected = to_address_string(&genesis.header.miner_address, Network::Signet);
+        state
+            .chain_store_handle
+            .init_or_setup_genesis(genesis)
+            .await
+            .unwrap();
+
+        let query = Query(SharesQuery {
+            to: Some(0),
+            num: Some(1),
+        });
+
+        let response = shares(State(state), query).await.unwrap().0;
+        let miner_address = &response.shares[0].miner_address;
+
+        assert_eq!(*miner_address, expected);
+        assert!(
+            miner_address.starts_with("sp2pool1"),
+            "expected a signet share address, got {miner_address}"
+        );
     }
 }

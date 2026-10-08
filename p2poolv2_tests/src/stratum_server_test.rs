@@ -1,32 +1,21 @@
-// Copyright (C) 2024-2026 P2Poolv2 Developers (see AUTHORS)
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
 //
-// This file is part of P2Poolv2
-//
-// P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free
-// Software Foundation, either version 3 of the License, or (at your option)
-// any later version.
-//
-// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License along with
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 #[cfg(test)]
 use bitcoindrpc::test_utils::{mock_method, setup_mock_bitcoin_rpc};
 #[cfg(test)]
 use p2poolv2_lib::accounting::stats::metrics;
+use p2poolv2_lib::config::DEFAULT_VERSION_MASK;
 #[cfg(test)]
 use p2poolv2_lib::stratum::{
     self, client_connections,
     messages::{Response, SimpleRequest},
     server::StratumServerBuilder,
-    work::{notify, tracker::start_tracker_actor},
+    work::tracker::start_tracker_actor,
 };
 #[cfg(test)]
-use p2poolv2_lib::test_utils::setup_test_chain_store_handle;
+use p2poolv2_lib::test_utils::{TestShareBlockBuilder, setup_test_chain_store_handle};
 #[cfg(test)]
 use std::net::SocketAddr;
 #[cfg(test)]
@@ -43,7 +32,6 @@ async fn test_stratum_server_subscribe() {
     // Setup server - using Arc so we can access it for shutdown
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     let connections_handle = client_connections::start_connections_handler().await;
-    let (notify_tx, _notify_rx) = tokio::sync::mpsc::channel::<notify::NotifyCmd>(100);
 
     let template = std::fs::read_to_string(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -64,6 +52,15 @@ async fn test_stratum_server_subscribe() {
         .unwrap();
 
     let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as u32;
+    let genesis = TestShareBlockBuilder::new().time(now).build();
+    chain_store_handle
+        .init_or_setup_genesis(genesis)
+        .await
+        .unwrap();
 
     let mut server = StratumServerBuilder::default()
         .shutdown_rx(shutdown_rx)
@@ -76,7 +73,7 @@ async fn test_stratum_server_subscribe() {
         .maximum_difficulty(Some(1))
         .zmqpubhashblock("tcp://127.0.0.1:28332".to_string())
         .network(bitcoin::network::Network::Regtest)
-        .version_mask(0x1fffe000)
+        .version_mask(DEFAULT_VERSION_MASK)
         .chain_store_handle(chain_store_handle)
         .build()
         .await
@@ -90,7 +87,6 @@ async fn test_stratum_server_subscribe() {
         let _result = server
             .start(
                 Some(ready_tx),
-                notify_tx,
                 tracker_handle,
                 bitcoinrpc_config,
                 metrics_handle,

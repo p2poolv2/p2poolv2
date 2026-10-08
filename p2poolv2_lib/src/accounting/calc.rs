@@ -1,18 +1,6 @@
-// Copyright (C) 2024-2026 P2Poolv2 Developers (see AUTHORS)
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
 //
-// This file is part of P2Poolv2
-//
-// P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free
-// Software Foundation, either version 3 of the License, or (at your option)
-// any later version.
-//
-// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License along with
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Difficulty adjuster module based on CKPool's algorithm.
 //!
@@ -149,8 +137,7 @@ mod tests {
         let new_dsps = decay_time(dsps, difficulty, elapsed_time, interval);
         assert!(
             (new_dsps - 0.003134).abs() < 1e-6,
-            "Expected new dsps to be approximately 0.003134, got {}",
-            new_dsps
+            "Expected new dsps to be approximately 0.003134, got {new_dsps}"
         );
     }
 
@@ -164,8 +151,7 @@ mod tests {
         let new_dsps = decay_time(dsps, difficulty, elapsed_time, interval);
         assert!(
             (new_dsps - 12.992719).abs() < 1e-6,
-            "Expected new dsps to be approximately 12.992719, got {}",
-            new_dsps
+            "Expected new dsps to be approximately 12.992719, got {new_dsps}"
         );
     }
 

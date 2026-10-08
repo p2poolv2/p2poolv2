@@ -1,18 +1,6 @@
-// Copyright (C) 2024-2026 P2Poolv2 Developers (see AUTHORS)
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
 //
-// This file is part of P2Poolv2
-//
-// P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free
-// Software Foundation, either version 3 of the License, or (at your option)
-// any later version.
-//
-// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License along with
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Concurrent block fetcher for downloading blocks from peers.
 //!
@@ -29,7 +17,7 @@ use bitcoin::BlockHash;
 use libp2p::PeerId;
 use libp2p::request_response::ResponseChannel;
 use peer_selector::PeerSelector;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
@@ -42,7 +30,8 @@ const MAX_IN_FLIGHT_PER_PEER: usize = 16;
 const INITIAL_IN_FLIGHT_CAPACITY: usize = 64;
 
 /// Default timeout for a single block request before retrying.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// Should remain same as libp2p request timeout.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// How often the fetcher checks for timed-out requests.
 const TICK_INTERVAL: Duration = Duration::from_secs(5);
@@ -50,19 +39,39 @@ const TICK_INTERVAL: Duration = Duration::from_secs(5);
 /// Channel capacity for block fetcher events.
 const BLOCK_FETCHER_CHANNEL_CAPACITY: usize = 8192;
 
+/// Number of blockhashes moved from the backlog into the pending
+/// queue at a time. The next batch is loaded only after the current
+/// batch is fully dispatched and all responses have been received,
+/// bounding memory in the downstream block receiver.
+pub(crate) const FETCH_BATCH_SIZE: usize = 1000;
+
+/// A blockhash queued for fetching, with an optional preferred peer
+/// that is known to have the block body (the inv/headers source).
+/// When preferred_peer is Some, dispatch targets that peer first.
+/// When None, round-robin is used for load distribution.
+struct PendingBlock {
+    blockhash: BlockHash,
+    preferred_peer: Option<PeerId>,
+}
+
 /// Events sent to the block fetcher from p2p message handlers.
 pub enum BlockFetcherEvent {
-    /// Blocks identified by handle_share_headers
+    /// Blocks identified by handle_share_headers.
+    /// The peer_id is always added to the peer selector.
+    /// When use_peer is true, blocks are fetched from this peer
+    /// (steady-state: peer announced the block and has the body).
+    /// When false, round-robin distributes across peers (initial sync).
     FetchBlocks {
         blockhashes: Vec<BlockHash>,
-        /// If peer is not known it is added to the list of peers
-        /// block fetcher knows about.
         peer_id: PeerId,
+        use_peer: bool,
     },
-    /// A block was received from a peer, and can now be remove from in-flight.
-    BlockReceived(BlockHash),
+    /// A block request completed (received or not found) and can be removed from in-flight.
+    BlockRequestCompleted(BlockHash),
     /// Peers list updated -- used for round-robin distribution.
     PeersUpdated(Vec<PeerId>),
+    /// A peer disconnected and should be removed from the selector.
+    PeerRemoved(PeerId),
 }
 
 impl fmt::Display for BlockFetcherEvent {
@@ -71,17 +80,22 @@ impl fmt::Display for BlockFetcherEvent {
             BlockFetcherEvent::FetchBlocks {
                 blockhashes,
                 peer_id,
+                use_peer,
             } => write!(
                 formatter,
-                "FetchBlocks({} hashes, peer={})",
+                "FetchBlocks({} hashes, peer={}, use_peer={})",
                 blockhashes.len(),
-                peer_id
+                peer_id,
+                use_peer
             ),
-            BlockFetcherEvent::BlockReceived(hash) => {
-                write!(formatter, "BlockReceived({hash})")
+            BlockFetcherEvent::BlockRequestCompleted(hash) => {
+                write!(formatter, "BlockRequestCompleted({hash})")
             }
             BlockFetcherEvent::PeersUpdated(peers) => {
                 write!(formatter, "PeersUpdated({} peers)", peers.len())
+            }
+            BlockFetcherEvent::PeerRemoved(peer_id) => {
+                write!(formatter, "PeerRemoved({peer_id})")
             }
         }
     }
@@ -128,8 +142,22 @@ pub struct BlockFetcher {
     swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
     /// Blockhashes that have been requested -- inflight
     in_flight: HashMap<BlockHash, InFlightRequest>,
-    /// Blockhashes waiting to be requested (not yet in-flight).
-    pending: VecDeque<BlockHash>,
+    /// Blocks waiting to be requested (not yet in-flight).
+    /// Holds at most one batch of FETCH_BATCH_SIZE entries.
+    pending: VecDeque<PendingBlock>,
+    /// Blocks that have not yet been moved into `pending`.
+    /// Batches of FETCH_BATCH_SIZE are promoted when the current
+    /// batch is fully processed (pending and in_flight both empty).
+    backlog: VecDeque<PendingBlock>,
+    /// Membership index over `backlog` + `pending` + `in_flight`: a blockhash
+    /// we still want to fetch. Kept so `is_known` and completion are O(1)
+    /// instead of scanning the queues (an initial sync enqueues ~100k hashes;
+    /// a linear scan per hash is quadratic). The `VecDeque`s remain the ordered
+    /// source of truth; this set never dictates order. An entry may leave this
+    /// set while a stale copy is still sitting in a queue -- such an entry is
+    /// skipped when it reaches the front of `pending` (lazy deletion), so
+    /// removal is O(1) too.
+    queued: HashSet<BlockHash>,
     /// Peer selection with round-robin distribution and capacity tracking.
     peer_selector: PeerSelector,
 }
@@ -145,6 +173,8 @@ impl BlockFetcher {
             swarm_tx,
             in_flight: HashMap::with_capacity(INITIAL_IN_FLIGHT_CAPACITY),
             pending: VecDeque::new(),
+            backlog: VecDeque::new(),
+            queued: HashSet::new(),
             peer_selector: PeerSelector::new(),
         }
     }
@@ -158,16 +188,20 @@ impl BlockFetcher {
             tokio::select! {
                 event = self.event_rx.recv() => {
                     match event {
-                        Some(BlockFetcherEvent::FetchBlocks { blockhashes, peer_id }) => {
-                            self.handle_fetch_blocks(blockhashes, peer_id).await;
+                        Some(BlockFetcherEvent::FetchBlocks { blockhashes, peer_id, use_peer }) => {
+                            self.handle_fetch_blocks(blockhashes, peer_id, use_peer).await;
                         }
-                        Some(BlockFetcherEvent::BlockReceived(blockhash)) => {
-                            self.handle_block_received(blockhash);
+                        Some(BlockFetcherEvent::BlockRequestCompleted(blockhash)) => {
+                            self.handle_block_request_completed(blockhash);
                             self.dispatch_pending_requests().await;
+                            self.refill_pending_from_backlog().await;
                         }
                         Some(BlockFetcherEvent::PeersUpdated(peers)) => {
                             debug!("Peers list updated in block fetcher");
                             self.peer_selector.update_peers(peers);
+                        }
+                        Some(BlockFetcherEvent::PeerRemoved(peer_id)) => {
+                            self.handle_peer_removed(peer_id);
                         }
                         None => {
                             info!("Block fetcher stopped -- channel closed");
@@ -178,46 +212,141 @@ impl BlockFetcher {
                 _ = tick_interval.tick() => {
                     self.retry_timed_out_requests().await;
                     self.dispatch_pending_requests().await;
+                    self.refill_pending_from_backlog().await;
                 }
             }
         }
     }
 
-    /// Handle a FetchBlocks event by adding blockhashes to the pending queue
-    /// and immediately dispatching requests to peers to trigget getblock.
-    async fn handle_fetch_blocks(&mut self, blockhashes: Vec<BlockHash>, peer_id: PeerId) {
-        info!(
-            "Block fetcher received {} blockhashes to fetch from peer {}",
+    /// Check whether a blockhash is already tracked (backlog, pending, or
+    /// in-flight). O(1) via the `queued` index. `FetchBlocks` re-sends the full
+    /// missing set on every header-sync completion, so without this dedup the
+    /// same hashes would be re-queued and re-requested repeatedly.
+    fn is_known(&self, blockhash: &BlockHash) -> bool {
+        self.queued.contains(blockhash)
+    }
+
+    /// Handle a FetchBlocks event by adding new blockhashes to the
+    /// backlog and refilling pending if the current batch is done.
+    async fn handle_fetch_blocks(
+        &mut self,
+        blockhashes: Vec<BlockHash>,
+        peer_id: PeerId,
+        use_peer: bool,
+    ) {
+        debug!(
+            "Block fetcher received {} blockhashes to fetch from peer {}, use_peer: {}",
             blockhashes.len(),
-            peer_id
+            peer_id,
+            use_peer
         );
 
         self.peer_selector.add_peer(peer_id);
 
-        // Add blockhashes that are not already in-flight or pending
+        let preferred_peer = if use_peer { Some(peer_id) } else { None };
+
         for blockhash in blockhashes {
-            if !self.in_flight.contains_key(&blockhash) && !self.pending.contains(&blockhash) {
-                self.pending.push_back(blockhash);
+            if !self.is_known(&blockhash) {
+                self.backlog.push_back(PendingBlock {
+                    blockhash,
+                    preferred_peer,
+                });
+                self.queued.insert(blockhash);
             }
         }
+
+        self.refill_pending_from_backlog().await;
+    }
+
+    /// Remove a blockhash from tracking when its request completes (received,
+    /// not found, or arrived out of band via broadcast).
+    ///
+    /// Dropping it from `queued` is enough: any stale copy still sitting in
+    /// `pending`/`backlog` is skipped when it reaches the front (see
+    /// `dispatch_pending_requests`), so this stays O(1) rather than scanning
+    /// the queues.
+    fn handle_block_request_completed(&mut self, blockhash: BlockHash) {
+        if let Some(request) = self.in_flight.remove(&blockhash) {
+            debug!("Block request completed, removed from in-flight: {blockhash}");
+            self.peer_selector.record_completion(request.peer_id);
+        }
+        self.queued.remove(&blockhash);
+    }
+
+    /// Remove a disconnected peer from the selector and drop any
+    /// in-flight requests that were assigned to it.
+    ///
+    /// In-flight requests are intentionally not re-queued to other
+    /// peers. A peer may have sent cheap headers and then disconnected,
+    /// and propagating those requests to other peers who do not have
+    /// the blocks would waste their bandwidth.
+    fn handle_peer_removed(&mut self, peer_id: PeerId) {
+        debug!("Removing peer {peer_id} from block fetcher");
+        self.peer_selector.remove_peer(&peer_id);
+
+        let dropped: Vec<BlockHash> = self
+            .in_flight
+            .iter()
+            .filter(|(_, request)| request.peer_id == peer_id)
+            .map(|(blockhash, _)| *blockhash)
+            .collect();
+
+        for blockhash in &dropped {
+            self.in_flight.remove(blockhash);
+            // Drop from the membership index too, otherwise the block is
+            // neither queued nor in-flight yet still counts as known, so a
+            // later FetchBlocks could never re-request it. Not re-queued here
+            // by design (see the doc comment above).
+            self.queued.remove(blockhash);
+        }
+
+        if !dropped.is_empty() {
+            debug!(
+                "Dropped {} in-flight requests from removed peer {peer_id}",
+                dropped.len()
+            );
+        }
+
+        for entry in &mut self.pending {
+            if entry.preferred_peer == Some(peer_id) {
+                entry.preferred_peer = None;
+            }
+        }
+        for entry in &mut self.backlog {
+            if entry.preferred_peer == Some(peer_id) {
+                entry.preferred_peer = None;
+            }
+        }
+    }
+
+    /// Move the next batch of blockhashes from the backlog into
+    /// pending when the current batch is fully processed.
+    async fn refill_pending_from_backlog(&mut self) {
+        if !self.pending.is_empty() || !self.in_flight.is_empty() {
+            return;
+        }
+        if self.backlog.is_empty() {
+            return;
+        }
+
+        let batch_size = FETCH_BATCH_SIZE.min(self.backlog.len());
+        self.pending.extend(self.backlog.drain(..batch_size));
+
+        debug!(
+            "Loaded batch of {} blocks from backlog ({} remaining)",
+            self.pending.len(),
+            self.backlog.len()
+        );
 
         self.dispatch_pending_requests().await;
     }
 
-    /// Remove a blockhash from in-flight tracking when the block is received.
-    /// The caller should dispatch pending requests afterwards since capacity
-    /// may have been freed.
-    fn handle_block_received(&mut self, blockhash: BlockHash) {
-        if let Some(request) = self.in_flight.remove(&blockhash) {
-            debug!("Block received, removed from in-flight: {blockhash}");
-            self.peer_selector.record_completion(request.peer_id);
-        }
-        // Also remove from pending in case it was queued but not yet sent
-        self.pending.retain(|hash| *hash != blockhash);
-    }
-
-    /// Send GetData::Block requests for pending blockhashes, respecting
-    /// per-peer in-flight limits.
+    /// Send GetData::Block requests for pending blockhashes,
+    /// respecting per-peer in-flight limits.  Send GetData::Block
+    /// requests for pending blocks, respecting per-peer in-flight
+    /// limits. When a pending block has a preferred peer
+    /// (steady-state inv handling), dispatch to that peer.  Otherwise
+    /// use round-robin (initial sync / retry).
     async fn dispatch_pending_requests(&mut self) {
         if !self.peer_selector.has_peers() || self.pending.is_empty() {
             return;
@@ -225,16 +354,26 @@ impl BlockFetcher {
 
         let mut dispatch_count = 0usize;
 
-        while let Some(&blockhash) = self.pending.front() {
-            let peer_id = match self.peer_selector.select_peer() {
+        while let Some(pending_block) = self.pending.front() {
+            let blockhash = pending_block.blockhash;
+            let preferred_peer = pending_block.preferred_peer;
+
+            // Lazy deletion: skip an entry whose block already completed (no
+            // longer in `queued`) or is already being fetched under another
+            // entry (in `in_flight`). Popping it here is how completion stays
+            // O(1) without scanning the queues.
+            if !self.queued.contains(&blockhash) || self.in_flight.contains_key(&blockhash) {
+                self.pending.pop_front();
+                continue;
+            }
+
+            let peer_id = match self.select_peer_for_block(preferred_peer) {
                 Some(peer_id) => peer_id,
-                None => {
-                    // All peers are at capacity -- keep remaining in pending
-                    return;
-                }
+                None => return,
             };
 
             let message = Message::GetData(GetData::Block(blockhash));
+            debug!("Sending GetData for {blockhash}");
             if let Err(send_error) = self
                 .swarm_tx
                 .send(SwarmSend::Request(peer_id, message))
@@ -273,14 +412,7 @@ impl BlockFetcher {
             return;
         }
 
-        let now = Instant::now();
-        let mut timed_out = Vec::new();
-
-        for (blockhash, request) in &self.in_flight {
-            if now.duration_since(request.requested_at) > REQUEST_TIMEOUT {
-                timed_out.push(*blockhash);
-            }
-        }
+        let timed_out = self.collect_timed_out_requests();
 
         for blockhash in timed_out {
             let old_request = self.in_flight.remove(&blockhash).unwrap();
@@ -289,10 +421,43 @@ impl BlockFetcher {
                 old_request.peer_id
             );
             self.peer_selector.record_completion(old_request.peer_id);
-            // Re-add to pending for retry from a different peer
-            if !self.pending.contains(&blockhash) {
-                self.pending.push_back(blockhash);
-            }
+            self.requeue_for_retry(blockhash);
+        }
+    }
+
+    /// Select a peer for a block request. Uses the preferred peer if
+    /// available and has capacity, otherwise falls back to round-robin.
+    /// Returns None if all peers are at capacity.
+    fn select_peer_for_block(&mut self, preferred_peer: Option<PeerId>) -> Option<PeerId> {
+        match preferred_peer {
+            Some(preferred) if self.peer_selector.peer_has_capacity(&preferred) => Some(preferred),
+            _ => self.peer_selector.select_peer(),
+        }
+    }
+
+    /// Return blockhashes of in-flight requests that have exceeded
+    /// the request timeout.
+    fn collect_timed_out_requests(&self) -> Vec<BlockHash> {
+        let now = Instant::now();
+        self.in_flight
+            .iter()
+            .filter(|(_, request)| now.duration_since(request.requested_at) > REQUEST_TIMEOUT)
+            .map(|(blockhash, _)| *blockhash)
+            .collect()
+    }
+
+    /// Re-add a block to the front of the pending queue for retry
+    /// with round-robin peer selection (no preferred peer).
+    fn requeue_for_retry(&mut self, blockhash: BlockHash) {
+        let already_pending = self
+            .pending
+            .iter()
+            .any(|entry| entry.blockhash == blockhash);
+        if !already_pending {
+            self.pending.push_front(PendingBlock {
+                blockhash,
+                preferred_peer: None,
+            });
         }
     }
 }
@@ -332,6 +497,7 @@ mod tests {
             .send(BlockFetcherEvent::FetchBlocks {
                 blockhashes: vec![blockhash],
                 peer_id,
+                use_peer: true,
             })
             .await
             .unwrap();
@@ -370,12 +536,13 @@ mod tests {
             .send(BlockFetcherEvent::FetchBlocks {
                 blockhashes: vec![blockhash],
                 peer_id,
+                use_peer: true,
             })
             .await
             .unwrap();
 
         block_fetcher_tx
-            .send(BlockFetcherEvent::BlockReceived(blockhash))
+            .send(BlockFetcherEvent::BlockRequestCompleted(blockhash))
             .await
             .unwrap();
         drop(block_fetcher_tx);
@@ -407,10 +574,12 @@ mod tests {
         let blockhash_one = random_blockhash();
         let blockhash_two = random_blockhash();
 
+        // No preferred peer -- round-robin should distribute across peers
         block_fetcher_tx
             .send(BlockFetcherEvent::FetchBlocks {
                 blockhashes: vec![blockhash_one, blockhash_two],
                 peer_id: peer_a,
+                use_peer: false,
             })
             .await
             .unwrap();
@@ -444,6 +613,116 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_block_fetcher_uses_preferred_peer_when_use_peer_true() {
+        let (block_fetcher_tx, block_fetcher_rx) = create_block_fetcher_channel();
+        let (swarm_tx, mut swarm_rx) = mpsc::channel(64);
+        let fetcher = BlockFetcher::new(block_fetcher_rx, swarm_tx);
+
+        let peer_a = PeerId::random();
+        let peer_b = PeerId::random();
+
+        // Register both peers so round-robin has two options
+        block_fetcher_tx
+            .send(BlockFetcherEvent::PeersUpdated(vec![peer_a, peer_b]))
+            .await
+            .unwrap();
+
+        let blockhash_one = random_blockhash();
+        let blockhash_two = random_blockhash();
+
+        // use_peer=true: both blocks should go to peer_a
+        block_fetcher_tx
+            .send(BlockFetcherEvent::FetchBlocks {
+                blockhashes: vec![blockhash_one, blockhash_two],
+                peer_id: peer_a,
+                use_peer: true,
+            })
+            .await
+            .unwrap();
+        drop(block_fetcher_tx);
+
+        let fetcher_handle = tokio::spawn(fetcher.run());
+
+        let message_one = swarm_rx.recv().await.unwrap();
+        let message_two = swarm_rx.recv().await.unwrap();
+
+        for message in [message_one, message_two] {
+            match message {
+                SwarmSend::Request(peer, Message::GetData(GetData::Block(_))) => {
+                    assert_eq!(peer, peer_a, "Expected preferred peer_a, got {peer}");
+                }
+                other => panic!("Expected GetData::Block request, got: {other:?}"),
+            }
+        }
+
+        let result = fetcher_handle.await.unwrap();
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_block_fetcher_falls_back_to_round_robin_when_preferred_at_capacity() {
+        let (block_fetcher_tx, block_fetcher_rx) = create_block_fetcher_channel();
+        let (swarm_tx, mut swarm_rx) = mpsc::channel(64);
+        let fetcher = BlockFetcher::new(block_fetcher_rx, swarm_tx);
+
+        let peer_a = PeerId::random();
+        let peer_b = PeerId::random();
+
+        block_fetcher_tx
+            .send(BlockFetcherEvent::PeersUpdated(vec![peer_a, peer_b]))
+            .await
+            .unwrap();
+
+        // Fill peer_a to capacity + 1 overflow block, all preferring peer_a
+        let all_hashes: Vec<BlockHash> = (0..MAX_IN_FLIGHT_PER_PEER + 1)
+            .map(|_| random_blockhash())
+            .collect();
+        let overflow_hash = all_hashes[MAX_IN_FLIGHT_PER_PEER];
+
+        block_fetcher_tx
+            .send(BlockFetcherEvent::FetchBlocks {
+                blockhashes: all_hashes.clone(),
+                peer_id: peer_a,
+                use_peer: true,
+            })
+            .await
+            .unwrap();
+        drop(block_fetcher_tx);
+
+        let fetcher_handle = tokio::spawn(fetcher.run());
+
+        // First MAX_IN_FLIGHT_PER_PEER requests go to peer_a
+        for _ in 0..MAX_IN_FLIGHT_PER_PEER {
+            let message = swarm_rx.recv().await.unwrap();
+            match message {
+                SwarmSend::Request(peer, Message::GetData(GetData::Block(_))) => {
+                    assert_eq!(
+                        peer, peer_a,
+                        "Capacity requests should go to preferred peer_a"
+                    );
+                }
+                other => panic!("Expected GetData::Block request, got: {other:?}"),
+            }
+        }
+
+        // The overflow request should fall back to peer_b
+        let message = swarm_rx.recv().await.unwrap();
+        match message {
+            SwarmSend::Request(peer, Message::GetData(GetData::Block(hash))) => {
+                assert_eq!(hash, overflow_hash);
+                assert_eq!(
+                    peer, peer_b,
+                    "Expected fallback to peer_b when peer_a is at capacity"
+                );
+            }
+            other => panic!("Expected GetData::Block request, got: {other:?}"),
+        }
+
+        let result = fetcher_handle.await.unwrap();
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
     async fn test_block_fetcher_skips_duplicate_blockhashes() {
         let (block_fetcher_tx, block_fetcher_rx) = create_block_fetcher_channel();
         let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
@@ -457,6 +736,7 @@ mod tests {
             .send(BlockFetcherEvent::FetchBlocks {
                 blockhashes: vec![blockhash],
                 peer_id,
+                use_peer: true,
             })
             .await
             .unwrap();
@@ -465,6 +745,7 @@ mod tests {
             .send(BlockFetcherEvent::FetchBlocks {
                 blockhashes: vec![blockhash],
                 peer_id,
+                use_peer: true,
             })
             .await
             .unwrap();
@@ -494,6 +775,7 @@ mod tests {
             .send(BlockFetcherEvent::FetchBlocks {
                 blockhashes: vec![blockhash],
                 peer_id,
+                use_peer: true,
             })
             .await
             .unwrap();
@@ -513,5 +795,231 @@ mod tests {
 
         let result = fetcher_handle.await.unwrap();
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_block_fetcher_batches_from_backlog() {
+        let (block_fetcher_tx, block_fetcher_rx) = create_block_fetcher_channel();
+        let (swarm_tx, mut swarm_rx) = mpsc::channel(2048);
+        let fetcher = BlockFetcher::new(block_fetcher_rx, swarm_tx);
+
+        let peer_id = PeerId::random();
+        let total_blocks = FETCH_BATCH_SIZE + 500;
+        let blockhashes: Vec<BlockHash> = (0..total_blocks).map(|_| random_blockhash()).collect();
+
+        block_fetcher_tx
+            .send(BlockFetcherEvent::FetchBlocks {
+                blockhashes: blockhashes.clone(),
+                peer_id,
+                use_peer: true,
+            })
+            .await
+            .unwrap();
+
+        let fetcher_handle = tokio::spawn(fetcher.run());
+
+        // Yield to let the fetcher process the FetchBlocks event
+        tokio::task::yield_now().await;
+
+        // With 1 peer and MAX_IN_FLIGHT_PER_PEER=16, only 16 blocks
+        // are dispatched at a time. Drain and complete them all,
+        // counting the total dispatched across all batches.
+        let mut total_dispatched = 0usize;
+        loop {
+            match swarm_rx.try_recv() {
+                Ok(SwarmSend::Request(_, Message::GetData(GetData::Block(hash)))) => {
+                    total_dispatched += 1;
+                    block_fetcher_tx
+                        .send(BlockFetcherEvent::BlockRequestCompleted(hash))
+                        .await
+                        .unwrap();
+                    // Yield so the fetcher processes the completion
+                    tokio::task::yield_now().await;
+                }
+                _ => {
+                    // Yield and try once more in case the fetcher
+                    // needs a cycle to refill from backlog
+                    tokio::task::yield_now().await;
+                    match swarm_rx.try_recv() {
+                        Ok(SwarmSend::Request(_, Message::GetData(GetData::Block(hash)))) => {
+                            total_dispatched += 1;
+                            block_fetcher_tx
+                                .send(BlockFetcherEvent::BlockRequestCompleted(hash))
+                                .await
+                                .unwrap();
+                            tokio::task::yield_now().await;
+                        }
+                        _ => {
+                            // Truly done
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        assert_eq!(
+            total_dispatched, total_blocks,
+            "All blocks should be dispatched across batches"
+        );
+
+        drop(block_fetcher_tx);
+        let result = fetcher_handle.await.unwrap();
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_block_fetcher_peer_removed_drops_in_flight() {
+        let (block_fetcher_tx, block_fetcher_rx) = create_block_fetcher_channel();
+        let (swarm_tx, mut swarm_rx) = mpsc::channel(64);
+        let fetcher = BlockFetcher::new(block_fetcher_rx, swarm_tx);
+
+        let peer_a = PeerId::random();
+        let peer_b = PeerId::random();
+
+        // Register both peers
+        block_fetcher_tx
+            .send(BlockFetcherEvent::PeersUpdated(vec![peer_a, peer_b]))
+            .await
+            .unwrap();
+
+        let blockhash = random_blockhash();
+
+        block_fetcher_tx
+            .send(BlockFetcherEvent::FetchBlocks {
+                blockhashes: vec![blockhash],
+                peer_id: peer_a,
+                use_peer: true,
+            })
+            .await
+            .unwrap();
+
+        let fetcher_handle = tokio::spawn(fetcher.run());
+
+        // Drain the initial request
+        let initial_request = swarm_rx.recv().await.unwrap();
+        let initial_peer = match initial_request {
+            SwarmSend::Request(peer, Message::GetData(GetData::Block(hash))) => {
+                assert_eq!(hash, blockhash);
+                peer
+            }
+            other => panic!("Expected GetData::Block, got: {other:?}"),
+        };
+
+        // Remove the peer that got the request -- in-flight should be
+        // dropped, not re-queued to other peers
+        block_fetcher_tx
+            .send(BlockFetcherEvent::PeerRemoved(initial_peer))
+            .await
+            .unwrap();
+
+        // Give the fetcher time to process the event
+        tokio::task::yield_now().await;
+
+        drop(block_fetcher_tx);
+
+        // No retry request should be sent
+        assert!(
+            swarm_rx.try_recv().is_err(),
+            "in-flight requests from removed peer should be dropped, not retried"
+        );
+
+        let result = fetcher_handle.await.unwrap();
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_block_fetcher_peer_removed_no_in_flight_is_noop() {
+        let (block_fetcher_tx, block_fetcher_rx) = create_block_fetcher_channel();
+        let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
+        let fetcher = BlockFetcher::new(block_fetcher_rx, swarm_tx);
+
+        let peer_a = PeerId::random();
+        let peer_b = PeerId::random();
+
+        block_fetcher_tx
+            .send(BlockFetcherEvent::PeersUpdated(vec![peer_a, peer_b]))
+            .await
+            .unwrap();
+
+        // Remove a peer with nothing in-flight
+        block_fetcher_tx
+            .send(BlockFetcherEvent::PeerRemoved(peer_a))
+            .await
+            .unwrap();
+
+        drop(block_fetcher_tx);
+
+        let fetcher_handle = tokio::spawn(fetcher.run());
+
+        // No requests should be sent
+        assert!(
+            swarm_rx.try_recv().is_err(),
+            "no requests should be sent when removed peer has no in-flight"
+        );
+
+        let result = fetcher_handle.await.unwrap();
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_block_fetcher_dedups_across_overlapping_fetch_batches() {
+        // FetchBlocks re-sends the full missing set each time, so consecutive
+        // batches overlap heavily. Each block must be tracked exactly once
+        // across backlog + pending + in_flight, and the `queued` index must
+        // match -- no duplicate requests, no quadratic scan.
+        let (_block_fetcher_tx, block_fetcher_rx) = create_block_fetcher_channel();
+        let (swarm_tx, _swarm_rx) = mpsc::channel(1024);
+        let mut fetcher = BlockFetcher::new(block_fetcher_rx, swarm_tx);
+
+        let peer_id = PeerId::random();
+        let hashes: Vec<BlockHash> = (0..4).map(|_| random_blockhash()).collect();
+
+        fetcher
+            .handle_fetch_blocks(hashes[0..3].to_vec(), peer_id, false)
+            .await;
+        fetcher
+            .handle_fetch_blocks(hashes[1..4].to_vec(), peer_id, false)
+            .await;
+
+        assert_eq!(
+            fetcher.queued.len(),
+            4,
+            "queued should hold the 4 distinct hashes"
+        );
+        let tracked = fetcher.backlog.len() + fetcher.pending.len() + fetcher.in_flight.len();
+        assert_eq!(tracked, 4, "no block should be tracked twice");
+    }
+
+    #[tokio::test]
+    async fn test_block_fetcher_lazy_skips_completed_block() {
+        // A block that completed (e.g. arrived via broadcast) may still have a
+        // stale entry sitting in a queue. Dispatch must skip it rather than
+        // re-request it.
+        let (_block_fetcher_tx, block_fetcher_rx) = create_block_fetcher_channel();
+        let (swarm_tx, mut swarm_rx) = mpsc::channel(32);
+        let mut fetcher = BlockFetcher::new(block_fetcher_rx, swarm_tx);
+
+        let peer_id = PeerId::random();
+        let blockhash = random_blockhash();
+        fetcher.peer_selector.add_peer(peer_id);
+
+        // Complete the block first, then leave a stale pending entry behind.
+        fetcher.handle_block_request_completed(blockhash);
+        fetcher.pending.push_back(PendingBlock {
+            blockhash,
+            preferred_peer: None,
+        });
+
+        fetcher.dispatch_pending_requests().await;
+
+        assert!(
+            swarm_rx.try_recv().is_err(),
+            "a completed block must not be requested"
+        );
+        assert!(
+            fetcher.pending.is_empty(),
+            "the stale entry should be drained"
+        );
     }
 }

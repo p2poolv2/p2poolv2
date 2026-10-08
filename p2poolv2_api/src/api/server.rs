@@ -1,18 +1,6 @@
-// Copyright (C) 2024-2026 P2Poolv2 Developers (see AUTHORS)
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
 //
-// This file is part of P2Poolv2
-//
-// P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free
-// Software Foundation, either version 3 of the License, or (at your option)
-// any later version.
-//
-// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License along with
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 use crate::api::endpoints;
 use crate::api::error::ApiError;
@@ -23,7 +11,7 @@ use axum::{
     http::StatusCode,
     middleware::{self, Next},
     response::Response,
-    routing::get,
+    routing::{delete, get, post},
 };
 use chrono::DateTime;
 use p2poolv2_lib::monitoring_events::MonitoringEventSender;
@@ -36,10 +24,12 @@ use p2poolv2_lib::{
 };
 use serde::Deserialize;
 use std::path::PathBuf;
+use std::time::Duration;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::oneshot;
+use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
-use tracing::{info, trace};
+use tracing::{info, trace, warn};
 
 #[derive(Clone)]
 pub(crate) struct AppState {
@@ -59,6 +49,7 @@ pub(crate) struct AppState {
 pub struct AppConfig {
     pub pool_signature_length: usize,
     pub network: bitcoin::Network,
+    pub cors_allowed: bool,
 }
 
 /// Get AppConfig from AppState ref
@@ -109,10 +100,15 @@ fn build_router(app_state: Arc<AppState>, app_config: AppConfig) -> Router {
         .route("/shares", get(endpoints::shares::shares))
         .route("/candidates", get(endpoints::candidates::candidates))
         .route("/share", get(endpoints::share::share))
+        .route("/dag", get(endpoints::dag::dag))
+        .route("/transaction", get(endpoints::transaction::transaction))
         .route(
             "/share_headers",
             get(endpoints::share_headers::share_headers),
         )
+        .route("/blocked_ips", get(get_blocked_ips))
+        .route("/blocked_ips", post(block_ip))
+        .route("/blocked_ips", delete(unblock_ip))
         .layer(middleware::from_fn_with_state(
             app_state.clone(),
             auth_middleware,
@@ -133,14 +129,19 @@ fn build_router(app_state: Arc<AppState>, app_config: AppConfig) -> Router {
         )
         .nest_service("/static", ServeDir::new(&static_dir));
 
-    authenticated_routes
+    let mut router = authenticated_routes
         .merge(unauthenticated_routes)
-        .layer(middleware::from_fn(log_req))
-        .layer(Extension(app_config))
-        .with_state(app_state)
+        .layer(middleware::from_fn(log_req));
+
+    if app_config.cors_allowed {
+        router = router.layer(CorsLayer::permissive())
+    }
+
+    router.layer(Extension(app_config)).with_state(app_state)
 }
 
 /// Start the API server and return a shutdown channel and the actual bound port.
+#[allow(clippy::too_many_arguments)] // wiring constructor: each parameter is a distinct collaborator, a params struct would only move the list
 pub async fn start_api_server(
     config: ApiConfig,
     chain_store_handle: ChainStoreHandle,
@@ -154,6 +155,7 @@ pub async fn start_api_server(
     let app_config = AppConfig {
         pool_signature_length: pool_signature.unwrap_or_default().len(),
         network,
+        cors_allowed: config.cors_allowed,
     };
 
     let app_state = Arc::new(AppState {
@@ -208,6 +210,11 @@ async fn health_check() -> String {
 ///
 /// The exposition also includes parsed coinbase outputs for showing
 /// the current coinbase payout distribution
+/// How long `/metrics` waits for the node's P2P health snapshot. The node
+/// answers from its event loop, which never blocks, so this only trips if the
+/// node has stopped; the scrape then omits the P2P series rather than hang.
+const P2P_HEALTH_TIMEOUT: Duration = Duration::from_secs(1);
+
 async fn metrics(State(state): State<Arc<AppState>>) -> String {
     //  Get base metrics
     let pool_metrics = state.metrics_handle.get_metrics().await;
@@ -221,33 +228,121 @@ async fn metrics(State(state): State<Arc<AppState>>) -> String {
         exposition.push_str("# HELP coinbase_rewards_distribution Current coinbase rewards distribution between users\n");
         exposition.push_str(&coinbase_distribution);
     }
+
+    if let Some(network_difficulty) = state.tracker_handle.get_network_difficulty() {
+        exposition.push_str("# HELP network_difficulty Current bitcoin network difficulty\n");
+        exposition.push_str("# TYPE network_difficulty gauge\n");
+        exposition.push_str(&format!("network_difficulty {network_difficulty}\n"));
+    }
+
+    // Cumulative confirmed sharechain work at the tip. Read live from the store
+    // so it is reorg- and restart-safe (it always reflects the canonical
+    // confirmed chain). Pool hashrate on Grafana is rate(sharechain_work_total),
+    // since chain work is measured in expected hashes.
+    //
+    // Only emitted while the chain is current. During sync the confirmed tip
+    // advances by the whole backlog in a short wall-clock window, which would
+    // make rate() report replay speed as an inflated hashrate. Suppressing the
+    // sample during sync leaves a gap instead; Prometheus staleness then keeps
+    // rate() from bridging the sync jump when work resumes.
+    if state.chain_store_handle.is_current()
+        && let Ok(total_work) = state.chain_store_handle.get_total_work()
+    {
+        exposition.push_str(
+                "# HELP sharechain_work_total Cumulative confirmed sharechain work in expected hashes; pool hashrate is rate() of this\n",
+            );
+        exposition.push_str("# TYPE sharechain_work_total counter\n");
+        exposition.push_str(&format!(
+            "sharechain_work_total {}\n",
+            work_to_f64(total_work)
+        ));
+    }
+
+    match tokio::time::timeout(P2P_HEALTH_TIMEOUT, state.node_handle.get_p2p_health()).await {
+        Ok(Ok(p2p_health)) => exposition.push_str(&p2p_health.exposition()),
+        Ok(Err(error)) => warn!("Failed to read P2P health for /metrics: {error}"),
+        Err(_) => warn!("Timed out reading P2P health for /metrics"),
+    }
+
     exposition
+}
+
+/// Convert 256-bit chain work to an f64 for Prometheus exposition. Lossy in the
+/// low bits but monotonic, which is all rate() needs for a hashrate.
+fn work_to_f64(work: bitcoin::Work) -> f64 {
+    work.to_le_bytes()
+        .iter()
+        .rev()
+        .fold(0.0_f64, |acc, &byte| acc * 256.0 + byte as f64)
 }
 
 /// Response type for the /peers endpoint.
 ///
-/// Reuses the shared PeerResponse from the lib crate but with a
-/// default Connected status since the REST endpoint only lists
-/// currently connected peers.
-use p2poolv2_lib::monitoring_events::{PeerResponse, PeerStatus};
+use p2poolv2_lib::node::connection_tracker::PeerInfoResponse;
 
-/// Returns the list of currently connected peers.
-async fn peers(State(state): State<Arc<AppState>>) -> Result<Json<Vec<PeerResponse>>, ApiError> {
-    let peer_ids = state
+/// Returns enriched info for all connected peers including IP, direction,
+/// and connection duration.
+async fn peers(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<PeerInfoResponse>>, ApiError> {
+    let peer_infos = state
         .node_handle
-        .get_peers()
+        .get_peer_infos()
         .await
-        .map_err(|error| ApiError::ServerError(format!("Failed to get peers: {error}")))?;
+        .map_err(|error| ApiError::ServerError(format!("Failed to get peer infos: {error}")))?;
+    Ok(Json(peer_infos))
+}
 
-    let peers: Vec<PeerResponse> = peer_ids
-        .into_iter()
-        .map(|peer_id| PeerResponse {
-            peer_id: peer_id.to_string(),
-            status: PeerStatus::Connected,
-        })
-        .collect();
+/// Request body for block/unblock IP endpoints.
+#[derive(Deserialize)]
+struct BlockIpRequest {
+    ip: String,
+}
 
-    Ok(Json(peers))
+/// List all blocked IPs.
+async fn get_blocked_ips(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Vec<String>>, ApiError> {
+    let ips =
+        state.node_handle.get_blocked_ips().await.map_err(|error| {
+            ApiError::ServerError(format!("Failed to get blocked IPs: {error}"))
+        })?;
+    let ip_strings: Vec<String> = ips.iter().map(|ip| ip.to_string()).collect();
+    Ok(Json(ip_strings))
+}
+
+/// Add an IP to the runtime blocklist.
+async fn block_ip(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<BlockIpRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let ip: std::net::IpAddr = body
+        .ip
+        .parse()
+        .map_err(|error| ApiError::BadRequest(format!("Invalid IP address: {error}")))?;
+    state
+        .node_handle
+        .block_ip(ip)
+        .await
+        .map_err(|error| ApiError::ServerError(format!("Failed to block IP: {error}")))?;
+    Ok(Json(serde_json::json!({"blocked": body.ip})))
+}
+
+/// Remove an IP from the runtime blocklist.
+async fn unblock_ip(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<BlockIpRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let ip: std::net::IpAddr = body
+        .ip
+        .parse()
+        .map_err(|error| ApiError::BadRequest(format!("Invalid IP address: {error}")))?;
+    state
+        .node_handle
+        .unblock_ip(ip)
+        .await
+        .map_err(|error| ApiError::ServerError(format!("Failed to unblock IP: {error}")))?;
+    Ok(Json(serde_json::json!({"unblocked": body.ip})))
 }
 
 /// Returns PPLNS shares with optional time filtering and limit.
@@ -312,6 +407,22 @@ async fn pplns_shares(
 mod tests {
     use super::*;
     use axum::extract::State;
+
+    #[test]
+    fn test_work_to_f64() {
+        // Little-endian bytes for 256 (0x0100).
+        let mut le = [0u8; 32];
+        le[1] = 1;
+        assert_eq!(work_to_f64(bitcoin::Work::from_le_bytes(le)), 256.0);
+
+        // 65536 (0x010000) is larger.
+        let mut le_larger = [0u8; 32];
+        le_larger[2] = 1;
+        let larger = bitcoin::Work::from_le_bytes(le_larger);
+        assert_eq!(work_to_f64(larger), 65536.0);
+        assert!(work_to_f64(larger) > work_to_f64(bitcoin::Work::from_le_bytes(le)));
+    }
+
     use base64::Engine;
     use bitcoin::{Amount, Network, TxOut};
     use p2poolv2_lib::accounting::stats::metrics;
@@ -338,6 +449,7 @@ mod tests {
             app_config: AppConfig {
                 pool_signature_length: 0,
                 network: bitcoin::Network::Signet,
+                cors_allowed: false,
             },
             chain_store_handle,
             metrics_handle,
@@ -348,6 +460,17 @@ mod tests {
             auth_token: None,
         });
         (state, temp_dir)
+    }
+
+    #[tokio::test]
+    async fn test_metrics_endpoint_includes_p2p_health() {
+        let node_handle = NodeHandle::new_for_test();
+        let (state, _temp_dir) = build_test_state(node_handle).await;
+
+        let exposition = metrics(State(state)).await;
+
+        assert!(exposition.contains("# TYPE p2p_connected_peers gauge\np2p_connected_peers 0\n"));
+        assert!(exposition.contains("p2p_connections_closed_unresponsive_total 0\n"));
     }
 
     #[tokio::test]
@@ -480,6 +603,7 @@ mod tests {
             app_config: AppConfig {
                 pool_signature_length: 8,
                 network: bitcoin::Network::Signet,
+                cors_allowed: false,
             },
             chain_store_handle,
             metrics_handle,
@@ -587,6 +711,7 @@ mod tests {
             app_config: AppConfig {
                 pool_signature_length: 0,
                 network: bitcoin::Network::Signet,
+                cors_allowed: false,
             },
             chain_store_handle,
             metrics_handle,
@@ -729,6 +854,53 @@ mod tests {
             response.status(),
             101,
             "WebSocket upgrade should not succeed with only an Authorization header"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_cors_headers_present_when_enabled() {
+        use tower::ServiceExt;
+
+        let node_handle = NodeHandle::new_for_test();
+        let (chain_store_handle, _temp_dir) =
+            p2poolv2_lib::test_utils::setup_test_chain_store_handle(true).await;
+        let metrics_temp = tempfile::tempdir().unwrap();
+        let metrics_handle =
+            metrics::start_metrics(metrics_temp.path().to_str().unwrap().to_string())
+                .await
+                .unwrap();
+        let tracker_handle = start_tracker_actor();
+
+        let state = Arc::new(AppState {
+            app_config: AppConfig {
+                pool_signature_length: 0,
+                network: bitcoin::Network::Signet,
+                cors_allowed: true,
+            },
+            chain_store_handle,
+            metrics_handle,
+            tracker_handle,
+            node_handle,
+            monitoring_event_sender: create_monitoring_event_channel().0,
+            auth_user: None,
+            auth_token: None,
+        });
+
+        let app = build_router(state.clone(), state.app_config.clone());
+
+        let request = http::Request::builder()
+            .uri("/health")
+            .body(http_body_util::Empty::<bytes::Bytes>::new())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), http::StatusCode::OK);
+
+        let headers = response.headers();
+        assert_eq!(
+            headers.get("access-control-allow-origin"),
+            Some(&"*".parse().unwrap()),
+            "access-control-allow-origin header should be present"
         );
     }
 }

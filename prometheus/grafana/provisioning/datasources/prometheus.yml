@@ -1,8 +1,17 @@
 apiVersion: 1
 
+# Remove any existing same-name datasource first so the pinned uid below is
+# applied cleanly. Grafana cannot change the uid of an already-provisioned
+# datasource, so without this an older volume (created before uid was pinned)
+# fails provisioning with "data source not found".
+deleteDatasources:
+  - name: Prometheus
+    orgId: 1
+
 datasources:
   - name: Prometheus
     type: prometheus
+    uid: prometheus
     access: proxy
     url: http://prometheus:9090
     isDefault: true

@@ -1,23 +1,12 @@
-// Copyright (C) 2024-2026 P2Poolv2 Developers (see AUTHORS)
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
 //
-// This file is part of P2Poolv2
-//
-// P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free
-// Software Foundation, either version 3 of the License, or (at your option)
-// any later version.
-//
-// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License along with
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 /// Custom implementation of Stratum messages with JSON-RPC serialization
 use std::borrow::Cow;
 use std::vec;
 
+use crate::stratum::error::StratumErrorCode;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -60,13 +49,27 @@ impl PartialEq for Id {
 }
 
 /// StratumError represents the error structure in Stratum responses
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Error<'a> {
     pub code: i32,
     #[serde(borrow)]
     pub message: Cow<'a, str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<Value>,
+}
+
+// Serialize as the standard 3-element array: [code, message, null]
+impl Serialize for Error<'_> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeSeq;
+        let mut seq = serializer.serialize_seq(Some(3))?;
+        seq.serialize_element(&self.code)?;
+        seq.serialize_element(&self.message)?;
+        seq.serialize_element(&self.data.clone().unwrap_or(json!("")))?;
+        seq.end()
+    }
 }
 
 /// Message type capturing all possible stratum message types.
@@ -155,7 +158,7 @@ pub struct MiningConfigureParams<'a> {
 
 /// Response represents a Stratum response message from the server to the client
 /// We use Value in result to allow for different types of responses.
-/// TODO: Consider using various Response types to avoing using Value (which will result in memory allocations)
+/// TODO: Consider using various Response types to avoiding using Value (which will result in memory allocations)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Response<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -344,7 +347,7 @@ impl<'a> MiningConfigure<'a> {
 }
 
 /// Response represents a Stratum response message from the server to the client
-/// Supported resposes are set_difficulty (in response to subscribe), ok and error.
+/// Supported responses are set_difficulty (in response to subscribe), ok and error.
 impl Response<'_> {
     pub fn new_set_difficulty_response(
         id: Option<Id>,
@@ -373,16 +376,25 @@ impl Response<'_> {
         }
     }
 
-    pub fn new_error(id: Option<Id>, code: i32, message: String) -> Self {
+    pub fn new_error(id: Option<Id>, error_code: StratumErrorCode) -> Self {
         Response {
             id,
             result: None,
             error: Some(Error {
-                code,
-                message: Cow::Owned(message),
+                // SAFETY: [StratumErrorCode] is repr(i32)
+                code: error_code as i32,
+                message: Cow::Owned(error_code.to_string()),
                 data: None,
             }),
         }
+    }
+
+    /// Override the default error message with a custom one.
+    pub fn with_message(mut self, msg: String) -> Self {
+        if let Some(ref mut error) = self.error {
+            error.message = Cow::Owned(msg);
+        }
+        self
     }
 }
 
@@ -560,7 +572,7 @@ mod tests {
 
         let notify_str =
             include_str!("../../../p2poolv2_tests/test_data/validation/stratum/a/notify.json");
-        let notify: Notify = serde_json::from_str(&notify_str).unwrap();
+        let notify: Notify = serde_json::from_str(notify_str).unwrap();
         assert_eq!(notify.method, "mining.notify");
         assert_eq!(
             notify.params.merkle_branches.len(),
@@ -619,7 +631,7 @@ mod tests {
         let serialized_error = serde_json::to_string(&error).unwrap();
         assert_eq!(
             serialized_error,
-            r#"{"code":-1,"message":"An error occurred","data":"Additional error data"}"#
+            r#"[-1,"An error occurred","Additional error data"]"#
         );
     }
 
@@ -697,8 +709,7 @@ mod tests {
         // Test new_error
         let response = Response::new_error(
             Some(Id::String("abc".to_string())),
-            -32601,
-            "Method not found".to_string(),
+            StratumErrorCode::MethodNotFound,
         );
         assert_eq!(response.id, Some(Id::String("abc".to_string())));
         assert!(response.result.is_none());

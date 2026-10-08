@@ -11,11 +11,12 @@ repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
 rust-version.workspace = true
+publish.workspace = true
 
 [dependencies]
 p2poolv2_lib = { workspace = true }
 bitcoin = { workspace = true }
-axum = { version = "0.7", features = ["ws"] }
+axum = { version = "0.8", features = ["ws"] }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -24,21 +25,21 @@ hmac = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 serde = { workspace = true }
-serde_json = "1"
+serde_json = { workspace = true }
 chrono = { workspace = true }
 subtle = "2"
-tower-http = { version = "0.6", features = ["fs"] }
+tower-http = { version = "0.7", features = ["fs", "cors"] }
 
 [dev-dependencies]
 p2poolv2_lib = { workspace = true, features = ["test-utils"] }
 tempfile.workspace = true
-test-log = { version = "0.2", features = ["trace"] }
+test-log = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
-tower = "0.5"
+tower = { workspace = true }
 http = "1"
 http-body-util = "0.1"
 bytes = "1"
-reqwest = "0.12"
+reqwest = { workspace = true, features = ["json"] }
 
 [lib]
 name = "p2poolv2_api"

@@ -28,6 +28,9 @@ until $CLI getblockcount > /dev/null 2>&1; do
 done
 echo "Bitcoind RPC is ready"
 
+echo "Creating wallet for mining..."
+$CLI createwallet "miner" > /dev/null 2>&1 || $CLI loadwallet "miner" > /dev/null 2>&1 || true
+
 HEIGHT=$($CLI getblockcount)
 echo "Current block height: $HEIGHT"
 
@@ -39,8 +42,9 @@ fi
 BLOCKS_NEEDED=$((TARGET_HEIGHT - HEIGHT))
 echo "Mining $BLOCKS_NEEDED blocks to reach height $TARGET_HEIGHT..."
 
-PYTHONPATH=/usr/local/lib/python3 python3 /usr/local/bin/signet-miner generate \
+PYTHONPATH=/usr/local/lib/python3 python3 /usr/local/bin/signet-miner \
   --cli "$CLI" \
+  generate \
   --grind-cmd "bitcoin-util grind" \
   --address "$ADDR" \
   --max-blocks "$BLOCKS_NEEDED" \

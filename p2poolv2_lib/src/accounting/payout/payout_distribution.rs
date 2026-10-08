@@ -1,18 +1,6 @@
-// Copyright (C) 2024-2026 P2Poolv2 Developers (see AUTHORS)
+// SPDX-FileCopyrightText: 2024-2026 P2Poolv2 Developers (see AUTHORS)
 //
-// This file is part of P2Poolv2
-//
-// P2Poolv2 is free software: you can redistribute it and/or modify it under
-// the terms of the GNU General Public License as published by the Free
-// Software Foundation, either version 3 of the License, or (at your option)
-// any later version.
-//
-// P2Poolv2 is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-//
-// You should have received a copy of the GNU General Public License along with
-// P2Poolv2. If not, see <https://www.gnu.org/licenses/>.
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 use crate::accounting::OutputPair;
 use crate::config::StratumConfig;
@@ -21,7 +9,7 @@ use crate::config::StratumConfig;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
-use bitcoin::{Address, Amount};
+use bitcoin::{Address, Amount, BlockHash};
 use std::collections::HashMap;
 use std::error::Error;
 
@@ -37,10 +25,12 @@ pub trait PayoutDistribution {
     /// Fill distribution according to the the Payout mechanism.  The
     /// donation and fees amount have already been filled by the trait
     /// common implementation of get_outpoint_distribution
+    #[allow(clippy::too_many_arguments)]
     fn fill_distribution_from_shares(
         &mut self,
         distribution: &mut Vec<OutputPair>,
         chain_store_handle: &ChainStoreHandle,
+        anchor: BlockHash,
         total_difficulty: u128,
         total_amount: bitcoin::Amount,
         remaining_total_amount: Amount,
@@ -51,6 +41,10 @@ pub trait PayoutDistribution {
     ///
     /// # Arguments
     /// * `store` - Handle to the chain store for querying PPLNS shares
+    /// * `anchor` - Share the payout window is anchored on. The producer
+    ///   passes the same tip it commits as `prev_share_blockhash`, so the
+    ///   window it pays matches the one the validator reconstructs from
+    ///   that prev, closing the read-tip-vs-payout-tip race.
     /// * `total_difficulty` - Target cumulative difficulty to collect shares for
     /// * `total_amount` - Total bitcoin amount to distribute among contributors
     ///
@@ -59,6 +53,7 @@ pub trait PayoutDistribution {
     fn get_output_distribution(
         &mut self,
         chain_store_handle: &ChainStoreHandle,
+        anchor: BlockHash,
         total_difficulty: u128,
         total_amount: bitcoin::Amount,
         config: &StratumConfig<crate::config::Parsed>,
@@ -81,6 +76,7 @@ pub trait PayoutDistribution {
         self.fill_distribution_from_shares(
             &mut distribution,
             chain_store_handle,
+            anchor,
             total_difficulty,
             total_amount,
             remaining_total_amount,

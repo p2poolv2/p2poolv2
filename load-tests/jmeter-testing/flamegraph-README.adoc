@@ -49,9 +49,43 @@ The script sets these flags to ensure accurate stack traces:
 - `RUSTFLAGS="-C force-frame-pointers=yes"` -- enables frame pointers
   for accurate call graph unwinding
 
+=== Remote load testing
+
+When the P2Poolv2 server is already running on a separate host (for
+example under `perf` or `cargo flamegraph`), use `run_remote_load.sh`
+to drive traffic from another machine. No mock-bitcoind or local build
+is needed.
+
+[,shell]
+----
+cd load-tests/jmeter-testing
+./run_remote_load.sh --host 192.168.1.50
+----
+
+All parameters can be overridden:
+
+[,shell]
+----
+./run_remote_load.sh --host 192.168.1.50 --port 3333 \
+    --threads 5000 --ramp 60 --duration 300 --delay 3000
+----
+
+Options:
+
+- `--host <ip>` -- stratum server IP or hostname (required)
+- `--port <port>` -- stratum port (default: 3333)
+- `--threads <n>` -- number of simulated miners (default: 5000)
+- `--ramp <seconds>` -- ramp-up time (default: 60)
+- `--duration <seconds>` -- test duration (default: 300)
+- `--delay <ms>` -- interval between submit calls per thread (default: 3000)
+
+Results are saved to `results/remote-<host>-<timestamp>.jtl`.
+
 === Adjusting the load
 
-The jmeter test parameters (thread count, ramp-up, duration) are
-defined in `stratum.jmx`. Edit these to change the profiling
-workload. More threads and longer duration produce more samples and a
-more representative flamegraph.
+The jmeter test parameters (thread count, ramp-up, duration) default
+to the values shown above. They can be overridden from the command
+line via `run_remote_load.sh` flags, or by passing `-J` properties
+directly to jmeter. The defaults are defined in `stratum.jmx` using
+`__P()` functions. More threads and longer duration produce more
+samples and a more representative flamegraph.

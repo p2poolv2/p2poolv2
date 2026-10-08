@@ -1,0 +1,49 @@
+# P2Poolv2 systemd template unit -- managed by Ansible
+[Unit]
+Description=P2Poolv2 %i - Bitcoin Mining Pool
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User={{ p2poolv2_user }}
+Group={{ p2poolv2_group }}
+
+StateDirectory=p2poolv2/%i
+LogsDirectory=p2poolv2/%i
+RuntimeDirectory=p2poolv2/%i
+
+StateDirectoryMode=0750
+LogsDirectoryMode=0750
+RuntimeDirectoryMode=0750
+
+WorkingDirectory=%S/p2poolv2/%i
+
+Environment=P2POOL_STATIC_DIR={{ p2poolv2_static_dir }}
+
+ExecStart={{ p2poolv2_bin_dir }}/p2poolv2 --config {{ p2poolv2_config_dir }}/config-%i.toml
+
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=p2poolv2-%i
+LimitNOFILE=65536
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+MemoryDenyWriteExecute=true
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target
