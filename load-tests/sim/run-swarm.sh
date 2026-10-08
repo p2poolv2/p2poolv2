@@ -29,7 +29,9 @@
 #   DIST_SEED      seed for the latency spread        (default 42; reproducible)
 #   DISTINCT_ADDR  1 = each node gets its own payout    (default 1; needs a loaded
 #                  address via RPC getnewaddress             wallet on the bitcoind)
-#   POOL_SIGNATURE must be identical across nodes      (default P2Poolv2-dev)
+#   POOL_SIGNATURE_PREFIX  node i signs as PREFIX$i     (default P2Pool-sim-;
+#                  signatures are not consensus, so they differ per node to show
+#                  it; each must stay within the 16-byte config limit)
 #   DIAL_FANOUT    how many earlier peers each dials   (default 3)
 #   PROFILE        cargo profile: release | debug      (default release)
 #
@@ -84,7 +86,15 @@ ASERT_ANCHOR="${ASERT_ANCHOR:-$(date +%s)}"
 # Total is N*HASHRATE regardless of HASHRATE_DIST (zipf preserves the total).
 NETWORK_HASHRATE="${NETWORK_HASHRATE:-$(awk -v n="$N" -v h="$HASHRATE" 'BEGIN{printf "%.0f", n*h}')}"
 DISTINCT_ADDR="${DISTINCT_ADDR:-1}"
-POOL_SIGNATURE="${POOL_SIGNATURE:-P2Poolv2-dev}"
+POOL_SIGNATURE_PREFIX="${POOL_SIGNATURE_PREFIX:-P2Pool-sim-}"
+# The config rejects a pool signature over 16 bytes; check the longest one
+# (the highest node index) before launching anything.
+MAX_POOL_SIGNATURE_LENGTH=16
+longest_signature="${POOL_SIGNATURE_PREFIX}$((N - 1))"
+if [ "${#longest_signature}" -gt "$MAX_POOL_SIGNATURE_LENGTH" ]; then
+  echo "pool signature '$longest_signature' exceeds $MAX_POOL_SIGNATURE_LENGTH bytes; shorten POOL_SIGNATURE_PREFIX" >&2
+  exit 1
+fi
 
 # Minimal JSON-RPC helper against the shared regtest bitcoind.
 rpc() {
@@ -190,6 +200,9 @@ for i in $(seq 0 $((N - 1))); do
   # harmless here, and per-share coinbases stay distinct because each carries
   # its own weak block hash.
   node_share_addr="${SHARE_ADDRESSES[$((i % ${#SHARE_ADDRESSES[@]}))]}"
+  # Each node tags its own coinbases differently. Validation reads the
+  # signature from each block, so the swarm must still converge.
+  node_pool_signature="${POOL_SIGNATURE_PREFIX}$i"
 
   # Topology: each node dials up to DIAL_FANOUT earlier nodes (chain + chords),
   # which yields a single connected component. Node 0 dials nobody.
@@ -237,7 +250,7 @@ zmqpubhashblock = "$ZMQ"
 network = "regtest"
 version_mask = "1fffffe0"
 difficulty_multiplier = 1.0
-pool_signature = "$POOL_SIGNATURE"
+pool_signature = "$node_pool_signature"
 
 [bitcoinrpc]
 url = "$RPC_URL"
