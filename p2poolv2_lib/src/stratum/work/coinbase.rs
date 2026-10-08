@@ -346,7 +346,7 @@ pub fn extract_commitment_hash_from_coinbase(
 
 /// The values a bitcoin coinbase carries that its share header does not:
 /// what `build_bitcoin_coinbase_transaction` takes besides the payouts, the
-/// height, the pool signature and the commitment.
+/// height and the commitment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CoinbaseFields {
     /// The coinbaseaux flags push, the scriptSig's second item.
@@ -355,6 +355,10 @@ pub(crate) struct CoinbaseFields {
     pub(crate) extranonce: Vec<u8>,
     /// The nanosecond timestamp push, the scriptSig's fourth item.
     pub(crate) nsecs: u64,
+    /// The pool signature push, the scriptSig's fifth item. It only tags the
+    /// coinbase, so it is read from the block rather than taken from config:
+    /// nodes configured with different signatures still agree on validity.
+    pub(crate) pool_signature: Vec<u8>,
     /// The BIP141 witness commitment output, if the coinbase has one.
     pub(crate) witness_commitment: Option<WitnessCommitment>,
 }
@@ -377,8 +381,9 @@ pub(crate) fn parse_bitcoin_coinbase_fields(
             });
         }
     };
-    //* The first push is the height, which the header carries. The next three
-    //* are the aux flags, the extranonce and the nanosecond timestamp.
+    //* The first push is the height, which the header carries. The next four
+    //* are the aux flags, the extranonce, the nanosecond timestamp and the
+    //* pool signature, which is an empty push when none is configured.
     let mut pushes = input
         .script_sig
         .instructions()
@@ -406,6 +411,7 @@ pub(crate) fn parse_bitcoin_coinbase_fields(
             .map_err(|_| WorkError {
                 message: "Bitcoin coinbase nanosecond timestamp is not 8 bytes".to_string(),
             })?;
+    let pool_signature = next_push("pool signature")?;
 
     let witness_commitment = coinbase.output.iter().rev().skip(2).find_map(|output| {
         let script: [u8; WITNESS_COMMITMENT_LENGTH] =
@@ -419,6 +425,7 @@ pub(crate) fn parse_bitcoin_coinbase_fields(
         aux_flags,
         extranonce,
         nsecs: u64::from_le_bytes(nsecs_bytes),
+        pool_signature,
         witness_commitment,
     })
 }
@@ -963,7 +970,7 @@ mod tests {
             200,
             PushBytesBuf::from(&[0x01, 0x02, 0x03]),
             Some(&witness_commitment),
-            b"P2Poolv2",
+            b"OtherPool",
             Some(commitment_hash),
             1_700_000_000_123_456_789,
             Some(&extranonce),
@@ -975,6 +982,7 @@ mod tests {
         assert_eq!(fields.aux_flags.as_bytes(), [0x01, 0x02, 0x03]);
         assert_eq!(fields.extranonce, extranonce);
         assert_eq!(fields.nsecs, 1_700_000_000_123_456_789);
+        assert_eq!(fields.pool_signature, b"OtherPool");
         assert_eq!(fields.witness_commitment, Some(witness_commitment));
         let rebuilt = build_bitcoin_coinbase_transaction(
             Version::TWO,
@@ -982,7 +990,7 @@ mod tests {
             200,
             fields.aux_flags,
             fields.witness_commitment.as_ref(),
-            b"P2Poolv2",
+            &fields.pool_signature,
             Some(commitment_hash),
             fields.nsecs,
             Some(&fields.extranonce),
@@ -1017,6 +1025,51 @@ mod tests {
         let fields = parse_bitcoin_coinbase_fields(&coinbase).unwrap();
 
         assert_eq!(fields.witness_commitment, None);
+    }
+
+    /// A node with no pool signature configured pushes an empty one, which
+    /// is written as OP_0 and must still read back as an empty signature.
+    #[test]
+    fn test_parse_bitcoin_coinbase_fields_reads_empty_pool_signature() {
+        let address = parse_address(
+            "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr",
+            bitcoin::Network::Regtest,
+        )
+        .unwrap();
+        let outputs = [OutputPair {
+            address,
+            amount: Amount::from_str("50 BTC").unwrap(),
+        }];
+        let commitment_hash = create_test_commitment().hash();
+        let coinbase = build_bitcoin_coinbase_transaction(
+            Version::TWO,
+            &outputs,
+            200,
+            PushBytesBuf::from(&[0u8]),
+            None,
+            b"",
+            Some(commitment_hash),
+            1,
+            None,
+        )
+        .unwrap();
+
+        let fields = parse_bitcoin_coinbase_fields(&coinbase).unwrap();
+
+        assert!(fields.pool_signature.is_empty());
+        let rebuilt = build_bitcoin_coinbase_transaction(
+            Version::TWO,
+            &outputs,
+            200,
+            fields.aux_flags,
+            None,
+            &fields.pool_signature,
+            Some(commitment_hash),
+            fields.nsecs,
+            Some(&fields.extranonce),
+        )
+        .unwrap();
+        assert_eq!(rebuilt, coinbase);
     }
 
     #[test]

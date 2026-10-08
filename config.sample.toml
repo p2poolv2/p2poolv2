@@ -72,6 +72,9 @@ difficulty_multiplier = 1.0
 # to mine anonymous blocks. This signature is only used to show others
 # how large your pool is, if you are running private, there is no need
 # to add a pool signature. Maximum length 16 bytes.
+# It only tags the coinbases this node builds. It is not part of consensus:
+# peers read each block's signature from its own coinbase, so nodes with
+# different signatures, or none, still accept each other's shares.
 pool_signature = "P2Poolv2"
 # Maximum concurrent stratum connections (default: 90% of OS file descriptor limit)
 # max_connections = 1000

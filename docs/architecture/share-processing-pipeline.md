@@ -623,9 +623,12 @@ and again in both validation paths, reading only the block itself:
 A failure at the gate is a bad copy of the block, not a bad block: it is never
 stored, so the hash stays fetchable. After the gate the body is the one the
 proof of work fixes, and a later failure is the miner's. `validate_bitcoin_payout`
-reads the aux flags, extranonce, nanosecond timestamp and witness commitment
-back out of the bitcoin coinbase (`parse_bitcoin_coinbase_fields`), rebuilds
-the coinbase from the PPLNS window, and requires the two to be equal.
+reads the aux flags, extranonce, nanosecond timestamp, pool signature and
+witness commitment back out of the bitcoin coinbase
+(`parse_bitcoin_coinbase_fields`), rebuilds the coinbase from the PPLNS window,
+and requires the two to be equal. The pool signature is read rather than taken
+from this node's config because it is only a tag: nodes configured with
+different signatures must agree on every block.
 
 The coinbase merkle branch travels separately from the header, because shares
 mined on one template share a branch:

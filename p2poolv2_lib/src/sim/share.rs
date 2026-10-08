@@ -253,12 +253,13 @@ mod tests {
             share_block.header.bitcoin_height as i64,
             fields.aux_flags,
             fields.witness_commitment.as_ref(),
-            POOL_SIGNATURE,
+            &fields.pool_signature,
             Some(commitment_hash),
             fields.nsecs,
             Some(&fields.extranonce),
         )
         .expect("reconstruct coinbase");
+        assert_eq!(fields.pool_signature, POOL_SIGNATURE);
         assert_eq!(reconstructed, share_block.bitcoin_coinbase);
 
         let recomputed_root = compute_merkle_root_from_branches(
