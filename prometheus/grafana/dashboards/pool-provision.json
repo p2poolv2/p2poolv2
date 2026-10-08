@@ -452,9 +452,33 @@
                   {
                     "targetBlank": true,
                     "title": "Open in block explorer",
-                    "url": "${explorer}/block/${__value.raw}"
+                    "url": "${__data.fields.explorer}/block/${__value.raw}"
                   }
                 ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "explorer"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "network"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
               }
             ]
           }
@@ -486,7 +510,7 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "max by (blockhash, height, miner) (bitcoin_block_found_time_seconds) * 1000",
+          "expr": "label_replace(label_replace(max by (blockhash, height, miner, network) (bitcoin_block_found_time_seconds) * 1000, \"explorer\", \"https://mempool.space\", \"network\", \"main\"), \"explorer\", \"https://mempool.space/$1\", \"network\", \"(testnet4|signet)\")",
           "format": "table",
           "instant": true,
           "range": false,
@@ -542,38 +566,6 @@
         "regex": "",
         "skipUrlSync": false,
         "type": "datasource"
-      },
-      {
-        "current": {
-          "text": "https://mempool.space",
-          "value": "https://mempool.space"
-        },
-        "description": "Block explorer used for found block links. Pick the one matching this pool's bitcoin network.",
-        "hide": 0,
-        "includeAll": false,
-        "label": "Block explorer",
-        "multi": false,
-        "name": "explorer",
-        "options": [
-          {
-            "selected": true,
-            "text": "https://mempool.space",
-            "value": "https://mempool.space"
-          },
-          {
-            "selected": false,
-            "text": "https://mempool.space/testnet4",
-            "value": "https://mempool.space/testnet4"
-          },
-          {
-            "selected": false,
-            "text": "https://mempool.space/signet",
-            "value": "https://mempool.space/signet"
-          }
-        ],
-        "query": "https://mempool.space,https://mempool.space/testnet4,https://mempool.space/signet",
-        "skipUrlSync": false,
-        "type": "custom"
       }
     ]
   },

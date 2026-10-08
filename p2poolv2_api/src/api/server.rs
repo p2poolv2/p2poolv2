@@ -264,7 +264,10 @@ async fn metrics(State(state): State<Arc<AppState>>) -> String {
     // from the share chain and timestamped with bitcoin header times, so it is
     // correct during sync and the same on every node.
     match state.chain_store_handle.get_found_blocks() {
-        Ok(found_blocks) => exposition.push_str(&found_blocks_exposition(&found_blocks)),
+        Ok(found_blocks) => exposition.push_str(&found_blocks_exposition(
+            &found_blocks,
+            state.app_config.network,
+        )),
         Err(error) => warn!("Failed to read found blocks for /metrics: {error}"),
     }
 
@@ -280,10 +283,12 @@ async fn metrics(State(state): State<Arc<AppState>>) -> String {
 /// Exposition for the bitcoin blocks found by the pool.
 ///
 /// Emits a counter of all found blocks and one gauge line per block, set to
-/// its bitcoin header time and labeled with blockhash, height and miner so
-/// Grafana can list the blocks and link to a block explorer. Entries are
-/// never deleted from the store, so the counter is monotonic.
-fn found_blocks_exposition(found_blocks: &[FoundBlock]) -> String {
+/// its bitcoin header time and labeled with blockhash, height, miner and the
+/// bitcoin network so Grafana can list the blocks and link each to the block
+/// explorer for that network. The network label uses bitcoin core's names
+/// (main, testnet4, signet, regtest). Entries are never deleted from the
+/// store, so the counter is monotonic.
+fn found_blocks_exposition(found_blocks: &[FoundBlock], network: bitcoin::Network) -> String {
     let mut output = String::with_capacity(256 + found_blocks.len() * 256);
     output.push_str(
         "# HELP bitcoin_blocks_found_total Total number of bitcoin blocks found by the pool\n",
@@ -294,15 +299,17 @@ fn found_blocks_exposition(found_blocks: &[FoundBlock]) -> String {
         found_blocks.len()
     ));
     output.push_str(
-        "# HELP bitcoin_block_found_time_seconds Bitcoin header time of a block found by the pool, labeled with blockhash, height and miner\n",
+        "# HELP bitcoin_block_found_time_seconds Bitcoin header time of a block found by the pool, labeled with blockhash, height, miner and network\n",
     );
     output.push_str("# TYPE bitcoin_block_found_time_seconds gauge\n");
+    let network_name = network.to_core_arg();
     for found_block in found_blocks {
         output.push_str(&format!(
-            "bitcoin_block_found_time_seconds{{blockhash=\"{}\",height=\"{}\",miner=\"{}\"}} {}\n",
+            "bitcoin_block_found_time_seconds{{blockhash=\"{}\",height=\"{}\",miner=\"{}\",network=\"{}\"}} {}\n",
             found_block.bitcoin_blockhash,
             found_block.bitcoin_height,
             found_block.miner_bitcoin_address,
+            network_name,
             found_block.bitcoin_time
         ));
     }
@@ -532,7 +539,7 @@ mod tests {
             miner_bitcoin_address: "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh".to_string(),
         }];
 
-        let exposition = found_blocks_exposition(&found_blocks);
+        let exposition = found_blocks_exposition(&found_blocks, Network::Bitcoin);
 
         assert!(
             exposition.contains(
@@ -541,13 +548,13 @@ mod tests {
         );
         assert!(exposition.contains("# TYPE bitcoin_block_found_time_seconds gauge\n"));
         assert!(exposition.contains(
-            "bitcoin_block_found_time_seconds{blockhash=\"0000000000000000000320283a032748cef8227873ff4872689bf23f1cda83a5\",height=\"840000\",miner=\"bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh\"} 1713571767\n"
+            "bitcoin_block_found_time_seconds{blockhash=\"0000000000000000000320283a032748cef8227873ff4872689bf23f1cda83a5\",height=\"840000\",miner=\"bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh\",network=\"main\"} 1713571767\n"
         ));
     }
 
     #[test]
     fn test_found_blocks_exposition_with_no_blocks() {
-        let exposition = found_blocks_exposition(&[]);
+        let exposition = found_blocks_exposition(&[], Network::Testnet4);
 
         assert!(exposition.contains("bitcoin_blocks_found_total 0\n"));
         assert!(!exposition.contains("bitcoin_block_found_time_seconds{"));
@@ -587,7 +594,7 @@ mod tests {
 
         assert!(exposition.contains("bitcoin_blocks_found_total 1\n"));
         assert!(exposition.contains(&format!(
-            "bitcoin_block_found_time_seconds{{blockhash=\"{}\",height=\"{}\",miner=\"{}\"}} {}\n",
+            "bitcoin_block_found_time_seconds{{blockhash=\"{}\",height=\"{}\",miner=\"{}\",network=\"signet\"}} {}\n",
             share.header.bitcoin_header.block_hash(),
             share.header.bitcoin_height,
             share.header.miner_bitcoin_address,
