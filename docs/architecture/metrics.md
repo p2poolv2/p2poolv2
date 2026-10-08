@@ -98,7 +98,7 @@ contributed work.
 | Metric | Type | Source |
 |---|---|---|
 | `bitcoin_blocks_found_total` | counter | live read of `FoundBlocks` CF |
-| `bitcoin_block_found_time_seconds{blockhash,height,miner}` | gauge | live read of `FoundBlocks` CF |
+| `bitcoin_block_found_time_seconds{blockhash,height,miner,network}` | gauge | live read of `FoundBlocks` CF |
 
 Derived from the share chain and persisted in the store
 (`store/found_block.rs`, see `store-schema.md`). When `confirm_blocks`
@@ -129,10 +129,16 @@ find; it records nothing.
 - *Blocks found*: Stat of `bitcoin_blocks_found_total` (instant).
 - *Found blocks table*: a Table panel over
   `bitcoin_block_found_time_seconds * 1000` (Instant query, Format =
-  Table, value unit `dateTimeAsIso`). A data link on the `blockhash`
-  field points at `${explorer}/block/${__data.fields.blockhash}`, where
-  `explorer` is a dashboard variable choosing mempool.space for mainnet,
-  testnet4 or signet.
+  Table, value unit `dateTimeAsIso`). The `network` label (bitcoin core
+  names: main, testnet4, signet, regtest) is mapped to an `explorer`
+  label in the query with `label_replace`: `https://mempool.space` for
+  main and `https://mempool.space/<network>` for testnet4 and signet. A
+  data link on the `blockhash` field points at
+  `${__data.fields.explorer}/block/${__value.raw}`; the `explorer` and
+  `network` columns are hidden with a field override (not removed by the
+  organize transform, which would make them unavailable to the link).
+  Regtest and private signets have no public explorer, so their links
+  do not resolve.
 
 ### Pool-wide sharechain hashrate (Release 2) -- pool item #2
 
