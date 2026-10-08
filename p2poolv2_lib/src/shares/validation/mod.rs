@@ -163,7 +163,9 @@ pub const MAX_UNCLES: usize = 3;
 pub const MAX_FUTURE_TIME_SECS: u64 = 120;
 /// Number of ancestor share headers used to compute median time past.
 pub const MTP_WINDOW: usize = 11;
-/// Maximum block size not counting bitcoin blocks limited to 200kB
+/// Maximum size of a share block's body, limited to 200kB: its share
+/// transactions plus the bitcoin coinbase it carries. The header and the
+/// coinbase merkle branch are bounded by their decoders.
 pub const BLOCK_TXS_SIZE_LIMIT: u32 = 200 * 1024;
 /// Maximum number of transactions allowed in a share block
 pub const TXS_COUNT_LIMIT: u32 = 100;
@@ -382,12 +384,15 @@ pub trait ShareValidator {
     /// block: the copy is dropped and the hash stays fetchable.
     fn validate_body_matches_header(&self, share: &ShareBlock) -> Result<(), ValidationError>;
 
-    /// Validate that the total size of the share's transactions is within
-    /// `BLOCK_TXS_SIZE_LIMIT`.
+    /// Validate that the total size of the share's transactions and its
+    /// bitcoin coinbase is within `BLOCK_TXS_SIZE_LIMIT`.
+    ///
+    /// The bitcoin coinbase counts because it is carried and buffered with
+    /// the block, and a miner can make it as large as a message allows.
     ///
     /// Part of the ddos prevention gate alongside `validate_header_minimum_difficulty`:
-    /// it reads only the block's own transactions, so it can run before the
-    /// block is buffered or stored. Without it the only size bound on an
+    /// it reads only the block itself, so it can run before the block is
+    /// buffered or stored. Without it the only size bound on an
     /// incoming block is the transport's `MAX_P2P_MESSAGE_SIZE`, letting one
     /// minimum-difficulty share pin far more memory than it costs to produce.
     fn validate_block_size(&self, share: &ShareBlock) -> Result<(), ValidationError>;
@@ -1117,10 +1122,11 @@ impl ShareValidator for DefaultShareValidator {
     }
 
     fn validate_block_size(&self, share: &ShareBlock) -> Result<(), ValidationError> {
-        let total_size: usize = share.transactions.iter().map(|tx| tx.total_size()).sum();
+        let transactions_size: usize = share.transactions.iter().map(|tx| tx.total_size()).sum();
+        let total_size = transactions_size + share.bitcoin_coinbase.total_size();
         if total_size > BLOCK_TXS_SIZE_LIMIT as usize {
             return Err(ValidationError::consensus(format!(
-                "Block transactions size {total_size} exceeds limit of {BLOCK_TXS_SIZE_LIMIT}"
+                "Block transactions and bitcoin coinbase size {total_size} exceeds limit of {BLOCK_TXS_SIZE_LIMIT}"
             )));
         }
         Ok(())
@@ -2438,13 +2444,37 @@ mod tests {
         assert!(error.to_string().contains("exceeds limit of"));
     }
 
+    /// The bitcoin coinbase travels and is buffered with the block, so it
+    /// counts toward the size limit. A miner can make it as large as a
+    /// message allows; uncounted, a block of small share transactions could
+    /// still pin close to `MAX_P2P_MESSAGE_SIZE` in every buffered slot.
+    #[test]
+    fn test_validate_block_size_fails_when_bitcoin_coinbase_exceeds_limit() {
+        let mut share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+        share.bitcoin_coinbase.output[0].script_pubkey =
+            ScriptBuf::from_bytes(vec![0u8; BLOCK_TXS_SIZE_LIMIT as usize]);
+
+        let error = validator().validate_block_size(&share).unwrap_err();
+        assert!(
+            error.to_string().contains("exceeds limit of"),
+            "unexpected error: {error}"
+        );
+    }
+
     #[test]
     fn test_validate_block_size_succeeds_at_exactly_limit() {
         let share = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
-        let coinbase_size: usize = share.transactions.iter().map(|tx| tx.total_size()).sum();
-        let remaining = BLOCK_TXS_SIZE_LIMIT as usize - coinbase_size;
+        let base_size: usize = share
+            .transactions
+            .iter()
+            .map(|tx| tx.total_size())
+            .sum::<usize>()
+            + share.bitcoin_coinbase.total_size();
+        let remaining = BLOCK_TXS_SIZE_LIMIT as usize - base_size;
 
         // Use a two-pass approach: build a candidate transaction, measure its
         // total size, then adjust the script size to hit the exact target.
@@ -2458,7 +2488,12 @@ mod tests {
             .add_transaction(fill_tx)
             .build();
 
-        let total_size: usize = share.transactions.iter().map(|tx| tx.total_size()).sum();
+        let total_size: usize = share
+            .transactions
+            .iter()
+            .map(|tx| tx.total_size())
+            .sum::<usize>()
+            + share.bitcoin_coinbase.total_size();
         assert_eq!(total_size, BLOCK_TXS_SIZE_LIMIT as usize);
 
         let result = validator().validate_block_size(&share);
