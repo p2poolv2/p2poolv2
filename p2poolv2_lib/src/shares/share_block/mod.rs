@@ -925,7 +925,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "share_sync fixtures were built before share headers dropped merkle_root, coinbase_value and the coinbase fields, and the commitment bound the share witness root; regenerate them"]
     fn test_fixture_coinbase_reconstruction_matches_bitcoin_merkle_root() {
         let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../p2poolv2_tests/test_data/share_sync/share_blocks.json");
