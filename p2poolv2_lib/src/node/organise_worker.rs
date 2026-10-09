@@ -929,7 +929,7 @@ impl OrganiseWorker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::accounting::payout::sharechain_pplns::pplns_window::MAX_PPLNS_WINDOW_SHARES;
+    use crate::accounting::payout::sharechain_pplns::pplns_window::PPLNS_WINDOW_SHARES;
     use crate::monitoring_events::create_monitoring_event_channel;
     use crate::node::validation_worker::create_validation_channel;
     use crate::shares::chain::chain_store_handle::MockChainStoreHandle;
@@ -1240,7 +1240,7 @@ mod tests {
             });
         // Candidate tip more than one PPLNS window above height 5, so
         // is_in_pplns_zone(5, tip) is false (prune window).
-        let candidate_tip = MAX_PPLNS_WINDOW_SHARES as u32 + 100;
+        let candidate_tip = PPLNS_WINDOW_SHARES as u32 + 100;
         mock_chain_handle
             .expect_get_candidate_tip_height()
             .returning(move || Ok(Some(candidate_tip)));

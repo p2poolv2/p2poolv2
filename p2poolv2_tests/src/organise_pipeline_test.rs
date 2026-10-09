@@ -91,14 +91,11 @@ async fn receive_and_organise(chain_store_handle: &ChainStoreHandle, block: &Sha
 /// exercised, which does not consult pool difficulty, so the anchor is
 /// arbitrary.
 fn ingest_validator() -> DefaultShareValidator {
-    DefaultShareValidator::new(
-        PoolDifficulty::new(
-            bitcoin::CompactTarget::from_consensus(0x1d00ffff),
-            FIRST_BLOCK_TIME,
-            0,
-        ),
-        1,
-    )
+    DefaultShareValidator::new(PoolDifficulty::new(
+        bitcoin::CompactTarget::from_consensus(0x1d00ffff),
+        FIRST_BLOCK_TIME,
+        0,
+    ))
 }
 
 /// Receive a block and run the real ingest-time prevout validation over it,

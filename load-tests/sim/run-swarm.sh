@@ -249,7 +249,6 @@ bootstrap_address = "$MINER_ADDRESS"
 zmqpubhashblock = "$ZMQ"
 network = "regtest"
 version_mask = "1fffffe0"
-difficulty_multiplier = 1.0
 pool_signature = "$node_pool_signature"
 
 [bitcoinrpc]

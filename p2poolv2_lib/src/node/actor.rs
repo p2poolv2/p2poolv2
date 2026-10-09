@@ -361,7 +361,6 @@ impl NodeActor {
         let block_fetcher_tx_for_receiver = block_fetcher_tx.clone();
         let block_fetcher_tx_for_response = block_fetcher_tx.clone();
         let block_receiver_tx_for_response = block_receiver_tx.clone();
-        let difficulty_multiplier = config.stratum.difficulty_multiplier as u128;
 
         let pool_difficulty = PoolDifficulty::build(&chain_store_handle)
             .map_err(|error| -> Box<dyn Error> { Box::new(error) })?;
@@ -370,9 +369,8 @@ impl NodeActor {
         // mockall_double swaps in the non-Copy MockPoolDifficulty under cfg(test)
         // and pool_difficulty is used again below.
         #[allow(clippy::clone_on_copy)]
-        let share_validator: Arc<dyn ShareValidator + Send + Sync> = Arc::new(
-            DefaultShareValidator::new(pool_difficulty.clone(), difficulty_multiplier),
-        );
+        let share_validator: Arc<dyn ShareValidator + Send + Sync> =
+            Arc::new(DefaultShareValidator::new(pool_difficulty.clone()));
 
         let node = Node::new(
             config,
@@ -415,7 +413,6 @@ impl NodeActor {
             chain_store_handle.clone(),
             organise_tx.clone(),
             node.swarm_tx.clone(),
-            difficulty_multiplier,
             pool_difficulty,
         );
         let validation_worker_id = workers

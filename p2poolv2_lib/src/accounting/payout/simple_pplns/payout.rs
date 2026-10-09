@@ -16,6 +16,13 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Hydrapool's window target, in bitcoin blocks' worth of difficulty: the
+/// walk back through stored shares stops once their difficulty reaches one
+/// bitcoin block's. A fixed constant rather than config, so the window is the
+/// same on every Hydrapool node. The share chain mode does not use it: its
+/// window is the last `PPLNS_WINDOW_SHARES` shares.
+const HYDRAPOOL_DIFFICULTY_MULTIPLIER: u128 = 1;
+
 pub struct Payout {
     /// Step size in seconds for batch querying shares from storage.
     /// This determines how far back in time to query in each batch.
@@ -31,7 +38,7 @@ impl PayoutDistribution for Payout {
         // Time-window PPLNS is not anchored on a share; it queries by
         // timestamp, so the share-chain anchor does not apply here.
         _anchor: BlockHash,
-        total_difficulty: u128,
+        bitcoin_difficulty: u128,
         total_amount: bitcoin::Amount,
         remaining_total_amount: Amount,
         bootstrap_address: Address,
@@ -40,6 +47,8 @@ impl PayoutDistribution for Payout {
         // This avoids parsing miner addresses when 100% goes to donation/fee
         // This also avoids running PPLNS share look ups when we don't need to use that data
         if remaining_total_amount > bitcoin::Amount::ZERO {
+            let total_difficulty =
+                bitcoin_difficulty.saturating_mul(HYDRAPOOL_DIFFICULTY_MULTIPLIER);
             let address_difficulty_map =
                 self.accumulate_difficulty_by_address(chain_store_handle, total_difficulty)?;
 

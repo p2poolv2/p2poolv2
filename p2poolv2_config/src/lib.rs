@@ -122,8 +122,6 @@ pub struct StratumConfig<State = Raw> {
     /// The version mask to use for version-rolling
     #[serde(deserialize_with = "deserialize_version_mask")]
     pub version_mask: i32,
-    /// The difficulty multiplier for dynamic difficulty adjustment
-    pub difficulty_multiplier: f64,
     /// Test config to ignore difficulty
     pub ignore_difficulty: Option<bool>,
     /// Optional pool signature to include in coinbase
@@ -159,23 +157,6 @@ impl StratumConfig<Raw> {
         if self.pool_signature.clone().unwrap_or("".to_string()).len() > MAX_POOL_SIGNATURE_LENGTH {
             return Err(ConfigError {
                 message: format!("Pool signature length is limited to {MAX_POOL_SIGNATURE_LENGTH}"),
-            });
-        }
-
-        // Every consumer reads difficulty_multiplier through an `as u128` cast,
-        // so anything below 1.0 truncates to zero -- which makes the PPLNS
-        // payout unbuildable and takes the node down at the first block
-        // template -- and a fractional value silently rounds down, changing the
-        // payout window for the whole pool. Reject both here instead.
-        if !self.difficulty_multiplier.is_finite()
-            || self.difficulty_multiplier < 1.0
-            || self.difficulty_multiplier.fract() != 0.0
-        {
-            return Err(ConfigError {
-                message: format!(
-                    "difficulty_multiplier must be a whole number of at least 1, got {}",
-                    self.difficulty_multiplier
-                ),
             });
         }
 
@@ -249,7 +230,6 @@ impl StratumConfig<Raw> {
             miner_address: self.miner_address,
             network: self.network,
             version_mask: self.version_mask,
-            difficulty_multiplier: self.difficulty_multiplier,
             ignore_difficulty: self.ignore_difficulty,
             pool_signature: self.pool_signature,
             max_connections: self.max_connections,
@@ -312,7 +292,6 @@ impl StratumConfig<Raw> {
             miner_address: None,
             network: bitcoin::Network::Signet,
             version_mask: DEFAULT_VERSION_MASK,
-            difficulty_multiplier: 1.0,
             ignore_difficulty: None,
             pool_signature: None,
             max_connections: None,
@@ -663,11 +642,6 @@ impl Config {
         self
     }
 
-    pub fn with_difficulty_multiplier(mut self, difficulty_multiplier: f64) -> Self {
-        self.stratum.difficulty_multiplier = difficulty_multiplier;
-        self
-    }
-
     pub fn with_ignore_difficulty(mut self, ignore_difficulty: Option<bool>) -> Self {
         self.stratum.ignore_difficulty = ignore_difficulty;
         self
@@ -758,7 +732,6 @@ mod tests {
             .with_start_difficulty(1)
             .with_minimum_difficulty(1)
             .with_maximum_difficulty(Some(100))
-            .with_difficulty_multiplier(2.0)
             .with_ignore_difficulty(Some(true))
             .with_bitcoinrpc_url("http://localhost:8332".to_string())
             .with_bitcoinrpc_username("testuser".to_string())
@@ -782,7 +755,6 @@ mod tests {
         assert_eq!(config.stratum.start_difficulty, 1);
         assert_eq!(config.stratum.minimum_difficulty, 1);
         assert_eq!(config.stratum.maximum_difficulty, Some(100));
-        assert_eq!(config.stratum.difficulty_multiplier, 2.0);
         assert!(config.stratum.ignore_difficulty.unwrap());
         assert_eq!(
             config.stratum.solo_address,
@@ -1073,38 +1045,6 @@ mod tests {
         let mut config_with_sig = StratumConfig::<Raw>::new_for_test_default();
         config_with_sig.pool_signature = Some("MyPool/1.0 and some more bytes....".to_string());
         assert_err!(config_with_sig.parse());
-    }
-
-    /// difficulty_multiplier is cast with `as u128` by every consumer, so a
-    /// value below 1.0 becomes zero and a fractional one silently rounds down.
-    /// Both are rejected at parse rather than surfacing as a dead pool.
-    #[test]
-    fn test_parse_fails_on_unusable_difficulty_multiplier() {
-        for multiplier in [0.0, 0.5, 1.5, -1.0, f64::NAN, f64::INFINITY] {
-            let mut config = StratumConfig::<Raw>::new_for_test_default();
-            config.difficulty_multiplier = multiplier;
-            let result = config.parse();
-            assert_err!(&result);
-            assert!(
-                result
-                    .unwrap_err()
-                    .message
-                    .contains("difficulty_multiplier must be a whole number"),
-                "expected rejection for multiplier {multiplier}"
-            );
-        }
-    }
-
-    #[test]
-    fn test_parse_accepts_whole_difficulty_multiplier() {
-        for multiplier in [1.0, 2.0, 1000.0] {
-            let mut config = StratumConfig::<Raw>::new_for_test_default();
-            config.difficulty_multiplier = multiplier;
-            assert!(
-                config.parse().is_ok(),
-                "expected multiplier {multiplier} to be accepted"
-            );
-        }
     }
 
     #[test]

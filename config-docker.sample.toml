@@ -62,9 +62,9 @@ zmqpubhashblock = "tcp://bitcoind:28332"
 network = "signet"
 # Use BIP 323 mask for version rolling (see https://github.com/bitcoin/bips/blob/622e47722cd35514e96da37ae89f868e18d581e4/bip-0323.mediawiki#specification)
 version_mask = "1fffffe0"
-# The difficulty multiplier defines the window size for calculating payout proportions
-# See https://github.com/p2poolv2/p2poolv2/wiki/Difficult-Multiplier on how to choose this
-difficulty_multiplier = 1.0
+# The PPLNS payout window is fixed for the network, not configured: each
+# coinbase pays the last 120,960 shares (about two weeks at the 10 second
+# share target), weighted by share difficulty.
 # Add a pool signature, if you want. Comment out the line if you want
 # to mine anonymous blocks. This signature is only used to show others
 # how large your pool is, if you are running private, there is no need

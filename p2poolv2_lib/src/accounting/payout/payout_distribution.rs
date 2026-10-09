@@ -31,7 +31,7 @@ pub trait PayoutDistribution {
         distribution: &mut Vec<OutputPair>,
         chain_store_handle: &ChainStoreHandle,
         anchor: BlockHash,
-        total_difficulty: u128,
+        bitcoin_difficulty: u128,
         total_amount: bitcoin::Amount,
         remaining_total_amount: Amount,
         bootstrap_address: Address,
@@ -45,7 +45,10 @@ pub trait PayoutDistribution {
     ///   passes the same tip it commits as `prev_share_blockhash`, so the
     ///   window it pays matches the one the validator reconstructs from
     ///   that prev, closing the read-tip-vs-payout-tip race.
-    /// * `total_difficulty` - Target cumulative difficulty to collect shares for
+    /// * `bitcoin_difficulty` - Difficulty of the bitcoin block being paid for.
+    ///   Only Hydrapool's time-window PPLNS uses it, as its window target; the
+    ///   share chain window is the last `PPLNS_WINDOW_SHARES` shares and
+    ///   ignores it.
     /// * `total_amount` - Total bitcoin amount to distribute among contributors
     ///
     /// # Returns
@@ -54,7 +57,7 @@ pub trait PayoutDistribution {
         &mut self,
         chain_store_handle: &ChainStoreHandle,
         anchor: BlockHash,
-        total_difficulty: u128,
+        bitcoin_difficulty: u128,
         total_amount: bitcoin::Amount,
         config: &StratumConfig<crate::config::Parsed>,
     ) -> Result<Vec<OutputPair>, Box<dyn Error + Send + Sync>> {
@@ -77,7 +80,7 @@ pub trait PayoutDistribution {
             &mut distribution,
             chain_store_handle,
             anchor,
-            total_difficulty,
+            bitcoin_difficulty,
             total_amount,
             remaining_total_amount,
             config.bootstrap_address().clone(),

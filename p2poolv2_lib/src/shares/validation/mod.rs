@@ -14,9 +14,7 @@ use crate::accounting::payout::payout_distribution::{
 use crate::accounting::payout::sharechain_pplns::PplnsWindow;
 #[cfg(not(test))]
 use crate::accounting::payout::sharechain_pplns::PplnsWindow;
-use crate::accounting::payout::sharechain_pplns::pplns_window::{
-    MAX_PPLNS_WINDOW_SHARES, WindowError,
-};
+use crate::accounting::payout::sharechain_pplns::pplns_window::{PPLNS_WINDOW_SHARES, WindowError};
 #[cfg(test)]
 #[mockall_double::double]
 use crate::pool_difficulty::PoolDifficulty;
@@ -202,7 +200,7 @@ fn bitcoin_coinbase_value(coinbase: &Transaction) -> Result<u64, ValidationError
 /// PPLNS zone: block_height > tip_height - PPLNS_DEPTH
 /// Prune zone: everything else below that height
 pub fn is_in_pplns_zone(block_height: u32, tip_height: u32) -> bool {
-    block_height > tip_height.saturating_sub(MAX_PPLNS_WINDOW_SHARES as u32)
+    block_height > tip_height.saturating_sub(PPLNS_WINDOW_SHARES as u32)
 }
 
 /// Look up a block's height and the candidate tip height from the store,
@@ -410,37 +408,28 @@ pub trait ShareValidator {
 /// avoiding repeated builds on each validation call.
 pub struct DefaultShareValidator {
     pool_difficulty: PoolDifficulty,
-    /// Multiplier applied to bitcoin difficulty when walking the PPLNS window.
-    difficulty_multiplier: u128,
     /// Time provider used to enforce the future-time bound on share timestamps.
     time_provider: Arc<dyn TimeProvider + Send + Sync>,
 }
 
 impl DefaultShareValidator {
-    /// Create a new DefaultShareValidator with the given pool difficulty and
-    /// difficulty multiplier for PPLNS window walks. Uses `SystemTimeProvider`
-    /// for timestamp validation.
+    /// Create a new DefaultShareValidator with the given pool difficulty. Uses
+    /// `SystemTimeProvider` for timestamp validation.
     ///
-    /// There is no pool signature: payout validation reads it from each
-    /// block's own coinbase, so this node's configured signature has no say in
-    /// whether another pool's block is valid.
-    pub fn new(pool_difficulty: PoolDifficulty, difficulty_multiplier: u128) -> Self {
-        Self::with_time_provider(
-            pool_difficulty,
-            difficulty_multiplier,
-            Arc::new(SystemTimeProvider),
-        )
+    /// No node-local value decides payout validity: the pool signature is
+    /// read from each block's own coinbase, and the PPLNS window is the fixed
+    /// last `PPLNS_WINDOW_SHARES` shares.
+    pub fn new(pool_difficulty: PoolDifficulty) -> Self {
+        Self::with_time_provider(pool_difficulty, Arc::new(SystemTimeProvider))
     }
 
     /// Create a new DefaultShareValidator with an explicit time provider.
     pub fn with_time_provider(
         pool_difficulty: PoolDifficulty,
-        difficulty_multiplier: u128,
         time_provider: Arc<dyn TimeProvider + Send + Sync>,
     ) -> Self {
         Self {
             pool_difficulty,
-            difficulty_multiplier,
             time_provider,
         }
     }
@@ -457,8 +446,8 @@ impl DefaultShareValidator {
     /// bodies are never fetched. The two boundaries are a full window apart and
     /// the gap covers the exemption with room to spare: an uncle sits at most
     /// `MAX_UNCLES_DEPTH` below its nephew, so a nephew whose uncle is below
-    /// `prune_height` (`tip - 2 * MAX_PPLNS_WINDOW_SHARES`) is itself far below
-    /// the zone boundary (`tip - MAX_PPLNS_WINDOW_SHARES`) and never reaches
+    /// `prune_height` (`tip - 2 * PPLNS_WINDOW_SHARES`) is itself far below
+    /// the zone boundary (`tip - PPLNS_WINDOW_SHARES`) and never reaches
     /// this check. Ungated, such a block is admitted, stored, and then fails
     /// validation forever on a body nothing will ever fetch.
     fn validate_uncle_bodies_present(
@@ -879,8 +868,8 @@ impl DefaultShareValidator {
 
     /// Validate the bitcoin coinbase against the PPLNS window distribution.
     ///
-    /// Computes the expected distribution from the PPLNS window using
-    /// bitcoin header difficulty * difficulty_multiplier, reconstructs
+    /// Computes the expected distribution from the PPLNS window -- the last
+    /// `PPLNS_WINDOW_SHARES` shares below the share's parent -- reconstructs
     /// the expected coinbase transaction, and verifies that the merkle
     /// root computed from the reconstructed coinbase and the template
     /// merkle branches matches the bitcoin header's merkle root.
@@ -899,20 +888,8 @@ impl DefaultShareValidator {
             .write()
             .expect("PPLNS window lock poisoned on write");
 
-        let bitcoin_difficulty = share.header.bitcoin_header.difficulty(window.network());
-        let share_pool_difficulty = share.header.get_difficulty(window.network());
-        let total_difficulty = sim_overrides::pplns_total_difficulty(
-            bitcoin_difficulty,
-            self.difficulty_multiplier,
-            share_pool_difficulty,
-        );
-
         let address_difficulty_map = window
-            .get_distribution_from_start_hash(
-                total_difficulty,
-                share.header.prev_share_blockhash,
-                chain_store_handle,
-            )
+            .get_distribution_from_start_hash(share.header.prev_share_blockhash, chain_store_handle)
             .map_err(|error| match error {
                 // The anchor is below the confirmed entries this node's window
                 // retains, and the window's oldest entry only moves forward
@@ -1405,7 +1382,7 @@ impl ShareValidator for DefaultShareValidator {
                 ))
             })?
             + 1;
-        let min_coinbase_root_height = block_height.saturating_sub(MAX_PPLNS_WINDOW_SHARES as u32);
+        let min_coinbase_root_height = block_height.saturating_sub(PPLNS_WINDOW_SHARES as u32);
         match chain_store_handle
             .check_prevouts(
                 &all_outpoints,
@@ -1528,11 +1505,11 @@ mod tests {
     use std::time::SystemTime;
 
     fn validator() -> DefaultShareValidator {
-        DefaultShareValidator::new(PoolDifficulty::default(), 1)
+        DefaultShareValidator::new(PoolDifficulty::default())
     }
 
     fn validator_with(pool_difficulty: PoolDifficulty) -> DefaultShareValidator {
-        DefaultShareValidator::new(pool_difficulty, 1)
+        DefaultShareValidator::new(pool_difficulty)
     }
 
     fn metadata_at_height(height: u32) -> BlockMetadata {
@@ -2142,7 +2119,7 @@ mod tests {
             .with(eq(bitcoin::BlockHash::all_zeros()))
             .returning(|_| Some(genesis_for_tests()));
 
-        let validator = DefaultShareValidator::new(PoolDifficulty::default(), 1);
+        let validator = DefaultShareValidator::new(PoolDifficulty::default());
         let result = validator.validate_share_block(&share_block, &chain_store_handle);
 
         assert!(result.is_ok(), "Expected Ok, got: {:?}", result.err());
@@ -3723,14 +3700,11 @@ mod tests {
 
         // Mock PplnsWindow returning matching 60/40 distribution
         let mut mock_window = PplnsWindow::default();
-        mock_window
-            .expect_network()
-            .return_const(bitcoin::Network::Signet);
         let addr_a_clone = address_a.clone();
         let addr_b_clone = address_b.clone();
         mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(move |_, _, _| {
+            .returning(move |_, _| {
                 let mut distribution = HashMap::with_capacity(2);
                 distribution.insert(addr_a_clone.clone(), 600u128);
                 distribution.insert(addr_b_clone.clone(), 400u128);
@@ -3738,7 +3712,7 @@ mod tests {
             });
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
-        let validator = DefaultShareValidator::new(PoolDifficulty::default(), 1);
+        let validator = DefaultShareValidator::new(PoolDifficulty::default());
         let result = validator.validate_bitcoin_payout(
             &share_block,
             &ChainStoreHandle::default(),
@@ -3796,14 +3770,11 @@ mod tests {
 
         // Mock PplnsWindow returning 60/40 distribution
         let mut mock_window = PplnsWindow::default();
-        mock_window
-            .expect_network()
-            .return_const(bitcoin::Network::Signet);
         let addr_a_clone = address_a.clone();
         let addr_b_clone = address_b.clone();
         mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(move |_, _, _| {
+            .returning(move |_, _| {
                 let mut distribution = HashMap::with_capacity(2);
                 distribution.insert(addr_a_clone.clone(), 600u128);
                 distribution.insert(addr_b_clone.clone(), 400u128);
@@ -3813,7 +3784,7 @@ mod tests {
 
         // The reconstructed coinbase will have different outputs (60/40)
         // from the 50/50 coinbase the block carries
-        let validator = DefaultShareValidator::new(PoolDifficulty::default(), 1);
+        let validator = DefaultShareValidator::new(PoolDifficulty::default());
         let error = validator
             .validate_bitcoin_payout(&share_block, &ChainStoreHandle::default(), pplns_window)
             .unwrap_err();
@@ -3835,11 +3806,8 @@ mod tests {
         // Mock PplnsWindow returning empty distribution
         let mut mock_window = PplnsWindow::default();
         mock_window
-            .expect_network()
-            .return_const(bitcoin::Network::Signet);
-        mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(|_, _, _| Ok(HashMap::new()));
+            .returning(|_, _| Ok(HashMap::new()));
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
         let error = validator()
@@ -3882,11 +3850,8 @@ mod tests {
 
         let mut mock_window = PplnsWindow::default();
         mock_window
-            .expect_network()
-            .return_const(bitcoin::Network::Signet);
-        mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(|_, _, _| {
+            .returning(|_, _| {
                 Err(WindowError::ReadFailure(
                     "prev_share_blockhash not found in PPLNS window".into(),
                 ))
@@ -3921,15 +3886,12 @@ mod tests {
         let anchor = share_block.header.prev_share_blockhash;
         let mut mock_window = PplnsWindow::default();
         mock_window
-            .expect_network()
-            .return_const(bitcoin::Network::Signet);
-        mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(move |_, _, _| {
+            .returning(move |_, _| {
                 Err(WindowError::InsufficientEntries {
                     anchor,
                     oldest_cached_height: 5_000,
-                    max_window_shares: MAX_PPLNS_WINDOW_SHARES,
+                    max_window_shares: PPLNS_WINDOW_SHARES,
                 })
             });
 
@@ -4020,13 +3982,10 @@ mod tests {
         share_block.bitcoin_coinbase = coinbase_tx;
 
         let mut mock_window = PplnsWindow::default();
-        mock_window
-            .expect_network()
-            .return_const(bitcoin::Network::Signet);
         let addr_a_clone = address_a.clone();
         mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(move |_, _, _| Ok(HashMap::from([(addr_a_clone.clone(), 1000u128)])));
+            .returning(move |_, _| Ok(HashMap::from([(addr_a_clone.clone(), 1000u128)])));
 
         let result = validator().validate_bitcoin_payout(
             &share_block,
@@ -4072,13 +4031,10 @@ mod tests {
         share_block.bitcoin_coinbase = coinbase_tx;
 
         let mut mock_window = PplnsWindow::default();
-        mock_window
-            .expect_network()
-            .return_const(bitcoin::Network::Signet);
         let addr_a_clone = address_a.clone();
         mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(move |_, _, _| Ok(HashMap::from([(addr_a_clone.clone(), 1000u128)])));
+            .returning(move |_, _| Ok(HashMap::from([(addr_a_clone.clone(), 1000u128)])));
 
         let result = validator().validate_bitcoin_payout(
             &share_block,
@@ -4126,18 +4082,15 @@ mod tests {
         share_block.bitcoin_coinbase = coinbase_tx;
 
         let mut mock_window = PplnsWindow::default();
-        mock_window
-            .expect_network()
-            .return_const(bitcoin::Network::Signet);
         let addr_a_clone = address_a.clone();
         mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(move |_, _, _| Ok(HashMap::from([(addr_a_clone.clone(), 100u128)])));
+            .returning(move |_, _| Ok(HashMap::from([(addr_a_clone.clone(), 100u128)])));
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
         // The reconstructed coinbase will also have 1 sat to address_a,
         // so merkle roots should match and validation should pass
-        let validator = DefaultShareValidator::new(PoolDifficulty::default(), 1);
+        let validator = DefaultShareValidator::new(PoolDifficulty::default());
         let result = validator.validate_bitcoin_payout(
             &share_block,
             &ChainStoreHandle::default(),
@@ -4243,15 +4196,12 @@ mod tests {
 
         // Mock PplnsWindow returning 3 miners with difficulties 500, 300, 200
         let mut mock_window = PplnsWindow::default();
-        mock_window
-            .expect_network()
-            .return_const(bitcoin::Network::Signet);
         let miner_a_clone = miner_a.clone();
         let miner_b_clone = miner_b.clone();
         let miner_c_clone = miner_c.clone();
         mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(move |_, _, _| {
+            .returning(move |_, _| {
                 let mut distribution = HashMap::with_capacity(3);
                 distribution.insert(miner_a_clone.clone(), 500u128);
                 distribution.insert(miner_b_clone.clone(), 300u128);
@@ -4260,7 +4210,7 @@ mod tests {
             });
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
-        let validator = DefaultShareValidator::new(PoolDifficulty::default(), 1);
+        let validator = DefaultShareValidator::new(PoolDifficulty::default());
         let result = validator.validate_bitcoin_payout(
             &share_block,
             &ChainStoreHandle::default(),
@@ -4351,16 +4301,13 @@ mod tests {
 
         // Mock PplnsWindow returning 100% to address_a
         let mut mock_window = PplnsWindow::default();
-        mock_window
-            .expect_network()
-            .return_const(bitcoin::Network::Signet);
         let addr_a_clone = address_a.clone();
         mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(move |_, _, _| Ok(HashMap::from([(addr_a_clone.clone(), 1000u128)])));
+            .returning(move |_, _| Ok(HashMap::from([(addr_a_clone.clone(), 1000u128)])));
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
-        let validator = DefaultShareValidator::new(PoolDifficulty::default(), 1);
+        let validator = DefaultShareValidator::new(PoolDifficulty::default());
         let result = validator.validate_bitcoin_payout(
             &share_block,
             &ChainStoreHandle::default(),
@@ -4728,7 +4675,7 @@ mod tests {
     fn test_is_in_pplns_zone_within_pplns_depth() {
         // Block just inside PPLNS window
         let tip = 300_000u32;
-        let pplns_boundary = tip - MAX_PPLNS_WINDOW_SHARES as u32;
+        let pplns_boundary = tip - PPLNS_WINDOW_SHARES as u32;
         assert!(is_in_pplns_zone(pplns_boundary + 1, tip));
     }
 
@@ -4736,14 +4683,14 @@ mod tests {
     fn test_is_in_pplns_zone_at_boundary_is_prune_zone() {
         // Block exactly at boundary is NOT in PPLNS zone (prune zone)
         let tip = 300_000u32;
-        let pplns_boundary = tip - MAX_PPLNS_WINDOW_SHARES as u32;
+        let pplns_boundary = tip - PPLNS_WINDOW_SHARES as u32;
         assert!(!is_in_pplns_zone(pplns_boundary, tip));
     }
 
     #[test]
     fn test_is_in_pplns_zone_below_boundary_is_prune_zone() {
         let tip = 300_000u32;
-        let pplns_boundary = tip - MAX_PPLNS_WINDOW_SHARES as u32;
+        let pplns_boundary = tip - PPLNS_WINDOW_SHARES as u32;
         assert!(!is_in_pplns_zone(pplns_boundary - 1, tip));
     }
 
