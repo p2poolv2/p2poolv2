@@ -58,8 +58,9 @@ or no-ops in production builds (zero overhead). Key overrides:
   be overridden for time-compressed runs.
 - **Genesis anchoring**: `sim_overrides::genesis_timestamp()` and
   `anchor_target()` anchor ASERT at launch time and steady-state difficulty.
-- **PPLNS window**: `sim_overrides::pplns_total_difficulty()` uses
-  `MAX_PPLNS_WINDOW_SHARES` for a realistic multi-miner coinbase on regtest.
+- **PPLNS window**: no override. The window is the last `PPLNS_WINDOW_SHARES`
+  shares on every network, so the sim pays the same multi-miner window as
+  mainnet.
 - **Propagation delay**: `sim_overrides::spawn_delayed_broadcast()` models
   network latency with per-broadcast jitter.
 - **Auto-submit**: disabled under sim (regtest headers meet bitcoin target ~50%

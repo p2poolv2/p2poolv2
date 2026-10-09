@@ -17,7 +17,7 @@ use p2poolv2_lib::test_utils::{
 };
 use std::hint::black_box;
 
-/// Total confirmed shares to fill the window (MAX_PPLNS_WINDOW_SHARES).
+/// Total confirmed shares to fill the window (PPLNS_WINDOW_SHARES).
 const TOTAL_CONFIRMED_SHARES: usize = 120960;
 
 /// Every Nth confirmed share references one uncle, yielding ~10% uncles.
@@ -106,7 +106,7 @@ fn bench_get_distribution_from_start_hash(criterion: &mut Criterion) {
         bencher.iter(|| {
             black_box(
                 window
-                    .get_distribution_from_start_hash(u128::MAX, tip, &chain_store_handle)
+                    .get_distribution_from_start_hash(tip, &chain_store_handle)
                     .expect("tip should be in window"),
             );
         });

@@ -245,8 +245,8 @@ witness commitment). That split is the PPLNS distribution, proportional to each
 miner's share contribution in the window.
 
 > Breadth: the number of payees = distinct miners with weight in the PPLNS
-> window. In sim builds, the PPLNS window uses `MAX_PPLNS_WINDOW_SHARES`
-> (120960) as the window depth, so all active miners appear in the coinbase
+> window. The PPLNS window is the last `PPLNS_WINDOW_SHARES` (120960) shares
+> on every network, sim included, so all active miners appear in the coinbase
 > once the chain has enough shares. With 20 nodes you'll see ~17-20 payees
 > per block once the chain is deeper than the window.
 

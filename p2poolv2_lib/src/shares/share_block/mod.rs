@@ -671,6 +671,7 @@ mod tests {
     use crate::accounting::payout::payout_distribution::{
         append_proportional_distribution, include_address_and_cut,
     };
+    use crate::accounting::payout::sharechain_pplns::pplns_window::PPLNS_WINDOW_SHARES;
     use crate::shares::share_commitment::ShareCommitment;
     use crate::shares::transactions::coinbase::compute_witness_root;
     use crate::stratum::work::coinbase::{
@@ -936,28 +937,21 @@ mod tests {
         let network = bitcoin::Network::Signet;
         let difficulty_scale: u128 = 10;
 
-        // Build PPLNS distribution matching the production PplnsWindow logic.
-        // The threshold uses the bitcoin header difficulty (from the template),
-        // while each share contributes its share chain difficulty (from header.bits).
+        // Build PPLNS distribution matching the production PplnsWindow logic:
+        // the last PPLNS_WINDOW_SHARES shares below the block, each weighted by
+        // its share chain difficulty (from header.bits). The fixture chain is
+        // shorter than the window, so every prior share is paid.
         for (index, block) in blocks.iter().enumerate().skip(1) {
             let header = &block.header;
-            let bitcoin_difficulty = header.bitcoin_header.difficulty(network);
-            let scaled_threshold = bitcoin_difficulty.saturating_mul(difficulty_scale);
 
             let mut address_difficulty_map: HashMap<bitcoin::Address, u128> =
                 HashMap::with_capacity(4);
-            let mut accumulated_difficulty: u128 = 0;
-            for prior_index in (0..index).rev() {
+            for prior_index in (0..index).rev().take(PPLNS_WINDOW_SHARES) {
                 let prior_header = &blocks[prior_index].header;
                 let share_difficulty = prior_header.get_difficulty(network);
-                let scaled_contribution = share_difficulty.saturating_mul(difficulty_scale);
                 *address_difficulty_map
                     .entry(prior_header.miner_bitcoin_address.clone())
-                    .or_insert(0) += scaled_contribution;
-                accumulated_difficulty = accumulated_difficulty.saturating_add(scaled_contribution);
-                if accumulated_difficulty >= scaled_threshold {
-                    break;
-                }
+                    .or_insert(0) += share_difficulty.saturating_mul(difficulty_scale);
             }
 
             // Build outputs the same way the validator does

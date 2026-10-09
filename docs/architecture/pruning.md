@@ -14,12 +14,12 @@ P2Poolv2 retains a rolling window of chain data. Old block bodies are
 pruned while headers are kept indefinitely. The system uses two depth
 constants:
 
-- **PPLNS_DEPTH** (120,960 blocks, ~14 days): blocks within this
+- **PPLNS_WINDOW_SHARES** (120,960 blocks, ~14 days): blocks within this
   window get full transaction validation and participate in payout
   accounting.
 - **PRUNE_DEPTH** (241,920 blocks, ~28 days): blocks within this
   window have their bodies retained. Blocks between PRUNE_DEPTH and
-  PPLNS_DEPTH get PoW-only body validation.
+  PPLNS_WINDOW_SHARES get PoW-only body validation.
 
 ## Header Sync
 
@@ -66,7 +66,7 @@ Relevant code: `store/organise/candidate.rs` (`missing_data_scan_start`).
 When block bodies arrive, validation depends on the block's zone
 relative to the candidate tip:
 
-### Prune zone (height <= tip - PPLNS_DEPTH)
+### Prune zone (height <= tip - PPLNS_WINDOW_SHARES)
 
 `validate_below_pplns_depth` runs:
 - Pool difficulty (PoW)
@@ -78,7 +78,7 @@ Skips: coinbase structure, merkle root, witness commitment,
 transaction structure, script verification, prevout validation, MTP,
 bitcoin coinbase payout verification.
 
-### PPLNS zone (height > tip - PPLNS_DEPTH)
+### PPLNS zone (height > tip - PPLNS_WINDOW_SHARES)
 
 `validate_share_block` runs all checks. `validate_with_chain_context`
 runs MTP, bitcoin coinbase payout, and prevout validation before
@@ -119,7 +119,7 @@ readable from RocksDB.
 ### Validation
 
 `validate_prevouts` computes `min_coinbase_root_height = block_height -
-PPLNS_DEPTH` from the spending block's own height and passes it to
+PPLNS_WINDOW_SHARES` from the spending block's own height and passes it to
 `check_prevouts`. Outputs with `coinbase_root_height <
 min_coinbase_root_height` are rejected in the same batch read that checks
 output existence and coinbase maturity -- one pass covers all three.
@@ -195,7 +195,7 @@ from concurrent header arrivals advancing the candidate tip.
 
 Prune-zone blocks without SpendsIndex entries cannot cause
 double-spend acceptance:
-- Their outputs have `coinbase_root_height` below `tip - PPLNS_DEPTH`
+- Their outputs have `coinbase_root_height` below `tip - PPLNS_WINDOW_SHARES`
 - `check_prevouts` rejects spending those outputs
 - SpendsIndex is only needed for outputs that CAN be spent
 
@@ -210,8 +210,8 @@ Relevant code:
 
 | Constant | Value | Meaning |
 |---|---|---|
-| PPLNS_DEPTH | 120,960 | 14 days at 10s/block |
-| PRUNE_DEPTH | 241,920 | 2 x PPLNS_DEPTH |
+| PPLNS_WINDOW_SHARES | 120,960 | 14 days at 10s/block |
+| PRUNE_DEPTH | 241,920 | 2 x PPLNS_WINDOW_SHARES |
 | PRUNE_INTERVAL | 360 | 1 hour of blocks |
 | Block height | u32 | Overflows in ~1,361 years |
 

@@ -173,7 +173,7 @@ and `collect_spent_outputs` would fail on a block that is perfectly valid.
 Blocks below `prune_height` are exempt because their bodies are never fetched;
 requiring one would stall the chain permanently at the boundary. Spends cannot
 reach below it either: `min_coinbase_root_height` caps them one window back
-(`MAX_PPLNS_WINDOW_SHARES`) while bodies are retained for two (`PRUNE_DEPTH`).
+(`PPLNS_WINDOW_SHARES`) while bodies are retained for two (`PRUNE_DEPTH`).
 
 ### OrganiseEvent::InvalidBlock(BlockHash)
 - **Purpose**: Record that a block failed pre-context validation
@@ -483,7 +483,7 @@ block that failed without a verdict").
 
 ### PPLNS zone tiering
 
-`is_in_pplns_zone(H, tip) = H > tip - MAX_PPLNS_WINDOW_SHARES` splits blocks
+`is_in_pplns_zone(H, tip) = H > tip - PPLNS_WINDOW_SHARES` splits blocks
 into two tiers, and `check_pplns_zone` is called independently by the
 validation worker (choosing full content validation vs PoW-only) and by the
 organise worker (choosing whether `validate_with_chain_context` runs).
@@ -542,6 +542,11 @@ Chain-context validation (`validate_bitcoin_payout` in
 `shares/validation/mod.rs`) reconstructs the expected coinbase from the PPLNS
 window and checks it against the share's bitcoin merkle root. Success is what
 transitions a block from `HeaderValid` to `BlockValid`.
+
+The window is the last `PPLNS_WINDOW_SHARES` (120,960) shares, each weighted by
+its share difficulty: a fixed share count, about two weeks at the 10 s share
+target, with no node-local setting and no bitcoin difficulty in it. Every node
+must pay the same window, so it is a network constant rather than config.
 
 The window is anchored on the share's declared `prev_share_blockhash`, not the
 live confirmed tip, via `PplnsWindow::get_distribution_from_start_hash`. The

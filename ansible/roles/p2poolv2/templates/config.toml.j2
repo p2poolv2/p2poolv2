@@ -49,7 +49,6 @@ fee = {{ p2poolv2_fee | default(0) }}
 zmqpubhashblock = "{{ p2poolv2_zmq_endpoint }}"
 network = "{{ p2poolv2_bitcoin_network }}"
 version_mask = "{{ p2poolv2_version_mask }}"
-difficulty_multiplier = {{ p2poolv2_difficulty_multiplier }}
 {% if p2poolv2_pool_signature is defined %}
 pool_signature = "{{ p2poolv2_pool_signature }}"
 {% endif %}

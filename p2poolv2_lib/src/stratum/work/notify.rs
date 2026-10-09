@@ -13,7 +13,6 @@ use crate::pool_difficulty;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
-use crate::sim_overrides;
 use crate::stratum::work::prepared_notify::{PreparedNotifyParams, PreparedNotifyParamsBuilder};
 use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
@@ -33,14 +32,13 @@ pub(crate) struct NotifyContext {
 /// Build the output distribution for the coinbase transaction using
 /// payout accounting in NotifyContext.
 ///
-/// The total difficulty threshold is computed by `sim_overrides::pplns_total_difficulty`,
-/// which uses the production formula (bitcoin_difficulty * multiplier) in normal
-/// builds and a sim-specific formula in sim builds.
+/// The template's bitcoin difficulty is passed to the payout, where only
+/// Hydrapool uses it; the share chain window is the last `PPLNS_WINDOW_SHARES`
+/// shares.
 ///
 /// Returns `Err` if the payout distribution cannot be resolved.
 fn build_output_distribution(
     template: &BlockTemplate,
-    pool_target: bitcoin::CompactTarget,
     anchor: bitcoin::BlockHash,
     context: &mut NotifyContext,
 ) -> Result<Vec<OutputPair>, WorkError> {
@@ -49,21 +47,13 @@ fn build_output_distribution(
     let compact_target = bitcoin::pow::CompactTarget::from_unprefixed_hex(&template.bits).unwrap();
     let bitcoin_difficulty =
         bitcoin::Target::from_compact(compact_target).difficulty(context.config.network);
-    let share_pool_difficulty =
-        bitcoin::Target::from_compact(pool_target).difficulty(context.config.network);
-
-    let total_difficulty = sim_overrides::pplns_total_difficulty(
-        bitcoin_difficulty,
-        context.config.difficulty_multiplier as u128,
-        share_pool_difficulty,
-    );
 
     context
         .payout
         .get_output_distribution(
             &context.chain_store_handle,
             anchor,
-            total_difficulty,
+            bitcoin_difficulty,
             total_amount,
             &context.config,
         )
@@ -100,7 +90,7 @@ fn build_prepared_notify(
     //* Anchor the payout on the same `tip` we commit as prev_share_blockhash
     //* below, so a confirmed-chain advance between reads cannot make the
     //* coinbase pay a window inconsistent with its declared prev.
-    let output_distribution = build_output_distribution(template, target, tip, context)?;
+    let output_distribution = build_output_distribution(template, tip, context)?;
 
     PreparedNotifyParamsBuilder::new(
         Arc::clone(template),
