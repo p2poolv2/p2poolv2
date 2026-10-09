@@ -126,9 +126,20 @@
         {
           "editorMode": "builder",
           "expr": "rate(sharechain_work_total[5m])",
-          "legendFormat": "Pool Hashrate",
+          "legendFormat": "Pool Hashrate (5m)",
           "range": true,
           "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          }
+        },
+        {
+          "editorMode": "builder",
+          "expr": "rate(sharechain_work_total[1h])",
+          "legendFormat": "Pool Hashrate (1h)",
+          "range": true,
+          "refId": "B",
           "datasource": {
             "type": "prometheus",
             "uid": "${DS_PROMETHEUS}"

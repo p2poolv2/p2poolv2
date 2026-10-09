@@ -177,7 +177,9 @@ threshold matches Prometheus's default staleness, `rate()` does not bridge
 the sync jump when work resumes. A quiet pool (no shares for >5 min) also
 gaps out, which is the honest reading -- no recent work, no hashrate.
 
-**Grafana:** Time series of `rate(sharechain_work_total[1h])` (hashes/s).
+**Grafana:** Time series of `rate(sharechain_work_total[5m])` and
+`rate(sharechain_work_total[1h])` (hashes/s), matching the 5m/1h pair
+on the node hashrate panel.
 This measures the whole pool (every node sees the full confirmed chain),
 not just locally connected miners. Expect gaps during sync and idle
 periods.
