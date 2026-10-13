@@ -256,6 +256,34 @@ and payout checks read only this store. It is fed by:
   `getblockheader` until reaching a header already in the store.
 - **Carried headers** that pass the check.
 
+**Possible simplification, to evaluate at implementation time.** zmq
+alone is not reliable: messages can be dropped, and a dead connection
+shows no gap in sequence numbers. `getchaintips` is there to cover that.
+But no acceptance or payout check needs bitcoind's side branches. A
+share's carried headers reach back to its share parent's bitcoin prev,
+which is already known. A batch's first share links into the sender's
+active chain, which is old main chain history the receiver also has.
+Eligibility only looks at bitcoin prevs used by shares in the window, and
+those are in the store once the shares are accepted. So the store may
+need only the local active chain, which the existing template poll
+already provides:
+
+- The GBT poller (`stratum/work/gbt.rs`) fetches a template at least every
+  `GBT_POLL_INTERVAL` (10 seconds), and zmq only triggers it earlier.
+- When a template's `previousblockhash` is not in the store, walk back
+  with `getblockheader` to a known header. This also covers a bitcoin
+  reorg.
+- A missed zmq message or a dead zmq connection then costs at most one
+  poll interval, the delay the job builder already accepts.
+
+If this holds, `getchaintips` and handling of `sequence` events can be
+dropped, and zmq stays only as the early template trigger. New Core zmq
+events, such as one for each header added to the block index, would not
+simplify more than this. Using bitcoind to check carried headers would
+remove the local difficulty code, but bitcoind's verdict on a header
+depends on what it has seen (it rejects headers below a block it found
+invalid), so nodes could disagree on acceptance.
+
 **Retention.** Payout checks place bitcoin prevs about 14 days back from
 the paying share, and nodes validate shares up to `PRUNE_DEPTH` (about 28
 days) deep. So the store keeps headers for at least the window plus
