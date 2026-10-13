@@ -32,6 +32,8 @@ use bitcoin::{
     Address, Block, BlockHash, CompactTarget, CompressedPublicKey, Transaction, block::Header,
 };
 #[cfg(any(test, feature = "test-utils"))]
+use p2poolv2_wallet::share_owner::ShareOwner;
+#[cfg(any(test, feature = "test-utils"))]
 use std::str::FromStr;
 
 // Imports only needed for internal tests
@@ -139,7 +141,7 @@ pub fn make_test_share_program(index: usize) -> bitcoin::WitnessProgram {
 #[cfg(any(test, feature = "test-utils"))]
 pub fn test_coinbase_transaction(index: usize) -> bitcoin::Transaction {
     build_sharechain_coinbase_transaction(
-        &make_test_share_program(index),
+        &ShareOwner::Taproot(make_test_share_program(index)),
         BlockHash::from_byte_array([index as u8; 32]),
         &[],
     )
@@ -358,7 +360,7 @@ pub fn create_test_commitment() -> ShareCommitment {
         .unwrap(),
         uncles: vec![],
         miner_bitcoin_address: btcaddress,
-        miner_address: make_test_share_program(1),
+        miner_address: make_test_share_program(1).into(),
         non_coinbase_root: compute_non_coinbase_root(&[]),
         // Use signet-easy target so test bitcoin headers can meet pool difficulty.
         // In production, calculate_target_clamped ensures pool target is never
@@ -455,7 +457,7 @@ pub fn build_block_from_work_components(path: &str, nsecs: u64) -> ShareBlock {
         prev_share_blockhash: BlockHash::all_zeros(),
         uncles: vec![],
         miner_bitcoin_address: miner_bitcoin_address.clone(),
-        miner_address: make_test_share_program(1),
+        miner_address: make_test_share_program(1).into(),
         non_coinbase_root: compute_non_coinbase_root(&[]),
         bits: CompactTarget::from_consensus(0x1b4188f5),
         time: 1700000000u32,
@@ -514,7 +516,7 @@ pub fn build_block_from_work_components(path: &str, nsecs: u64) -> ShareBlock {
         prev_share_blockhash: BlockHash::all_zeros(),
         uncles: vec![],
         miner_bitcoin_address,
-        miner_address: make_test_share_program(1),
+        miner_address: make_test_share_program(1).into(),
         merkle_root: share_merkle_root,
         bitcoin_header,
         time: 1700000000u32,
@@ -748,7 +750,7 @@ fn test_share_block(
                 prev_share_blockhash: prev_blockhash,
                 uncles: uncles.clone(),
                 miner_bitcoin_address: btcaddress.clone(),
-                miner_address: *share_address,
+                miner_address: (*share_address).into(),
                 non_coinbase_root: compute_non_coinbase_root(&other_share_transactions),
                 bits: share_bits,
                 time: share_time,
@@ -805,7 +807,7 @@ fn test_share_block(
     // The coinbase can only be built now, once the bitcoin header exists,
     // and the share merkle root only after that.
     let share_coinbase = build_sharechain_coinbase_transaction(
-        share_address,
+        &ShareOwner::from(*share_address),
         bitcoin_header.block_hash(),
         &other_share_transactions,
     );
@@ -821,7 +823,7 @@ fn test_share_block(
         prev_share_blockhash: prev_blockhash,
         uncles,
         miner_bitcoin_address: btcaddress.clone(),
-        miner_address: *share_address,
+        miner_address: ShareOwner::from(*share_address),
         merkle_root: share_merkle_root,
         bitcoin_header,
         time: share_time,
@@ -908,7 +910,7 @@ impl TestShareHeaderBuilder {
             prev_share_blockhash: self.prev_share_blockhash.unwrap_or(BlockHash::all_zeros()),
             uncles: self.uncles,
             miner_bitcoin_address: self.btcaddress.unwrap_or(default_address),
-            miner_address: share_address,
+            miner_address: share_address.into(),
             merkle_root: share_merkle_root,
             bitcoin_header: Header {
                 version: bitcoin::block::Version::TWO,

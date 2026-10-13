@@ -83,7 +83,7 @@ fn parse_difficulty(password: &str) -> Option<u64> {
 /// address, which BIP173 requires be rejected because mixed case defeats the
 /// checksum, and `str::to_lowercase` can change byte length on non-ASCII input
 /// and desynchronise the offsets.
-fn extract_string_value<'a>(password: &'a str, key: &str) -> Option<&'a str> {
+pub(crate) fn extract_string_value<'a>(password: &'a str, key: &str) -> Option<&'a str> {
     let bytes = password.as_bytes();
     let key_bytes = key.as_bytes();
     if key_bytes.is_empty() || bytes.len() < key_bytes.len() {

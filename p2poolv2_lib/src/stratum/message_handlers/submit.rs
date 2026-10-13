@@ -386,6 +386,9 @@ mod handle_submit_tests {
             chain_store_handle,
             mode: PoolMode::P2poolv2,
             miner_address: None,
+            share_chain: crate::config::Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
         };
 
         let message = handle_submit(submit, &mut session, ctx).await.unwrap();
@@ -479,6 +482,9 @@ mod handle_submit_tests {
             chain_store_handle,
             mode: PoolMode::P2poolv2,
             miner_address: None,
+            share_chain: crate::config::Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
         };
 
         let response = handle_submit(submit, &mut session, ctx).await.unwrap();
@@ -572,6 +578,9 @@ mod handle_submit_tests {
             chain_store_handle,
             mode: PoolMode::P2poolv2,
             miner_address: None,
+            share_chain: crate::config::Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
         };
 
         let response = handle_submit(submit, &mut session, ctx).await.unwrap();
@@ -664,6 +673,9 @@ mod handle_submit_tests {
             chain_store_handle,
             mode: PoolMode::P2poolv2,
             miner_address: None,
+            share_chain: crate::config::Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
         };
 
         let message = handle_submit(submit, &mut session, ctx).await.unwrap();
@@ -731,6 +743,9 @@ mod handle_submit_tests {
             chain_store_handle,
             mode: PoolMode::P2poolv2,
             miner_address: None,
+            share_chain: crate::config::Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
         };
 
         let message = handle_submit(submit, &mut session, ctx).await.unwrap();
@@ -807,6 +822,9 @@ mod handle_submit_tests {
             chain_store_handle,
             mode: PoolMode::P2poolv2,
             miner_address: None,
+            share_chain: crate::config::Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
         };
 
         let message = handle_submit(submit, &mut session, ctx).await.unwrap();
@@ -898,6 +916,9 @@ mod handle_submit_tests {
             chain_store_handle: chain_store_handle.clone(),
             mode: PoolMode::P2poolv2,
             miner_address: None,
+            share_chain: crate::config::Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
         };
 
         let message = handle_submit(submit.clone(), &mut session, ctx)
@@ -935,6 +956,9 @@ mod handle_submit_tests {
             chain_store_handle,
             mode: PoolMode::P2poolv2,
             miner_address: None,
+            share_chain: crate::config::Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
         };
 
         let message2 = handle_submit(submit, &mut session, ctx2).await.unwrap();
@@ -1017,6 +1041,9 @@ mod handle_submit_tests {
             chain_store_handle,
             mode: PoolMode::P2poolv2,
             miner_address: None,
+            share_chain: crate::config::Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
         };
 
         let message = handle_submit(submit, &mut session, ctx).await.unwrap();
@@ -1085,6 +1112,9 @@ mod handle_submit_tests {
             chain_store_handle,
             mode: PoolMode::P2poolv2,
             miner_address: None,
+            share_chain: crate::config::Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
         };
 
         let messages = handle_submit(submit, &mut session, ctx).await.unwrap();
@@ -1164,6 +1194,9 @@ mod handle_submit_tests {
             chain_store_handle,
             mode: PoolMode::P2poolv2,
             miner_address: None,
+            share_chain: crate::config::Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
         };
 
         // Verify the inserted job is properly registered
@@ -1261,6 +1294,9 @@ mod handle_submit_tests {
             chain_store_handle,
             mode: PoolMode::P2poolv2,
             miner_address: None,
+            share_chain: crate::config::Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
         };
 
         let messages = handle_submit(submit, &mut session, ctx).await.unwrap();
@@ -1342,6 +1378,9 @@ mod handle_submit_tests {
             chain_store_handle,
             mode: PoolMode::P2poolv2,
             miner_address: None,
+            share_chain: crate::config::Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
         };
 
         let messages = handle_submit(submit, &mut session, ctx).await.unwrap();
@@ -1424,6 +1463,9 @@ mod handle_submit_tests {
             chain_store_handle,
             mode: PoolMode::P2poolv2,
             miner_address: None,
+            share_chain: crate::config::Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
         };
 
         let messages = handle_submit(submit, &mut session, ctx).await.unwrap();
@@ -1484,6 +1526,9 @@ mod handle_submit_tests {
             chain_store_handle,
             mode: PoolMode::P2poolv2,
             miner_address: None,
+            share_chain: crate::config::Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
         };
 
         let messages = handle_submit(submit, &mut session, ctx).await.unwrap();
@@ -1575,6 +1620,9 @@ mod handle_submit_tests {
             chain_store_handle,
             mode: PoolMode::P2poolv2,
             miner_address: None,
+            share_chain: crate::config::Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
         };
 
         let messages = handle_submit(submit, &mut session, ctx).await.unwrap();
@@ -1659,6 +1707,9 @@ mod handle_submit_tests {
             chain_store_handle,
             mode: PoolMode::Hydrapool,
             miner_address: None,
+            share_chain: crate::config::Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
         };
 
         let messages = handle_submit(submit, &mut session, ctx).await.unwrap();

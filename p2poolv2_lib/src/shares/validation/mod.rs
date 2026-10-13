@@ -17,6 +17,7 @@ use crate::accounting::payout::sharechain_pplns::PplnsWindow;
 use crate::accounting::payout::sharechain_pplns::pplns_window::{
     MAX_PPLNS_WINDOW_SHARES, WindowError,
 };
+use crate::config::Chain;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::pool_difficulty::PoolDifficulty;
@@ -384,6 +385,11 @@ pub struct DefaultShareValidator {
     pool_signature: Vec<u8>,
     /// Time provider used to enforce the future-time bound on share timestamps.
     time_provider: Arc<dyn TimeProvider + Send + Sync>,
+    /// Which chain's share owner this validator accepts.
+    ///
+    /// Bitcoin requires a taproot program and a BIP141 witness commitment.
+    /// Bitcoin Cash requires a 20-byte P2PKH hash and rejects that commitment.
+    chain: Chain,
 }
 
 impl DefaultShareValidator {
@@ -416,7 +422,17 @@ impl DefaultShareValidator {
             difficulty_multiplier,
             pool_signature,
             time_provider,
+            chain: Chain::Bitcoin,
         }
+    }
+
+    /// Select the chain whose share owner this validator accepts.
+    ///
+    /// The default is Bitcoin, which keeps every existing caller on taproot
+    /// shares. A Bitcoin Cash node passes [`Chain::BitcoinCash`].
+    pub fn for_chain(mut self, chain: Chain) -> Self {
+        self.chain = chain;
+        self
     }
 
     /// Require the block body of every uncle to be stored.
@@ -834,27 +850,23 @@ impl DefaultShareValidator {
         Ok(())
     }
 
-    /// Validate the miner address is a P2TR witness program.
+    /// Validate the miner address for this validator's chain.
     ///
-    /// `ShareHeader` stores a bare `WitnessProgram`, and its decode enforces
-    /// only the BIP141 2 to 40 byte bounds. Restricting that to taproot is
-    /// this pool's rule, and it belongs here rather than in the codec: a node
-    /// that predates a future witness version must still be able to decode a
-    /// header carrying one and reject it on its merits, which is what makes
-    /// widening a soft fork rather than a format break.
-    ///
-    /// `Address::from_witness_program` applies the same rule to anything an
-    /// operator configures or a miner sends as `p2p=`. This is the same rule
-    /// at the other end, for a program that arrived over the wire.
+    /// Bitcoin accepts a taproot witness program. Bitcoin Cash accepts a
+    /// 20-byte P2PKH hash. The header can carry either, and the tag on the
+    /// cash form is outside the witness version range, so a Bitcoin decoder
+    /// rejects a cash share while still reading an old taproot share.
     fn validate_miner_address(&self, share_header: &ShareHeader) -> Result<(), ValidationError> {
-        if !share_header.miner_address.is_p2tr() {
-            return Err(ValidationError::consensus(format!(
-                "Miner address is witness version {} with a {} byte program, expected version 1 with 32 bytes",
-                share_header.miner_address.version().to_num(),
-                share_header.miner_address.program().len()
-            )));
+        match (self.chain, share_header.miner_address) {
+            (Chain::Bitcoin, owner) if owner.is_taproot() => Ok(()),
+            (Chain::BitcoinCash, p2poolv2_wallet::share_owner::ShareOwner::CashP2pkh(_)) => Ok(()),
+            (Chain::Bitcoin, _) => Err(ValidationError::consensus(
+                "Miner address must be a taproot witness program".to_string(),
+            )),
+            (Chain::BitcoinCash, _) => Err(ValidationError::consensus(
+                "Miner address must be a 20-byte Bitcoin Cash P2PKH hash".to_string(),
+            )),
         }
-        Ok(())
     }
 
     /// Validate the share coinbase creates an output with 1 share
@@ -901,6 +913,15 @@ impl DefaultShareValidator {
             .transactions
             .first()
             .ok_or_else(|| ValidationError::consensus("Share block has no transactions"))?;
+
+        if self.chain == Chain::BitcoinCash {
+            if coinbase.input[0].witness.is_empty() && coinbase.output.len() == 1 {
+                return Ok(());
+            }
+            return Err(ValidationError::consensus(
+                "Bitcoin Cash share coinbase must not carry a witness commitment".to_string(),
+            ));
+        }
 
         let witness_stack: Vec<&[u8]> = coinbase.input[0].witness.iter().collect();
         if witness_stack.len() != 1 || witness_stack[0].len() != 32 {
@@ -1537,6 +1558,43 @@ mod tests {
 
     fn validator_with(pool_difficulty: PoolDifficulty) -> DefaultShareValidator {
         DefaultShareValidator::new(pool_difficulty, 1, b"P2Poolv2".to_vec())
+    }
+
+    #[test]
+    fn bitcoin_rejects_a_cash_share_owner() {
+        let mut share = TestShareBlockBuilder::new().build();
+        share.header.miner_address =
+            p2poolv2_wallet::share_owner::ShareOwner::CashP2pkh([0x22; 20]);
+        let error = validator()
+            .validate_miner_address(&share.header)
+            .unwrap_err();
+        assert!(error.to_string().contains("taproot"), "{error}");
+    }
+
+    #[test]
+    fn bitcoin_cash_accepts_a_p2pkh_owner_and_rejects_taproot() {
+        let mut share = TestShareBlockBuilder::new().build();
+        let cash = p2poolv2_wallet::share_owner::ShareOwner::CashP2pkh([0x22; 20]);
+        share.header.miner_address = cash;
+        share.transactions[0] = ShareTransaction(build_sharechain_coinbase_transaction(
+            &cash,
+            share.header.bitcoin_header.block_hash(),
+            &[],
+        ));
+        let bch_validator = validator().for_chain(Chain::BitcoinCash);
+        assert!(bch_validator.validate_miner_address(&share.header).is_ok());
+        assert!(bch_validator.validate_share_coinbase(&share).is_ok());
+        assert!(
+            bch_validator
+                .validate_share_witness_commitment(&share)
+                .is_ok()
+        );
+
+        let taproot = TestShareBlockBuilder::new().build();
+        let error = bch_validator
+            .validate_miner_address(&taproot.header)
+            .unwrap_err();
+        assert!(error.to_string().contains("P2PKH"), "{error}");
     }
 
     fn metadata_at_height(height: u32) -> BlockMetadata {

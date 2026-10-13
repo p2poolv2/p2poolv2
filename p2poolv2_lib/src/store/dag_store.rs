@@ -7,7 +7,6 @@ use super::{ColumnFamily, Store, writer::StoreError};
 use crate::shares::chain::chain_store_handle::{COMMON_ANCESTOR_DEPTH, ConfirmedHeaderResult};
 use crate::shares::share_block::{ShareBlock, ShareHeader, is_terminal_blockhash};
 use crate::shares::validation::MAX_UNCLES;
-use bitcoin::WitnessProgram;
 use bitcoin::consensus::{self, Encodable, encode};
 use bitcoin::hashes::Hash;
 use bitcoin::{BlockHash, CompactTarget, Work};
@@ -56,8 +55,8 @@ pub struct ShareInfo {
     /// Not the bech32m form: rendering that needs a network, and the store is
     /// network agnostic by design. The API and CLI layers hold the configured
     /// network and render it there.
-    #[serde(with = "p2poolv2_wallet::witness_program_codec::serde_hex")]
-    pub miner_address: WitnessProgram,
+    #[serde(with = "p2poolv2_wallet::share_owner::serde_hex")]
+    pub miner_address: p2poolv2_wallet::share_owner::ShareOwner,
     pub timestamp: u32,
     pub bits: CompactTarget,
     pub uncles: Vec<UncleInfo>,
@@ -71,8 +70,8 @@ pub struct UncleInfo {
     pub miner_bitcoin_address: String,
     /// Miner address, as the witness program the header stores. See
     /// [`ShareInfo::miner_address`].
-    #[serde(with = "p2poolv2_wallet::witness_program_codec::serde_hex")]
-    pub miner_address: WitnessProgram,
+    #[serde(with = "p2poolv2_wallet::share_owner::serde_hex")]
+    pub miner_address: p2poolv2_wallet::share_owner::ShareOwner,
     pub timestamp: u32,
     pub height: Option<u32>,
 }
@@ -854,8 +853,8 @@ pub struct DagEntry {
     ///
     /// The witness program rather than the bech32m form: the store is network
     /// agnostic, so the API and CLI layers render it.
-    #[serde(with = "p2poolv2_wallet::witness_program_codec::serde_hex_option")]
-    pub miner_address: Option<WitnessProgram>,
+    #[serde(with = "p2poolv2_wallet::share_owner::serde_hex_option")]
+    pub miner_address: Option<p2poolv2_wallet::share_owner::ShareOwner>,
     pub has_block_data: bool,
 }
 
@@ -4009,7 +4008,7 @@ mod tests {
             prev_blockhash: BlockHash::all_zeros(),
             height: 42,
             miner_bitcoin_address: "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q".to_string(),
-            miner_address: make_test_share_program(1),
+            miner_address: make_test_share_program(1).into(),
             timestamp: 1_700_000_000,
             bits: CompactTarget::from_consensus(0x1b4188f5),
             uncles: vec![],
@@ -4035,7 +4034,7 @@ mod tests {
             blockhash: BlockHash::all_zeros(),
             prev_blockhash: BlockHash::all_zeros(),
             miner_bitcoin_address: "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string(),
-            miner_address: make_test_share_program(2),
+            miner_address: make_test_share_program(2).into(),
             timestamp: 1_700_000_010,
             height: Some(41),
         };
@@ -4045,7 +4044,7 @@ mod tests {
             prev_blockhash: BlockHash::all_zeros(),
             height: 42,
             miner_bitcoin_address: "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q".to_string(),
-            miner_address: make_test_share_program(1),
+            miner_address: make_test_share_program(1).into(),
             timestamp: 1_700_000_020,
             bits: CompactTarget::from_consensus(0x1b4188f5),
             uncles: vec![uncle],
@@ -4062,7 +4061,7 @@ mod tests {
             blockhash: BlockHash::all_zeros(),
             prev_blockhash: BlockHash::all_zeros(),
             miner_bitcoin_address: "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q".to_string(),
-            miner_address: make_test_share_program(2),
+            miner_address: make_test_share_program(2).into(),
             timestamp: 1_700_000_005,
             height: Some(10),
         };
@@ -4087,7 +4086,7 @@ mod tests {
             blockhash: BlockHash::all_zeros(),
             prev_blockhash: BlockHash::all_zeros(),
             miner_bitcoin_address: "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string(),
-            miner_address: make_test_share_program(2),
+            miner_address: make_test_share_program(2).into(),
             timestamp: 1_700_000_005,
             height: None,
         };

@@ -16,7 +16,8 @@ pub mod signal;
 use p2poolv2_api::start_api_server;
 use p2poolv2_lib::accounting::payout::build_payout_for_mode;
 use p2poolv2_lib::accounting::stats::metrics;
-use p2poolv2_lib::config::{Chain, Config};
+use p2poolv2_lib::address::bch_share::BchShareNetwork;
+use p2poolv2_lib::config::{BitcoinCashNetwork, Chain, Config};
 use p2poolv2_lib::node::actor::NodeHandle;
 use p2poolv2_lib::pool_difficulty::PoolDifficulty;
 use p2poolv2_lib::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -235,7 +236,7 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
 
     if stratum_config.chain == Chain::BitcoinCash {
         info!(
-            "Bitcoin Cash template validation is selected for {:?}. Share-chain identities, genesis, and Stratum V2 are still the Bitcoin implementation.",
+            "Bitcoin Cash templates and share owners are selected for {:?}. Genesis and Stratum V2 are still the Bitcoin implementation.",
             stratum_config.bitcoin_cash_network
         );
     }
@@ -307,6 +308,11 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
     let exit_sender_stratum = exit_sender.clone();
     let exit_receiver_stratum = exit_sender.subscribe();
     let configured_miner_address = stratum_config.miner_address();
+    let share_chain = stratum_config.chain;
+    let bch_share_network = stratum_config.bitcoin_cash_network.map(bch_share_network);
+    let cash_share = stratum_config
+        .bch_miner_address()
+        .map(|address| address.hash);
 
     tokio::spawn(async move {
         let mut stratum_server = StratumServerBuilder::default()
@@ -329,6 +335,9 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
             .chain_store_handle(chain_store_handle_for_stratum)
             .mode(stratum_config.mode)
             .miner_address(configured_miner_address)
+            .share_chain(share_chain)
+            .bch_share_network(bch_share_network)
+            .cash_share(cash_share)
             .build()
             .await
             .unwrap();
@@ -415,4 +424,12 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
     };
 
     Ok((handles, runner))
+}
+
+fn bch_share_network(network: BitcoinCashNetwork) -> BchShareNetwork {
+    match network {
+        BitcoinCashNetwork::Mainnet => BchShareNetwork::Mainnet,
+        BitcoinCashNetwork::Chipnet => BchShareNetwork::Chipnet,
+        BitcoinCashNetwork::Regtest => BchShareNetwork::Regtest,
+    }
 }

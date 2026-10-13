@@ -7,10 +7,8 @@ use crate::shares::witness_commitment::{WITNESS_COMMITMENT_LENGTH, WitnessCommit
 use bitcoin::consensus::Encodable;
 use bitcoin::hashes::{Hash, HashEngine, sha256d};
 use bitcoin::script::Builder;
-use bitcoin::{
-    BlockHash, ScriptBuf, Transaction, TxMerkleNode, TxOut, WitnessMerkleNode, WitnessProgram,
-    Wtxid, merkle_tree,
-};
+use bitcoin::{BlockHash, Transaction, TxMerkleNode, TxOut, WitnessMerkleNode, Wtxid, merkle_tree};
+use p2poolv2_wallet::share_owner::ShareOwner;
 
 const SHARE_VALUE: u64 = 1; // 100_000_000 satoshi == 1 BTC == 1 share
 /// BIP141 witness commitment header: OP_RETURN, push 36, magic "aa21a9ed".
@@ -21,14 +19,16 @@ const WITNESS_RESERVED_VALUE: [u8; 32] = [0u8; 32];
 
 /// Create a coinbase transaction for the given share chain miner address.
 ///
-/// Builds a coinbase that pays the miner one share unit and embeds a
+/// A taproot owner is paid a witness program and the coinbase embeds a
 /// BIP141 witness commitment covering the provided share transactions.
 /// The caller must pass every non-coinbase transaction that will be
 /// included in the share block (in order); the coinbase's own wtxid is
 /// replaced by all-zeros when computing the witness root, per BIP141.
+/// That coinbase also places the 32-byte witness reserved value on the
+/// input witness stack so validators can recompute the commitment.
 ///
-/// Also places the 32-byte witness reserved value on the coinbase input's
-/// witness stack so validators can recompute the commitment.
+/// A Bitcoin Cash owner is paid a P2PKH script. Bitcoin Cash has no
+/// witness commitment, so that coinbase has one output and an empty witness.
 ///
 /// `weak_block_hash` is what makes this transaction unique per share, and it
 /// is the only thing that does. Every other input is the same for every share
@@ -40,21 +40,24 @@ const WITNESS_RESERVED_VALUE: [u8; 32] = [0u8; 32];
 /// back into the commitment would make this circular: the hash would depend on
 /// a coinbase that depends on the hash.
 pub fn build_sharechain_coinbase_transaction(
-    miner_address: &WitnessProgram,
+    miner_address: &ShareOwner,
     weak_block_hash: BlockHash,
     other_share_transactions: &[ShareTransaction],
 ) -> Transaction {
-    let script_pubkey = ScriptBuf::new_witness_program(miner_address);
-
     let payout_output = TxOut {
         value: bitcoin::Amount::from_int_btc(SHARE_VALUE),
-        script_pubkey,
+        script_pubkey: miner_address.script_pubkey(),
     };
-
-    let witness_commitment_output = build_witness_commitment_output(other_share_transactions);
-
-    let mut witness = bitcoin::Witness::new();
-    witness.push(WITNESS_RESERVED_VALUE);
+    let (witness, outputs) = match miner_address {
+        ShareOwner::Taproot(_) => {
+            let witness_commitment_output =
+                build_witness_commitment_output(other_share_transactions);
+            let mut witness = bitcoin::Witness::new();
+            witness.push(WITNESS_RESERVED_VALUE);
+            (witness, vec![payout_output, witness_commitment_output])
+        }
+        ShareOwner::CashP2pkh(_) => (bitcoin::Witness::new(), vec![payout_output]),
+    };
 
     let tx_in = bitcoin::TxIn {
         previous_output: bitcoin::OutPoint::null(),
@@ -69,7 +72,7 @@ pub fn build_sharechain_coinbase_transaction(
         version: bitcoin::transaction::Version::TWO,
         lock_time: bitcoin::absolute::LockTime::ZERO,
         input: vec![tx_in],
-        output: vec![payout_output, witness_commitment_output],
+        output: outputs,
     }
 }
 
@@ -162,7 +165,7 @@ mod tests {
 
     #[test]
     fn test_create_share_block_coinbase_transaction() {
-        let address = make_test_share_program(1);
+        let address = ShareOwner::Taproot(make_test_share_program(1));
 
         let transaction =
             build_sharechain_coinbase_transaction(&address, test_weak_block_hash(), &[]);
@@ -176,10 +179,7 @@ mod tests {
 
         let output = &transaction.output[0];
         assert_eq!(output.value, bitcoin::Amount::from_int_btc(SHARE_VALUE));
-        assert_eq!(
-            output.script_pubkey,
-            ScriptBuf::new_witness_program(&address)
-        );
+        assert_eq!(output.script_pubkey, address.script_pubkey());
 
         let commitment_output = &transaction.output[1];
         assert_eq!(commitment_output.value, bitcoin::Amount::ZERO);
@@ -199,7 +199,7 @@ mod tests {
 
     #[test]
     fn test_create_share_block_coinbase_transaction_with_share_transactions() {
-        let address = make_test_share_program(1);
+        let address = ShareOwner::Taproot(make_test_share_program(1));
 
         // Build two non-coinbase share transactions with distinct witnesses,
         // so each produces a different wtxid and contributes to the witness
@@ -269,10 +269,7 @@ mod tests {
 
         let output = &coinbase_transaction.output[0];
         assert_eq!(output.value, bitcoin::Amount::from_int_btc(SHARE_VALUE));
-        assert_eq!(
-            output.script_pubkey,
-            ScriptBuf::new_witness_program(&address)
-        );
+        assert_eq!(output.script_pubkey, address.script_pubkey());
 
         let commitment_output = &coinbase_transaction.output[1];
         assert_eq!(commitment_output.value, bitcoin::Amount::ZERO);
@@ -314,6 +311,7 @@ mod share_coinbase_tests {
     use super::tests::test_weak_block_hash;
     use super::*;
     use crate::test_utils::make_test_share_program;
+    use bitcoin::ScriptBuf;
 
     /// A non-coinbase share transaction spending a distinct outpoint, so it has
     /// its own txid and moves the root.
@@ -343,7 +341,7 @@ mod share_coinbase_tests {
     /// outpoint -- a miner with ten thousand shares would hold one unit.
     #[test]
     fn two_shares_from_one_miner_have_different_coinbase_txids() {
-        let address = make_test_share_program(1);
+        let address = ShareOwner::Taproot(make_test_share_program(1));
 
         let first = build_sharechain_coinbase_transaction(
             &address,
@@ -363,7 +361,7 @@ mod share_coinbase_tests {
     /// same inputs must always give the same transaction.
     #[test]
     fn coinbase_is_deterministic_for_the_same_inputs() {
-        let address = make_test_share_program(1);
+        let address = ShareOwner::Taproot(make_test_share_program(1));
         assert_eq!(
             build_sharechain_coinbase_transaction(&address, test_weak_block_hash(), &[]),
             build_sharechain_coinbase_transaction(&address, test_weak_block_hash(), &[])
@@ -375,12 +373,12 @@ mod share_coinbase_tests {
     #[test]
     fn different_miners_give_different_coinbase_txids() {
         let first = build_sharechain_coinbase_transaction(
-            &make_test_share_program(1),
+            &ShareOwner::Taproot(make_test_share_program(1)),
             test_weak_block_hash(),
             &[],
         );
         let second = build_sharechain_coinbase_transaction(
-            &make_test_share_program(2),
+            &ShareOwner::Taproot(make_test_share_program(2)),
             test_weak_block_hash(),
             &[],
         );
@@ -392,7 +390,7 @@ mod share_coinbase_tests {
     /// witness commitment output, so its own txid moves when they change.
     #[test]
     fn coinbase_txid_depends_on_the_other_transactions() {
-        let address = make_test_share_program(1);
+        let address = ShareOwner::Taproot(make_test_share_program(1));
         let alone = build_sharechain_coinbase_transaction(&address, test_weak_block_hash(), &[]);
         let with_transaction = build_sharechain_coinbase_transaction(
             &address,
@@ -446,5 +444,16 @@ mod share_coinbase_tests {
             compute_non_coinbase_root(&transactions),
             compute_non_coinbase_root(&transactions)
         );
+    }
+
+    #[test]
+    fn bitcoin_cash_coinbase_pays_p2pkh_and_omits_the_witness_commitment() {
+        let owner = ShareOwner::CashP2pkh([0x22; 20]);
+        let transaction =
+            build_sharechain_coinbase_transaction(&owner, test_weak_block_hash(), &[]);
+        assert_eq!(transaction.output.len(), 1);
+        assert_eq!(transaction.output[0].script_pubkey, owner.script_pubkey());
+        assert!(transaction.output[0].script_pubkey.is_p2pkh());
+        assert!(transaction.input[0].witness.is_empty());
     }
 }

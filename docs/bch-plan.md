@@ -19,11 +19,23 @@ and Clippy with all targets and features and warnings denied. Native Windows
 builds used `SECP256K1_STATIC` and `ENABLE_MODULE_ELLSWIFT` compiler defines;
 no dependency source or consensus checks were disabled.
 
-This is a foundation checkpoint: the BCH fetch path is not yet selected by
-node startup. The BCH share identities and consensus, CashAddr payouts,
-main/mini genesis and difficulty settings, Stratum V2 and Job Declaration,
-merge-mining commitments, and live regtest/chipnet mining validation remain
-unfinished. The upstream Bitcoin test suite passing does not validate those
+Startup now selects the template source. `chain = "bitcoin-cash"` with
+`bitcoin_cash_network` set to mainnet, chipnet, or regtest asks BCHN for a template
+and accepts CashAddr P2PKH and P2SH payouts for that prefix. Bitcoin
+configuration is unchanged when `chain` is omitted.
+
+A share header stores either a Bitcoin taproot witness program or a Bitcoin
+Cash 20-byte P2PKH hash. Taproot bytes are unchanged: version, length, then
+the program. The cash form starts with tag `0x20`, which is not a witness
+version, so a Bitcoin decoder rejects it. Cash share addresses are CashAddr
+P2PKH under `p2pool`, `tp2pool`, and `rp2pool`. The coinbase pays that P2PKH
+script and does not add a BIP141 witness commitment. Stratum `p2p=` on a
+Bitcoin Cash node parses that CashAddr form. Payout CashAddr and Bitcoin
+bech32m share addresses are rejected there.
+
+Still unfinished: main and mini genesis and difficulty, Stratum V2 with both
+Job Declaration modes, merge-mining commitments, and live regtest or chipnet
+mining. The upstream Bitcoin test suite passing does not validate those
 BCH requirements.
 
 ## Startup selection (2026-10-13)
@@ -39,8 +51,10 @@ CashAddr for the selected prefix (`bitcoincash`, `bchtest`, `bchreg`).
 Chipnet uses `bchtest`. A Bitcoin witness payout is rejected so it cannot
 be written into a Bitcoin Cash coinbase.
 
-The share-chain `network` field, genesis, share addresses, and Stratum
-server are unchanged. This is still not a working Bitcoin Cash pool.
+The share-chain `network` field still selects genesis. On `bitcoin-cash`, a
+configured `miner_address` is a CashAddr share address (`p2pool`, `tp2pool`,
+or `rp2pool`) and the header stores that P2PKH hash. Genesis, difficulty,
+and Stratum V2 are unchanged. This is still not a working Bitcoin Cash pool.
 
 ## Goal
 

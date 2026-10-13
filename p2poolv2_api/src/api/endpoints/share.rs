@@ -9,7 +9,7 @@ use axum::{
     extract::{Query, State},
 };
 use bitcoin::{BlockHash, Network};
-use p2poolv2_lib::address::witness_program_codec::to_address_string;
+use p2poolv2_lib::address::share_owner::to_address_string;
 use p2poolv2_lib::shares::chain::chain_store_handle::ChainStoreHandle;
 use p2poolv2_lib::store::dag_store::MAX_UNCLES_DEPTH;
 use p2poolv2_lib::store::writer::StoreError;

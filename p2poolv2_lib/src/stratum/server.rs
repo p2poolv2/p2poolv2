@@ -4,6 +4,7 @@
 
 use crate::accounting::stats::metrics;
 use crate::address::Address as P2PoolAddress;
+use crate::config::Chain;
 pub use crate::config::PoolMode;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
@@ -49,6 +50,12 @@ pub struct StratumServer {
     pub mode: PoolMode,
     /// Pool wide share chain address from `[stratum] miner_address`, if set.
     pub miner_address: Option<P2PoolAddress>,
+    /// Bitcoin keeps taproot share addresses. Bitcoin Cash parses CashAddr.
+    pub share_chain: Chain,
+    /// Prefix a Bitcoin Cash share address must use. None on Bitcoin.
+    pub bch_share_network: Option<p2poolv2_wallet::bch_share::BchShareNetwork>,
+    /// Pool wide Bitcoin Cash share hash, when the operator configured one.
+    pub cash_share: Option<[u8; 20]>,
     shutdown_rx: oneshot::Receiver<()>,
     connections_handle: ClientConnectionsHandle,
     emissions_tx: EmissionSender,
@@ -76,6 +83,9 @@ pub struct StratumServerBuilder {
     chain_store_handle: Option<ChainStoreHandle>,
     mode: Option<PoolMode>,
     miner_address: Option<P2PoolAddress>,
+    share_chain: Chain,
+    bch_share_network: Option<p2poolv2_wallet::bch_share::BchShareNetwork>,
+    cash_share: Option<[u8; 20]>,
 }
 
 impl StratumServerBuilder {
@@ -169,6 +179,24 @@ impl StratumServerBuilder {
         self
     }
 
+    pub fn share_chain(mut self, share_chain: Chain) -> Self {
+        self.share_chain = share_chain;
+        self
+    }
+
+    pub fn bch_share_network(
+        mut self,
+        bch_share_network: Option<p2poolv2_wallet::bch_share::BchShareNetwork>,
+    ) -> Self {
+        self.bch_share_network = bch_share_network;
+        self
+    }
+
+    pub fn cash_share(mut self, cash_share: Option<[u8; 20]>) -> Self {
+        self.cash_share = cash_share;
+        self
+    }
+
     pub async fn build(self) -> Result<StratumServer, Box<dyn std::error::Error + Send + Sync>> {
         Ok(StratumServer {
             hostname: self.hostname.ok_or("hostname is required")?,
@@ -195,6 +223,9 @@ impl StratumServerBuilder {
             wait_for_chain_sync: self.wait_for_chain_sync.unwrap_or(true),
             mode: self.mode.unwrap_or_default(),
             miner_address: self.miner_address,
+            share_chain: self.share_chain,
+            bch_share_network: self.bch_share_network,
+            cash_share: self.cash_share,
             chain_store_handle: self
                 .chain_store_handle
                 .ok_or("chain store handle is required")?,
@@ -315,6 +346,9 @@ impl StratumServer {
                                         chain_store_handle: self.chain_store_handle.clone(),
                                         mode: self.mode,
                                         miner_address: self.miner_address,
+                                        share_chain: self.share_chain,
+                                        bch_share_network: self.bch_share_network,
+                                        cash_share: self.cash_share,
                                     };
                                     accept_connection(
                                         stream,
@@ -440,6 +474,12 @@ pub(crate) struct StratumContext {
     /// operator configured one. Every share then carries it as its miner
     /// address, and a miner sending a different `p2p=` is rejected at authorize.
     pub miner_address: Option<P2PoolAddress>,
+    /// Which share identity authorize and the work notify use.
+    pub share_chain: Chain,
+    /// Required when [`share_chain`](Self::share_chain) is Bitcoin Cash.
+    pub bch_share_network: Option<p2poolv2_wallet::bch_share::BchShareNetwork>,
+    /// Configured Bitcoin Cash share hash. None when each miner sends `p2p=`.
+    pub cash_share: Option<[u8; 20]>,
 }
 
 /// Handles a single connection to the Stratum server.  This function
@@ -498,10 +538,7 @@ where
                 let (commitment_address, share_address) = if is_hydrapool {
                     (None, None)
                 } else {
-                    (
-                        session.parsed_address.as_ref(),
-                        session.miner_address.as_ref(),
-                    )
+                    (session.parsed_address.as_ref(), session.share_owner)
                 };
                 match build_notify_from_prepared(
                     &prepared,
@@ -554,7 +591,7 @@ where
                     let (commitment_address, share_address) = if is_hydrapool {
                         (None, None)
                     } else {
-                        (session.parsed_address.as_ref(), session.miner_address.as_ref())
+                        (session.parsed_address.as_ref(), session.share_owner)
                     };
                     match build_notify_from_prepared(&prepared, commitment_address, share_address, &ctx.tracker_handle) {
                         Ok(notify_json) => {
@@ -812,6 +849,9 @@ mod stratum_server_tests {
             chain_store_handle,
             mode: PoolMode::P2poolv2,
             miner_address: Some(make_test_share_address(1, bitcoin::Network::Testnet4)),
+            share_chain: crate::config::Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
         };
 
         // Run the handler
@@ -934,6 +974,9 @@ mod stratum_server_tests {
             chain_store_handle,
             mode: PoolMode::P2poolv2,
             miner_address: Some(make_test_share_address(1, bitcoin::Network::Testnet4)),
+            share_chain: crate::config::Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
         };
 
         // Run the handler
@@ -1017,6 +1060,9 @@ mod stratum_server_tests {
             chain_store_handle,
             mode: PoolMode::P2poolv2,
             miner_address: Some(make_test_share_address(1, bitcoin::Network::Testnet4)),
+            share_chain: crate::config::Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
         };
 
         // Run the handler
@@ -1098,6 +1144,9 @@ mod stratum_server_tests {
             chain_store_handle,
             mode: PoolMode::P2poolv2,
             miner_address: Some(make_test_share_address(1, bitcoin::Network::Testnet4)),
+            share_chain: crate::config::Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
         };
 
         // Run the handler
@@ -1198,6 +1247,9 @@ mod stratum_server_tests {
             chain_store_handle,
             mode: PoolMode::P2poolv2,
             miner_address: Some(make_test_share_address(1, bitcoin::Network::Testnet4)),
+            share_chain: crate::config::Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
         };
 
         // Spawn the handler in a separate task
@@ -1318,6 +1370,9 @@ mod stratum_server_tests {
             chain_store_handle,
             mode: PoolMode::P2poolv2,
             miner_address: Some(make_test_share_address(1, bitcoin::Network::Testnet4)),
+            share_chain: crate::config::Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
         };
 
         // Spawn the handler in a separate task
@@ -1428,6 +1483,9 @@ mod stratum_server_tests {
                 chain_store_handle,
                 mode: PoolMode::P2poolv2,
                 miner_address: Some(make_test_share_address(1, bitcoin::Network::Testnet4)),
+                share_chain: crate::config::Chain::Bitcoin,
+                bch_share_network: None,
+                cash_share: None,
             };
 
             // wait for subscribe/authorize messages
@@ -1510,6 +1568,9 @@ mod stratum_server_tests {
                 chain_store_handle,
                 mode: PoolMode::P2poolv2,
                 miner_address: Some(make_test_share_address(1, bitcoin::Network::Testnet4)),
+                share_chain: crate::config::Chain::Bitcoin,
+                bch_share_network: None,
+                cash_share: None,
             };
 
             let subscribe_message =
@@ -1648,6 +1709,9 @@ mod stratum_server_tests {
             chain_store_handle,
             mode: PoolMode::P2poolv2,
             miner_address: Some(make_test_share_address(1, bitcoin::Network::Testnet4)),
+            share_chain: crate::config::Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
         };
 
         // Pre-load a template before starting handle_connection
@@ -1776,6 +1840,9 @@ mod stratum_server_tests {
             chain_store_handle,
             mode: PoolMode::P2poolv2,
             miner_address: Some(make_test_share_address(1, bitcoin::Network::Testnet4)),
+            share_chain: crate::config::Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
         };
 
         // Start with no template - will send one after authorization
@@ -1914,6 +1981,9 @@ mod stratum_server_tests {
             chain_store_handle,
             mode: PoolMode::P2poolv2,
             miner_address: Some(make_test_share_address(1, bitcoin::Network::Testnet4)),
+            share_chain: crate::config::Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
         };
 
         let (template_tx, template_rx) = watch::channel(None);

@@ -18,13 +18,11 @@ use bitcoin::consensus::encode::Error::ParseFailed;
 use bitcoin::secp256k1::Secp256k1;
 use bitcoin::{
     Address, BlockHash, CompactTarget, CompressedPublicKey, Target, TxMerkleNode, Txid, VarInt,
-    WitnessProgram,
     block::Header,
     consensus::{Decodable, Encodable},
     hashes::Hash,
 };
 use core::mem;
-use p2poolv2_wallet::witness_program_codec;
 use serde::{Deserialize, Serialize};
 pub use share_transaction::{
     DuplicatePrevoutError, ShareTransaction, SpendingPrevouts, extract_spending_prevouts,
@@ -69,8 +67,8 @@ pub struct ShareHeader {
     /// address matters. Storing it would let one output be spelled four ways, and
     /// since `block_hash` covers every field, each spelling would be a
     /// distinct block carrying the same proof of work.
-    #[serde(with = "p2poolv2_wallet::witness_program_codec::serde_hex")]
-    pub miner_address: WitnessProgram,
+    #[serde(with = "p2poolv2_wallet::share_owner::serde_hex")]
+    pub miner_address: p2poolv2_wallet::share_owner::ShareOwner,
     /// Share block transactions merkle root - from blocktemplate
     pub merkle_root: TxMerkleNode,
     /// Bitcoin header the share is found for
@@ -275,7 +273,7 @@ impl ShareHeader {
         len += self.prev_share_blockhash.consensus_encode(w)?;
         len += self.uncles.consensus_encode(w)?;
         len += encode_address(&self.miner_bitcoin_address, w)?;
-        len += witness_program_codec::consensus_encode(&self.miner_address, w)?;
+        len += p2poolv2_wallet::share_owner::consensus_encode(&self.miner_address, w)?;
         len += self.merkle_root.consensus_encode(w)?;
         len += self.bitcoin_header.version.consensus_encode(w)?;
         len += self.bitcoin_header.prev_blockhash.consensus_encode(w)?;
@@ -322,7 +320,7 @@ impl ShareHeader {
         let prev_share_blockhash = BlockHash::consensus_decode(r)?;
         let uncles = Vec::<BlockHash>::consensus_decode(r)?;
         let miner_bitcoin_address = decode_address(r)?;
-        let miner_address = witness_program_codec::consensus_decode(r)?;
+        let miner_address = p2poolv2_wallet::share_owner::consensus_decode(r)?;
         let merkle_root = TxMerkleNode::consensus_decode(r)?;
         let bitcoin_version = bitcoin::block::Version::consensus_decode(r)?;
         let bitcoin_prev_blockhash = BlockHash::consensus_decode(r)?;
@@ -489,7 +487,8 @@ impl ShareBlock {
             network,
             &secp,
         )?
-        .witness_program();
+        .witness_program()
+        .into();
         let block_hex = hex::decode(genesis_data.bitcoin_block_hex).unwrap();
         // panic here, as if the genesis block is bad, we bail at the start of the process
         let bitcoin_block: bitcoin::Block = match bitcoin::consensus::deserialize(&block_hex) {
@@ -753,7 +752,7 @@ mod tests {
         // is the payout identity on bitcoin and is not this output.
         assert_eq!(
             output.script_pubkey,
-            ScriptBuf::new_witness_program(&share.header.miner_address)
+            share.header.miner_address.script_pubkey()
         );
         assert_ne!(
             output.script_pubkey,
@@ -783,7 +782,7 @@ mod tests {
         // Verify the output script matches the builder's share chain address
         assert_eq!(
             output.script_pubkey,
-            ScriptBuf::new_witness_program(&share_block.header.miner_address)
+            share_block.header.miner_address.script_pubkey()
         );
     }
 
@@ -828,7 +827,7 @@ mod tests {
 
         let share_address = make_test_share_program(1);
         let commitment = ShareCommitment {
-            miner_address: share_address,
+            miner_address: share_address.into(),
             non_coinbase_root: compute_non_coinbase_root(&[]),
             prev_share_blockhash: BlockHash::from_str(
                 "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4",

@@ -8,8 +8,8 @@
 //! directly, without requiring a running node or API server.
 
 use bitcoin::BlockHash;
-use bitcoin::{Network, WitnessProgram};
-use p2poolv2_lib::address::witness_program_codec::{to_address_string, to_hex};
+use bitcoin::Network;
+use p2poolv2_lib::address::share_owner::{self, ShareOwner};
 use p2poolv2_lib::address_display::{DagEntryDisplay, ShareInfoDisplay};
 use p2poolv2_lib::store::Store;
 use p2poolv2_lib::store::dag_store::{DagEntry, MAX_UNCLES_DEPTH};
@@ -301,10 +301,10 @@ fn dag_response(
 /// no human readable part to choose, and guessing one would print an address
 /// that names a chain this node may not be on, so the program hex is shown
 /// instead. Supply `--config` to see the address form.
-fn miner_address_display(witness_program: &WitnessProgram, network: Option<Network>) -> String {
+fn miner_address_display(owner: &ShareOwner, network: Option<Network>) -> String {
     match network {
-        Some(network) => to_address_string(witness_program, network),
-        None => to_hex(witness_program),
+        Some(network) => share_owner::to_address_string(owner, network),
+        None => share_owner::to_hex(owner),
     }
 }
 
@@ -316,8 +316,8 @@ fn miner_address_display(witness_program: &WitnessProgram, network: Option<Netwo
 /// Truncated from both ends rather than the head: every share chain address on
 /// a given network begins with the same prefix, so a head-only slice renders
 /// every miner identically.
-fn short_miner_address(witness_program: &WitnessProgram, network: Option<Network>) -> String {
-    ends(&miner_address_display(witness_program, network), 6)
+fn short_miner_address(owner: &ShareOwner, network: Option<Network>) -> String {
+    ends(&miner_address_display(owner, network), 6)
 }
 
 /// Truncate to the first and last `n` characters, joined by an ellipsis.
@@ -677,6 +677,7 @@ fn lookup_by_height(
 mod tests {
     use super::*;
     use bitcoin::hashes::Hash as HashTrait;
+    use p2poolv2_lib::address::witness_program_codec::{to_address_string, to_hex};
     use p2poolv2_lib::store::dag_store::UncleInfo;
     use p2poolv2_lib::test_utils::make_test_share_program;
     use p2poolv2_lib::test_utils::{genesis_for_tests, setup_test_chain_store_handle};
@@ -873,7 +874,7 @@ mod tests {
     #[test]
     fn miner_address_display_falls_back_to_hex_without_a_network() {
         assert_eq!(
-            miner_address_display(&make_test_share_program(1), None),
+            miner_address_display(&ShareOwner::from(make_test_share_program(1)), None),
             to_hex(&make_test_share_program(1))
         );
     }
@@ -882,8 +883,14 @@ mod tests {
     /// every share address on a network shares its leading characters.
     #[test]
     fn short_miner_address_keeps_both_ends_so_miners_stay_distinguishable() {
-        let first = short_miner_address(&make_test_share_program(1), Some(Network::Signet));
-        let second = short_miner_address(&make_test_share_program(2), Some(Network::Signet));
+        let first = short_miner_address(
+            &ShareOwner::from(make_test_share_program(1)),
+            Some(Network::Signet),
+        );
+        let second = short_miner_address(
+            &ShareOwner::from(make_test_share_program(2)),
+            Some(Network::Signet),
+        );
         assert_ne!(first, second);
     }
 
@@ -894,14 +901,14 @@ mod tests {
             prev_blockhash: BlockHash::all_zeros(),
             height: 2,
             miner_bitcoin_address: "tb1qx6e0gj7q7xurl08cwnpmeve6w6zf4tw6vfwe3f".to_string(),
-            miner_address: make_test_share_program(1),
+            miner_address: make_test_share_program(1).into(),
             timestamp: 200,
             bits: CompactTarget::from_consensus(0x1d00ffff),
             uncles: vec![UncleInfo {
                 blockhash: BlockHash::all_zeros(),
                 prev_blockhash: BlockHash::all_zeros(),
                 miner_bitcoin_address: "tb1qx6e0gj7q7xurl08cwnpmeve6w6zf4tw6vfwe3f".to_string(),
-                miner_address: make_test_share_program(2),
+                miner_address: make_test_share_program(2).into(),
                 timestamp: 100,
                 height: Some(1),
             }],
@@ -955,7 +962,7 @@ mod tests {
             parent: BlockHash::all_zeros(),
             uncles: vec![],
             miner_bitcoin_address: "tb1qx6e0gj7q7xurl08cwnpmeve6w6zf4tw6vfwe3f".to_string(),
-            miner_address: Some(make_test_share_program(1)),
+            miner_address: Some(make_test_share_program(1).into()),
             has_block_data: true,
         }];
         let response = dag_response(0, 1, &entries, Some(Network::Signet));
@@ -981,7 +988,7 @@ mod tests {
             .unwrap(),
             height: 1,
             miner_bitcoin_address: "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q".to_string(),
-            miner_address: make_test_share_program(1),
+            miner_address: make_test_share_program(1).into(),
             timestamp: 1700000000,
             bits: CompactTarget::from_consensus(0x1d00ffff),
             uncles: vec![p2poolv2_lib::store::dag_store::UncleInfo {
@@ -994,7 +1001,7 @@ mod tests {
                 )
                 .unwrap(),
                 miner_bitcoin_address: "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string(),
-                miner_address: make_test_share_program(2),
+                miner_address: make_test_share_program(2).into(),
                 timestamp: 1699999990,
                 height: Some(1),
             }],

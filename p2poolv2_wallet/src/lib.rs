@@ -74,7 +74,13 @@
 //!
 //! This module never generates, stores or handles a private key. The node only
 //! needs the address to build a share coinbase output.
+//!
+//! Bitcoin Cash has no taproot, so its share identity is a separate CashAddr
+//! P2PKH in [`bch_share`]. The bech32m form above stays the Bitcoin share
+//! address.
 
+pub mod bch_share;
+pub mod share_owner;
 pub mod witness_program_codec;
 
 use bitcoin::bech32::primitives::decode::{PaddingError, SegwitHrpstringError};

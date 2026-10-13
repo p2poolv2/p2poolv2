@@ -6,12 +6,10 @@ use super::address_serde;
 use super::option_address_serde;
 use super::share_block::{ShareBlock, ShareHeader};
 use super::transactions::coinbase::compute_non_coinbase_root;
-use bitcoin::WitnessProgram;
 use bitcoin::consensus::Encodable;
 use bitcoin::hashes::Hash;
 use bitcoin::io::Write;
 use bitcoin::{Address, BlockHash, CompactTarget, TxMerkleNode, hashes};
-use p2poolv2_wallet::witness_program_codec;
 use serde::Serialize;
 
 /// Share commitment created by miner and embedded in the bitcoin
@@ -44,8 +42,8 @@ pub struct ShareCommitment {
     /// Hashed directly. The coinbase is no longer in the commitment,
     /// as it carries the weak block hash, so this is now the only thing
     /// binding a miner to the proof of work produced.
-    #[serde(with = "p2poolv2_wallet::witness_program_codec::serde_hex")]
-    pub miner_address: WitnessProgram,
+    #[serde(with = "p2poolv2_wallet::share_owner::serde_hex")]
+    pub miner_address: p2poolv2_wallet::share_owner::ShareOwner,
     /// Merkle root over this share's *non-coinbase* transactions.
     ///
     /// The coinbase is deliberately absent: it carries the weak block hash, so
@@ -165,7 +163,7 @@ pub(crate) fn commitment_digest(
     time: u32,
     suffix: &[u8],
     miner_bitcoin_address: Option<&Address>,
-    miner_address: Option<WitnessProgram>,
+    miner_address: Option<p2poolv2_wallet::share_owner::ShareOwner>,
 ) -> hashes::sha256::Hash {
     let mut serialized = Vec::with_capacity(
         prefix.len() + COMMITMENT_TIME_SIZE + suffix.len() + COMMITMENT_TAIL_SIZE,
@@ -182,7 +180,7 @@ pub(crate) fn commitment_digest(
             .expect("encoding address script_pubkey should never fail");
     }
     if let Some(program) = miner_address {
-        witness_program_codec::consensus_encode(&program, &mut serialized)
+        p2poolv2_wallet::share_owner::consensus_encode(&program, &mut serialized)
             .expect("encoding miner address should never fail");
     }
 
@@ -377,7 +375,7 @@ mod tests {
             commitment1.miner_bitcoin_address, commitment2.miner_bitcoin_address,
             "only the share address may differ for this test to mean anything"
         );
-        commitment2.miner_address = make_test_share_program(2);
+        commitment2.miner_address = make_test_share_program(2).into();
 
         assert_ne!(commitment1.hash(), commitment2.hash());
     }

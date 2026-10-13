@@ -10,7 +10,6 @@ use super::error::WorkError;
 use super::gbt::build_merkle_branches_for_template;
 use super::tracker::JobTracker;
 use crate::accounting::OutputPair;
-use crate::address::Address as P2PoolAddress;
 use crate::shares::share_commitment::{
     ShareCommitment, build_commitment_prefix, build_commitment_suffix, commitment_digest,
 };
@@ -18,7 +17,6 @@ use crate::shares::transactions::coinbase::compute_non_coinbase_root;
 use crate::shares::witness_commitment::WitnessCommitment;
 use crate::stratum::util::{reverse_four_byte_chunks, to_be_hex};
 use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
-use bitcoin::WitnessProgram;
 use bitcoin::hashes::{self, Hash};
 use bitcoin::transaction::Version;
 use bitcoin::{Address, BlockHash, CompactTarget};
@@ -422,7 +420,7 @@ fn get_commitment_hex(
     time: u32,
     commitment_suffix: &[u8],
     miner_bitcoin_address: Option<&Address>,
-    miner_address: Option<WitnessProgram>,
+    miner_address: Option<p2poolv2_wallet::share_owner::ShareOwner>,
 ) -> String {
     let digest = commitment_digest(
         commitment_prefix,
@@ -468,7 +466,7 @@ fn build_per_miner_coinbase2(
 pub(crate) fn build_notify_from_prepared(
     prepared: &PreparedNotifyParams,
     miner_bitcoin_address: Option<&Address>,
-    miner_address: Option<&P2PoolAddress>,
+    miner_address: Option<p2poolv2_wallet::share_owner::ShareOwner>,
     tracker_handle: &JobTracker,
 ) -> Result<String, WorkError> {
     let fresh_time = SystemTimeProvider.seconds_since_epoch() as u32;
@@ -482,7 +480,7 @@ pub(crate) fn build_notify_from_prepared(
             prev_share_blockhash: prepared.prev_share_blockhash,
             uncles: prepared.uncles.clone(),
             miner_bitcoin_address: bitcoin_address.clone(),
-            miner_address: share_address.witness_program(),
+            miner_address: share_address,
             non_coinbase_root: compute_non_coinbase_root(&[]),
             bits: prepared.bits,
             time: fresh_time,
@@ -503,7 +501,7 @@ pub(crate) fn build_notify_from_prepared(
         fresh_time,
         &prepared.commitment_suffix,
         miner_bitcoin_address,
-        miner_address.map(|address| address.witness_program()),
+        miner_address,
     );
 
     // Build per-miner coinbase2
@@ -618,7 +616,9 @@ mod tests {
         let notify_json = build_notify_from_prepared(
             &prepared,
             Some(&address),
-            Some(&make_test_share_address(1, bitcoin::Network::Signet)),
+            Some(p2poolv2_wallet::share_owner::ShareOwner::Taproot(
+                make_test_share_address(1, bitcoin::Network::Signet).witness_program(),
+            )),
             &tracker_handle,
         )
         .expect("build_notify_from_prepared should succeed");
@@ -667,7 +667,9 @@ mod tests {
         let notify_json = build_notify_from_prepared(
             &prepared,
             Some(&address),
-            Some(&make_test_share_address(1, bitcoin::Network::Signet)),
+            Some(p2poolv2_wallet::share_owner::ShareOwner::Taproot(
+                make_test_share_address(1, bitcoin::Network::Signet).witness_program(),
+            )),
             &tracker_handle,
         )
         .expect("build_notify_from_prepared should succeed");
@@ -685,7 +687,7 @@ mod tests {
             prev_share_blockhash: BlockHash::all_zeros(),
             uncles: Vec::new(),
             miner_bitcoin_address: address,
-            miner_address: make_test_share_program(1),
+            miner_address: make_test_share_program(1).into(),
             non_coinbase_root: compute_non_coinbase_root(&[]),
             bits,
             time: commitment.time,
@@ -720,14 +722,14 @@ mod tests {
             time,
             &prepared.commitment_suffix,
             Some(&address1),
-            Some(share_address),
+            Some(share_address.into()),
         );
         let hash2 = get_commitment_hex(
             &prepared.commitment_prefix,
             time,
             &prepared.commitment_suffix,
             Some(&address2),
-            Some(share_address),
+            Some(share_address.into()),
         );
 
         assert_ne!(
@@ -765,14 +767,14 @@ mod tests {
             time,
             &prepared.commitment_suffix,
             Some(&bitcoin_address),
-            Some(share_address),
+            Some(share_address.into()),
         );
 
         let commitment = ShareCommitment {
             prev_share_blockhash: prepared.prev_share_blockhash,
             uncles: prepared.uncles.clone(),
             miner_bitcoin_address: bitcoin_address,
-            miner_address: share_address,
+            miner_address: share_address.into(),
             non_coinbase_root,
             bits: prepared.bits,
             time,
@@ -805,14 +807,14 @@ mod tests {
             time,
             &prepared.commitment_suffix,
             Some(&bitcoin_address),
-            Some(share_address1),
+            Some(share_address1.into()),
         );
         let hash2 = get_commitment_hex(
             &prepared.commitment_prefix,
             time,
             &prepared.commitment_suffix,
             Some(&bitcoin_address),
-            Some(share_address2),
+            Some(share_address2.into()),
         );
 
         assert_ne!(

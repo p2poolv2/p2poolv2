@@ -95,7 +95,7 @@ mod tests {
     use axum::extract::{Query, State};
     use bitcoin::Network;
     use p2poolv2_lib::accounting::stats::metrics;
-    use p2poolv2_lib::address::witness_program_codec::to_address_string;
+    use p2poolv2_lib::address::share_owner::to_address_string;
     use p2poolv2_lib::monitoring_events::create_monitoring_event_channel;
     use p2poolv2_lib::node::actor::NodeHandle;
     use p2poolv2_lib::stratum::work::tracker::start_tracker_actor;

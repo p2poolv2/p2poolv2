@@ -413,6 +413,18 @@ The practical consequence for miners: use a key your wallet manages and
 can export later, not a throwaway. Shares accrue to that key now and
 become spendable when the wallet side ships.
 
+## Bitcoin Cash
+
+Bitcoin Cash does not use this bech32m form. Its share owner is a 20-byte
+P2PKH hash, encoded in the header as tag `0x20`, a length byte of 20, then
+the hash. Tag `0x20` is outside witness versions 0 through 16, so a decoder
+of the Bitcoin layout rejects a cash share, and a decoder that still accepts
+those versions reads an old taproot share unchanged. The text form is
+CashAddr with prefixes `p2pool`, `tp2pool`, and `rp2pool`. Payout CashAddr
+(`bitcoincash`, `bchtest`, `bchreg`) is a different string and is not a
+share address. See `p2poolv2_wallet::bch_share` and
+`p2poolv2_wallet::share_owner`.
+
 ## Registration
 
 The HRPs are not yet registered in SLIP-173. Registration is intended,

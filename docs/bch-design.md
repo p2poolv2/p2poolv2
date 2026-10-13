@@ -21,9 +21,10 @@ cannot tell chipnet from testnet3 or testnet4. The Bitcoin Cash RPC URL is
 what points the node at chipnet.
 
 `stratum.network` stays the share-chain network (`main`, `testnet4`,
-`signet`, `regtest`). Share addresses, genesis, and ASERT difficulty still
-read it. Setting `chain = "bitcoin-cash"` does not create a Bitcoin Cash
-share chain.
+`signet`, `regtest`). Genesis and ASERT difficulty still read it. A Bitcoin
+Cash `miner_address` uses `bitcoin_cash_network` and the prefixes `p2pool`,
+`tp2pool`, and `rp2pool`. Setting `chain = "bitcoin-cash"` does not create a
+new share-chain genesis.
 
 A Bitcoin Cash startup that would encode a witness payout is rejected at
 config parse. CashAddr decoding accepts only 20-byte P2PKH and P2SH. The
@@ -38,10 +39,11 @@ ZMQ paths both use this check.
 - **Segwit removal.** Not done. Witness commitments and share-chain script
   validation are still the Bitcoin implementation. This change only refuses
   to turn a template that still carries those fields into a Bitcoin Cash job.
-- **Share chain addresses.** Not done. `miner_address` stays bech32m over a
-  taproot output key. CashAddr here is only the coinbase payout address
-  (`miner_bitcoin_address` in the share header's terms), which is a different
-  field and does not own shares.
+- **Share chain addresses.** A header stores `ShareOwner`. Bitcoin stays a
+  taproot witness program. Bitcoin Cash stores a 20-byte P2PKH hash under
+  tag `0x20`, addressed as CashAddr `p2pool`, `tp2pool`, or `rp2pool`. That
+  string is not the payout CashAddr (`miner_bitcoin_address`). Genesis is
+  still the Bitcoin share chain.
 - **Share trading.** Waits. The mini share chain is the stand-in named in the
   plan, and the atomic-swap scripts are not ported. No v1 code is copied.
 - **Block rules.** CTOR, compact-target agreement, witness exclusion, and the
@@ -63,8 +65,8 @@ ZMQ paths both use this check.
 
 ## Still unfinished
 
-Share-chain identities and consensus, main and mini genesis, Stratum V2
-with both Job Declaration modes, the merge-mining commitment, and live
-regtest or chipnet mining. A node started with `chain = "bitcoin-cash"`
-can validate BCHN templates and pay a CashAddr script. It must not be
-treated as a working Bitcoin Cash pool until those items land.
+Main and mini genesis, Stratum V2 with both Job Declaration modes, the
+merge-mining commitment, and live regtest or chipnet mining. A node started
+with `chain = "bitcoin-cash"` can validate BCHN templates, pay a CashAddr
+script, and record a P2PKH share owner. It must not be treated as a working
+Bitcoin Cash pool until those items land.

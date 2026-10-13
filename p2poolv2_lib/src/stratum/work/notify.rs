@@ -285,7 +285,9 @@ mod tests {
         let notify_json = build_notify_from_prepared(
             &prepared,
             Some(&address),
-            Some(&make_test_share_address(1, bitcoin::Network::Signet)),
+            Some(p2poolv2_wallet::share_owner::ShareOwner::Taproot(
+                make_test_share_address(1, bitcoin::Network::Signet).witness_program(),
+            )),
             &tracker_handle,
         )
         .expect("Failed to build notify");
@@ -465,7 +467,9 @@ mod tests {
         let result = build_notify_from_prepared(
             prepared.as_ref().unwrap(),
             Some(&miner_address),
-            Some(&make_test_share_address(1, bitcoin::Network::Signet)),
+            Some(p2poolv2_wallet::share_owner::ShareOwner::Taproot(
+                make_test_share_address(1, bitcoin::Network::Signet).witness_program(),
+            )),
             &tracker_handle,
         );
         assert!(result.is_ok(), "build_notify_from_prepared should succeed");
@@ -535,7 +539,9 @@ mod tests {
         let notify_str = build_notify_from_prepared(
             &prepared,
             Some(&btcaddress),
-            Some(&make_test_share_address(1, bitcoin::Network::Signet)),
+            Some(p2poolv2_wallet::share_owner::ShareOwner::Taproot(
+                make_test_share_address(1, bitcoin::Network::Signet).witness_program(),
+            )),
             &tracker_handle,
         )
         .expect("build_notify_from_prepared should succeed");
@@ -631,7 +637,9 @@ mod tests {
         let notify_json = build_notify_from_prepared(
             &prepared,
             Some(&address),
-            Some(&make_test_share_address(1, bitcoin::Network::Signet)),
+            Some(p2poolv2_wallet::share_owner::ShareOwner::Taproot(
+                make_test_share_address(1, bitcoin::Network::Signet).witness_program(),
+            )),
             &tracker_handle,
         )
         .expect("Failed to build notify");

@@ -17,7 +17,7 @@ use axum::{
     response::Response,
 };
 use bitcoin::Network;
-use p2poolv2_lib::address::witness_program_codec::to_address_string;
+use p2poolv2_lib::address::share_owner::to_address_string;
 use p2poolv2_lib::monitoring_events::{MonitoringEvent, MonitoringEventSender};
 use serde::Deserialize;
 use serde_json::Value;
@@ -210,6 +210,7 @@ fn handle_client_message(text: &str, subscriptions: &mut HashSet<Topic>) {
 mod tests {
     use super::*;
     use bitcoin::hashes::Hash;
+    use p2poolv2_lib::address::witness_program_codec::to_address_string as witness_to_address_string;
     use p2poolv2_lib::monitoring_events::create_monitoring_event_channel;
     use p2poolv2_lib::store::dag_store::{ShareInfo, UncleInfo};
     use p2poolv2_lib::test_utils::make_test_share_program;
@@ -236,7 +237,7 @@ mod tests {
             prev_blockhash: bitcoin::BlockHash::all_zeros(),
             height: 1,
             miner_bitcoin_address: "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q".to_string(),
-            miner_address: make_test_share_program(1),
+            miner_address: make_test_share_program(1).into(),
             timestamp: 0,
             bits: bitcoin::CompactTarget::from_consensus(0x1d00ffff),
             uncles: vec![],
@@ -316,7 +317,7 @@ mod tests {
             prev_blockhash: bitcoin::BlockHash::all_zeros(),
             height: 42,
             miner_bitcoin_address: "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q".to_string(),
-            miner_address: make_test_share_program(1),
+            miner_address: make_test_share_program(1).into(),
             timestamp: 1000,
             bits: bitcoin::CompactTarget::from_consensus(0x1d00ffff),
             uncles: vec![],
@@ -350,7 +351,7 @@ mod tests {
             blockhash: bitcoin::BlockHash::all_zeros(),
             prev_blockhash: bitcoin::BlockHash::all_zeros(),
             miner_bitcoin_address: "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q".to_string(),
-            miner_address: make_test_share_program(2),
+            miner_address: make_test_share_program(2).into(),
             timestamp: 999,
             height: Some(41),
         };
@@ -359,7 +360,7 @@ mod tests {
             prev_blockhash: bitcoin::BlockHash::all_zeros(),
             height: 42,
             miner_bitcoin_address: "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q".to_string(),
-            miner_address: make_test_share_program(1),
+            miner_address: make_test_share_program(1).into(),
             timestamp: 1000,
             bits: bitcoin::CompactTarget::from_consensus(0x1d00ffff),
             uncles: vec![uncle],
@@ -370,11 +371,11 @@ mod tests {
 
         assert_eq!(
             parsed["data"]["miner_address"],
-            to_address_string(&make_test_share_program(1), Network::Signet)
+            witness_to_address_string(&make_test_share_program(1), Network::Signet)
         );
         assert_eq!(
             parsed["data"]["uncles"][0]["miner_address"],
-            to_address_string(&make_test_share_program(2), Network::Signet)
+            witness_to_address_string(&make_test_share_program(2), Network::Signet)
         );
     }
 
@@ -387,7 +388,7 @@ mod tests {
             prev_blockhash: bitcoin::BlockHash::all_zeros(),
             height: 42,
             miner_bitcoin_address: "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q".to_string(),
-            miner_address: make_test_share_program(1),
+            miner_address: make_test_share_program(1).into(),
             timestamp: 1000,
             bits: bitcoin::CompactTarget::from_consensus(0x1d00ffff),
             uncles: vec![],
@@ -429,7 +430,7 @@ mod tests {
             prev_blockhash: bitcoin::BlockHash::all_zeros(),
             height: 1,
             miner_bitcoin_address: "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string(),
-            miner_address: make_test_share_program(1),
+            miner_address: make_test_share_program(1).into(),
             timestamp: 0,
             bits: bitcoin::CompactTarget::from_consensus(0x1d00ffff),
             uncles: vec![],

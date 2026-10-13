@@ -8,6 +8,7 @@ use bitcoin::address::NetworkChecked;
 use bitcoin::{Address, Network};
 use bitcoindrpc::BitcoinRpcConfig;
 use p2poolv2_wallet::Address as ShareAddress;
+use p2poolv2_wallet::bch_share::{self, BchShareAddress, BchShareNetwork};
 use serde::Deserialize;
 use std::marker::PhantomData;
 use std::str::FromStr;
@@ -199,8 +200,8 @@ pub struct StratumConfig<State = Raw> {
     /// P2Poolv2 mode only; Hydrapool builds no share commitment.
     pub miner_address: Option<String>,
     /// The network can be "main", "testnet4" or "signet".
-    /// This remains the share-chain network. Bitcoin Cash work uses `chain`
-    /// and `bitcoin_cash_network`; share identities are not ported yet.
+    /// On Bitcoin this is also the share-address prefix. On Bitcoin Cash the
+    /// share address uses `bitcoin_cash_network` instead.
     #[serde(deserialize_with = "deserialize_network")]
     pub network: bitcoin::Network,
     /// Block chain that supplies work templates and payout scripts.
@@ -239,6 +240,9 @@ pub struct StratumConfig<State = Raw> {
     pub fee_address_parsed: Option<Address<NetworkChecked>>,
     #[serde(skip)]
     pub miner_address_parsed: Option<ShareAddress>,
+    /// Bitcoin Cash share owner, set only when `chain` is bitcoin-cash.
+    #[serde(skip)]
+    pub bch_miner_address: Option<BchShareAddress>,
 
     #[serde(skip)]
     #[serde(default)]
@@ -322,8 +326,10 @@ impl StratumConfig<Raw> {
             )?;
         }
 
-        // The network should be one we support an hrp for.
-        if self.mode == PoolMode::P2poolv2 {
+        // Bitcoin share addresses use this network's bech32m prefix. Bitcoin
+        // Cash share addresses use bitcoin_cash_network, so that chain does
+        // not have to name a Bitcoin share prefix. Genesis still reads network.
+        if self.mode == PoolMode::P2poolv2 && self.chain == Chain::Bitcoin {
             p2poolv2_wallet::expected_hrp(self.network).map_err(|error| ConfigError {
                 message: format!(
                     "Network {} cannot be used for a share chain: {error}",
@@ -339,11 +345,31 @@ impl StratumConfig<Raw> {
             self.bitcoin_cash_network,
         )?;
 
-        let miner_address_parsed = self
-            .miner_address
-            .as_ref()
-            .map(|address| parse_share_address(address, self.network))
-            .transpose()?;
+        let (miner_address_parsed, bch_miner_address) = match self.chain {
+            Chain::Bitcoin => (
+                self.miner_address
+                    .as_ref()
+                    .map(|address| parse_share_address(address, self.network))
+                    .transpose()?,
+                None,
+            ),
+            Chain::BitcoinCash => {
+                let bitcoin_cash_network =
+                    self.bitcoin_cash_network.ok_or_else(|| ConfigError {
+                        message: "bitcoin_cash_network is required when chain is bitcoin-cash"
+                            .to_string(),
+                    })?;
+                let parsed = self
+                    .miner_address
+                    .as_ref()
+                    .map(|address| bch_share::parse(address, share_network(bitcoin_cash_network)))
+                    .transpose()
+                    .map_err(|error| ConfigError {
+                        message: format!("Invalid Bitcoin Cash share address: {error}"),
+                    })?;
+                (None, parsed)
+            }
+        };
 
         let donation_address_parsed = self
             .donation_address
@@ -389,6 +415,7 @@ impl StratumConfig<Raw> {
             donation_address_parsed,
             fee_address_parsed,
             miner_address_parsed,
+            bch_miner_address,
             _state: PhantomData,
         })
     }
@@ -418,6 +445,19 @@ impl StratumConfig<Parsed> {
     /// miner supplying a different one in `p2p=` is rejected at authorize.
     pub fn miner_address(&self) -> Option<ShareAddress> {
         self.miner_address_parsed
+    }
+
+    /// Bitcoin Cash share address configured for this pool, if any.
+    pub fn bch_miner_address(&self) -> Option<BchShareAddress> {
+        self.bch_miner_address
+    }
+}
+
+fn share_network(network: BitcoinCashNetwork) -> BchShareNetwork {
+    match network {
+        BitcoinCashNetwork::Mainnet => BchShareNetwork::Mainnet,
+        BitcoinCashNetwork::Chipnet => BchShareNetwork::Chipnet,
+        BitcoinCashNetwork::Regtest => BchShareNetwork::Regtest,
     }
 }
 
@@ -454,6 +494,7 @@ impl StratumConfig<Raw> {
             donation_address_parsed: None,
             fee_address_parsed: None,
             miner_address_parsed: None,
+            bch_miner_address: None,
             _state: PhantomData,
         }
     }
@@ -864,6 +905,7 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use p2poolv2_wallet::bch_share::{BchShareAddress, BchShareNetwork};
     use temp_env::with_var;
     use tokio_test::assert_err;
 
@@ -1368,6 +1410,31 @@ mod tests {
                 0x47, 0x93, 0xf8, 0xeb, 0x2b, 0x6c, 0xda, 0xc9, 0x87,
             ]
         );
+    }
+
+    #[test]
+    fn bitcoin_cash_accepts_a_share_address_and_rejects_a_payout_address() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.chain = Chain::BitcoinCash;
+        config.bitcoin_cash_network = Some(BitcoinCashNetwork::Chipnet);
+        config.bootstrap_address = "bchtest:pr6m7j9njldwwzlg9v7v53unlr4jkmx6eyvwc0uz5t".to_string();
+        config.miner_address =
+            Some(BchShareAddress::new(BchShareNetwork::Chipnet, [0x22; 20]).encode());
+        let parsed = config.parse().unwrap();
+        assert_eq!(
+            parsed.bch_miner_address().map(|address| address.hash),
+            Some([0x22; 20])
+        );
+        assert!(parsed.miner_address().is_none());
+
+        let mut payout_as_share = StratumConfig::<Raw>::new_for_test_default();
+        payout_as_share.chain = Chain::BitcoinCash;
+        payout_as_share.bitcoin_cash_network = Some(BitcoinCashNetwork::Chipnet);
+        payout_as_share.bootstrap_address =
+            "bchtest:pr6m7j9njldwwzlg9v7v53unlr4jkmx6eyvwc0uz5t".to_string();
+        payout_as_share.miner_address =
+            Some("bchtest:pr6m7j9njldwwzlg9v7v53unlr4jkmx6eyvwc0uz5t".to_string());
+        assert!(payout_as_share.parse().is_err());
     }
 
     #[test]

@@ -21,8 +21,8 @@
 //! carry its own copy of the same mapping.
 
 use crate::store::dag_store::{DagEntry, ShareInfo, UncleInfo};
-use bitcoin::{BlockHash, CompactTarget, Network, WitnessProgram};
-use p2poolv2_wallet::witness_program_codec::{to_address_string, to_hex};
+use bitcoin::{BlockHash, CompactTarget, Network};
+use p2poolv2_wallet::share_owner::{self, ShareOwner};
 use serde::Serialize;
 
 /// Render a miner address for `network`, or the witness program hex when
@@ -31,10 +31,10 @@ use serde::Serialize;
 /// The CLI reaches the second case: `--config` is optional beside
 /// `--db-path`, and guessing a network would name a chain this node may not
 /// be on.
-fn address_for(witness_program: &WitnessProgram, network: Option<Network>) -> String {
+fn address_for(owner: &ShareOwner, network: Option<Network>) -> String {
     match network {
-        Some(network) => to_address_string(witness_program, network),
-        None => to_hex(witness_program),
+        Some(network) => share_owner::to_address_string(owner, network),
+        None => share_owner::to_hex(owner),
     }
 }
 
@@ -168,8 +168,10 @@ pub fn render_header_addresses<T>(
     header_at: impl Fn(&T) -> &crate::shares::share_block::ShareHeader,
 ) {
     for (index, entry) in entries.iter().enumerate() {
-        value[index]["miner_address"] =
-            serde_json::Value::String(to_address_string(&header_at(entry).miner_address, network));
+        value[index]["miner_address"] = serde_json::Value::String(share_owner::to_address_string(
+            &header_at(entry).miner_address,
+            network,
+        ));
     }
 }
 
@@ -178,6 +180,7 @@ mod tests {
     use super::*;
     use crate::test_utils::{TestShareBlockBuilder, make_test_share_program};
     use bitcoin::hashes::Hash;
+    use p2poolv2_wallet::witness_program_codec::{to_address_string, to_hex};
 
     fn share_info_with_uncle() -> ShareInfo {
         ShareInfo {
@@ -185,14 +188,14 @@ mod tests {
             prev_blockhash: BlockHash::all_zeros(),
             height: 2,
             miner_bitcoin_address: "tb1qx6e0gj7q7xurl08cwnpmeve6w6zf4tw6vfwe3f".to_string(),
-            miner_address: make_test_share_program(1),
+            miner_address: make_test_share_program(1).into(),
             timestamp: 200,
             bits: CompactTarget::from_consensus(0x1d00ffff),
             uncles: vec![UncleInfo {
                 blockhash: BlockHash::all_zeros(),
                 prev_blockhash: BlockHash::all_zeros(),
                 miner_bitcoin_address: "tb1qx6e0gj7q7xurl08cwnpmeve6w6zf4tw6vfwe3f".to_string(),
-                miner_address: make_test_share_program(2),
+                miner_address: make_test_share_program(2).into(),
                 timestamp: 100,
                 height: Some(1),
             }],
@@ -265,7 +268,7 @@ mod tests {
             parent: BlockHash::all_zeros(),
             uncles: vec![],
             miner_bitcoin_address: "tb1qx6e0gj7q7xurl08cwnpmeve6w6zf4tw6vfwe3f".to_string(),
-            miner_address: Some(make_test_share_program(1)),
+            miner_address: Some(make_test_share_program(1).into()),
             has_block_data: true,
         };
         let display = DagEntryDisplay::from_dag_entry(&entry, Some(Network::Signet));
