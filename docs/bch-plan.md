@@ -33,10 +33,9 @@ script and does not add a BIP141 witness commitment. Stratum `p2p=` on a
 Bitcoin Cash node parses that CashAddr form. Payout CashAddr and Bitcoin
 bech32m share addresses are rejected there.
 
-Still unfinished: main and mini genesis and difficulty, Stratum V2 with both
-Job Declaration modes, merge-mining commitments, and live regtest or chipnet
-mining. The upstream Bitcoin test suite passing does not validate those
-BCH requirements.
+Still unfinished: Stratum V2 with both Job Declaration modes, merge-mining
+commitments, and live regtest or chipnet mining. The upstream Bitcoin test
+suite passing does not validate those BCH requirements.
 
 ## Startup selection (2026-10-13)
 
@@ -51,10 +50,12 @@ CashAddr for the selected prefix (`bitcoincash`, `bchtest`, `bchreg`).
 Chipnet uses `bchtest`. A Bitcoin witness payout is rejected so it cannot
 be written into a Bitcoin Cash coinbase.
 
-The share-chain `network` field still selects genesis. On `bitcoin-cash`, a
-configured `miner_address` is a CashAddr share address (`p2pool`, `tp2pool`,
-or `rp2pool`) and the header stores that P2PKH hash. Genesis, difficulty,
-and Stratum V2 are unchanged. This is still not a working Bitcoin Cash pool.
+The share-chain `network` field still selects the Bitcoin genesis. On
+`bitcoin-cash`, genesis is a P2PKH share anchored at the published BCHN
+genesis block. `bch_share_chain` is `main` or `mini`. A configured
+`miner_address` is a CashAddr share address (`p2pool`, `tp2pool`, or
+`rp2pool`) and the header stores that P2PKH hash. Stratum V2 is unchanged.
+This is still not a working Bitcoin Cash pool.
 
 ## Goal
 

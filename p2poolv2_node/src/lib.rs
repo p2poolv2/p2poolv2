@@ -21,7 +21,6 @@ use p2poolv2_lib::config::{BitcoinCashNetwork, Chain, Config};
 use p2poolv2_lib::node::actor::NodeHandle;
 use p2poolv2_lib::pool_difficulty::PoolDifficulty;
 use p2poolv2_lib::shares::chain::chain_store_handle::ChainStoreHandle;
-use p2poolv2_lib::shares::share_block::ShareBlock;
 use p2poolv2_lib::store::Store;
 use p2poolv2_lib::store::writer::{StoreHandle, StoreWriter, write_channel};
 use p2poolv2_lib::stratum::client_connections::start_connections_handler;
@@ -152,7 +151,8 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
     let exit_sender = watch::Sender::new(ShutdownReason::None);
     let sig_handle = setup_signal_handler(exit_sender.clone());
 
-    let genesis = ShareBlock::build_genesis_for_network(config.stratum.network).unwrap();
+    let genesis = p2poolv2_lib::shares::bch_genesis::genesis_for_stratum(&config.stratum)
+        .expect("share genesis data is fixed");
     let store = Arc::new(Store::new(config.store.path.clone(), false).unwrap());
 
     let (write_tx, write_rx) = write_channel();

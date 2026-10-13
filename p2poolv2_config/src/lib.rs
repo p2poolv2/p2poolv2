@@ -136,6 +136,21 @@ pub enum BitcoinCashNetwork {
     Regtest,
 }
 
+/// Which Bitcoin Cash share chain this node extends.
+///
+/// Main and mini are different genesis shares, so they do not reorg into
+/// each other. Mini's anchor target is 256 times easier than the main
+/// ceiling, which is the existing `MAX_POOL_TARGET`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum BchShareChain {
+    /// Share target ceiling `0x1b384bd7`, anchor `0x1b4188f5`.
+    #[default]
+    Main,
+    /// Share target ceiling and anchor `0x1c384bd7` (256 times easier).
+    Mini,
+}
+
 impl BitcoinCashNetwork {
     /// Human-readable prefix covered by the CashAddr checksum.
     pub fn cashaddr_prefix(self) -> &'static str {
@@ -212,6 +227,10 @@ pub struct StratumConfig<State = Raw> {
     /// `mainnet` (alias `main`), `chipnet`, and `regtest`.
     #[serde(default)]
     pub bitcoin_cash_network: Option<BitcoinCashNetwork>,
+    /// Main or mini Bitcoin Cash share chain. Ignored unless `chain` is
+    /// `bitcoin-cash`. `mini` on a Bitcoin node is rejected.
+    #[serde(default)]
+    pub bch_share_chain: BchShareChain,
     /// The version mask to use for version-rolling
     #[serde(deserialize_with = "deserialize_version_mask")]
     pub version_mask: i32,
@@ -315,6 +334,13 @@ impl StratumConfig<Raw> {
             (Chain::Bitcoin, None) | (Chain::BitcoinCash, Some(_)) => {}
         }
 
+        if self.chain == Chain::Bitcoin && self.bch_share_chain == BchShareChain::Mini {
+            return Err(ConfigError {
+                message: "bch_share_chain = mini is only valid when chain is bitcoin-cash"
+                    .to_string(),
+            });
+        }
+
         if self.chain == Chain::BitcoinCash
             && let Some(solo_address) = &self.solo_address
         {
@@ -404,6 +430,7 @@ impl StratumConfig<Raw> {
             network: self.network,
             chain: self.chain,
             bitcoin_cash_network: self.bitcoin_cash_network,
+            bch_share_chain: self.bch_share_chain,
             version_mask: self.version_mask,
             difficulty_multiplier: self.difficulty_multiplier,
             ignore_difficulty: self.ignore_difficulty,
@@ -483,6 +510,7 @@ impl StratumConfig<Raw> {
             network: bitcoin::Network::Signet,
             chain: Chain::Bitcoin,
             bitcoin_cash_network: None,
+            bch_share_chain: BchShareChain::Main,
             version_mask: DEFAULT_VERSION_MASK,
             difficulty_multiplier: 1.0,
             ignore_difficulty: None,
@@ -1481,6 +1509,33 @@ mod tests {
             "unexpected message: {}",
             error.message
         );
+    }
+
+    #[test]
+    fn bitcoin_rejects_a_mini_share_chain() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.bch_share_chain = BchShareChain::Mini;
+
+        let error = config.parse().unwrap_err();
+        assert!(
+            error
+                .message
+                .contains("bch_share_chain = mini is only valid when chain is bitcoin-cash"),
+            "unexpected message: {}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn bitcoin_cash_accepts_the_mini_share_chain() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.chain = Chain::BitcoinCash;
+        config.bitcoin_cash_network = Some(BitcoinCashNetwork::Chipnet);
+        config.bootstrap_address = "bchtest:pr6m7j9njldwwzlg9v7v53unlr4jkmx6eyvwc0uz5t".to_string();
+        config.bch_share_chain = BchShareChain::Mini;
+
+        let parsed = config.parse().unwrap();
+        assert_eq!(parsed.bch_share_chain, BchShareChain::Mini);
     }
 }
 

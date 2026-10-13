@@ -28,7 +28,7 @@ use crate::shares::share_block::ShareBlock;
 use crate::shares::validation::check_pplns_zone;
 use crate::shares::validation::{DefaultShareValidator, FailureKind, ShareValidator};
 use crate::utils::cpu::available_cpus;
-use bitcoin::BlockHash;
+use bitcoin::{BlockHash, CompactTarget};
 use libp2p::request_response::ResponseChannel;
 use std::fmt;
 use std::sync::Arc;
@@ -95,6 +95,8 @@ pub struct ValidationWorker {
     pool_signature: Vec<u8>,
     pool_difficulty: PoolDifficulty,
     chain: Chain,
+    /// Easiest share target the validator accepts. Defaults to the main ceiling.
+    target_ceiling: CompactTarget,
 }
 
 impl ValidationWorker {
@@ -118,12 +120,21 @@ impl ValidationWorker {
             pool_signature,
             pool_difficulty,
             chain: Chain::Bitcoin,
+            target_ceiling: CompactTarget::from_consensus(
+                crate::shares::share_block::MAX_POOL_TARGET,
+            ),
         }
     }
 
     /// Select the chain whose share owner this worker's validator accepts.
     pub fn for_chain(mut self, chain: Chain) -> Self {
         self.chain = chain;
+        self
+    }
+
+    /// Set the easiest share target this worker's validator accepts.
+    pub fn with_target_ceiling(mut self, target_ceiling: CompactTarget) -> Self {
+        self.target_ceiling = target_ceiling;
         self
     }
 
@@ -140,7 +151,8 @@ impl ValidationWorker {
                 self.difficulty_multiplier,
                 self.pool_signature.clone(),
             )
-            .for_chain(self.chain),
+            .for_chain(self.chain)
+            .with_target_ceiling(self.target_ceiling),
         );
 
         while let Some(event) = self.validation_rx.recv().await {

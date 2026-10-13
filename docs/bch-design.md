@@ -3,7 +3,7 @@
 Written 2026-10-13, before the startup-selection change. Each porting item
 from [bch-plan.md](bch-plan.md) gets a decision here. Open questions stay
 open: this file does not invent PPLNS lengths, a merge-mining commitment,
-a new share-chain genesis, or a license change.
+or a license change.
 
 ## Startup selection, decided in this change
 
@@ -21,10 +21,13 @@ cannot tell chipnet from testnet3 or testnet4. The Bitcoin Cash RPC URL is
 what points the node at chipnet.
 
 `stratum.network` stays the share-chain network (`main`, `testnet4`,
-`signet`, `regtest`). Genesis and ASERT difficulty still read it. A Bitcoin
-Cash `miner_address` uses `bitcoin_cash_network` and the prefixes `p2pool`,
-`tp2pool`, and `rp2pool`. Setting `chain = "bitcoin-cash"` does not create a
-new share-chain genesis.
+`signet`, `regtest`) for a Bitcoin node, and that is still what selects the
+Bitcoin genesis. A Bitcoin Cash node ignores it for genesis. It builds a
+P2PKH share from the published BCHN genesis block for `bitcoin_cash_network`
+and from `bch_share_chain` (`main` or `mini`). Mini's anchor target is
+`0x1c384bd7`, 256 times easier than the main ceiling `0x1b384bd7`. Main
+keeps the existing anchor `0x1b4188f5` and that same ceiling, so a Bitcoin
+config that omits `chain` still starts on the taproot genesis.
 
 A Bitcoin Cash startup that would encode a witness payout is rejected at
 config parse. CashAddr decoding accepts only 20-byte P2PKH and P2SH. The
@@ -42,8 +45,8 @@ ZMQ paths both use this check.
 - **Share chain addresses.** A header stores `ShareOwner`. Bitcoin stays a
   taproot witness program. Bitcoin Cash stores a 20-byte P2PKH hash under
   tag `0x20`, addressed as CashAddr `p2pool`, `tp2pool`, or `rp2pool`. That
-  string is not the payout CashAddr (`miner_bitcoin_address`). Genesis is
-  still the Bitcoin share chain.
+  string is not the payout CashAddr (`miner_bitcoin_address`). A Bitcoin Cash
+  genesis share uses the same P2PKH form.
 - **Share trading.** Waits. The mini share chain is the stand-in named in the
   plan, and the atomic-swap scripts are not ported. No v1 code is copied.
 - **Block rules.** CTOR, compact-target agreement, witness exclusion, and the
@@ -57,16 +60,17 @@ ZMQ paths both use this check.
   chipnet, or regtest for the CashAddr prefix. New Bitcoin Cash tests use
   the regtest fixture captured from BCHN and the chipnet prefix; they do
   not require a live node.
-- **Share window and difficulty.** Not changed. Genesis files are untouched.
-  Window length, share interval, and main versus mini difficulty remain the
-  open question in the plan.
+- **Share window and difficulty.** PPLNS window length and the 10 second
+  share interval are unchanged. Bitcoin Cash main and mini now have separate
+  genesis shares. Mini is easier by the compact exponent above; it is not a
+  retune of the PPLNS window.
 - **Stratum V2.** Not started. SV1 remains the server. Both Job Declaration
   modes stay future work, and declared jobs will have to keep CTOR.
 
 ## Still unfinished
 
-Main and mini genesis, Stratum V2 with both Job Declaration modes, the
-merge-mining commitment, and live regtest or chipnet mining. A node started
-with `chain = "bitcoin-cash"` can validate BCHN templates, pay a CashAddr
-script, and record a P2PKH share owner. It must not be treated as a working
-Bitcoin Cash pool until those items land.
+Stratum V2 with both Job Declaration modes, the merge-mining commitment, and
+live regtest or chipnet mining. A node started with `chain = "bitcoin-cash"`
+can validate BCHN templates, pay a CashAddr script, record a P2PKH share
+owner, and start from a main or mini P2PKH genesis. It must not be treated
+as a working Bitcoin Cash pool until those remaining items land.

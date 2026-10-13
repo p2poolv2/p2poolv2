@@ -390,6 +390,11 @@ pub struct DefaultShareValidator {
     /// Bitcoin requires a taproot program and a BIP141 witness commitment.
     /// Bitcoin Cash requires a 20-byte P2PKH hash and rejects that commitment.
     chain: Chain,
+    /// Easiest share target this validator accepts.
+    ///
+    /// Bitcoin and the Bitcoin Cash main chain use `MAX_POOL_TARGET`. The mini
+    /// chain uses its own easier ceiling so its genesis target is valid.
+    target_ceiling: CompactTarget,
 }
 
 impl DefaultShareValidator {
@@ -423,6 +428,7 @@ impl DefaultShareValidator {
             pool_signature,
             time_provider,
             chain: Chain::Bitcoin,
+            target_ceiling: CompactTarget::from_consensus(MAX_POOL_TARGET),
         }
     }
 
@@ -432,6 +438,15 @@ impl DefaultShareValidator {
     /// shares. A Bitcoin Cash node passes [`Chain::BitcoinCash`].
     pub fn for_chain(mut self, chain: Chain) -> Self {
         self.chain = chain;
+        self
+    }
+
+    /// Set the easiest share target this validator accepts.
+    ///
+    /// The default is [`MAX_POOL_TARGET`]. A mini Bitcoin Cash node passes the
+    /// mini ceiling so shares on that chain are not rejected as too easy.
+    pub fn with_target_ceiling(mut self, target_ceiling: CompactTarget) -> Self {
+        self.target_ceiling = target_ceiling;
         self
     }
 
@@ -1220,7 +1235,7 @@ impl ShareValidator for DefaultShareValidator {
         }
 
         let declared_target = Target::from_compact(share_header.bits);
-        let max_pool_target = Target::from_compact(CompactTarget::from_consensus(MAX_POOL_TARGET));
+        let max_pool_target = Target::from_compact(self.target_ceiling);
         if declared_target > max_pool_target {
             return Err(ValidationError::consensus(format!(
                 "Share target {declared_target} is easier than maximum pool target {max_pool_target}"

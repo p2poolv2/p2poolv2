@@ -65,6 +65,9 @@ zmqpubhashblock = "tcp://bitcoind:28332"
 # chain = "bitcoin"
 # Required with chain = "bitcoin-cash": "mainnet", "chipnet", or "regtest".
 # bitcoin_cash_network = "chipnet"
+# Main or mini Bitcoin Cash share chain. Default "main". "mini" is rejected
+# unless chain is "bitcoin-cash". Mini's share target is 256 times easier.
+# bch_share_chain = "main"
 # The share-chain network can be "main", "testnet4" or "signet"
 network = "signet"
 # Use BIP 323 mask for version rolling (see https://github.com/bitcoin/bips/blob/622e47722cd35514e96da37ae89f868e18d581e4/bip-0323.mediawiki#specification)

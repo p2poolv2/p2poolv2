@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+pub mod bch_genesis;
 pub mod chain;
 pub mod coinbase_proof;
 pub(crate) mod coinbaseaux_flags;

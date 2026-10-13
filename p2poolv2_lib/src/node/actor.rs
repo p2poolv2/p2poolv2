@@ -362,6 +362,12 @@ impl NodeActor {
         let block_fetcher_tx_for_response = block_fetcher_tx.clone();
         let block_receiver_tx_for_response = block_receiver_tx.clone();
         let chain = config.stratum.chain;
+        let target_ceiling = crate::shares::bch_genesis::target_ceiling(
+            crate::shares::bch_genesis::genesis_for_stratum(&config.stratum)
+                .map_err(|error| -> Box<dyn Error> { error })?
+                .header
+                .bits,
+        );
         let difficulty_multiplier = config.stratum.difficulty_multiplier as u128;
         let pool_signature = config
             .stratum
@@ -384,7 +390,8 @@ impl NodeActor {
                 difficulty_multiplier,
                 pool_signature.clone(),
             )
-            .for_chain(chain),
+            .for_chain(chain)
+            .with_target_ceiling(target_ceiling),
         );
 
         let node = Node::new(
@@ -432,7 +439,8 @@ impl NodeActor {
             pool_signature,
             pool_difficulty,
         )
-        .for_chain(chain);
+        .for_chain(chain)
+        .with_target_ceiling(target_ceiling);
         let validation_worker_id = workers
             .spawn(async move {
                 validation_worker
