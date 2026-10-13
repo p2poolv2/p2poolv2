@@ -14,6 +14,7 @@ use axum::{
     routing::{delete, get, post},
 };
 use chrono::DateTime;
+use p2poolv2_lib::address::bch_share::BchShareNetwork;
 use p2poolv2_lib::monitoring_events::MonitoringEventSender;
 use p2poolv2_lib::node::actor::NodeHandle;
 use p2poolv2_lib::stratum::work::tracker::{JobTracker, parse_coinbase};
@@ -49,6 +50,9 @@ pub(crate) struct AppState {
 pub struct AppConfig {
     pub pool_signature_length: usize,
     pub network: bitcoin::Network,
+    /// Bitcoin Cash share prefix. Independent of `network`, which stays the
+    /// Bitcoin share-chain network used for taproot addresses and genesis.
+    pub cash_network: Option<BchShareNetwork>,
     pub cors_allowed: bool,
 }
 
@@ -150,11 +154,13 @@ pub async fn start_api_server(
     node_handle: NodeHandle,
     monitoring_event_sender: MonitoringEventSender,
     network: bitcoin::Network,
+    cash_network: Option<BchShareNetwork>,
     pool_signature: Option<String>,
 ) -> Result<(oneshot::Sender<()>, u16), std::io::Error> {
     let app_config = AppConfig {
         pool_signature_length: pool_signature.unwrap_or_default().len(),
         network,
+        cash_network,
         cors_allowed: config.cors_allowed,
     };
 
@@ -449,6 +455,7 @@ mod tests {
             app_config: AppConfig {
                 pool_signature_length: 0,
                 network: bitcoin::Network::Signet,
+                cash_network: None,
                 cors_allowed: false,
             },
             chain_store_handle,
@@ -603,6 +610,7 @@ mod tests {
             app_config: AppConfig {
                 pool_signature_length: 8,
                 network: bitcoin::Network::Signet,
+                cash_network: None,
                 cors_allowed: false,
             },
             chain_store_handle,
@@ -711,6 +719,7 @@ mod tests {
             app_config: AppConfig {
                 pool_signature_length: 0,
                 network: bitcoin::Network::Signet,
+                cash_network: None,
                 cors_allowed: false,
             },
             chain_store_handle,
@@ -875,6 +884,7 @@ mod tests {
             app_config: AppConfig {
                 pool_signature_length: 0,
                 network: bitcoin::Network::Signet,
+                cash_network: None,
                 cors_allowed: true,
             },
             chain_store_handle,

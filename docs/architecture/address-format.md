@@ -420,9 +420,11 @@ P2PKH hash, encoded in the header as tag `0x20`, a length byte of 20, then
 the hash. Tag `0x20` is outside witness versions 0 through 16, so a decoder
 of the Bitcoin layout rejects a cash share, and a decoder that still accepts
 those versions reads an old taproot share unchanged. The text form is
-CashAddr with prefixes `p2pool`, `tp2pool`, and `rp2pool`. Payout CashAddr
-(`bitcoincash`, `bchtest`, `bchreg`) is a different string and is not a
-share address. See `p2poolv2_wallet::bch_share` and
+CashAddr with prefixes `p2pool`, `tp2pool`, and `rp2pool`. That prefix
+comes from `bitcoin_cash_network`. The Bitcoin share-chain `network` still
+selects the bech32m prefix and genesis, and signet is not chipnet. Payout
+CashAddr (`bitcoincash`, `bchtest`, `bchreg`) is a different string and is
+not a share address. See `p2poolv2_wallet::bch_share` and
 `p2poolv2_wallet::share_owner`.
 
 ## Registration

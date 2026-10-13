@@ -17,6 +17,7 @@ use axum::{
     response::Response,
 };
 use bitcoin::Network;
+use p2poolv2_lib::address::bch_share::BchShareNetwork;
 use p2poolv2_lib::address::share_owner::to_address_string;
 use p2poolv2_lib::monitoring_events::{MonitoringEvent, MonitoringEventSender};
 use serde::Deserialize;
@@ -82,7 +83,10 @@ pub(crate) async fn websocket_handler(
 
     let monitoring_event_sender = state.monitoring_event_sender.clone();
     let network = state.app_config.network;
-    Ok(upgrade.on_upgrade(move |socket| handle_socket(socket, monitoring_event_sender, network)))
+    let cash_network = state.app_config.cash_network;
+    Ok(upgrade.on_upgrade(move |socket| {
+        handle_socket(socket, monitoring_event_sender, network, cash_network)
+    }))
 }
 
 /// Serialize a monitoring event for the wire, rendering miner addresses in
@@ -97,16 +101,27 @@ pub(crate) async fn websocket_handler(
 /// Mirroring `ShareInfo` in a second struct would be the alternative, and it
 /// would silently drop any field added to `ShareInfo` later; this carries new
 /// fields through untouched and rewrites only what needs the network.
-fn event_to_json(event: &MonitoringEvent, network: Network) -> Result<String, serde_json::Error> {
+fn event_to_json(
+    event: &MonitoringEvent,
+    network: Network,
+    cash_network: Option<BchShareNetwork>,
+) -> Result<String, serde_json::Error> {
     let mut value = serde_json::to_value(event)?;
 
     if let MonitoringEvent::Share(share) = event
         && let Some(data) = value.get_mut("data")
     {
-        data["miner_address"] = Value::String(to_address_string(&share.miner_address, network));
+        data["miner_address"] = Value::String(to_address_string(
+            &share.miner_address,
+            network,
+            cash_network,
+        ));
         for (index, uncle) in share.uncles.iter().enumerate() {
-            data["uncles"][index]["miner_address"] =
-                Value::String(to_address_string(&uncle.miner_address, network));
+            data["uncles"][index]["miner_address"] = Value::String(to_address_string(
+                &uncle.miner_address,
+                network,
+                cash_network,
+            ));
         }
     }
 
@@ -122,6 +137,7 @@ async fn handle_socket(
     mut socket: WebSocket,
     monitoring_event_sender: MonitoringEventSender,
     network: Network,
+    cash_network: Option<BchShareNetwork>,
 ) {
     let mut event_receiver = monitoring_event_sender.subscribe();
     let mut subscriptions: HashSet<Topic> = HashSet::with_capacity(TOPIC_COUNT);
@@ -150,7 +166,7 @@ async fn handle_socket(
                 match event_result {
                     Ok(event) => {
                         if event_matches_subscriptions(&event, &subscriptions) {
-                            match event_to_json(&event, network) {
+                            match event_to_json(&event, network, cash_network) {
                                 Ok(json) => {
                                     if socket.send(Message::Text(json.into())).await.is_err() {
                                         debug!("WebSocket send failed, closing connection");
@@ -328,7 +344,7 @@ mod tests {
         let received = receiver.recv().await.unwrap();
         assert!(event_matches_subscriptions(&received, &subscriptions));
 
-        let json = event_to_json(&received, Network::Signet).unwrap();
+        let json = event_to_json(&received, Network::Signet, None).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed["topic"], "Share");
         assert_eq!(parsed["data"]["height"], 42);
@@ -366,7 +382,7 @@ mod tests {
             uncles: vec![uncle],
         });
 
-        let json = event_to_json(&event, Network::Signet).unwrap();
+        let json = event_to_json(&event, Network::Signet, None).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
 
         assert_eq!(
@@ -395,9 +411,9 @@ mod tests {
         });
 
         let signet: serde_json::Value =
-            serde_json::from_str(&event_to_json(&event, Network::Signet).unwrap()).unwrap();
+            serde_json::from_str(&event_to_json(&event, Network::Signet, None).unwrap()).unwrap();
         let mainnet: serde_json::Value =
-            serde_json::from_str(&event_to_json(&event, Network::Bitcoin).unwrap()).unwrap();
+            serde_json::from_str(&event_to_json(&event, Network::Bitcoin, None).unwrap()).unwrap();
 
         assert!(
             signet["data"]["miner_address"]

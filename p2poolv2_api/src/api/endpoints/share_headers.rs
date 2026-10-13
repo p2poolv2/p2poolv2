@@ -155,6 +155,7 @@ pub(crate) async fn share_headers(
         &mut value["headers"],
         &response.headers,
         state.app_config.network,
+        state.app_config.cash_network,
         |entry| &entry.header,
     );
 
@@ -186,6 +187,7 @@ mod tests {
             app_config: AppConfig {
                 pool_signature_length: 0,
                 network: bitcoin::Network::Signet,
+                cash_network: None,
                 cors_allowed: false,
             },
             chain_store_handle,
@@ -265,7 +267,7 @@ mod tests {
         );
         assert_eq!(
             response["headers"][0]["miner_address"],
-            to_address_string(&genesis.header.miner_address, Network::Signet)
+            to_address_string(&genesis.header.miner_address, Network::Signet, None)
         );
         assert!(response["headers"][0]["transactions"].is_null());
     }

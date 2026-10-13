@@ -46,6 +46,7 @@ async fn test_api_server_without_authentication() -> Result<(), ApiError> {
         node_handle,
         create_monitoring_event_channel().0,
         bitcoin::Network::Signet,
+        None,
         Some("p2poolv2".to_string()),
     )
     .await
@@ -130,6 +131,7 @@ async fn test_api_server_with_authentication() -> Result<(), ApiError> {
         node_handle,
         create_monitoring_event_channel().0,
         bitcoin::Network::Signet,
+        None,
         Some("p2poolv2".to_string()),
     )
     .await
@@ -248,6 +250,7 @@ async fn test_pplns_shares_endpoint_get_all() -> Result<(), ApiError> {
         node_handle,
         create_monitoring_event_channel().0,
         bitcoin::Network::Signet,
+        None,
         Some("p2poolv2".to_string()),
     )
     .await
@@ -362,6 +365,7 @@ async fn test_pplns_shares_endpoint_limit() -> Result<(), ApiError> {
         node_handle,
         create_monitoring_event_channel().0,
         bitcoin::Network::Signet,
+        None,
         Some("p2poolv2".to_string()),
     )
     .await
@@ -471,6 +475,7 @@ async fn test_pplns_shares_endpoint_time_filter() -> Result<(), ApiError> {
         node_handle,
         create_monitoring_event_channel().0,
         bitcoin::Network::Signet,
+        None,
         Some("p2poolv2".to_string()),
     )
     .await

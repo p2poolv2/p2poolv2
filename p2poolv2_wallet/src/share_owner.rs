@@ -110,21 +110,22 @@ pub fn to_hex(owner: &ShareOwner) -> String {
 
 /// Text form an operator can match against configuration.
 ///
-/// Taproot uses the Bitcoin share address for `network`. Cash uses the
-/// CashAddr share prefix that corresponds to that network: mainnet, regtest,
-/// or chipnet for every test network.
-pub fn to_address_string(owner: &ShareOwner, network: Network) -> String {
+/// Taproot uses the Bitcoin share address for `network`. A cash owner uses
+/// `cash_network`, which is `bitcoin_cash_network`, not the Bitcoin
+/// share-chain network. Signet and testnet4 are not chipnet. Without a cash
+/// network the consensus hex is returned, so a missing prefix is not spelled
+/// as `tp2pool`.
+pub fn to_address_string(
+    owner: &ShareOwner,
+    network: Network,
+    cash_network: Option<BchShareNetwork>,
+) -> String {
     match owner {
         ShareOwner::Taproot(program) => witness_program_codec::to_address_string(program, network),
-        ShareOwner::CashP2pkh(hash) => BchShareAddress::new(cash_network(network), *hash).encode(),
-    }
-}
-
-fn cash_network(network: Network) -> BchShareNetwork {
-    match network {
-        Network::Bitcoin => BchShareNetwork::Mainnet,
-        Network::Regtest => BchShareNetwork::Regtest,
-        _ => BchShareNetwork::Chipnet,
+        ShareOwner::CashP2pkh(hash) => match cash_network {
+            Some(cash_network) => BchShareAddress::new(cash_network, *hash).encode(),
+            None => to_hex(owner),
+        },
     }
 }
 
@@ -230,15 +231,21 @@ mod tests {
     }
 
     #[test]
-    fn cash_address_text_uses_the_regtest_prefix() {
+    fn cash_address_text_uses_the_supplied_cash_network() {
         let owner = ShareOwner::CashP2pkh([0x22; 20]);
-        let text = to_address_string(&owner, Network::Regtest);
+        let text = to_address_string(&owner, Network::Signet, Some(BchShareNetwork::Regtest));
         assert!(text.starts_with("rp2pool:"));
         assert_eq!(
             crate::bch_share::parse(&text, BchShareNetwork::Regtest)
                 .unwrap()
                 .hash,
             [0x22; 20]
+        );
+        let mainnet = to_address_string(&owner, Network::Signet, Some(BchShareNetwork::Mainnet));
+        assert!(mainnet.starts_with("p2pool:"));
+        assert_eq!(
+            to_address_string(&owner, Network::Signet, None),
+            to_hex(&owner)
         );
     }
 }

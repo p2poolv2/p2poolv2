@@ -22,6 +22,7 @@
 
 use crate::store::dag_store::{DagEntry, ShareInfo, UncleInfo};
 use bitcoin::{BlockHash, CompactTarget, Network};
+use p2poolv2_wallet::bch_share::BchShareNetwork;
 use p2poolv2_wallet::share_owner::{self, ShareOwner};
 use serde::Serialize;
 
@@ -31,9 +32,13 @@ use serde::Serialize;
 /// The CLI reaches the second case: `--config` is optional beside
 /// `--db-path`, and guessing a network would name a chain this node may not
 /// be on.
-fn address_for(owner: &ShareOwner, network: Option<Network>) -> String {
+fn address_for(
+    owner: &ShareOwner,
+    network: Option<Network>,
+    cash_network: Option<BchShareNetwork>,
+) -> String {
     match network {
-        Some(network) => share_owner::to_address_string(owner, network),
+        Some(network) => share_owner::to_address_string(owner, network, cash_network),
         None => share_owner::to_hex(owner),
     }
 }
@@ -53,28 +58,36 @@ pub struct ShareInfoDisplay {
 }
 
 impl ShareInfoDisplay {
-    pub fn from_share_info(share: &ShareInfo, network: Option<Network>) -> Self {
+    pub fn from_share_info(
+        share: &ShareInfo,
+        network: Option<Network>,
+        cash_network: Option<BchShareNetwork>,
+    ) -> Self {
         Self {
             blockhash: share.blockhash,
             prev_blockhash: share.prev_blockhash,
             height: share.height,
             miner_bitcoin_address: share.miner_bitcoin_address.clone(),
-            miner_address: address_for(&share.miner_address, network),
+            miner_address: address_for(&share.miner_address, network, cash_network),
             timestamp: share.timestamp,
             bits: share.bits,
             uncles: share
                 .uncles
                 .iter()
-                .map(|uncle| UncleInfoDisplay::from_uncle_info(uncle, network))
+                .map(|uncle| UncleInfoDisplay::from_uncle_info(uncle, network, cash_network))
                 .collect(),
         }
     }
 
     /// Convert a whole query result.
-    pub fn from_share_infos(shares: &[ShareInfo], network: Option<Network>) -> Vec<Self> {
+    pub fn from_share_infos(
+        shares: &[ShareInfo],
+        network: Option<Network>,
+        cash_network: Option<BchShareNetwork>,
+    ) -> Vec<Self> {
         shares
             .iter()
-            .map(|share| Self::from_share_info(share, network))
+            .map(|share| Self::from_share_info(share, network, cash_network))
             .collect()
     }
 }
@@ -92,12 +105,16 @@ pub struct UncleInfoDisplay {
 }
 
 impl UncleInfoDisplay {
-    pub fn from_uncle_info(uncle: &UncleInfo, network: Option<Network>) -> Self {
+    pub fn from_uncle_info(
+        uncle: &UncleInfo,
+        network: Option<Network>,
+        cash_network: Option<BchShareNetwork>,
+    ) -> Self {
         Self {
             blockhash: uncle.blockhash,
             prev_blockhash: uncle.prev_blockhash,
             miner_bitcoin_address: uncle.miner_bitcoin_address.clone(),
-            miner_address: address_for(&uncle.miner_address, network),
+            miner_address: address_for(&uncle.miner_address, network, cash_network),
             timestamp: uncle.timestamp,
             height: uncle.height,
         }
@@ -123,7 +140,11 @@ pub struct DagEntryDisplay {
 }
 
 impl DagEntryDisplay {
-    pub fn from_dag_entry(entry: &DagEntry, network: Option<Network>) -> Self {
+    pub fn from_dag_entry(
+        entry: &DagEntry,
+        network: Option<Network>,
+        cash_network: Option<BchShareNetwork>,
+    ) -> Self {
         Self {
             blockhash: entry.blockhash,
             height: entry.height,
@@ -135,16 +156,20 @@ impl DagEntryDisplay {
             miner_address: entry
                 .miner_address
                 .as_ref()
-                .map(|program| address_for(program, network)),
+                .map(|program| address_for(program, network, cash_network)),
             has_block_data: entry.has_block_data,
         }
     }
 
     /// Convert a whole query result.
-    pub fn from_dag_entries(entries: &[DagEntry], network: Option<Network>) -> Vec<Self> {
+    pub fn from_dag_entries(
+        entries: &[DagEntry],
+        network: Option<Network>,
+        cash_network: Option<BchShareNetwork>,
+    ) -> Vec<Self> {
         entries
             .iter()
-            .map(|entry| Self::from_dag_entry(entry, network))
+            .map(|entry| Self::from_dag_entry(entry, network, cash_network))
             .collect()
     }
 }
@@ -165,12 +190,14 @@ pub fn render_header_addresses<T>(
     value: &mut serde_json::Value,
     entries: &[T],
     network: Network,
+    cash_network: Option<BchShareNetwork>,
     header_at: impl Fn(&T) -> &crate::shares::share_block::ShareHeader,
 ) {
     for (index, entry) in entries.iter().enumerate() {
         value[index]["miner_address"] = serde_json::Value::String(share_owner::to_address_string(
             &header_at(entry).miner_address,
             network,
+            cash_network,
         ));
     }
 }
@@ -180,6 +207,8 @@ mod tests {
     use super::*;
     use crate::test_utils::{TestShareBlockBuilder, make_test_share_program};
     use bitcoin::hashes::Hash;
+    use p2poolv2_wallet::bch_share::BchShareNetwork;
+    use p2poolv2_wallet::share_owner::ShareOwner;
     use p2poolv2_wallet::witness_program_codec::{to_address_string, to_hex};
 
     fn share_info_with_uncle() -> ShareInfo {
@@ -205,8 +234,11 @@ mod tests {
     /// Uncles are nested, so they are the case a conversion forgets.
     #[test]
     fn renders_the_address_of_a_share_and_of_its_uncles() {
-        let display =
-            ShareInfoDisplay::from_share_info(&share_info_with_uncle(), Some(Network::Signet));
+        let display = ShareInfoDisplay::from_share_info(
+            &share_info_with_uncle(),
+            Some(Network::Signet),
+            None,
+        );
 
         assert_eq!(
             display.miner_address,
@@ -219,18 +251,32 @@ mod tests {
         assert!(display.miner_address.starts_with("sp2pool1"));
     }
 
+    /// A cash owner on a signet share chain still spells the cash prefix the
+    /// operator configured. Signet must not become chipnet.
+    #[test]
+    fn renders_a_cash_owner_with_the_cash_network() {
+        let mut share = share_info_with_uncle();
+        share.miner_address = ShareOwner::CashP2pkh([0x22; 20]);
+        let display = ShareInfoDisplay::from_share_info(
+            &share,
+            Some(Network::Signet),
+            Some(BchShareNetwork::Mainnet),
+        );
+        assert!(display.miner_address.starts_with("p2pool:"));
+    }
+
     /// One miner address is spelled differently per network. That spelling is
     /// what the consensus encoding deliberately omits.
     #[test]
     fn renders_the_address_for_the_given_network() {
         let share = share_info_with_uncle();
         assert!(
-            ShareInfoDisplay::from_share_info(&share, Some(Network::Bitcoin))
+            ShareInfoDisplay::from_share_info(&share, Some(Network::Bitcoin), None)
                 .miner_address
                 .starts_with("p2pool1")
         );
         assert!(
-            ShareInfoDisplay::from_share_info(&share, Some(Network::Testnet4))
+            ShareInfoDisplay::from_share_info(&share, Some(Network::Testnet4), None)
                 .miner_address
                 .starts_with("tp2pool1")
         );
@@ -239,14 +285,14 @@ mod tests {
     /// Without a network there is no human readable part to choose.
     #[test]
     fn falls_back_to_the_witness_program_hex_without_a_network() {
-        let display = ShareInfoDisplay::from_share_info(&share_info_with_uncle(), None);
+        let display = ShareInfoDisplay::from_share_info(&share_info_with_uncle(), None, None);
         assert_eq!(display.miner_address, to_hex(&make_test_share_program(1)));
     }
 
     #[test]
     fn carries_every_other_field_across_unchanged() {
         let share = share_info_with_uncle();
-        let display = ShareInfoDisplay::from_share_info(&share, Some(Network::Signet));
+        let display = ShareInfoDisplay::from_share_info(&share, Some(Network::Signet), None);
 
         assert_eq!(display.blockhash, share.blockhash);
         assert_eq!(display.prev_blockhash, share.prev_blockhash);
@@ -271,7 +317,7 @@ mod tests {
             miner_address: Some(make_test_share_program(1).into()),
             has_block_data: true,
         };
-        let display = DagEntryDisplay::from_dag_entry(&entry, Some(Network::Signet));
+        let display = DagEntryDisplay::from_dag_entry(&entry, Some(Network::Signet), None);
 
         assert_eq!(
             display.miner_address.as_deref(),
@@ -294,7 +340,7 @@ mod tests {
             miner_address: None,
             has_block_data: false,
         };
-        let display = DagEntryDisplay::from_dag_entry(&entry, Some(Network::Signet));
+        let display = DagEntryDisplay::from_dag_entry(&entry, Some(Network::Signet), None);
 
         assert_eq!(display.miner_address, None);
     }
@@ -303,7 +349,7 @@ mod tests {
     fn renders_addresses_on_share_headers() {
         let headers = vec![TestShareBlockBuilder::new().build().header];
         let mut value = serde_json::to_value(&headers).unwrap();
-        render_header_addresses(&mut value, &headers, Network::Signet, |header| header);
+        render_header_addresses(&mut value, &headers, Network::Signet, None, |header| header);
 
         assert!(
             value[0]["miner_address"]

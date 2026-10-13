@@ -21,7 +21,8 @@ pub mod transactions;
 use crate::commands;
 use bitcoin::Network;
 use clap::{ArgGroup, Parser, Subcommand};
-use p2poolv2_lib::config::Config;
+use p2poolv2_lib::address::bch_share::BchShareNetwork;
+use p2poolv2_lib::config::{BitcoinCashNetwork, Config};
 use std::error::Error;
 use std::path::Path;
 
@@ -228,14 +229,18 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
                 // Direct database query mode (offline, no running node required)
                 let store = commands::db_query::open_store(db_path)?;
 
-                // A miner address is stored as the bare witness program it
-                // encodes, so rendering it needs the network. --config is
-                // documented as not required here.
-                let network = match &cli.config {
+                // A miner address is stored without its text prefix. --config is
+                // documented as not required here. The cash prefix comes from
+                // bitcoin_cash_network, not from the Bitcoin share-chain network.
+                let (network, cash_network) = match &cli.config {
                     Some(config_path) if Path::new(config_path).exists() => {
-                        Some(Config::load(config_path)?.stratum.network)
+                        let loaded = Config::load(config_path)?;
+                        (
+                            Some(loaded.stratum.network),
+                            loaded.stratum.bitcoin_cash_network.map(cash_share_network),
+                        )
                     }
-                    _ => None,
+                    _ => (None, None),
                 };
 
                 match &cli.command {
@@ -251,16 +256,34 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
                     }
                     Some(Commands::Shares { to, num, dot, .. }) => {
                         if *dot {
-                            commands::db_query::shares_dot(&store, *to, *num, network)?;
+                            commands::db_query::shares_dot(
+                                &store,
+                                *to,
+                                *num,
+                                network,
+                                cash_network,
+                            )?;
                         } else {
-                            commands::db_query::shares(&store, *to, *num, network)?;
+                            commands::db_query::shares(&store, *to, *num, network, cash_network)?;
                         }
                     }
                     Some(Commands::Candidates { to, num, dot }) => {
                         if *dot {
-                            commands::db_query::candidates_dot(&store, *to, *num, network)?;
+                            commands::db_query::candidates_dot(
+                                &store,
+                                *to,
+                                *num,
+                                network,
+                                cash_network,
+                            )?;
                         } else {
-                            commands::db_query::candidates(&store, *to, *num, network)?;
+                            commands::db_query::candidates(
+                                &store,
+                                *to,
+                                *num,
+                                network,
+                                cash_network,
+                            )?;
                         }
                     }
                     Some(Commands::Share { hash, height, full }) => {
@@ -270,10 +293,11 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
                             *height,
                             *full,
                             network,
+                            cash_network,
                         )?;
                     }
                     Some(Commands::Dag { to, num, dot }) => {
-                        commands::db_query::dag(&store, *to, *num, *dot, network)?;
+                        commands::db_query::dag(&store, *to, *num, *dot, network, cash_network)?;
                     }
                     Some(Commands::Transactions { command }) => {
                         commands::transactions::execute_db(&store, command)?;
@@ -343,4 +367,12 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
     }
 
     Ok(())
+}
+
+fn cash_share_network(network: BitcoinCashNetwork) -> BchShareNetwork {
+    match network {
+        BitcoinCashNetwork::Mainnet => BchShareNetwork::Mainnet,
+        BitcoinCashNetwork::Chipnet => BchShareNetwork::Chipnet,
+        BitcoinCashNetwork::Regtest => BchShareNetwork::Regtest,
+    }
 }

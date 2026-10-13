@@ -74,7 +74,11 @@ pub(crate) async fn shares(
     Ok(Json(SharesResponse {
         from_height,
         to_height,
-        shares: ShareInfoDisplay::from_share_infos(&shares, Some(state.app_config.network)),
+        shares: ShareInfoDisplay::from_share_infos(
+            &shares,
+            Some(state.app_config.network),
+            state.app_config.cash_network,
+        ),
     }))
 }
 
@@ -103,6 +107,7 @@ mod tests {
             app_config: AppConfig {
                 pool_signature_length: 0,
                 network: bitcoin::Network::Signet,
+                cash_network: None,
                 cors_allowed: false,
             },
             chain_store_handle,
@@ -264,7 +269,7 @@ mod tests {
         let (state, _temp_dir) = build_test_state(node_handle).await;
 
         let genesis = genesis_for_tests();
-        let expected = to_address_string(&genesis.header.miner_address, Network::Signet);
+        let expected = to_address_string(&genesis.header.miner_address, Network::Signet, None);
         state
             .chain_store_handle
             .init_or_setup_genesis(genesis)
