@@ -4061,11 +4061,7 @@ mod tests {
         .unwrap();
 
         // Build full bitcoin transaction list: coinbase + template transactions
-        let template_transactions: Vec<bitcoin::Transaction> = template
-            .transactions
-            .iter()
-            .map(bitcoin::Transaction::from)
-            .collect();
+        let template_transactions = template.decode_transactions().unwrap();
         let mut all_bitcoin_txids = vec![coinbase_tx.compute_txid()];
         all_bitcoin_txids.extend(template_transactions.iter().map(|tx| tx.compute_txid()));
 
@@ -4078,6 +4074,7 @@ mod tests {
 
         // Set merkle branches from template transactions
         share_block.template_merkle_branches = build_merkle_branches_for_template(&template)
+            .unwrap()
             .into_iter()
             .map(TxMerkleNode::from_raw_hash)
             .collect();

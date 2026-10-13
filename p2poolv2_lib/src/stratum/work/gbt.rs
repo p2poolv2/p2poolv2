@@ -15,15 +15,38 @@ const GBT_NO_TRANSACTIONS_FIXTURE: &str =
     include_str!("../../../../p2poolv2_tests/test_data/gbt/signet/gbt-no-transactions.json");
 
 /// Compute merkle branches for the transactions in the block template
-/// Uses private compute_merkle_branches after parsing the txids from the template
+/// Return an error for invalid transaction IDs instead of panicking on node data.
 #[allow(dead_code)]
-pub fn build_merkle_branches_for_template(template: &BlockTemplate) -> Vec<sha256d::Hash> {
+pub fn build_merkle_branches_for_template(
+    template: &BlockTemplate,
+) -> Result<Vec<sha256d::Hash>, WorkError> {
     let txids = template
         .transactions
         .iter()
-        .map(|tx| tx.txid.parse().unwrap())
-        .collect();
-    compute_merkle_branches(txids)
+        .map(|transaction| {
+            transaction.txid.parse().map_err(|error| WorkError {
+                message: format!("Invalid template transaction ID: {error}"),
+            })
+        })
+        .collect::<Result<_, _>>()?;
+    Ok(compute_merkle_branches(txids))
+}
+
+/// Fetch and validate a BCHN template before exposing it to the mining pipeline.
+pub async fn get_bch_block_template(
+    bitcoind: &BitcoindRpcClient,
+) -> Result<BlockTemplate, WorkError> {
+    let json = bitcoind
+        .get_bch_block_template()
+        .await
+        .map_err(|error| WorkError {
+            message: error.to_string(),
+        })?;
+    let template: BlockTemplate = serde_json::from_str(&json).map_err(|error| WorkError {
+        message: format!("Invalid BCH template JSON: {error}"),
+    })?;
+    template.validate_bch()?;
+    Ok(template)
 }
 
 /// Compute the bitcoin merkle root by walking the merkle branches from the
@@ -189,8 +212,40 @@ pub async fn start_gbt(
 #[cfg(test)]
 mod gbt_load_tests {
     use super::*;
+    use crate::test_utils::bch_template_transaction;
     use bitcoin::hex::FromHex;
     use bitcoindrpc::test_utils::{mock_method, setup_mock_bitcoin_rpc};
+
+    #[tokio::test]
+    async fn bch_template_flows_through_rpc_and_validation() {
+        let (server, config) = setup_mock_bitcoin_rpc().await;
+        mock_method(
+            &server,
+            "getblocktemplate",
+            serde_json::json!([{"capabilities": ["coinbasetxn", "coinbase/append", "workid"]}]),
+            include_str!("../../../../bitcoindrpc/test_data/bchn-regtest-template.json").into(),
+        )
+        .await;
+        let client =
+            BitcoindRpcClient::new(&config.url, &config.username, &config.password).unwrap();
+        let template = get_bch_block_template(&client).await.unwrap();
+        assert_eq!(template.height, 102);
+        assert!(
+            build_merkle_branches_for_template(&template)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn malformed_transaction_id_returns_an_error() {
+        let mut template: BlockTemplate =
+            serde_json::from_str(GBT_NO_TRANSACTIONS_FIXTURE).unwrap();
+        let mut transaction = bch_template_transaction(1);
+        transaction.txid = "invalid".into();
+        template.transactions.push(transaction);
+        assert!(build_merkle_branches_for_template(&template).is_err());
+    }
 
     #[tokio::test]
     async fn test_get_block_template() {
@@ -369,7 +424,7 @@ mod gbt_load_tests {
                 .parse()
                 .unwrap();
 
-        let branches = build_merkle_branches_for_template(&template);
+        let branches = build_merkle_branches_for_template(&template).unwrap();
         assert_eq!(branches.len(), 3);
 
         let branch_nodes: Vec<bitcoin::TxMerkleNode> = branches

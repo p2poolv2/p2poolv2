@@ -344,7 +344,7 @@ impl PreparedNotifyParamsBuilder {
         )?;
 
         // Pre-compute merkle branches
-        let merkle_branches_raw = build_merkle_branches_for_template(&self.template);
+        let merkle_branches_raw = build_merkle_branches_for_template(&self.template)?;
         let merkle_branches_hex: Vec<String> = merkle_branches_raw
             .iter()
             .map(|branch| to_be_hex(&branch.to_string()))

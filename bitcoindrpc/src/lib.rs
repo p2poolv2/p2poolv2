@@ -26,8 +26,8 @@ struct JsonRpcRequest {
 /// In JSON-RPC 1.0, both result and error are always present
 /// One will be the actual value, the other will be null
 #[derive(Deserialize, Debug)]
-struct JsonRpcResponse<T> {
-    result: T,
+struct JsonRpcResponse {
+    result: serde_json::Value,
     error: Option<JsonRpcError>,
 }
 
@@ -180,7 +180,7 @@ impl BitcoindRpcClient {
             });
         }
 
-        let rpc_response: JsonRpcResponse<T> =
+        let rpc_response: JsonRpcResponse =
             response
                 .json()
                 .await
@@ -197,7 +197,9 @@ impl BitcoindRpcClient {
         }
 
         // In JSON-RPC 1.0, result is always present (can be null for void methods like submitblock)
-        Ok(rpc_response.result)
+        serde_json::from_value(rpc_response.result).map_err(|error| BitcoindRpcError::ParseError {
+            message: format!("Invalid result for {method}: {error}"),
+        })
     }
 
     /// Get current bitcoin difficulty from bitcoind rpc
@@ -211,8 +213,7 @@ impl BitcoindRpcClient {
         self.request("getblockchaininfo", vec![]).await
     }
 
-    /// Get current bitcoin block count from bitcoind rpc
-    /// We use special rules for signet
+    /// Fetch a Bitcoin template, negotiating SegWit and Signet when required.
     pub async fn getblocktemplate(
         &self,
         network: bitcoin::Network,
@@ -231,6 +232,21 @@ impl BitcoindRpcClient {
                 })]
             }
         };
+        self.request_block_template(params).await
+    }
+
+    /// Fetch a BCHN template without requesting Bitcoin-only consensus rules.
+    pub async fn get_bch_block_template(&self) -> Result<String, BitcoindRpcError> {
+        self.request_block_template(vec![serde_json::json!({
+            "capabilities": ["coinbasetxn", "coinbase/append", "workid"],
+        })])
+        .await
+    }
+
+    async fn request_block_template(
+        &self,
+        params: Vec<serde_json::Value>,
+    ) -> Result<String, BitcoindRpcError> {
         debug!("Requesting getblocktemplate with params: {:?}", params);
 
         // Configure retry parameters
@@ -451,6 +467,49 @@ mod tests {
                 initial_block_download: true,
             }
         );
+    }
+
+    #[tokio::test]
+    async fn bch_template_request_has_no_segwit_rule() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(body_json(serde_json::json!({
+                "method": "getblocktemplate",
+                "params": [{"capabilities": ["coinbasetxn", "coinbase/append", "workid"]}],
+                "id": 0,
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": {"height": 326900, "transactions": []},
+                "error": null,
+                "id": 0,
+            })))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
+        let template: serde_json::Value =
+            serde_json::from_str(&client.get_bch_block_template().await.unwrap()).unwrap();
+        assert_eq!(template["height"], 326900);
+    }
+
+    #[tokio::test]
+    async fn rpc_error_is_preserved_when_result_is_null() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": null,
+                "error": {"code": -28, "message": "Loading block index"},
+                "id": 0,
+            })))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
+        assert!(matches!(
+            client.getblockchaininfo().await,
+            Err(BitcoindRpcError::RpcError { code: -28, message })
+                if message == "Loading block index"
+        ));
     }
 
     #[tokio::test]

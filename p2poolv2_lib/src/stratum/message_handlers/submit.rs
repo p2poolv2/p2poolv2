@@ -15,7 +15,7 @@ use crate::stratum::{
     session::Session,
     work::{
         block_template::BlockTemplate, difficulty::validate::validate_bitcoin_difficulty,
-        tracker::JobId,
+        error::WorkError, tracker::JobId,
     },
 };
 use bitcoin::{block::Header, blockdata::block::Block, hashes::Hash};
@@ -124,7 +124,8 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
             validation_result.header,
             validation_result.coinbase.clone(),
             &job.blocktemplate,
-        );
+        )
+        .map_err(|error| Error::SubmitFailure(error.to_string()))?;
         submit_block(&block, &stratum_context.bitcoindrpc_client).await;
     }
 
@@ -265,21 +266,22 @@ pub async fn submit_block(block: &Block, bitcoindrpc_client: &BitcoindRpcClient)
 }
 
 /// Build full block from header, coinbase and blocktemplate
+/// Return an error for malformed template transactions rather than panicking.
 /// Only called for the rare case of finding a bitcoin block (real auto-submit
 /// in non-sim builds; the sim statistical block-find under `sim`).
 pub(crate) fn build_full_block(
     header: Header,
     coinbase: bitcoin::Transaction,
     blocktemplate: &BlockTemplate,
-) -> Block {
+) -> Result<Block, WorkError> {
     let mut all_transactions = Vec::with_capacity(blocktemplate.transactions.len() + 1);
     all_transactions.push(coinbase);
-    all_transactions.extend(blocktemplate.decode_transactions());
+    all_transactions.extend(blocktemplate.decode_transactions()?);
 
-    Block {
+    Ok(Block {
         header,
         txdata: all_transactions,
-    }
+    })
 }
 
 /// Use bitcoin mainnet max attainable target to convert the hash into difficulty
@@ -344,6 +346,7 @@ mod handle_submit_tests {
         let job_id = JobId(u64::from_str_radix(&notify.params.job_id, 16).unwrap());
 
         let merkle_branches = build_merkle_branches_for_template(&template)
+            .unwrap()
             .into_iter()
             .map(bitcoin::TxMerkleNode::from_raw_hash)
             .collect();
@@ -1532,6 +1535,7 @@ mod handle_submit_tests {
         let job_id = JobId(u64::from_str_radix(&notify.params.job_id, 16).unwrap());
 
         let merkle_branches = build_merkle_branches_for_template(&template)
+            .unwrap()
             .into_iter()
             .map(bitcoin::TxMerkleNode::from_raw_hash)
             .collect();
@@ -1615,6 +1619,7 @@ mod handle_submit_tests {
         let job_id = JobId(u64::from_str_radix(&notify.params.job_id, 16).unwrap());
 
         let merkle_branches = build_merkle_branches_for_template(&template)
+            .unwrap()
             .into_iter()
             .map(bitcoin::TxMerkleNode::from_raw_hash)
             .collect();

@@ -52,6 +52,8 @@ pub async fn submit_sim_block(
         template.height
     );
 
-    let block = build_full_block(header, coinbase, template);
-    submit_block(&block, client).await;
+    match build_full_block(header, coinbase, template) {
+        Ok(block) => submit_block(&block, client).await,
+        Err(error) => warn!("sim block-find: invalid template: {error}"),
+    }
 }

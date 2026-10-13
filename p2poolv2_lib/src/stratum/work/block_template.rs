@@ -3,7 +3,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use crate::stratum::work::error::WorkError;
+use bitcoin::hashes::Hash;
 use bitcoin::script::PushBytesBuf;
+use bitcoin::{BlockHash, CompactTarget, Target, Transaction, Txid};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -12,19 +14,24 @@ use std::collections::HashMap;
 pub struct TemplateTransaction {
     pub data: String,
     pub txid: String,
+    #[serde(default)]
     pub hash: String,
     pub depends: Vec<u32>,
     pub fee: u64,
     pub sigops: u32,
+    #[serde(default)]
     pub weight: u32,
 }
 
-/// Struct representing the getblocktemplate response from Bitcoin Core
+/// Template fields shared by Bitcoin Core and BCHN. BCH has no block weight.
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct BlockTemplate<T = TemplateTransaction> {
     pub version: i32,
+    #[serde(default)]
     pub rules: Vec<String>,
+    #[serde(default)]
     pub vbavailable: std::collections::HashMap<String, i32>,
+    #[serde(default)]
     pub vbrequired: u32,
     pub previousblockhash: String,
     pub transactions: Vec<T>,
@@ -37,6 +44,7 @@ pub struct BlockTemplate<T = TemplateTransaction> {
     pub noncerange: String,
     pub sigoplimit: u32,
     pub sizelimit: u32,
+    #[serde(default)]
     pub weightlimit: u32,
     pub curtime: u32,
     pub bits: String,
@@ -48,28 +56,118 @@ pub struct BlockTemplate<T = TemplateTransaction> {
     pub default_witness_commitment: Option<String>,
 }
 
-impl From<&TemplateTransaction> for bitcoin::Transaction {
-    fn from(tx: &TemplateTransaction) -> Self {
-        let bytes = hex::decode(&tx.data).expect("Failed to decode transaction hex");
-        bitcoin::consensus::deserialize(&bytes)
-            .expect("Failed to deserialize transaction from slice")
+impl TryFrom<&TemplateTransaction> for Transaction {
+    type Error = WorkError;
+
+    fn try_from(transaction: &TemplateTransaction) -> Result<Self, Self::Error> {
+        let bytes = hex::decode(&transaction.data).map_err(|error| WorkError {
+            message: format!("Invalid template transaction hex: {error}"),
+        })?;
+        bitcoin::consensus::deserialize(&bytes).map_err(|error| WorkError {
+            message: format!("Invalid template transaction: {error}"),
+        })
     }
 }
 
-impl From<TemplateTransaction> for bitcoin::Transaction {
-    fn from(tx: TemplateTransaction) -> Self {
-        bitcoin::Transaction::from(&tx)
+impl TryFrom<TemplateTransaction> for Transaction {
+    type Error = WorkError;
+
+    fn try_from(transaction: TemplateTransaction) -> Result<Self, Self::Error> {
+        Transaction::try_from(&transaction)
     }
 }
 
 impl BlockTemplate {
-    /// Decode all transactions from the template into bitcoin::Transaction
-    /// Uses the From<&TemplateTransaction> implementation
-    pub fn decode_transactions(&self) -> Vec<bitcoin::Transaction> {
+    /// Decode template transactions, returning malformed node data as an error.
+    pub fn decode_transactions(&self) -> Result<Vec<Transaction>, WorkError> {
         self.transactions
             .iter()
-            .map(bitcoin::Transaction::from)
+            .map(Transaction::try_from)
             .collect()
+    }
+
+    /// Check BCH template data before computing merkle branches or issuing jobs.
+    /// CTOR is checked in displayed transaction ID order; the coinbase is separate.
+    pub fn validate_bch(&self) -> Result<(), WorkError> {
+        let invalid = |message: &str| WorkError {
+            message: format!("Invalid BCH template: {message}"),
+        };
+        self.previousblockhash
+            .parse::<BlockHash>()
+            .map_err(|_| invalid("invalid previous block hash"))?;
+        let bits = u32::from_str_radix(&self.bits, 16)
+            .map(CompactTarget::from_consensus)
+            .map_err(|_| invalid("invalid compact target"))?;
+        let target = Target::from_compact(bits);
+        let target_bytes: [u8; 32] = hex::decode(&self.target)
+            .map_err(|_| invalid("invalid target hex"))?
+            .try_into()
+            .map_err(|_| invalid("target must be 32 bytes"))?;
+        if self.bits.len() != 8
+            || target == Target::ZERO
+            || bits.to_consensus() & 0x00800000 != 0
+            || target.to_compact_lossy() != bits
+            || target.to_be_bytes() != target_bytes
+        {
+            return Err(invalid("target and compact bits disagree or are invalid"));
+        }
+        if self.curtime < self.mintime || self.sizelimit < 81 || self.sigoplimit == 0 {
+            return Err(invalid("invalid timestamp or block limits"));
+        }
+        if self.coinbasevalue > bitcoin::Amount::MAX_MONEY.to_sat() {
+            return Err(invalid("coinbase value exceeds maximum money"));
+        }
+        if self.default_witness_commitment.is_some()
+            || self.weightlimit != 0
+            || self.rules.iter().any(|rule| {
+                matches!(
+                    rule.trim_start_matches('!'),
+                    "segwit" | "signet" | "taproot"
+                )
+            })
+        {
+            return Err(invalid("Bitcoin-only consensus fields"));
+        }
+        let mut previous_txid: Option<Txid> = None;
+        let mut transaction_bytes = 0usize;
+        for template_transaction in &self.transactions {
+            let transaction = Transaction::try_from(template_transaction)?;
+            let txid = transaction.compute_txid();
+            if template_transaction.txid.parse::<Txid>().ok() != Some(txid)
+                || (!template_transaction.hash.is_empty()
+                    && template_transaction.hash.parse::<Txid>().ok() != Some(txid))
+            {
+                return Err(invalid("transaction ID does not match its bytes"));
+            }
+            if transaction.is_coinbase()
+                || transaction
+                    .input
+                    .iter()
+                    .any(|input| !input.witness.is_empty())
+            {
+                return Err(invalid(
+                    "coinbase or witness transaction in transaction list",
+                ));
+            }
+            if previous_txid.is_some_and(|previous| {
+                previous
+                    .as_byte_array()
+                    .iter()
+                    .rev()
+                    .cmp(txid.as_byte_array().iter().rev())
+                    != std::cmp::Ordering::Less
+            }) {
+                return Err(invalid("transactions are not in strict CTOR order"));
+            }
+            transaction_bytes = transaction_bytes
+                .checked_add(bitcoin::consensus::serialize(&transaction).len())
+                .ok_or_else(|| invalid("transaction size overflow"))?;
+            previous_txid = Some(txid);
+        }
+        if transaction_bytes.saturating_add(81) > self.sizelimit as usize {
+            return Err(invalid("transactions exceed node block size limit"));
+        }
+        Ok(())
     }
 }
 
@@ -93,6 +191,149 @@ pub(crate) fn parse_flags(flags: Option<String>) -> Result<PushBytesBuf, WorkErr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::bch_template_transaction;
+
+    const BCHN_TEMPLATE: &str =
+        include_str!("../../../../bitcoindrpc/test_data/bchn-regtest-template.json");
+
+    #[test]
+    fn bchn_template_without_bitcoin_fields_is_valid() {
+        let template: BlockTemplate = serde_json::from_str(BCHN_TEMPLATE).unwrap();
+        template.validate_bch().unwrap();
+        assert_eq!(template.sizelimit, 32_000_000);
+        assert_eq!(template.weightlimit, 0);
+    }
+
+    #[test]
+    fn bch_rejects_mismatched_target() {
+        let mut template: BlockTemplate = serde_json::from_str(BCHN_TEMPLATE).unwrap();
+        template.target = "00".repeat(32);
+        assert!(
+            template
+                .validate_bch()
+                .unwrap_err()
+                .message
+                .contains("target")
+        );
+    }
+
+    #[test]
+    fn bch_rejects_coinbase_value_above_maximum_money() {
+        let mut template: BlockTemplate = serde_json::from_str(BCHN_TEMPLATE).unwrap();
+        template.coinbasevalue = bitcoin::Amount::MAX_MONEY.to_sat() + 1;
+        assert!(
+            template
+                .validate_bch()
+                .unwrap_err()
+                .message
+                .contains("maximum money")
+        );
+    }
+
+    #[test]
+    fn bch_rejects_witness_commitment() {
+        let mut template: BlockTemplate = serde_json::from_str(BCHN_TEMPLATE).unwrap();
+        template.default_witness_commitment = Some("6a24aa21a9ed".into());
+        assert!(
+            template
+                .validate_bch()
+                .unwrap_err()
+                .message
+                .contains("Bitcoin-only")
+        );
+    }
+
+    #[test]
+    fn bch_rejects_transaction_id_mismatch() {
+        let mut template: BlockTemplate = serde_json::from_str(BCHN_TEMPLATE).unwrap();
+        let mut transaction = bch_template_transaction(1);
+        transaction.txid = "00".repeat(32);
+        template.transactions.push(transaction);
+        assert!(
+            template
+                .validate_bch()
+                .unwrap_err()
+                .message
+                .contains("transaction ID")
+        );
+    }
+
+    #[test]
+    fn bch_rejects_witness_transactions() {
+        let mut template: BlockTemplate = serde_json::from_str(BCHN_TEMPLATE).unwrap();
+        let mut transaction = bch_template_transaction(1);
+        let mut decoded = Transaction::try_from(&transaction).unwrap();
+        decoded.input[0].witness.push([1u8]);
+        transaction.data = bitcoin::consensus::encode::serialize_hex(&decoded);
+        template.transactions.push(transaction);
+        assert!(
+            template
+                .validate_bch()
+                .unwrap_err()
+                .message
+                .contains("witness transaction")
+        );
+    }
+
+    #[test]
+    fn bch_rejects_duplicate_transaction_ids() {
+        let mut template: BlockTemplate = serde_json::from_str(BCHN_TEMPLATE).unwrap();
+        let transaction = bch_template_transaction(1);
+        template.transactions = vec![transaction.clone(), transaction];
+        assert!(
+            template
+                .validate_bch()
+                .unwrap_err()
+                .message
+                .contains("CTOR")
+        );
+    }
+
+    #[test]
+    fn bch_uses_display_order_for_ctor_and_rejects_reversed_order() {
+        let mut template: BlockTemplate = serde_json::from_str(BCHN_TEMPLATE).unwrap();
+        template.transactions = vec![bch_template_transaction(1), bch_template_transaction(2)];
+        template
+            .transactions
+            .sort_by(|left, right| left.txid.cmp(&right.txid));
+        template.validate_bch().unwrap();
+        template.transactions.reverse();
+        assert!(
+            template
+                .validate_bch()
+                .unwrap_err()
+                .message
+                .contains("CTOR")
+        );
+    }
+
+    #[test]
+    fn bch_rejects_transactions_over_node_size_limit() {
+        let mut template: BlockTemplate = serde_json::from_str(BCHN_TEMPLATE).unwrap();
+        template.transactions.push(bch_template_transaction(1));
+        template.sizelimit = 81;
+        assert!(
+            template
+                .validate_bch()
+                .unwrap_err()
+                .message
+                .contains("block size limit")
+        );
+    }
+
+    #[test]
+    fn malformed_template_hex_returns_an_error() {
+        let mut transaction = bch_template_transaction(1);
+        transaction.data = "invalid".into();
+        assert!(Transaction::try_from(transaction).is_err());
+    }
+
+    #[test]
+    fn malformed_template_transaction_returns_an_error() {
+        let mut transaction = bch_template_transaction(1);
+        transaction.data = "00".into();
+        assert!(Transaction::try_from(transaction).is_err());
+    }
 
     #[test]
     fn test_parse_flags() {
@@ -130,7 +371,7 @@ mod tests {
             weight: 892,
         };
 
-        let bitcoin_tx: bitcoin::Transaction = tx_data.into();
+        let bitcoin_tx = Transaction::try_from(tx_data).unwrap();
         assert_eq!(
             bitcoin_tx.compute_txid().to_string(),
             "74d7b9bf9f51dd7447e117b6a835a20b6f7d5d807285d1435da37574563ca525"
@@ -155,7 +396,7 @@ mod tests {
         let first_tx = &block_template.transactions[0];
 
         // Convert to Bitcoin Transaction
-        let btc_tx: bitcoin::Transaction = first_tx.clone().into();
+        let btc_tx = Transaction::try_from(first_tx).unwrap();
 
         // Verify transaction properties
         assert_eq!(btc_tx.compute_txid().to_string(), first_tx.txid);

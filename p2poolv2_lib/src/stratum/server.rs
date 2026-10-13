@@ -346,7 +346,8 @@ impl StratumServer {
 /// Returns a default max connections value based on the OS soft file descriptor limit.
 ///
 /// Computes 90% of the soft NOFILE limit. Falls back to 1024 if the limit
-/// cannot be queried.
+/// cannot be queried, including platforms without POSIX resource limits.
+#[cfg(unix)]
 fn default_max_connections() -> u32 {
     match rlimit::getrlimit(rlimit::Resource::NOFILE) {
         Ok((soft_limit, _hard_limit)) => {
@@ -366,6 +367,11 @@ fn default_max_connections() -> u32 {
             fallback
         }
     }
+}
+
+#[cfg(not(unix))]
+fn default_max_connections() -> u32 {
+    1024
 }
 
 /// Accepts a new stratum connection, spawning a handler task.

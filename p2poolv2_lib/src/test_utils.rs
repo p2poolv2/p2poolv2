@@ -61,6 +61,8 @@ use crate::stratum::messages::Response;
 use crate::stratum::messages::SimpleRequest;
 #[cfg(test)]
 use crate::stratum::work::block_template::BlockTemplate;
+#[cfg(test)]
+use crate::stratum::work::block_template::TemplateTransaction;
 #[cfg(any(test, feature = "test-utils"))]
 use crate::stratum::work::coinbase::build_bitcoin_coinbase_transaction;
 #[cfg(test)]
@@ -141,6 +143,25 @@ pub fn test_coinbase_transaction(index: usize) -> bitcoin::Transaction {
         BlockHash::from_byte_array([index as u8; 32]),
         &[],
     )
+}
+
+/// A non-coinbase, non-witness transaction for template parser checks.
+#[cfg(test)]
+pub fn bch_template_transaction(index: u32) -> TemplateTransaction {
+    let mut transaction = test_coinbase_transaction(1);
+    transaction.input[0].previous_output.vout = index;
+    transaction.input[0].witness.clear();
+    transaction.output.truncate(1);
+    let txid = transaction.compute_txid().to_string();
+    TemplateTransaction {
+        data: bitcoin::consensus::encode::serialize_hex(&transaction),
+        txid: txid.clone(),
+        hash: txid,
+        depends: Vec::new(),
+        fee: 0,
+        sigops: 0,
+        weight: 0,
+    }
 }
 
 /// Setup returns both chain handle and tempdir (tempdir must stay alive)
@@ -427,11 +448,7 @@ pub fn build_block_from_work_components(path: &str, nsecs: u64) -> ShareBlock {
     let miner_bitcoin_address = make_test_address(1);
 
     // Build template (non-coinbase) bitcoin transactions
-    let template_transactions: Vec<Transaction> = template
-        .transactions
-        .iter()
-        .map(bitcoin::Transaction::from)
-        .collect();
+    let template_transactions = template.decode_transactions().unwrap();
 
     // Build the share commitment and compute its hash
     let share_commitment = ShareCommitment {
@@ -523,6 +540,7 @@ pub fn build_block_from_work_components(path: &str, nsecs: u64) -> ShareBlock {
     };
 
     let template_merkle_branches = build_merkle_branches_for_template(&template)
+        .unwrap()
         .into_iter()
         .map(TxMerkleNode::from_raw_hash)
         .collect();

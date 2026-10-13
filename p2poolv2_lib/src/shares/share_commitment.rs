@@ -437,11 +437,7 @@ mod tests {
         let template: BlockTemplate =
             serde_json::from_str(json_content).expect("Failed to parse template JSON");
 
-        let mut bitcoin_transactions: Vec<bitcoin::Transaction> = template
-            .transactions
-            .iter()
-            .map(bitcoin::Transaction::from)
-            .collect();
+        let mut bitcoin_transactions = template.decode_transactions().unwrap();
         bitcoin_transactions.insert(0, coinbase);
 
         let template_merkle_root: TxMerkleNode = bitcoin::merkle_tree::calculate_root(

@@ -1,9 +1,30 @@
-# P2Poolv2 for Bitcoin Cash: plan
+# P2Poolv2 for Bitcoin Cash: implementation plan
 
-Status: plan only, no code yet. Written 2026-10-08 from design discussions
+Status: implementation in progress. Written 2026-10-08 from design discussions
 with the maintainer of [Pickaxe](https://github.com/CyberAshven/pickaxe-miner).
 Audience: contributors and AI agents starting the BCH port. Read
 [AGENTS.md](../AGENTS.md) and `docs/architecture/` before changing code.
+
+## Implementation checkpoint (2026-10-13)
+
+The first checkpoint adds BCHN template fetching without Bitcoin SegWit or
+Signet rules, parses BCH templates without Bitcoin-only fields, and validates
+transaction bytes, IDs, CTOR, targets and basic block limits before use.
+Malformed node data now returns errors through merkle and block construction
+instead of panicking. Bitcoin template requests retain their existing rules.
+
+A fixture captured from BCHN 29.2.0 on disposable regtest backs the parser and
+RPC tests. The Windows workspace passed 1,491 tests (one skipped), formatting,
+and Clippy with all targets and features and warnings denied. Native Windows
+builds used `SECP256K1_STATIC` and `ENABLE_MODULE_ELLSWIFT` compiler defines;
+no dependency source or consensus checks were disabled.
+
+This is a foundation checkpoint: the BCH fetch path is not yet selected by
+node startup. The BCH share identities and consensus, CashAddr payouts,
+main/mini genesis and difficulty settings, Stratum V2 and Job Declaration,
+merge-mining commitments, and live regtest/chipnet mining validation remain
+unfinished. The upstream Bitcoin test suite passing does not validate those
+BCH requirements.
 
 ## Goal
 
