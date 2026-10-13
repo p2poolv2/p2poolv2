@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+use crate::config::Chain;
 use crate::stratum::work::block_template::BlockTemplate;
 use crate::stratum::work::error::WorkError;
 use crate::stratum::work::notify::{NotifyCmd, NotifySender};
@@ -93,6 +94,25 @@ fn compute_merkle_branches(input_txids: Vec<sha256d::Hash>) -> Vec<sha256d::Hash
     merkle_branches
 }
 
+/// Fetch the template for the configured chain.
+///
+/// Bitcoin keeps the SegWit and Signet rule negotiation. Bitcoin Cash uses
+/// the BCHN request and rejects the template before it can become a job.
+async fn fetch_template(
+    bitcoind: &BitcoindRpcClient,
+    network: bitcoin::Network,
+    chain: Chain,
+) -> Result<BlockTemplate, WorkError> {
+    match chain {
+        Chain::Bitcoin => get_block_template(bitcoind, network)
+            .await
+            .map_err(|error| WorkError {
+                message: error.to_string(),
+            }),
+        Chain::BitcoinCash => get_bch_block_template(bitcoind).await,
+    }
+}
+
 /// Get a new blocktemplate from the bitcoind server
 /// Parse the received JSON into a BlockTemplate struct and return it.
 #[instrument(level = "debug", skip(bitcoind))]
@@ -124,6 +144,7 @@ pub async fn start_gbt(
     result_tx: NotifySender,
     poll_interval: u64,
     network: bitcoin::Network,
+    chain: Chain,
     mut zmq_trigger_rx: tokio::sync::mpsc::Receiver<()>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Create the RPC client once and reuse it for all requests
@@ -155,7 +176,7 @@ pub async fn start_gbt(
         loop {
             tokio::select! {
                 _ = interval.tick() => {
-                    match get_block_template(&bitcoind, network).await {
+                    match fetch_template(&bitcoind, network, chain).await {
                         Ok(template) => {
                             if result_tx
                                 .send(NotifyCmd::SendToAll {
@@ -176,7 +197,7 @@ pub async fn start_gbt(
                     match result {
                         Some(_) => {
                             debug!("Received ZMQ block notification");
-                            match get_block_template(&bitcoind, network).await {
+                            match fetch_template(&bitcoind, network, chain).await {
                                 Ok(template) => {
                                     if result_tx
                                         .send(NotifyCmd::SendToAll {
@@ -493,6 +514,7 @@ mod gbt_server_tests {
             template_tx,
             1,
             bitcoin::Network::Signet,
+            Chain::Bitcoin,
             zmq_trigger_rx,
         )
         .await;
@@ -547,6 +569,7 @@ mod gbt_server_tests {
             template_tx,
             60,
             bitcoin::Network::Signet,
+            Chain::Bitcoin,
             zmq_trigger_rx,
         )
         .await;
@@ -568,5 +591,91 @@ mod gbt_server_tests {
             panic!("Expected SendToAll");
         };
         assert_eq!(template.height, 108);
+    }
+
+    #[tokio::test]
+    async fn bitcoin_cash_startup_forwards_a_validated_template() {
+        let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        mock_method(
+            &mock_server,
+            "getblocktemplate",
+            serde_json::json!([{
+                "capabilities": ["coinbasetxn", "coinbase/append", "workid"],
+            }]),
+            include_str!("../../../../bitcoindrpc/test_data/bchn-regtest-template.json")
+                .to_string(),
+        )
+        .await;
+        mock_method(
+            &mock_server,
+            "getdifficulty",
+            serde_json::json!([]),
+            "1".into(),
+        )
+        .await;
+
+        let (_zmq_trigger_tx, zmq_trigger_rx) = mpsc::channel(1);
+        let (template_tx, mut template_rx) = mpsc::channel(10);
+        let result = start_gbt(
+            bitcoinrpc_config,
+            template_tx,
+            60,
+            bitcoin::Network::Regtest,
+            Chain::BitcoinCash,
+            zmq_trigger_rx,
+        )
+        .await;
+        assert!(result.is_ok());
+
+        let timeout =
+            tokio::time::timeout(std::time::Duration::from_secs(2), template_rx.recv()).await;
+        assert!(timeout.is_ok());
+        let cmd = timeout.unwrap().unwrap();
+        let NotifyCmd::SendToAll { template } = cmd else {
+            panic!("Expected SendToAll");
+        };
+        assert_eq!(template.height, 102);
+        assert!(template.default_witness_commitment.is_none());
+    }
+
+    #[tokio::test]
+    async fn bitcoin_cash_startup_drops_a_template_with_bitcoin_rules() {
+        let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        mock_method(
+            &mock_server,
+            "getblocktemplate",
+            serde_json::json!([{
+                "capabilities": ["coinbasetxn", "coinbase/append", "workid"],
+            }]),
+            GBT_NO_TRANSACTIONS_FIXTURE.to_string(),
+        )
+        .await;
+        mock_method(
+            &mock_server,
+            "getdifficulty",
+            serde_json::json!([]),
+            "1".into(),
+        )
+        .await;
+
+        let (_zmq_trigger_tx, zmq_trigger_rx) = mpsc::channel(1);
+        let (template_tx, mut template_rx) = mpsc::channel(10);
+        let result = start_gbt(
+            bitcoinrpc_config,
+            template_tx,
+            60,
+            bitcoin::Network::Signet,
+            Chain::BitcoinCash,
+            zmq_trigger_rx,
+        )
+        .await;
+        assert!(result.is_ok());
+
+        let received =
+            tokio::time::timeout(std::time::Duration::from_secs(1), template_rx.recv()).await;
+        assert!(
+            received.is_err(),
+            "a Bitcoin template must not be forwarded on the Bitcoin Cash path"
+        );
     }
 }

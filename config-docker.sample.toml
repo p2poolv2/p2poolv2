@@ -58,7 +58,13 @@ bootstrap_address = "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk"
 # In basis points, 1% = 100 basis points. Default 0
 # fee = 0
 zmqpubhashblock = "tcp://bitcoind:28332"
-# The network can be "main", "testnet4" or "signet"
+# Block chain for templates and payout scripts. Default "bitcoin".
+# "bitcoin-cash" fetches BCHN templates without SegWit rules and requires
+# CashAddr payout addresses. Share-chain identities are not selected by this.
+# chain = "bitcoin"
+# Required with chain = "bitcoin-cash": "mainnet", "chipnet", or "regtest".
+# bitcoin_cash_network = "chipnet"
+# The share-chain network can be "main", "testnet4" or "signet"
 network = "signet"
 # Use BIP 323 mask for version rolling (see https://github.com/bitcoin/bips/blob/622e47722cd35514e96da37ae89f868e18d581e4/bip-0323.mediawiki#specification)
 version_mask = "1fffffe0"

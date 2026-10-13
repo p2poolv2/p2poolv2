@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+mod cashaddr;
+
 use bitcoin::address::NetworkChecked;
 use bitcoin::{Address, Network};
 use bitcoindrpc::BitcoinRpcConfig;
@@ -24,6 +26,32 @@ impl std::error::Error for ConfigError {}
 impl std::fmt::Display for ConfigError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(formatter, "{}", self.message)
+    }
+}
+
+/// Parse a payout address for the chain this node is configured to mine.
+///
+/// Bitcoin keeps the existing address parser. Bitcoin Cash accepts only a
+/// CashAddr whose prefix matches `bitcoin_cash_network`, and returns the
+/// legacy script those bytes encode.
+pub fn parse_payout_address(
+    address: &str,
+    chain: Chain,
+    network: Network,
+    bitcoin_cash_network: Option<BitcoinCashNetwork>,
+) -> Result<Address, ConfigError> {
+    match chain {
+        Chain::Bitcoin => parse_address(address, network),
+        Chain::BitcoinCash => {
+            let bitcoin_cash_network = bitcoin_cash_network.ok_or_else(|| ConfigError {
+                message: "bitcoin_cash_network is required when chain is bitcoin-cash".to_string(),
+            })?;
+            cashaddr::decode(address, bitcoin_cash_network)
+                .map(|decoded| decoded.to_address())
+                .map_err(|error| ConfigError {
+                    message: format!("Invalid Bitcoin Cash payout address: {error}"),
+                })
+        }
     }
 }
 
@@ -76,6 +104,60 @@ pub enum PoolMode {
     Hydrapool,
 }
 
+/// Block chain that supplies work templates and coinbase payout scripts.
+///
+/// Existing configurations omit this field and stay on Bitcoin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum Chain {
+    /// Bitcoin. Template requests include SegWit, and Signet when selected.
+    #[default]
+    Bitcoin,
+    /// Bitcoin Cash. Template requests omit Bitcoin-only rules and are
+    /// validated before a job is built. Payout addresses are CashAddr.
+    BitcoinCash,
+}
+
+/// Bitcoin Cash network selected by the operator.
+///
+/// Chipnet uses the `bchtest` CashAddr prefix. BCHN uses that same prefix for
+/// its other test networks, so the prefix does not distinguish chipnet from
+/// testnet3 or testnet4. The RPC URL has to point at the network named here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BitcoinCashNetwork {
+    /// Bitcoin Cash mainnet. CashAddr prefix `bitcoincash`.
+    #[serde(alias = "main")]
+    Mainnet,
+    /// Bitcoin Cash chipnet. CashAddr prefix `bchtest`.
+    Chipnet,
+    /// Bitcoin Cash regtest. CashAddr prefix `bchreg`.
+    Regtest,
+}
+
+impl BitcoinCashNetwork {
+    /// Human-readable prefix covered by the CashAddr checksum.
+    pub fn cashaddr_prefix(self) -> &'static str {
+        match self {
+            BitcoinCashNetwork::Mainnet => "bitcoincash",
+            BitcoinCashNetwork::Chipnet => "bchtest",
+            BitcoinCashNetwork::Regtest => "bchreg",
+        }
+    }
+
+    /// Legacy base58 network whose pubkey and script version bytes match this
+    /// Bitcoin Cash network. Used only so `bitcoin::Address` can carry the
+    /// decoded script. Difficulty and share-chain identity still use
+    /// [`bitcoin::Network`].
+    pub fn legacy_network(self) -> Network {
+        match self {
+            BitcoinCashNetwork::Mainnet => Network::Bitcoin,
+            BitcoinCashNetwork::Chipnet => Network::Testnet,
+            BitcoinCashNetwork::Regtest => Network::Regtest,
+        }
+    }
+}
+
 /// Marker type for raw (unparsed) StratumConfig state
 #[derive(Debug, Clone, Default)]
 pub struct Raw;
@@ -116,9 +198,19 @@ pub struct StratumConfig<State = Raw> {
     /// and one that disagrees with this address is rejected at authorize.
     /// P2Poolv2 mode only; Hydrapool builds no share commitment.
     pub miner_address: Option<String>,
-    /// The network can be "main", "testnet4" or "signet
+    /// The network can be "main", "testnet4" or "signet".
+    /// This remains the share-chain network. Bitcoin Cash work uses `chain`
+    /// and `bitcoin_cash_network`; share identities are not ported yet.
     #[serde(deserialize_with = "deserialize_network")]
     pub network: bitcoin::Network,
+    /// Block chain that supplies work templates and payout scripts.
+    /// Defaults to Bitcoin so existing configurations keep their behavior.
+    #[serde(default)]
+    pub chain: Chain,
+    /// Required when `chain` is `bitcoin-cash`. Accepted values are
+    /// `mainnet` (alias `main`), `chipnet`, and `regtest`.
+    #[serde(default)]
+    pub bitcoin_cash_network: Option<BitcoinCashNetwork>,
     /// The version mask to use for version-rolling
     #[serde(deserialize_with = "deserialize_version_mask")]
     pub version_mask: i32,
@@ -203,6 +295,33 @@ impl StratumConfig<Raw> {
             });
         }
 
+        match (self.chain, self.bitcoin_cash_network) {
+            (Chain::Bitcoin, Some(_)) => {
+                return Err(ConfigError {
+                    message: "bitcoin_cash_network is only valid when chain is bitcoin-cash"
+                        .to_string(),
+                });
+            }
+            (Chain::BitcoinCash, None) => {
+                return Err(ConfigError {
+                    message: "bitcoin_cash_network is required when chain is bitcoin-cash"
+                        .to_string(),
+                });
+            }
+            (Chain::Bitcoin, None) | (Chain::BitcoinCash, Some(_)) => {}
+        }
+
+        if self.chain == Chain::BitcoinCash
+            && let Some(solo_address) = &self.solo_address
+        {
+            parse_payout_address(
+                solo_address,
+                self.chain,
+                self.network,
+                self.bitcoin_cash_network,
+            )?;
+        }
+
         // The network should be one we support an hrp for.
         if self.mode == PoolMode::P2poolv2 {
             p2poolv2_wallet::expected_hrp(self.network).map_err(|error| ConfigError {
@@ -213,7 +332,12 @@ impl StratumConfig<Raw> {
             })?;
         }
 
-        let bootstrap_address_parsed = parse_address(&self.bootstrap_address, self.network)?;
+        let bootstrap_address_parsed = parse_payout_address(
+            &self.bootstrap_address,
+            self.chain,
+            self.network,
+            self.bitcoin_cash_network,
+        )?;
 
         let miner_address_parsed = self
             .miner_address
@@ -224,13 +348,17 @@ impl StratumConfig<Raw> {
         let donation_address_parsed = self
             .donation_address
             .as_ref()
-            .map(|addr| parse_address(addr, self.network))
+            .map(|addr| {
+                parse_payout_address(addr, self.chain, self.network, self.bitcoin_cash_network)
+            })
             .transpose()?;
 
         let fee_address_parsed = self
             .fee_address
             .as_ref()
-            .map(|addr| parse_address(addr, self.network))
+            .map(|addr| {
+                parse_payout_address(addr, self.chain, self.network, self.bitcoin_cash_network)
+            })
             .transpose()?;
 
         Ok(StratumConfig {
@@ -248,6 +376,8 @@ impl StratumConfig<Raw> {
             fee: self.fee,
             miner_address: self.miner_address,
             network: self.network,
+            chain: self.chain,
+            bitcoin_cash_network: self.bitcoin_cash_network,
             version_mask: self.version_mask,
             difficulty_multiplier: self.difficulty_multiplier,
             ignore_difficulty: self.ignore_difficulty,
@@ -311,6 +441,8 @@ impl StratumConfig<Raw> {
             fee: None,
             miner_address: None,
             network: bitcoin::Network::Signet,
+            chain: Chain::Bitcoin,
+            bitcoin_cash_network: None,
             version_mask: DEFAULT_VERSION_MASK,
             difficulty_multiplier: 1.0,
             ignore_difficulty: None,
@@ -1207,6 +1339,81 @@ mod tests {
         config.mode = PoolMode::Hydrapool;
         let parsed = config.parse().unwrap();
         assert_eq!(parsed.mode, PoolMode::Hydrapool);
+    }
+
+    #[test]
+    fn absent_chain_stays_on_bitcoin() {
+        let config = Config::load("../config.sample.toml").unwrap();
+        assert_eq!(config.stratum.chain, Chain::Bitcoin);
+        assert_eq!(config.stratum.bitcoin_cash_network, None);
+    }
+
+    #[test]
+    fn bitcoin_cash_chipnet_accepts_a_matching_cashaddr_payout() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.chain = Chain::BitcoinCash;
+        config.bitcoin_cash_network = Some(BitcoinCashNetwork::Chipnet);
+        config.bootstrap_address = "bchtest:pr6m7j9njldwwzlg9v7v53unlr4jkmx6eyvwc0uz5t".to_string();
+
+        let parsed = config.parse().unwrap();
+        assert_eq!(parsed.chain, Chain::BitcoinCash);
+        assert_eq!(
+            parsed.bitcoin_cash_network,
+            Some(BitcoinCashNetwork::Chipnet)
+        );
+        assert_eq!(
+            parsed.bootstrap_address().script_pubkey().as_bytes(),
+            [
+                0xa9, 0x14, 0xf5, 0xbf, 0x48, 0xb3, 0x97, 0xda, 0xe7, 0x0b, 0xe8, 0x2b, 0x3c, 0xca,
+                0x47, 0x93, 0xf8, 0xeb, 0x2b, 0x6c, 0xda, 0xc9, 0x87,
+            ]
+        );
+    }
+
+    #[test]
+    fn bitcoin_cash_rejects_a_bitcoin_witness_payout() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.chain = Chain::BitcoinCash;
+        config.bitcoin_cash_network = Some(BitcoinCashNetwork::Regtest);
+
+        let error = config.parse().unwrap_err();
+        assert!(
+            error
+                .message
+                .contains("Invalid Bitcoin Cash payout address"),
+            "unexpected message: {}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn bitcoin_cash_requires_its_network() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.chain = Chain::BitcoinCash;
+
+        let error = config.parse().unwrap_err();
+        assert!(
+            error
+                .message
+                .contains("bitcoin_cash_network is required when chain is bitcoin-cash"),
+            "unexpected message: {}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn bitcoin_rejects_a_bitcoin_cash_network() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.bitcoin_cash_network = Some(BitcoinCashNetwork::Mainnet);
+
+        let error = config.parse().unwrap_err();
+        assert!(
+            error
+                .message
+                .contains("bitcoin_cash_network is only valid when chain is bitcoin-cash"),
+            "unexpected message: {}",
+            error.message
+        );
     }
 }
 

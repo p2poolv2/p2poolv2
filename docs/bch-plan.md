@@ -26,6 +26,22 @@ merge-mining commitments, and live regtest/chipnet mining validation remain
 unfinished. The upstream Bitcoin test suite passing does not validate those
 BCH requirements.
 
+## Startup selection (2026-10-13)
+
+Design checks for every porting item are in [bch-design.md](bch-design.md).
+Open questions there stay open.
+
+`stratum.chain = "bitcoin-cash"` now selects the BCHN template request at
+node startup, on both the poll and ZMQ paths, and drops a template that
+fails BCH validation. `bitcoin_cash_network` is `mainnet`, `chipnet`, or
+`regtest`. Payout, donation, fee, and solo addresses on that chain must be
+CashAddr for the selected prefix (`bitcoincash`, `bchtest`, `bchreg`).
+Chipnet uses `bchtest`. A Bitcoin witness payout is rejected so it cannot
+be written into a Bitcoin Cash coinbase.
+
+The share-chain `network` field, genesis, share addresses, and Stratum
+server are unchanged. This is still not a working Bitcoin Cash pool.
+
 ## Goal
 
 A peer-to-peer Bitcoin Cash mining pool built from P2Poolv2: miners

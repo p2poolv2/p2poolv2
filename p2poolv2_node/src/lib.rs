@@ -16,7 +16,7 @@ pub mod signal;
 use p2poolv2_api::start_api_server;
 use p2poolv2_lib::accounting::payout::build_payout_for_mode;
 use p2poolv2_lib::accounting::stats::metrics;
-use p2poolv2_lib::config::Config;
+use p2poolv2_lib::config::{Chain, Config};
 use p2poolv2_lib::node::actor::NodeHandle;
 use p2poolv2_lib::pool_difficulty::PoolDifficulty;
 use p2poolv2_lib::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -233,6 +233,13 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
         }
     };
 
+    if stratum_config.chain == Chain::BitcoinCash {
+        info!(
+            "Bitcoin Cash template validation is selected for {:?}. Share-chain identities, genesis, and Stratum V2 are still the Bitcoin implementation.",
+            stratum_config.bitcoin_cash_network
+        );
+    }
+
     let exit_sender_gbt = exit_sender.clone();
     let exit_receiver_gbt = exit_sender.subscribe();
     tokio::spawn(async move {
@@ -241,6 +248,7 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
             notify_tx_for_gbt,
             GBT_POLL_INTERVAL,
             stratum_config.network,
+            stratum_config.chain,
             zmq_trigger_rx,
         )
         .await
