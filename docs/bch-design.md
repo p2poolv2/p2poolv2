@@ -95,9 +95,12 @@ a full donation (10,000) still skips miner address validation.
 
 ## Checklist
 
-- **Segwit removal.** Not done. Witness commitments and share-chain script
-  validation are still the Bitcoin implementation. This change only refuses
-  to turn a template that still carries those fields into a Bitcoin Cash job.
+- **Segwit removal.** On the Bitcoin Cash paths: a template that still
+  carries SegWit fields is refused, the block coinbase carries no BIP141
+  witness commitment, the share coinbase is a single P2PKH output whose
+  witness-commitment check is skipped, and share transactions, which would
+  need Bitcoin Cash script rules, are refused. The Bitcoin code paths are
+  unchanged and still the shared implementation underneath.
 - **Share chain addresses.** A header stores `ShareOwner`. Bitcoin stays a
   taproot witness program. Bitcoin Cash stores a 20-byte P2PKH hash under
   tag `0x20`, addressed as CashAddr `p2pool`, `tp2pool`, or `rp2pool`. That
@@ -201,6 +204,8 @@ a full donation (10,000) still skips miner address validation.
     stays an open question.
   - Frames for channel messages carry the channel bit the specification
     requires; `SetCustomMiningJob` replies were sent without it before.
+  - One connection may open 32 channels (`max-channels-reached` after
+    that), because every template builds a job per channel.
   - Live check: a Python SV2 client on an extended channel mined BCHN regtest
     blocks 117 to 457 through this listener; block 300's coinbase carries the
     channel's extranonce prefix, the 1.5% donation, the 1% fee, the AuxPoW
