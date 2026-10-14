@@ -15,7 +15,7 @@ use crate::accounting::payout::sharechain_pplns::PplnsWindow;
 #[cfg(not(test))]
 use crate::accounting::payout::sharechain_pplns::PplnsWindow;
 use crate::accounting::payout::sharechain_pplns::pplns_window::{
-    COINBASE_MATURITY, PAYOUT_DEPTH, PPLNS_WINDOW_SHARES, WindowError,
+    COINBASE_MATURITY, PAYOUT_DEPTH, WindowError,
 };
 #[cfg(test)]
 #[mockall_double::double]
@@ -313,8 +313,9 @@ pub trait ShareValidator {
 
     /// Validate the block's inputs against the rules fixed by the block
     /// itself: no outpoint spent twice within the block, every outpoint
-    /// present in the `Outputs` column family, every coinbase root within the
-    /// payout window, and every coinbase output mature at this block's height.
+    /// present in the `Outputs` column family, every coinbase root within
+    /// `PAYOUT_DEPTH` of this block, and every coinbase output mature at this
+    /// block's height.
     ///
     /// Rules whose answer depends on which branch is confirmed are not checked
     /// here. See the implementation for why.
@@ -420,7 +421,8 @@ impl DefaultShareValidator {
     ///
     /// No node-local value decides payout validity: the pool signature is
     /// read from each block's own coinbase, and the PPLNS window is the fixed
-    /// last `PPLNS_WINDOW_SHARES` shares.
+    /// `PPLNS_WINDOW_SHARES` shares below the immature ones (see
+    /// `COINBASE_MATURITY`).
     pub fn new(pool_difficulty: PoolDifficulty) -> Self {
         Self::with_time_provider(pool_difficulty, Arc::new(SystemTimeProvider))
     }
@@ -870,8 +872,9 @@ impl DefaultShareValidator {
 
     /// Validate the bitcoin coinbase against the PPLNS window distribution.
     ///
-    /// Computes the expected distribution from the PPLNS window -- the last
-    /// `PPLNS_WINDOW_SHARES` shares below the share's parent -- reconstructs
+    /// Computes the expected distribution from the PPLNS window -- the
+    /// `PPLNS_WINDOW_SHARES` shares below the share's parent that are mature
+    /// for this share (see `COINBASE_MATURITY`) -- reconstructs
     /// the expected coinbase transaction, and verifies that the merkle
     /// root computed from the reconstructed coinbase and the template
     /// merkle branches matches the bitcoin header's merkle root.
@@ -1340,7 +1343,9 @@ impl ShareValidator for DefaultShareValidator {
     ///
     /// 1. No outpoint is spent by more than one input in this block.
     /// 2. Every outpoint exists in the `Outputs` column family.
-    /// 3. Every outpoint's coinbase root is within the payout window.
+    /// 3. Every outpoint's coinbase root is within `PAYOUT_DEPTH` of this
+    ///    block, so an output stays spendable for a full PPLNS window after
+    ///    it matures.
     /// 4. A coinbase output is mature relative to this block's own height.
     ///
     /// Each answer is fixed by the block and by data stamped on the outputs
@@ -1384,7 +1389,7 @@ impl ShareValidator for DefaultShareValidator {
                 ))
             })?
             + 1;
-        let min_coinbase_root_height = block_height.saturating_sub(PPLNS_WINDOW_SHARES as u32);
+        let min_coinbase_root_height = block_height.saturating_sub(PAYOUT_DEPTH as u32);
         match chain_store_handle
             .check_prevouts(
                 &all_outpoints,
@@ -1482,6 +1487,7 @@ mockall::mock! {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::accounting::payout::sharechain_pplns::pplns_window::PPLNS_WINDOW_SHARES;
     use crate::shares::share_block::ShareTransaction;
     use crate::shares::share_commitment::ShareCommitment;
     use crate::shares::witness_commitment::WitnessCommitment;
@@ -3522,6 +3528,58 @@ mod tests {
             .withf(
                 move |_outpoints, spending_height, _min_root, coinbase_maturity| {
                     *spending_height == parent_height + 1 && *coinbase_maturity == COINBASE_MATURITY
+                },
+            )
+            .returning(
+                |_outpoints, _spending_height, _min_coinbase_root_height, _coinbase_maturity| {
+                    Ok(PrevoutCheck::Accepted)
+                },
+            );
+
+        let spending_tx = bitcoin::Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint::new(bitcoin::Txid::all_zeros(), 0),
+                script_sig: ScriptBuf::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::new(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(10_000),
+                script_pubkey: ScriptBuf::new(),
+            }],
+        };
+
+        let share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .add_transaction(spending_tx)
+            .build();
+
+        let result = validator().validate_prevouts(&share, &chain_store_handle);
+        assert!(result.is_ok(), "got: {result:?}");
+    }
+
+    #[test]
+    fn test_validate_prevouts_expires_coinbase_roots_below_payout_depth() {
+        // An output stays spendable for a full PPLNS window after it matures,
+        // so the oldest allowed coinbase root is the spending height less
+        // `PAYOUT_DEPTH`. The `withf` guard makes the mock match only that
+        // exact minimum; any other value leaves the call unmatched and panics.
+        let parent_height = 200_000u32;
+        let spending_height = parent_height + 1;
+        let mut chain_store_handle = ChainStoreHandle::default();
+        chain_store_handle
+            .expect_get_block_metadata()
+            .returning(move |_| Ok(metadata_at_height(parent_height)));
+        chain_store_handle
+            .expect_check_prevouts()
+            .withf(
+                move |_outpoints,
+                      _spending_height,
+                      min_coinbase_root_height,
+                      _coinbase_maturity| {
+                    *min_coinbase_root_height == spending_height - PAYOUT_DEPTH as u32
                 },
             )
             .returning(

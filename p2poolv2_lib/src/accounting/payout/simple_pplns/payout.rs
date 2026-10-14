@@ -20,7 +20,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// walk back through stored shares stops once their difficulty reaches one
 /// bitcoin block's. A fixed constant rather than config, so the window is the
 /// same on every Hydrapool node. The share chain mode does not use it: its
-/// window is the last `PPLNS_WINDOW_SHARES` shares.
+/// window is `PPLNS_WINDOW_SHARES` mature shares.
 const HYDRAPOOL_DIFFICULTY_MULTIPLIER: u128 = 1;
 
 pub struct Payout {

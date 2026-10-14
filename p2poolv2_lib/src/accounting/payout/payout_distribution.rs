@@ -47,7 +47,7 @@ pub trait PayoutDistribution {
     ///   that prev, closing the read-tip-vs-payout-tip race.
     /// * `bitcoin_difficulty` - Difficulty of the bitcoin block being paid for.
     ///   Only Hydrapool's time-window PPLNS uses it, as its window target; the
-    ///   share chain window is the last `PPLNS_WINDOW_SHARES` shares and
+    ///   share chain window is `PPLNS_WINDOW_SHARES` mature shares and
     ///   ignores it.
     /// * `total_amount` - Total bitcoin amount to distribute among contributors
     ///

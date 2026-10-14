@@ -33,8 +33,7 @@ pub(crate) struct NotifyContext {
 /// payout accounting in NotifyContext.
 ///
 /// The template's bitcoin difficulty is passed to the payout, where only
-/// Hydrapool uses it; the share chain window is the last `PPLNS_WINDOW_SHARES`
-/// shares.
+/// Hydrapool uses it; the share chain window is `PPLNS_WINDOW_SHARES` deep.
 ///
 /// Returns `Err` if the payout distribution cannot be resolved.
 fn build_output_distribution(
