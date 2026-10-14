@@ -8,7 +8,7 @@ use super::coinbase::build_bitcoin_coinbase_transaction;
 use super::coinbase::{LOCKTIME_LENGTH, build_coinbase, get_timestamp_bytes, split_coinbase};
 use super::error::WorkError;
 use super::gbt::build_merkle_branches_for_template;
-use super::tracker::JobTracker;
+use super::tracker::{JobId, JobTracker};
 use crate::accounting::OutputPair;
 use crate::shares::share_commitment::{
     ShareCommitment, build_commitment_prefix, build_commitment_suffix, commitment_digest,
@@ -470,19 +470,20 @@ fn build_per_miner_coinbase2(
     coinbase2
 }
 
-/// Build a per-miner notify message from the prepared template.
+/// Insert one miner's job for `prepared` into the tracker.
 ///
-/// Computes the miner-specific commitment hash, assembles per-miner coinbase2,
-/// overwrites placeholders in the pre-built JSON, and inserts the job into the tracker.
+/// Computes the miner-specific commitment hash and coinbase2 and stores the
+/// job, returning its id and coinbase2. SV1 wraps this in a notify message;
+/// Stratum V2 reads the job back from the tracker to build its own messages.
 /// When either address is None (solo or Hydrapool mode), a commitment hash is
-/// still computed from whatever is available, but no `ShareCommitment` is built:
-/// a share needs both a bitcoin payout identity and a share chain owner.
-pub(crate) fn build_notify_from_prepared(
+/// still computed from whatever is available, but no `ShareCommitment` is
+/// built: a share needs both a bitcoin payout identity and a share chain owner.
+pub(crate) fn insert_miner_job(
     prepared: &PreparedNotifyParams,
     miner_bitcoin_address: Option<&Address>,
     miner_address: Option<p2poolv2_wallet::share_owner::ShareOwner>,
     tracker_handle: &JobTracker,
-) -> Result<String, WorkError> {
+) -> (JobId, String) {
     let fresh_time = SystemTimeProvider.seconds_since_epoch() as u32;
 
     let nsecs = get_timestamp_bytes(&SystemTimeProvider);
@@ -526,8 +527,35 @@ pub(crate) fn build_notify_from_prepared(
         &prepared.coinbase2_locktime,
     );
 
-    // Get next job_id
     let job_id = tracker_handle.get_next_job_id();
+    tracker_handle.insert_job(
+        Arc::clone(&prepared.template),
+        prepared.coinbase1.clone(),
+        coinbase2.clone(),
+        share_commitment,
+        nsecs,
+        prepared.merkle_branches.clone(),
+        job_id,
+    );
+    (job_id, coinbase2)
+}
+
+/// Build a per-miner notify message from the prepared template.
+///
+/// Inserts the miner's job with [`insert_miner_job`] and overwrites the
+/// job id and coinbase2 placeholders in the pre-built JSON.
+pub(crate) fn build_notify_from_prepared(
+    prepared: &PreparedNotifyParams,
+    miner_bitcoin_address: Option<&Address>,
+    miner_address: Option<p2poolv2_wallet::share_owner::ShareOwner>,
+    tracker_handle: &JobTracker,
+) -> Result<String, WorkError> {
+    let (job_id, coinbase2) = insert_miner_job(
+        prepared,
+        miner_bitcoin_address,
+        miner_address,
+        tracker_handle,
+    );
     let job_id_hex = format!("{job_id:016x}");
 
     // Clone the JSON template and overwrite the fixed-size placeholders.
@@ -539,17 +567,6 @@ pub(crate) fn build_notify_from_prepared(
     notify_json.replace_range(
         prepared.coinbase2_offset..prepared.coinbase2_offset + prepared.coinbase2_placeholder_len,
         &coinbase2,
-    );
-
-    // Insert job into tracker
-    tracker_handle.insert_job(
-        Arc::clone(&prepared.template),
-        prepared.coinbase1.clone(),
-        coinbase2,
-        share_commitment,
-        nsecs,
-        prepared.merkle_branches.clone(),
-        job_id,
     );
 
     Ok(notify_json)

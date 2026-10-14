@@ -20,7 +20,9 @@ use common_messages_sv2::{
     MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS, Protocol, SetupConnection, SetupConnectionError,
     SetupConnectionSuccess, has_declare_tx_data, has_work_selection,
 };
-use framing_sv2::framing::{MessageFrame, SerializedFrame};
+use framing_sv2::framing::MessageFrame;
+#[cfg(test)]
+use framing_sv2::framing::SerializedFrame;
 use job_declaration_sv2::{
     AllocateMiningJobToken, AllocateMiningJobTokenSuccess, DeclareMiningJob, DeclareMiningJobError,
     DeclareMiningJobSuccess, ERROR_CODE_DECLARE_MINING_JOB_INVALID_JOB,
@@ -31,9 +33,12 @@ use job_declaration_sv2::{
     ProvideMissingTransactions, ProvideMissingTransactionsSuccess,
 };
 use mining_sv2::{
-    MESSAGE_TYPE_SET_CUSTOM_MINING_JOB, MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_ERROR,
-    MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_SUCCESS, SetCustomMiningJob, SetCustomMiningJobError,
-    SetCustomMiningJobSuccess,
+    MESSAGE_TYPE_MINING_SET_NEW_PREV_HASH, MESSAGE_TYPE_NEW_EXTENDED_MINING_JOB,
+    MESSAGE_TYPE_NEW_MINING_JOB, MESSAGE_TYPE_SET_CUSTOM_MINING_JOB,
+    MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_ERROR, MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_SUCCESS,
+    MESSAGE_TYPE_SET_TARGET, MESSAGE_TYPE_SUBMIT_SHARES_ERROR, MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED,
+    MESSAGE_TYPE_SUBMIT_SHARES_STANDARD, MESSAGE_TYPE_SUBMIT_SHARES_SUCCESS, SetCustomMiningJob,
+    SetCustomMiningJobError, SetCustomMiningJobSuccess,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
@@ -137,7 +142,6 @@ impl JobRegistry {
 pub struct Sv2Connection {
     registry: Arc<Mutex<JobRegistry>>,
     decoder: Decoder,
-    encoder: Encoder,
     inbox: Vec<u8>,
     mode: Option<JobDeclarationMode>,
     mining: bool,
@@ -154,7 +158,6 @@ impl Sv2Connection {
         Self {
             registry,
             decoder: Decoder::new(),
-            encoder: Encoder::new(),
             inbox: Vec::new(),
             mode: None,
             mining: false,
@@ -163,22 +166,41 @@ impl Sv2Connection {
     }
 
     /// Accept `incoming` and return the response frames it completed.
+    ///
+    /// Every message goes to [`Self::handle_message`]. The listener decodes
+    /// with [`Self::decode`] instead, so it can route Mining Protocol channel
+    /// messages to [`super::mining::MiningChannels`].
     pub fn accept(&mut self, incoming: &[u8]) -> Result<Vec<Vec<u8>>, String> {
+        let messages = self.decode(incoming)?;
+        let mut responses = Vec::with_capacity(messages.len());
+        for (message_type, mut payload) in messages {
+            responses.extend(self.handle_message(message_type, &mut payload)?);
+        }
+        Ok(responses)
+    }
+
+    /// Decode `incoming` into complete messages: type and payload.
+    pub fn decode(&mut self, incoming: &[u8]) -> Result<Vec<(u8, Vec<u8>)>, String> {
         self.inbox.extend_from_slice(incoming);
-        let mut responses = Vec::new();
+        let mut messages = Vec::new();
         let mut reading = true;
         while reading && self.inbox.len() >= self.decoder.writable_len() {
             let room = self.decoder.writable_len();
             self.decoder.writable().copy_from_slice(&self.inbox[..room]);
             self.inbox.drain(..room);
-            responses.extend(self.read_frames()?);
+            messages.extend(self.read_frames()?);
             reading = self.decoder.writable_len() > 0;
         }
-        Ok(responses)
+        Ok(messages)
     }
 
-    fn read_frames(&mut self) -> Result<Vec<Vec<u8>>, String> {
-        let mut responses = Vec::new();
+    /// Whether this connection set up the Mining Protocol.
+    pub fn is_mining(&self) -> bool {
+        self.mining
+    }
+
+    fn read_frames(&mut self) -> Result<Vec<(u8, Vec<u8>)>, String> {
+        let mut messages = Vec::new();
         let mut reading = true;
         while reading {
             match self
@@ -187,42 +209,45 @@ impl Sv2Connection {
                 .map_err(|error| error.to_string())?
             {
                 Decoded::Incomplete(_) => reading = false,
-                Decoded::Frame(frame) => responses.extend(self.handle_frame(frame)?),
+                Decoded::Frame(mut frame) => {
+                    let message_type = frame.header().msg_type();
+                    messages.push((message_type, frame.payload().to_vec()));
+                }
             }
         }
-        Ok(responses)
+        Ok(messages)
     }
 
-    fn handle_frame(
+    /// Handle one setup, Job Declaration, or custom-job message.
+    pub fn handle_message(
         &mut self,
-        mut frame: SerializedFrame<Vec<u8>>,
+        message_type: u8,
+        payload: &mut [u8],
     ) -> Result<Vec<Vec<u8>>, String> {
-        let message_type = frame.header().msg_type();
-        let mut payload = frame.payload().to_vec();
         match message_type {
             MESSAGE_TYPE_SETUP_CONNECTION => {
                 let setup =
-                    SetupConnection::from_bytes(&mut payload).map_err(|error| error.to_string())?;
+                    SetupConnection::from_bytes(payload).map_err(|error| error.to_string())?;
                 self.on_setup(&setup)
             }
             MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN => {
-                let request = AllocateMiningJobToken::from_bytes(&mut payload)
+                let request = AllocateMiningJobToken::from_bytes(payload)
                     .map_err(|error| error.to_string())?;
                 self.on_allocate(request.request_id)
             }
             MESSAGE_TYPE_DECLARE_MINING_JOB => {
-                let request = DeclareMiningJob::from_bytes(&mut payload)
-                    .map_err(|error| error.to_string())?;
+                let request =
+                    DeclareMiningJob::from_bytes(payload).map_err(|error| error.to_string())?;
                 self.on_declare(&request)
             }
             MESSAGE_TYPE_PROVIDE_MISSING_TRANSACTIONS_SUCCESS => {
-                let request = ProvideMissingTransactionsSuccess::from_bytes(&mut payload)
+                let request = ProvideMissingTransactionsSuccess::from_bytes(payload)
                     .map_err(|error| error.to_string())?;
                 self.on_transactions(&request)
             }
             MESSAGE_TYPE_SET_CUSTOM_MINING_JOB => {
-                let request = SetCustomMiningJob::from_bytes(&mut payload)
-                    .map_err(|error| error.to_string())?;
+                let request =
+                    SetCustomMiningJob::from_bytes(payload).map_err(|error| error.to_string())?;
                 self.on_custom_job(&request)
             }
             _ => Err(format!(
@@ -484,17 +509,46 @@ impl Sv2Connection {
     where
         T: binary_sv2::Serialize + binary_sv2::GetSize,
     {
-        let frame = MessageFrame::from_message(message, message_type, 0, false)
-            .map_err(|error| error.to_string())?;
-        let encoded = self
-            .encoder
-            .encode(frame)
-            .map_err(|error| error.to_string())?;
-        Ok(vec![encoded])
+        Ok(vec![encode_frame(message, message_type)?])
     }
 }
 
-fn string_field(value: &'static str) -> Result<Str0255<'static>, String> {
+/// Whether the specification sets the channel bit on frames of this type.
+///
+/// Messages addressed to one channel carry the bit in their extension type;
+/// a client that dispatches by it would misroute a frame without it.
+fn is_channel_message(message_type: u8) -> bool {
+    matches!(
+        message_type,
+        MESSAGE_TYPE_NEW_MINING_JOB
+            | MESSAGE_TYPE_NEW_EXTENDED_MINING_JOB
+            | MESSAGE_TYPE_MINING_SET_NEW_PREV_HASH
+            | MESSAGE_TYPE_SET_TARGET
+            | MESSAGE_TYPE_SUBMIT_SHARES_STANDARD
+            | MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED
+            | MESSAGE_TYPE_SUBMIT_SHARES_SUCCESS
+            | MESSAGE_TYPE_SUBMIT_SHARES_ERROR
+            | MESSAGE_TYPE_SET_CUSTOM_MINING_JOB
+            | MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_SUCCESS
+            | MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_ERROR
+    )
+}
+
+/// Encode `message` as one unencrypted Stratum V2 frame, setting the channel
+/// bit where the specification requires it.
+pub(crate) fn encode_frame<T>(message: T, message_type: u8) -> Result<Vec<u8>, String>
+where
+    T: binary_sv2::Serialize + binary_sv2::GetSize,
+{
+    let frame =
+        MessageFrame::from_message(message, message_type, 0, is_channel_message(message_type))
+            .map_err(|error| error.to_string())?;
+    Encoder::new()
+        .encode(frame)
+        .map_err(|error| error.to_string())
+}
+
+pub(crate) fn string_field(value: &'static str) -> Result<Str0255<'static>, String> {
     value
         .try_into()
         .map_err(|error: binary_sv2::Error| error.to_string())
@@ -519,12 +573,7 @@ pub fn encode_message<T>(message: T, message_type: u8) -> Result<Vec<u8>, String
 where
     T: binary_sv2::Serialize + binary_sv2::GetSize,
 {
-    let frame = MessageFrame::from_message(message, message_type, 0, false)
-        .map_err(|error| error.to_string())?;
-    let encoded = Encoder::new()
-        .encode(frame)
-        .map_err(|error| error.to_string())?;
-    Ok(encoded)
+    encode_frame(message, message_type)
 }
 
 #[cfg(test)]

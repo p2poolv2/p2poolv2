@@ -80,7 +80,11 @@ zmqpubhashblock = "tcp://bitcoind:28332"
 # unless chain is "bitcoin-cash". Mini's share target is 256 times easier.
 # bch_share_chain = "main"
 # Stratum V2 listen port. Absent means the node does not open an SV2 socket.
-# Local frames are unencrypted. Bitcoin Cash jobs include one AuxPoW output.
+# Local frames are unencrypted, so keep it on localhost or a trusted LAN.
+# A Mining connection opens standard or extended channels with
+# user_identity "<payout address>.<worker>"; its shares belong to
+# miner_address, which p2poolv2 mode then requires. Job Declaration
+# connections are served too. Bitcoin Cash jobs include one AuxPoW output.
 # sv2_port = 3336
 # The share-chain network can be "main", "testnet4" or "signet"
 # On Bitcoin Cash it is ignored and derived from bitcoin_cash_network.

@@ -26,8 +26,7 @@ use p2poolv2_lib::store::Store;
 use p2poolv2_lib::store::writer::{StoreHandle, StoreWriter, write_channel};
 use p2poolv2_lib::stratum::client_connections::start_connections_handler;
 use p2poolv2_lib::stratum::emission::Emission;
-use p2poolv2_lib::stratum::server::StratumServerBuilder;
-use p2poolv2_lib::stratum::sv2;
+use p2poolv2_lib::stratum::server::{StratumServerBuilder, Sv2Listener};
 use p2poolv2_lib::stratum::work::gbt::start_gbt;
 use p2poolv2_lib::stratum::work::notify::start_notify;
 use p2poolv2_lib::stratum::work::prepared_notify::PreparedNotifyParams;
@@ -325,33 +324,16 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
     let cash_share = stratum_config
         .bch_miner_address()
         .map(|address| address.hash);
-    let sv2_port = stratum_config.sv2_port;
-    let sv2_hostname = stratum_config.hostname.clone();
-    let sv2_merge_mining = match share_chain {
-        Chain::BitcoinCash => Some(MergeMiningCommitment::reserved()),
-        Chain::Bitcoin => None,
-    };
-    let sv2_transactions = pool_transactions.clone();
-    let sv2_shutdown = exit_sender.subscribe();
-    let exit_sender_sv2 = exit_sender.clone();
-    tokio::spawn(async move {
-        let Some(port) = sv2_port else {
-            return;
-        };
-        // A configured SV2 port that cannot be bound is a startup failure, as
-        // it is for the SV1 port: the operator asked for a socket the node
-        // cannot open, so stop instead of running without it.
-        match sv2::bind(&sv2_hostname, port).await {
-            Ok(listener) => {
-                sv2::serve(listener, sv2_transactions, sv2_merge_mining, sv2_shutdown).await;
-            }
-            Err(bind_error) => {
-                error!("Failed to bind Stratum V2 on {sv2_hostname}:{port}: {bind_error}");
-                if *exit_sender_sv2.borrow() == ShutdownReason::None {
-                    let _ = exit_sender_sv2.send(ShutdownReason::Error);
-                }
-            }
-        }
+    // Stratum V2 is served by the stratum server beside SV1, sharing its job
+    // tracker, templates and shares. A port that cannot be bound fails the
+    // stratum server's start, which stops the node.
+    let sv2_listener = stratum_config.sv2_port.map(|port| Sv2Listener {
+        port,
+        pool_transactions: pool_transactions.clone(),
+        merge_mining: match share_chain {
+            Chain::BitcoinCash => Some(MergeMiningCommitment::reserved()),
+            Chain::Bitcoin => None,
+        },
     });
 
     tokio::spawn(async move {
@@ -378,6 +360,7 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
             .share_chain(share_chain)
             .bch_share_network(bch_share_network)
             .cash_share(cash_share)
+            .sv2(sv2_listener)
             .build()
             .await
             .unwrap();

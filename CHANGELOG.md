@@ -18,7 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `fee_address` and `fee` remain the operator's own cut.
 - `p2poolv2_cli bch-share-address` prints the Bitcoin Cash share address for a
   P2PKH CashAddr.
-- Local Stratum V2 listener (`sv2_port`) with both Job Declaration modes.
+- Local Stratum V2 listener (`sv2_port`) with both Job Declaration modes and
+  standard and extended mining channels that share the SV1 job tracker,
+  vardiff, block submission and share chain.
 
 ### Fixed
 

@@ -8,16 +8,23 @@
 //! connection uses the unencrypted framing the specification allows between
 //! local roles. This node does not generate a Noise static key.
 //!
+//! A Mining connection can also open standard and extended channels: every
+//! template becomes a job per channel, and submitted shares go through the
+//! same block submission and share-chain emission as SV1 (see `mining`).
+//!
 //! `SetupConnection` flag bit 0 (`DECLARE_TX_DATA`) selects the mode.
 //! Set, the client uses Full-Template: `DeclareMiningJob` plus
 //! `ProvideMissingTransactions`. Clear, the client uses Coinbase-only:
 //! `DeclareMiningJob` is rejected and `SetCustomMiningJob` mines the pool
 //! template. Either way the non-coinbase transactions are stored in CTOR.
 
+mod mining;
 mod server;
 mod session;
 
-pub use server::{bind, serve};
+pub use mining::EXTRANONCE_SIZE;
+pub use server::bind;
+pub(crate) use server::{Sv2Mining, serve};
 pub use session::{JobDeclarationMode, JobRegistry, PoolTransactionCache, Sv2Connection};
 
 use bitcoin::Transaction;

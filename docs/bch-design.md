@@ -175,6 +175,38 @@ a full donation (10,000) still skips miner address validation.
   other host names work; a bind failure stops the node instead of leaving it
   running without the socket, and a failed accept is logged without closing
   the listener. Omitting `sv2_port` does not open the socket.
+
+  Mining Protocol channels (2026-10-14). The listener now runs inside the
+  stratum server and shares its job tracker, templates, share pipeline, and
+  shutdown. A Mining connection opens standard or extended channels:
+  - The SV1 coinbase is `coinbase1 | enonce1 (4) | enonce2 (8) | coinbase2`.
+    An extended channel gets enonce1 as `extranonce_prefix`, rolls the 8
+    enonce2 bytes, and receives `NewExtendedMiningJob` with coinbase1 and
+    coinbase2 as prefix and suffix. A standard channel gets all 12 bytes and
+    a `NewMiningJob` merkle root computed from them.
+  - A new block tip sends the job as a future job followed by
+    `SetNewPrevHash`; a refreshed template on the same tip sends an active
+    job with `min_ntime`.
+  - `SubmitShares*` rebuilds the header, submits it to the node when it
+    meets the network target, emits it to the share chain when it meets the
+    pool target, and answers success or `difficulty-too-low` against the
+    channel target, the order SV1 uses. Vardiff is the SV1 adjuster, sent as
+    `SetTarget` and capped at the device's `max_target`.
+  - `user_identity` is `<payout address>.<worker>`, parsed as an SV1
+    username (CashAddr on Bitcoin Cash). Stratum V2 has no password to carry
+    `p2p=`, so shares belong to the configured `miner_address`, and a
+    P2Poolv2 node without one refuses the channel
+    (`share-address-required`). Binding a per-miner share address over SV2
+    stays an open question.
+  - Frames for channel messages carry the channel bit the specification
+    requires; `SetCustomMiningJob` replies were sent without it before.
+  - Live check: a Python SV2 client on an extended channel mined BCHN regtest
+    blocks 117 to 457 through this listener; block 300's coinbase carries the
+    channel's extranonce prefix, the 1.5% donation, the 1% fee, the AuxPoW
+    output, and the share commitment.
+  - Not done: Noise encryption and the authority key (an operator-supplied
+    key, since no P2Poolv2 crate generates private keys), group channels,
+    `UpdateChannel`, `CloseChannel`, and `SetExtranoncePrefix`.
 - **Merge mining.** One zero-value `OP_RETURN` on the Bitcoin Cash block
   coinbase, after the payouts and before the share-commitment padding. The
   payload is the published AuxPoW commitment: magic `fa be 6d 6d`, a 32-byte

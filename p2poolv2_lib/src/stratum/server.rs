@@ -7,6 +7,7 @@ use crate::address::Address as P2PoolAddress;
 use crate::config::Chain;
 pub use crate::config::PoolMode;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
+use crate::shares::merge_mining::MergeMiningCommitment;
 #[cfg(not(test))]
 use crate::stratum::client_connections::ClientConnectionsHandle;
 #[cfg(test)]
@@ -20,6 +21,7 @@ use crate::stratum::message_handlers::handle_message;
 use crate::stratum::messages::{Request, Response};
 use crate::stratum::session::Session;
 use crate::stratum::session_timeout::{self, check_session_timeouts};
+use crate::stratum::sv2::{self, PoolTransactionCache, Sv2Mining};
 use crate::stratum::work::prepared_notify::{PreparedNotifyParams, build_notify_from_prepared};
 use crate::stratum::work::tracker::JobTracker;
 use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
@@ -60,6 +62,20 @@ pub struct StratumServer {
     connections_handle: ClientConnectionsHandle,
     emissions_tx: EmissionSender,
     chain_store_handle: ChainStoreHandle,
+    sv2: Option<Sv2Listener>,
+}
+
+/// Local Stratum V2 listener served beside SV1 on the same host name.
+///
+/// It shares the SV1 job tracker, templates, share pipeline and shutdown, so
+/// a Stratum V2 miner earns shares exactly as an SV1 miner does.
+pub struct Sv2Listener {
+    /// TCP port for unencrypted Stratum V2 frames.
+    pub port: u16,
+    /// Latest template transactions in CTOR, for Job Declaration.
+    pub pool_transactions: PoolTransactionCache,
+    /// AuxPoW output each job token carries: `Some` on Bitcoin Cash.
+    pub merge_mining: Option<MergeMiningCommitment>,
 }
 
 /// Builder for StratumServer to avoid dependency on StratumConfig
@@ -86,6 +102,7 @@ pub struct StratumServerBuilder {
     share_chain: Chain,
     bch_share_network: Option<p2poolv2_wallet::bch_share::BchShareNetwork>,
     cash_share: Option<[u8; 20]>,
+    sv2: Option<Sv2Listener>,
 }
 
 impl StratumServerBuilder {
@@ -197,6 +214,12 @@ impl StratumServerBuilder {
         self
     }
 
+    /// Serve Stratum V2 beside SV1. `None`, the default, opens no SV2 socket.
+    pub fn sv2(mut self, sv2: Option<Sv2Listener>) -> Self {
+        self.sv2 = sv2;
+        self
+    }
+
     pub async fn build(self) -> Result<StratumServer, Box<dyn std::error::Error + Send + Sync>> {
         Ok(StratumServer {
             hostname: self.hostname.ok_or("hostname is required")?,
@@ -229,6 +252,7 @@ impl StratumServerBuilder {
             chain_store_handle: self
                 .chain_store_handle
                 .ok_or("chain store handle is required")?,
+            sv2: self.sv2,
         })
     }
 }
@@ -310,6 +334,33 @@ impl StratumServer {
             }
         };
 
+        // The SV2 listener stops when this sender sends or is dropped, which
+        // happens when the SV1 accept loop below ends for any reason.
+        let (sv2_stop_sender, sv2_stop_receiver) = watch::channel(());
+        if let Some(sv2) = self.sv2.take() {
+            let sv2_listener = sv2::bind(&self.hostname, sv2.port).await.map_err(
+                |bind_error| -> Box<dyn std::error::Error + Send> {
+                    error!(
+                        "Failed to bind Stratum V2 on {}:{}: {bind_error}",
+                        self.hostname, sv2.port
+                    );
+                    Box::new(bind_error)
+                },
+            )?;
+            let mining = Sv2Mining {
+                ctx: self.context(&tracker_handle, &bitcoindrpc_client, &metrics),
+                version_mask: self.version_mask,
+                template_rx: template_rx.clone(),
+            };
+            tokio::spawn(sv2::serve(
+                sv2_listener,
+                sv2.pool_transactions,
+                sv2.merge_mining,
+                Some(mining),
+                sv2_stop_receiver,
+            ));
+        }
+
         let max_connections = self.max_connections.unwrap_or_else(default_max_connections);
         info!("Stratum server max connections: {}", max_connections);
         let connection_semaphore = Arc::new(Semaphore::new(max_connections as usize));
@@ -332,24 +383,11 @@ impl StratumServer {
                         Ok((stream, addr)) => {
                             match connection_semaphore.clone().try_acquire_owned() {
                                 Ok(permit) => {
-                                    let ctx = StratumContext {
-                                        tracker_handle: tracker_handle.clone(),
-                                        bitcoindrpc_client: bitcoindrpc_client.clone(),
-                                        start_difficulty: self.start_difficulty,
-                                        minimum_difficulty: self.minimum_difficulty,
-                                        maximum_difficulty: self.maximum_difficulty,
-                                        ignore_difficulty: self.ignore_difficulty,
-                                        validate_addresses: self.validate_addresses,
-                                        emissions_tx: self.emissions_tx.clone(),
-                                        network: self.network,
-                                        metrics: metrics.clone(),
-                                        chain_store_handle: self.chain_store_handle.clone(),
-                                        mode: self.mode,
-                                        miner_address: self.miner_address,
-                                        share_chain: self.share_chain,
-                                        bch_share_network: self.bch_share_network,
-                                        cash_share: self.cash_share,
-                                    };
+                                    let ctx = self.context(
+                                        &tracker_handle,
+                                        &bitcoindrpc_client,
+                                        &metrics,
+                                    );
                                     accept_connection(
                                         stream,
                                         addr,
@@ -373,7 +411,35 @@ impl StratumServer {
                 }
             }
         }
+        let _ = sv2_stop_sender.send(());
         Ok(())
+    }
+
+    /// Context shared by every SV1 connection and the SV2 listener.
+    fn context(
+        &self,
+        tracker_handle: &Arc<JobTracker>,
+        bitcoindrpc_client: &BitcoindRpcClient,
+        metrics: &metrics::MetricsHandle,
+    ) -> StratumContext {
+        StratumContext {
+            tracker_handle: tracker_handle.clone(),
+            bitcoindrpc_client: bitcoindrpc_client.clone(),
+            start_difficulty: self.start_difficulty,
+            minimum_difficulty: self.minimum_difficulty,
+            maximum_difficulty: self.maximum_difficulty,
+            ignore_difficulty: self.ignore_difficulty,
+            validate_addresses: self.validate_addresses,
+            emissions_tx: self.emissions_tx.clone(),
+            network: self.network,
+            metrics: metrics.clone(),
+            chain_store_handle: self.chain_store_handle.clone(),
+            mode: self.mode,
+            miner_address: self.miner_address,
+            share_chain: self.share_chain,
+            bch_share_network: self.bch_share_network,
+            cash_share: self.cash_share,
+        }
     }
 }
 

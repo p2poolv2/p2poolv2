@@ -61,6 +61,10 @@ Also in this checkpoint:
 - The three open Stratum V2 review findings are fixed (request ids per
   connection, host-name bind that stops the node on failure, counted
   `coinbase_outputs`).
+- Stratum V2 Mining Protocol channels, standard and extended, share the SV1
+  job tracker and share pipeline (decisions 2 and 7). A Python SV2 client
+  mined BCHN regtest blocks through them. Shares belong to the configured
+  `miner_address`; per-miner share addresses over SV2 stay open.
 
 Still unfinished: a share accepted into the share chain from live mining,
 two-node share propagation on chipnet, a retuned PPLNS window, and Noise
