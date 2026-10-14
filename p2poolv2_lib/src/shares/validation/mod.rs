@@ -14,7 +14,9 @@ use crate::accounting::payout::payout_distribution::{
 use crate::accounting::payout::sharechain_pplns::PplnsWindow;
 #[cfg(not(test))]
 use crate::accounting::payout::sharechain_pplns::PplnsWindow;
-use crate::accounting::payout::sharechain_pplns::pplns_window::{PPLNS_WINDOW_SHARES, WindowError};
+use crate::accounting::payout::sharechain_pplns::pplns_window::{
+    COINBASE_MATURITY, PAYOUT_DEPTH, PPLNS_WINDOW_SHARES, WindowError,
+};
 #[cfg(test)]
 #[mockall_double::double]
 use crate::pool_difficulty::PoolDifficulty;
@@ -167,9 +169,6 @@ pub const MTP_WINDOW: usize = 11;
 pub const BLOCK_TXS_SIZE_LIMIT: u32 = 200 * 1024;
 /// Maximum number of transactions allowed in a share block
 pub const TXS_COUNT_LIMIT: u32 = 100;
-/// Coinbase outputs cannot be spent until the containing block is this
-/// many blocks deep. 70% of blocks-per-day at 10s block time (0.70 * 86400 / 10).
-pub const COINBASE_MATURITY: usize = 6048;
 /// Maximum total sigop cost allowed in a share block (matches Bitcoin consensus).
 pub const MAX_BLOCK_SIGOPS_COST: usize = 80_000;
 
@@ -197,10 +196,13 @@ fn bitcoin_coinbase_value(coinbase: &Transaction) -> Result<u64, ValidationError
 /// Check whether a block is in the PPLNS zone (needing full
 /// validation) or the prune zone (PoW-only validation).
 ///
-/// PPLNS zone: block_height > tip_height - PPLNS_DEPTH
+/// The PPLNS zone spans `PAYOUT_DEPTH`, the maturity depth plus the PPLNS
+/// window, so every share a coinbase near the tip can pay is fully validated.
+///
+/// PPLNS zone: block_height > tip_height - PAYOUT_DEPTH
 /// Prune zone: everything else below that height
 pub fn is_in_pplns_zone(block_height: u32, tip_height: u32) -> bool {
-    block_height > tip_height.saturating_sub(PPLNS_WINDOW_SHARES as u32)
+    block_height > tip_height.saturating_sub(PAYOUT_DEPTH as u32)
 }
 
 /// Look up a block's height and the candidate tip height from the store,
@@ -446,8 +448,8 @@ impl DefaultShareValidator {
     /// bodies are never fetched. The two boundaries are a full window apart and
     /// the gap covers the exemption with room to spare: an uncle sits at most
     /// `MAX_UNCLES_DEPTH` below its nephew, so a nephew whose uncle is below
-    /// `prune_height` (`tip - 2 * PPLNS_WINDOW_SHARES`) is itself far below
-    /// the zone boundary (`tip - PPLNS_WINDOW_SHARES`) and never reaches
+    /// `prune_height` (`tip - 2 * PAYOUT_DEPTH`) is itself far below
+    /// the zone boundary (`tip - PAYOUT_DEPTH`) and never reaches
     /// this check. Ungated, such a block is admitted, stored, and then fails
     /// validation forever on a body nothing will ever fetch.
     fn validate_uncle_bodies_present(
@@ -4673,9 +4675,9 @@ mod tests {
 
     #[test]
     fn test_is_in_pplns_zone_within_pplns_depth() {
-        // Block just inside PPLNS window
+        // Block just inside PPLNS zone
         let tip = 300_000u32;
-        let pplns_boundary = tip - PPLNS_WINDOW_SHARES as u32;
+        let pplns_boundary = tip - PAYOUT_DEPTH as u32;
         assert!(is_in_pplns_zone(pplns_boundary + 1, tip));
     }
 
@@ -4683,14 +4685,14 @@ mod tests {
     fn test_is_in_pplns_zone_at_boundary_is_prune_zone() {
         // Block exactly at boundary is NOT in PPLNS zone (prune zone)
         let tip = 300_000u32;
-        let pplns_boundary = tip - PPLNS_WINDOW_SHARES as u32;
+        let pplns_boundary = tip - PAYOUT_DEPTH as u32;
         assert!(!is_in_pplns_zone(pplns_boundary, tip));
     }
 
     #[test]
     fn test_is_in_pplns_zone_below_boundary_is_prune_zone() {
         let tip = 300_000u32;
-        let pplns_boundary = tip - PPLNS_WINDOW_SHARES as u32;
+        let pplns_boundary = tip - PAYOUT_DEPTH as u32;
         assert!(!is_in_pplns_zone(pplns_boundary - 1, tip));
     }
 
