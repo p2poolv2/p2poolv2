@@ -20,7 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   P2PKH CashAddr.
 - Local Stratum V2 listener (`sv2_port`) with both Job Declaration modes and
   standard and extended mining channels that share the SV1 job tracker,
-  vardiff, block submission and share chain.
+  vardiff, block submission and share chain, with optional Noise encryption
+  signed by an operator-supplied authority key.
 
 ### Fixed
 

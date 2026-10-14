@@ -4,8 +4,8 @@
 
 use crate::accounting::stats::metrics;
 use crate::address::Address as P2PoolAddress;
-use crate::config::Chain;
 pub use crate::config::PoolMode;
+use crate::config::{Chain, Sv2Authority};
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::merge_mining::MergeMiningCommitment;
 #[cfg(not(test))]
@@ -76,6 +76,9 @@ pub struct Sv2Listener {
     pub pool_transactions: PoolTransactionCache,
     /// AuxPoW output each job token carries: `Some` on Bitcoin Cash.
     pub merge_mining: Option<MergeMiningCommitment>,
+    /// Authority keys for the Noise handshake. `None` serves unencrypted
+    /// frames, which the specification allows only between local roles.
+    pub authority: Option<Sv2Authority>,
 }
 
 /// Builder for StratumServer to avoid dependency on StratumConfig
@@ -357,6 +360,7 @@ impl StratumServer {
                 sv2.pool_transactions,
                 sv2.merge_mining,
                 Some(mining),
+                sv2.authority,
                 sv2_stop_receiver,
             ));
         }

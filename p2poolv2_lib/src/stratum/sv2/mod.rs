@@ -19,6 +19,7 @@
 //! template. Either way the non-coinbase transactions are stored in CTOR.
 
 mod mining;
+mod noise;
 mod server;
 mod session;
 

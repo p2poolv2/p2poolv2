@@ -89,6 +89,15 @@ zmqpubhashblock = "tcp://127.0.0.1:28332"
 # miner_address, which p2poolv2 mode then requires. Job Declaration
 # connections are served too. Bitcoin Cash jobs include one AuxPoW output.
 # sv2_port = 3336
+# Noise encryption for Stratum V2, signed by your authority key. Set both
+# keys, in the Stratum V2 reference implementation's text form, to require
+# the encrypted handshake on every SV2 connection; miners pin the public key.
+# Make the keys with an external tool (this node never generates keys) and
+# prefer the env var P2POOL__STRATUM__SV2_AUTHORITY_SECRET_KEY for the secret.
+# sv2_authority_public_key = "9b..."
+# sv2_authority_secret_key = "..."
+# Seconds each Noise certificate stays valid. Default 3600.
+# sv2_cert_validity_secs = 3600
 # The share-chain network can be "main", "testnet4" or "signet".
 # On Bitcoin this also selects the bech32m share address. On Bitcoin Cash it
 # is ignored and derived from bitcoin_cash_network, so every node on one

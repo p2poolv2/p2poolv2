@@ -334,6 +334,7 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
             Chain::BitcoinCash => Some(MergeMiningCommitment::reserved()),
             Chain::Bitcoin => None,
         },
+        authority: stratum_config.sv2_authority(),
     });
 
     tokio::spawn(async move {

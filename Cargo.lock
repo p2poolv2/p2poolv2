@@ -3201,6 +3201,7 @@ dependencies = [
  "mining_sv2",
  "mockall",
  "mockall_double",
+ "noise_sv2",
  "p2poolv2_config",
  "p2poolv2_wallet",
  "rand 0.10.3",

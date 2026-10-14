@@ -5,7 +5,9 @@
 mod cashaddr;
 
 use bitcoin::address::NetworkChecked;
+use bitcoin::base58;
 use bitcoin::hashes::Hash;
+use bitcoin::secp256k1::{Keypair, Secp256k1, SecretKey};
 use bitcoin::{Address, Network, PubkeyHash};
 use bitcoindrpc::BitcoinRpcConfig;
 use p2poolv2_wallet::Address as ShareAddress;
@@ -323,6 +325,21 @@ pub struct StratumConfig<State = Raw> {
     /// socket, which is what every existing configuration does.
     #[serde(default)]
     pub sv2_port: Option<u16>,
+    /// Stratum V2 authority public key, in the Stratum V2 reference
+    /// implementation's text form (Base58Check of version `[1, 0]` and the
+    /// 32-byte x-only key). With `sv2_authority_secret_key`, every SV2
+    /// connection must complete the Noise NX handshake before any message.
+    /// The keys come from an external tool; this node never generates one.
+    #[serde(default)]
+    pub sv2_authority_public_key: Option<String>,
+    /// Stratum V2 authority secret key (Base58Check of the 32 bytes). Prefer
+    /// `P2POOL__STRATUM__SV2_AUTHORITY_SECRET_KEY` over the file.
+    #[serde(default)]
+    pub sv2_authority_secret_key: Option<String>,
+    /// Seconds a Noise certificate signed by the authority key stays valid.
+    /// Defaults to [`DEFAULT_SV2_CERT_VALIDITY_SECS`].
+    #[serde(default)]
+    pub sv2_cert_validity_secs: Option<u64>,
     /// The version mask to use for version-rolling
     #[serde(deserialize_with = "deserialize_version_mask")]
     pub version_mask: i32,
@@ -354,6 +371,9 @@ pub struct StratumConfig<State = Raw> {
     /// Bitcoin Cash share owner, set only when `chain` is bitcoin-cash.
     #[serde(skip)]
     pub bch_miner_address: Option<BchShareAddress>,
+    /// Decoded Stratum V2 authority keys, when both are configured.
+    #[serde(skip)]
+    pub sv2_authority: Option<Sv2Authority>,
 
     #[serde(skip)]
     #[serde(default)]
@@ -532,6 +552,13 @@ impl StratumConfig<Raw> {
 
         validate_cuts(self.chain, donation, self.fee)?;
 
+        let sv2_authority = parse_sv2_authority(
+            self.sv2_port,
+            self.sv2_authority_public_key.as_deref(),
+            self.sv2_authority_secret_key.as_deref(),
+            self.sv2_cert_validity_secs,
+        )?;
+
         Ok(StratumConfig {
             hostname: self.hostname,
             port: self.port,
@@ -551,6 +578,9 @@ impl StratumConfig<Raw> {
             bitcoin_cash_network: self.bitcoin_cash_network,
             bch_share_chain: self.bch_share_chain,
             sv2_port: self.sv2_port,
+            sv2_authority_public_key: self.sv2_authority_public_key,
+            sv2_authority_secret_key: self.sv2_authority_secret_key,
+            sv2_cert_validity_secs: self.sv2_cert_validity_secs,
             version_mask: self.version_mask,
             difficulty_multiplier: self.difficulty_multiplier,
             ignore_difficulty: self.ignore_difficulty,
@@ -563,6 +593,7 @@ impl StratumConfig<Raw> {
             fee_address_parsed,
             miner_address_parsed,
             bch_miner_address,
+            sv2_authority,
             _state: PhantomData,
         })
     }
@@ -598,6 +629,100 @@ impl StratumConfig<Parsed> {
     pub fn bch_miner_address(&self) -> Option<BchShareAddress> {
         self.bch_miner_address
     }
+
+    /// Stratum V2 authority keys, when the operator configured them.
+    pub fn sv2_authority(&self) -> Option<Sv2Authority> {
+        self.sv2_authority
+    }
+}
+
+/// Seconds a Noise certificate signed by the Stratum V2 authority key stays
+/// valid when `sv2_cert_validity_secs` is not set.
+pub const DEFAULT_SV2_CERT_VALIDITY_SECS: u64 = 3600;
+
+/// Version prefix of a Stratum V2 authority public key in the reference
+/// implementation's text form: little-endian `1`.
+const SV2_PUBLIC_KEY_VERSION: [u8; 2] = [1, 0];
+
+/// Stratum V2 authority keys that sign the Noise certificate.
+///
+/// Debug output never shows the secret.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Sv2Authority {
+    /// 32-byte x-only public key miners pin.
+    pub public_key: [u8; 32],
+    /// 32-byte secret key.
+    pub secret_key: [u8; 32],
+    /// Seconds each Noise certificate stays valid.
+    pub cert_validity_secs: u64,
+}
+
+impl std::fmt::Debug for Sv2Authority {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Sv2Authority")
+            .field("public_key", &self.public_key)
+            .field("secret_key", &"<redacted>")
+            .field("cert_validity_secs", &self.cert_validity_secs)
+            .finish()
+    }
+}
+
+/// Decode the configured Stratum V2 authority keys, if any.
+///
+/// Both keys or neither; they need `sv2_port`; and the public key must be
+/// the one the secret key derives, so a typo cannot make every miner's
+/// handshake fail against a key the operator did not mean to publish.
+fn parse_sv2_authority(
+    sv2_port: Option<u16>,
+    public_key: Option<&str>,
+    secret_key: Option<&str>,
+    cert_validity_secs: Option<u64>,
+) -> Result<Option<Sv2Authority>, ConfigError> {
+    let (public_text, secret_text) = match (public_key, secret_key) {
+        (None, None) => return Ok(None),
+        (Some(public_text), Some(secret_text)) => (public_text, secret_text),
+        _ => {
+            return Err(ConfigError {
+                message: "sv2_authority_public_key and sv2_authority_secret_key must both be set or both be unset".to_string(),
+            });
+        }
+    };
+    if sv2_port.is_none() {
+        return Err(ConfigError {
+            message: "sv2_authority keys need sv2_port".to_string(),
+        });
+    }
+    let public_bytes = base58::decode_check(public_text).map_err(|error| ConfigError {
+        message: format!("Invalid sv2_authority_public_key: {error}"),
+    })?;
+    if public_bytes.len() != 34 || public_bytes[..2] != SV2_PUBLIC_KEY_VERSION {
+        return Err(ConfigError {
+            message: "Invalid sv2_authority_public_key: expected version 1 and a 32-byte key"
+                .to_string(),
+        });
+    }
+    let secret_bytes = base58::decode_check(secret_text).map_err(|_| ConfigError {
+        message: "Invalid sv2_authority_secret_key: not Base58Check".to_string(),
+    })?;
+    let secret = SecretKey::from_slice(&secret_bytes).map_err(|_| ConfigError {
+        message: "Invalid sv2_authority_secret_key: not a 32-byte secp256k1 secret key".to_string(),
+    })?;
+    let derived = Keypair::from_secret_key(&Secp256k1::signing_only(), &secret)
+        .x_only_public_key()
+        .0
+        .serialize();
+    if derived[..] != public_bytes[2..] {
+        return Err(ConfigError {
+            message: "sv2_authority_public_key is not the key sv2_authority_secret_key derives"
+                .to_string(),
+        });
+    }
+    Ok(Some(Sv2Authority {
+        public_key: derived,
+        secret_key: secret.secret_bytes(),
+        cert_validity_secs: cert_validity_secs.unwrap_or(DEFAULT_SV2_CERT_VALIDITY_SECS),
+    }))
 }
 
 /// Donation output and basis points this node puts in the shares it mines.
@@ -698,6 +823,9 @@ impl StratumConfig<Raw> {
             bitcoin_cash_network: None,
             bch_share_chain: BchShareChain::Main,
             sv2_port: None,
+            sv2_authority_public_key: None,
+            sv2_authority_secret_key: None,
+            sv2_cert_validity_secs: None,
             version_mask: DEFAULT_VERSION_MASK,
             difficulty_multiplier: 1.0,
             ignore_difficulty: None,
@@ -710,6 +838,7 @@ impl StratumConfig<Raw> {
             fee_address_parsed: None,
             miner_address_parsed: None,
             bch_miner_address: None,
+            sv2_authority: None,
             _state: PhantomData,
         }
     }
@@ -2018,6 +2147,86 @@ mod bitcoin_cash_donation_tests {
         config.donation_address = Some("tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string());
         config.donation = Some(MAX_BASIS_POINTS);
         assert_eq!(config.parse().unwrap().donation, Some(MAX_BASIS_POINTS));
+    }
+}
+
+#[cfg(test)]
+mod sv2_authority_tests {
+    use super::*;
+
+    /// Test vectors from the Stratum V2 reference implementation's
+    /// key-utils crate: a secret key and the public key it derives.
+    const SECRET_KEY: &str = "zmBEmPhqo3A92FkiLVvyCz6htc3e53ph3ZbD4ASqGaLjwnFLi";
+    const PUBLIC_KEY: &str = "9bDuixKmZqAJnrmP746n8zU1wyAQRrus7th9dxnkPg6RzQvCnan";
+
+    #[test]
+    fn reference_implementation_key_pair_parses() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.sv2_port = Some(3336);
+        config.sv2_authority_public_key = Some(PUBLIC_KEY.to_string());
+        config.sv2_authority_secret_key = Some(SECRET_KEY.to_string());
+        let authority = config.parse().unwrap().sv2_authority().unwrap();
+        assert_eq!(authority.cert_validity_secs, DEFAULT_SV2_CERT_VALIDITY_SECS);
+        assert!(!format!("{authority:?}").contains(&format!("{:?}", authority.secret_key)));
+    }
+
+    #[test]
+    fn no_keys_means_no_noise() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.sv2_port = Some(3336);
+        assert!(config.parse().unwrap().sv2_authority().is_none());
+    }
+
+    #[test]
+    fn a_public_key_alone_is_rejected() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.sv2_port = Some(3336);
+        config.sv2_authority_public_key = Some(PUBLIC_KEY.to_string());
+        let error = config.parse().unwrap_err();
+        assert!(error.message.contains("both be set"), "{}", error.message);
+    }
+
+    #[test]
+    fn keys_without_an_sv2_port_are_rejected() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.sv2_authority_public_key = Some(PUBLIC_KEY.to_string());
+        config.sv2_authority_secret_key = Some(SECRET_KEY.to_string());
+        let error = config.parse().unwrap_err();
+        assert!(error.message.contains("need sv2_port"), "{}", error.message);
+    }
+
+    #[test]
+    fn a_corrupted_public_key_is_rejected() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.sv2_port = Some(3336);
+        // The reference implementation's bad-checksum vector.
+        config.sv2_authority_public_key =
+            Some("9bDuixKmZqAJnrmP746n8zU1wyAQRrus7th9dxnkPg6RzQvCnam".to_string());
+        config.sv2_authority_secret_key = Some(SECRET_KEY.to_string());
+        assert!(config.parse().is_err());
+    }
+
+    #[test]
+    fn a_public_key_of_another_version_is_rejected() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.sv2_port = Some(3336);
+        // The reference implementation's version-12 vector.
+        config.sv2_authority_public_key =
+            Some("2myPhc5vkPzuC5FXNK5tee79WmP7uoLh55SxezoF8iqwF3E3rnPY".to_string());
+        config.sv2_authority_secret_key = Some(SECRET_KEY.to_string());
+        let error = config.parse().unwrap_err();
+        assert!(error.message.contains("version 1"), "{}", error.message);
+    }
+
+    #[test]
+    fn a_secret_key_for_another_public_key_is_rejected() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.sv2_port = Some(3336);
+        config.sv2_authority_public_key = Some(PUBLIC_KEY.to_string());
+        // Base58Check of 32 bytes of 0x01: a valid secret for another key.
+        config.sv2_authority_secret_key = Some(base58::encode_check(&[1u8; 32]));
+        let error = config.parse().unwrap_err();
+        assert!(error.message.contains("derives"), "{}", error.message);
     }
 }
 

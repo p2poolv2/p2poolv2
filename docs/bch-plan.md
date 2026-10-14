@@ -46,6 +46,9 @@ P2PKH payouts, the 1.5% donation, an operator fee, the AuxPoW output, and the
 share commitment were all in a coinbase BCHN took. Details and what that run
 did not cover are in [bch-design.md](bch-design.md#live-regtest-run-2026-10-14).
 
+Operators: see [bch-quickstart.md](bch-quickstart.md) for BCHN settings,
+the node config, share addresses, the donation and fee, and miner settings.
+
 Also in this checkpoint:
 
 - Bitcoin Cash donates 1.5% by default to the project address, adjustable
@@ -65,10 +68,13 @@ Also in this checkpoint:
   job tracker and share pipeline (decisions 2 and 7). A Python SV2 client
   mined BCHN regtest blocks through them. Shares belong to the configured
   `miner_address`; per-miner share addresses over SV2 stay open.
+- Stratum V2 Noise encryption with the operator's authority key
+  (`sv2_authority_public_key`, `sv2_authority_secret_key`), decision 2.
 
 Still unfinished: a share accepted into the share chain from live mining,
-two-node share propagation on chipnet, a retuned PPLNS window, and Noise
-encryption for remote Stratum V2.
+two-node share propagation on chipnet, a retuned PPLNS window, a Bitcoin
+Cash script interpreter for share transfers, and per-miner share addresses
+over Stratum V2.
 
 ## Startup selection (2026-10-13)
 

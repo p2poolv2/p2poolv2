@@ -10,7 +10,9 @@
 //! get a job for every template the SV1 server sees (see `super::mining`).
 
 use super::mining::{MiningChannels, is_mining_channel_message};
+use super::noise::NoiseTransport;
 use super::session::{JobRegistry, PoolTransactionCache, Sv2Connection};
+use crate::config::Sv2Authority;
 use crate::shares::merge_mining::MergeMiningCommitment;
 use crate::stratum::server::StratumContext;
 use crate::stratum::work::prepared_notify::PreparedNotifyParams;
@@ -19,7 +21,7 @@ use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 /// Watch channel the SV1 notifier publishes prepared templates on.
 pub(crate) type TemplateReceiver = watch::Receiver<Option<Arc<PreparedNotifyParams>>>;
@@ -47,13 +49,17 @@ pub async fn bind(hostname: &str, port: u16) -> Result<TcpListener, std::io::Err
 ///
 /// `merge_mining` is `Some` for Bitcoin Cash, where every allocated job token
 /// carries the AuxPoW commitment output. Bitcoin passes `None`. `mining` is
-/// `None` when the listener only speaks Job Declaration. A failed accept is
-/// logged and the listener keeps serving, as the SV1 server does.
+/// `None` when the listener only speaks Job Declaration. With `authority`,
+/// every connection must complete the Noise NX handshake signed by that key
+/// before any message; without it frames are unencrypted, which the
+/// specification allows only between local roles. A failed accept is logged
+/// and the listener keeps serving, as the SV1 server does.
 pub(crate) async fn serve<ShutdownSignal>(
     listener: TcpListener,
     pool_transactions: PoolTransactionCache,
     merge_mining: Option<MergeMiningCommitment>,
     mining: Option<Sv2Mining>,
+    authority: Option<Sv2Authority>,
     mut shutdown: watch::Receiver<ShutdownSignal>,
 ) where
     ShutdownSignal: Send + Sync + 'static,
@@ -76,6 +82,7 @@ pub(crate) async fn serve<ShutdownSignal>(
                             stream,
                             Arc::clone(&registry),
                             connection_mining,
+                            authority,
                             shutdown.clone(),
                         ));
                     }
@@ -88,11 +95,22 @@ pub(crate) async fn serve<ShutdownSignal>(
 }
 
 async fn handle_connection<ShutdownSignal>(
-    stream: TcpStream,
+    mut stream: TcpStream,
     registry: Arc<Mutex<JobRegistry>>,
     mining: Option<Sv2Mining>,
+    authority: Option<Sv2Authority>,
     mut shutdown: watch::Receiver<ShutdownSignal>,
 ) {
+    let mut noise = match authority {
+        Some(authority) => match NoiseTransport::accept(&mut stream, &authority).await {
+            Ok(transport) => Some(transport),
+            Err(handshake_error) => {
+                debug!("Stratum V2 handshake failed: {handshake_error}");
+                return;
+            }
+        },
+        None => None,
+    };
     let mut connection = Sv2Connection::new(registry);
     let (mut template_rx, mut channels) = match mining {
         Some(services) => (
@@ -110,14 +128,23 @@ async fn handle_connection<ShutdownSignal>(
                     Ok(0) | Err(_) => return,
                     Ok(count) => count,
                 };
-                match handle_bytes(
-                    &mut connection,
-                    channels.as_mut(),
-                    template_rx.as_mut(),
-                    &buffer[..count],
-                )
-                .await
-                {
+                let messages = match noise.as_mut() {
+                    Some(transport) => transport.decode(&buffer[..count]),
+                    None => connection.decode(&buffer[..count]),
+                };
+                let handled = match messages {
+                    Ok(messages) => {
+                        handle_messages(
+                            &mut connection,
+                            channels.as_mut(),
+                            template_rx.as_mut(),
+                            messages,
+                        )
+                        .await
+                    }
+                    Err(decode_error) => Err(decode_error),
+                };
+                match handled {
                     Ok(frames) => frames,
                     Err(_) => return,
                 }
@@ -131,25 +158,31 @@ async fn handle_connection<ShutdownSignal>(
             _ = shutdown.changed() => return,
         };
         for frame in frames {
-            if writer.write_all(&frame).await.is_err() {
+            let wire = match noise.as_mut() {
+                Some(transport) => match transport.encrypt(frame) {
+                    Ok(encrypted) => encrypted,
+                    Err(_) => return,
+                },
+                None => frame,
+            };
+            if writer.write_all(&wire).await.is_err() {
                 return;
             }
         }
     }
 }
 
-/// Decode `bytes` and answer each complete message.
+/// Answer each complete message.
 ///
 /// Mining channel messages need a connection that set up the Mining Protocol
 /// on a listener with mining enabled; anything else is an error that closes
 /// the connection.
-async fn handle_bytes(
+async fn handle_messages(
     connection: &mut Sv2Connection,
     mut channels: Option<&mut MiningChannels>,
     mut template_rx: Option<&mut TemplateReceiver>,
-    bytes: &[u8],
+    messages: Vec<(u8, Vec<u8>)>,
 ) -> Result<Vec<Vec<u8>>, String> {
-    let messages = connection.decode(bytes)?;
     let mut frames = Vec::with_capacity(messages.len());
     for (message_type, mut payload) in messages {
         let responses = if is_mining_channel_message(message_type) {
@@ -187,12 +220,16 @@ async fn next_template(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::StratumConfig;
     use crate::stratum::sv2::session::encode_message;
+    use bitcoin::secp256k1::{Keypair, Secp256k1};
+    use codec_sv2::{Decrypted, Handshake, NoiseDecoder, NoiseEncoder};
     use common_messages_sv2::{
         MESSAGE_TYPE_SETUP_CONNECTION, MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS, Protocol,
         SetupConnection,
     };
-    use framing_sv2::framing::SerializedFrame;
+    use framing_sv2::framing::{MessageFrame, SerializedFrame};
+    use noise_sv2::{INITIATOR_EXPECTED_HANDSHAKE_MESSAGE_SIZE, Initiator};
 
     #[tokio::test]
     async fn bind_resolves_a_host_name() {
@@ -206,6 +243,121 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn noise_listener_answers_setup_connection_to_a_client_pinning_its_key() {
+        let mut config = StratumConfig::new_for_test_default();
+        config.sv2_port = Some(3336);
+        config.sv2_authority_public_key =
+            Some("9bDuixKmZqAJnrmP746n8zU1wyAQRrus7th9dxnkPg6RzQvCnan".to_string());
+        config.sv2_authority_secret_key =
+            Some("zmBEmPhqo3A92FkiLVvyCz6htc3e53ph3ZbD4ASqGaLjwnFLi".to_string());
+        let authority = config.parse().unwrap().sv2_authority().unwrap();
+        let listener = bind("localhost", 0).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (shutdown_sender, shutdown_receiver) = watch::channel(());
+        let server = tokio::spawn(serve(
+            listener,
+            PoolTransactionCache::new(),
+            None,
+            None,
+            Some(authority),
+            shutdown_receiver,
+        ));
+
+        let mut stream = TcpStream::connect(address).await.unwrap();
+        let initiator = Initiator::from_raw_k(authority.public_key).unwrap();
+        let (hello, waiting) = Handshake::initiator(initiator).step_0().unwrap();
+        let mut encoder = NoiseEncoder::new();
+        stream
+            .write_all(encoder.encode_handshake(hello).as_ref())
+            .await
+            .unwrap();
+        let mut reply = [0u8; INITIATOR_EXPECTED_HANDSHAKE_MESSAGE_SIZE];
+        stream.read_exact(&mut reply).await.unwrap();
+        let (mut encrypt, mut decrypt) = waiting.step_2(reply).unwrap().split();
+
+        let setup = MessageFrame::from_message(
+            SetupConnection {
+                protocol: Protocol::MiningProtocol,
+                min_version: 2,
+                max_version: 2,
+                flags: 0,
+                endpoint_host: "localhost".try_into().unwrap(),
+                endpoint_port: address.port(),
+                vendor: "p2poolv2".try_into().unwrap(),
+                hardware_version: "test".try_into().unwrap(),
+                firmware: "test".try_into().unwrap(),
+                device_id: "".try_into().unwrap(),
+            },
+            MESSAGE_TYPE_SETUP_CONNECTION,
+            0,
+            false,
+        )
+        .unwrap();
+        let encrypted: Vec<u8> = encoder.encode_transport(setup, &mut encrypt).unwrap();
+        stream.write_all(&encrypted).await.unwrap();
+
+        let mut decoder = NoiseDecoder::new();
+        let mut response_type = None;
+        while response_type.is_none() {
+            stream.read_exact(decoder.writable()).await.unwrap();
+            match decoder.next_transport_frame(decrypt).unwrap() {
+                Decrypted::Frame(frame, state) => {
+                    response_type = Some(frame.header().msg_type());
+                    decrypt = state;
+                }
+                Decrypted::Incomplete(_, state) => decrypt = state,
+            }
+        }
+        assert_eq!(response_type, Some(MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS));
+
+        shutdown_sender.send(()).unwrap();
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_client_pinning_another_authority_key_rejects_the_handshake() {
+        let mut config = StratumConfig::new_for_test_default();
+        config.sv2_port = Some(3336);
+        config.sv2_authority_public_key =
+            Some("9bDuixKmZqAJnrmP746n8zU1wyAQRrus7th9dxnkPg6RzQvCnan".to_string());
+        config.sv2_authority_secret_key =
+            Some("zmBEmPhqo3A92FkiLVvyCz6htc3e53ph3ZbD4ASqGaLjwnFLi".to_string());
+        let authority = config.parse().unwrap().sv2_authority().unwrap();
+        let listener = bind("localhost", 0).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (shutdown_sender, shutdown_receiver) = watch::channel(());
+        let server = tokio::spawn(serve(
+            listener,
+            PoolTransactionCache::new(),
+            None,
+            None,
+            Some(authority),
+            shutdown_receiver,
+        ));
+
+        let mut stream = TcpStream::connect(address).await.unwrap();
+        // The x-only key of secret 0x01..01: a valid key, but not the authority.
+        let other_key = Keypair::from_seckey_slice(&Secp256k1::new(), &[1u8; 32])
+            .unwrap()
+            .x_only_public_key()
+            .0
+            .serialize();
+        let initiator = Initiator::from_raw_k(other_key).unwrap();
+        let (hello, waiting) = Handshake::initiator(initiator).step_0().unwrap();
+        let mut encoder = NoiseEncoder::new();
+        stream
+            .write_all(encoder.encode_handshake(hello).as_ref())
+            .await
+            .unwrap();
+        let mut reply = [0u8; INITIATOR_EXPECTED_HANDSHAKE_MESSAGE_SIZE];
+        stream.read_exact(&mut reply).await.unwrap();
+        assert!(waiting.step_2(reply).is_err());
+
+        shutdown_sender.send(()).unwrap();
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn served_listener_answers_setup_connection() {
         let listener = bind("localhost", 0).await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -214,6 +366,7 @@ mod tests {
             listener,
             PoolTransactionCache::new(),
             Some(MergeMiningCommitment::reserved()),
+            None,
             None,
             shutdown_receiver,
         ));
