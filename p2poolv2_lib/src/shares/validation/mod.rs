@@ -201,7 +201,7 @@ fn bitcoin_coinbase_value(coinbase: &Transaction) -> Result<u64, ValidationError
 ///
 /// PPLNS zone: block_height > tip_height - PAYOUT_DEPTH
 /// Prune zone: everything else below that height
-pub fn is_in_pplns_zone(block_height: u32, tip_height: u32) -> bool {
+pub fn is_within_payout_depth(block_height: u32, tip_height: u32) -> bool {
     block_height > tip_height.saturating_sub(PAYOUT_DEPTH as u32)
 }
 
@@ -233,7 +233,7 @@ pub fn check_pplns_zone(
         .get_candidate_tip_height()
         .map_err(|error| format!("Failed to get candidate tip height: {error}"))?
         .unwrap_or(0);
-    Ok(is_in_pplns_zone(block_height, candidate_tip))
+    Ok(is_within_payout_depth(block_height, candidate_tip))
 }
 
 /// Trait for share validation operations.
@@ -4670,7 +4670,7 @@ mod tests {
     #[test]
     fn test_is_in_pplns_zone_at_tip() {
         // Block at tip height is in PPLNS zone
-        assert!(is_in_pplns_zone(300_000, 300_000));
+        assert!(is_within_payout_depth(300_000, 300_000));
     }
 
     #[test]
@@ -4678,7 +4678,7 @@ mod tests {
         // Block just inside PPLNS zone
         let tip = 300_000u32;
         let pplns_boundary = tip - PAYOUT_DEPTH as u32;
-        assert!(is_in_pplns_zone(pplns_boundary + 1, tip));
+        assert!(is_within_payout_depth(pplns_boundary + 1, tip));
     }
 
     #[test]
@@ -4686,28 +4686,28 @@ mod tests {
         // Block exactly at boundary is NOT in PPLNS zone (prune zone)
         let tip = 300_000u32;
         let pplns_boundary = tip - PAYOUT_DEPTH as u32;
-        assert!(!is_in_pplns_zone(pplns_boundary, tip));
+        assert!(!is_within_payout_depth(pplns_boundary, tip));
     }
 
     #[test]
     fn test_is_in_pplns_zone_below_boundary_is_prune_zone() {
         let tip = 300_000u32;
         let pplns_boundary = tip - PAYOUT_DEPTH as u32;
-        assert!(!is_in_pplns_zone(pplns_boundary - 1, tip));
+        assert!(!is_within_payout_depth(pplns_boundary - 1, tip));
     }
 
     #[test]
     fn test_is_in_pplns_zone_short_chain() {
         // Chain shorter than PPLNS depth: all blocks are in PPLNS zone
-        assert!(is_in_pplns_zone(1, 100));
-        assert!(is_in_pplns_zone(50, 100));
+        assert!(is_within_payout_depth(1, 100));
+        assert!(is_within_payout_depth(50, 100));
     }
 
     #[test]
     fn test_is_in_pplns_zone_height_zero() {
         // Height 0 with any tip is NOT in PPLNS zone (0 > anything is false)
-        assert!(!is_in_pplns_zone(0, 0));
-        assert!(!is_in_pplns_zone(0, 300_000));
+        assert!(!is_within_payout_depth(0, 0));
+        assert!(!is_within_payout_depth(0, 300_000));
     }
 
     #[test]
