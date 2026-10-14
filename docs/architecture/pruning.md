@@ -14,12 +14,19 @@ P2Poolv2 retains a rolling window of chain data. Old block bodies are
 pruned while headers are kept indefinitely. The system uses two depth
 constants:
 
-- **PPLNS_WINDOW_SHARES** (120,960 blocks, ~14 days): blocks within this
-  window get full transaction validation and participate in payout
-  accounting.
-- **PRUNE_DEPTH** (241,920 blocks, ~28 days): blocks within this
-  window have their bodies retained. Blocks between PRUNE_DEPTH and
-  PPLNS_WINDOW_SHARES get PoW-only body validation.
+- **PAYOUT_DEPTH** (127,008 blocks, ~14.7 days): `COINBASE_MATURITY`
+  (6,048) plus `PPLNS_WINDOW_SHARES` (120,960). Blocks within this depth
+  get full transaction validation. It covers every share a coinbase near
+  the tip can pay: the maturity skip and then the PPLNS window (see
+  `payout-distribution.md`).
+- **PRUNE_DEPTH** (254,016 blocks, ~29.4 days): `2 * PAYOUT_DEPTH`.
+  Blocks within this depth have their bodies retained. Blocks between
+  PRUNE_DEPTH and PAYOUT_DEPTH get PoW-only body validation.
+
+The second `PAYOUT_DEPTH` exists for output availability. A block at the
+bottom of the full-validation zone, `tip - PAYOUT_DEPTH`, may spend
+outputs up to `PAYOUT_DEPTH` older than itself (see "Output
+Spendability"), so their bodies must still be held.
 
 ## Header Sync
 
@@ -66,7 +73,7 @@ Relevant code: `store/organise/candidate.rs` (`missing_data_scan_start`).
 When block bodies arrive, validation depends on the block's zone
 relative to the candidate tip:
 
-### Prune zone (height <= tip - PPLNS_WINDOW_SHARES)
+### Prune zone (height <= tip - PAYOUT_DEPTH)
 
 `validate_below_pplns_depth` runs:
 - Pool difficulty (PoW)
@@ -78,7 +85,7 @@ Skips: coinbase structure, merkle root, witness commitment,
 transaction structure, script verification, prevout validation, MTP,
 bitcoin coinbase payout verification.
 
-### PPLNS zone (height > tip - PPLNS_WINDOW_SHARES)
+### PPLNS zone (height > tip - PAYOUT_DEPTH)
 
 `validate_share_block` runs all checks. `validate_with_chain_context`
 runs MTP, bitcoin coinbase payout, and prevout validation before
@@ -119,17 +126,21 @@ readable from RocksDB.
 ### Validation
 
 `validate_prevouts` computes `min_coinbase_root_height = block_height -
-PPLNS_WINDOW_SHARES` from the spending block's own height and passes it to
+PAYOUT_DEPTH` from the spending block's own height and passes it to
 `check_prevouts`. Outputs with `coinbase_root_height <
 min_coinbase_root_height` are rejected in the same batch read that checks
 output existence and coinbase maturity -- one pass covers all three.
+
+A coinbase output cannot be spent before depth `COINBASE_MATURITY`, so
+expiring at `PAYOUT_DEPTH` keeps a full `PPLNS_WINDOW_SHARES` of spendable
+life after it matures: depths `COINBASE_MATURITY` to `PAYOUT_DEPTH - 1`.
 
 ### Why store-at-write, not walk-at-validation
 
 A walk-at-validation approach was evaluated: walk the spending chain
 back to the coinbase during `validate_prevouts`. Rejected because an
 attacker can build spending chains up to ~12 million hops deep
-(120,960 blocks x 99 txs/block), creating a DoS of ~24 seconds per
+(127,008 blocks x 99 txs/block), creating a DoS of ~24 seconds per
 input validation. Store-at-write is O(1) at validation time and
 O(inputs) at write time, bounded by block size (~5000 inputs max).
 
@@ -195,7 +206,7 @@ from concurrent header arrivals advancing the candidate tip.
 
 Prune-zone blocks without SpendsIndex entries cannot cause
 double-spend acceptance:
-- Their outputs have `coinbase_root_height` below `tip - PPLNS_WINDOW_SHARES`
+- Their outputs have `coinbase_root_height` below `tip - PAYOUT_DEPTH`
 - `check_prevouts` rejects spending those outputs
 - SpendsIndex is only needed for outputs that CAN be spent
 
@@ -210,8 +221,10 @@ Relevant code:
 
 | Constant | Value | Meaning |
 |---|---|---|
+| COINBASE_MATURITY | 6,048 | 70% of a day at 10s/block |
 | PPLNS_WINDOW_SHARES | 120,960 | 14 days at 10s/block |
-| PRUNE_DEPTH | 241,920 | 2 x PPLNS_WINDOW_SHARES |
+| PAYOUT_DEPTH | 127,008 | COINBASE_MATURITY + PPLNS_WINDOW_SHARES |
+| PRUNE_DEPTH | 254,016 | 2 x PAYOUT_DEPTH |
 | PRUNE_INTERVAL | 360 | 1 hour of blocks |
 | Block height | u32 | Overflows in ~1,361 years |
 
