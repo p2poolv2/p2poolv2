@@ -38,6 +38,34 @@ serves both Job Declaration modes when `sv2_port` is set, and a Bitcoin
 Cash block coinbase carries one reserved AuxPoW output. The upstream
 Bitcoin test suite passing does not validate live BCH mining.
 
+## Implementation checkpoint (2026-10-14)
+
+A live BCHN 29.2.0 regtest node accepted blocks built by this node from its
+own templates and mined through its Stratum V1 port: BIP34 height, CashAddr
+P2PKH payouts, the 1.5% donation, an operator fee, the AuxPoW output, and the
+share commitment were all in a coinbase BCHN took. Details and what that run
+did not cover are in [bch-design.md](bch-design.md#live-regtest-run-2026-10-14).
+
+Also in this checkpoint:
+
+- Bitcoin Cash donates 1.5% by default to the project address, adjustable
+  by the operator, with an optional operator fee and a 10% consensus cap on
+  the two together (decision 9 below).
+- Stratum usernames accept CashAddr payouts. Before this no Bitcoin Cash
+  miner could authorize.
+- `stratum.network` on a Bitcoin Cash node is derived from
+  `bitcoin_cash_network`, so nodes on one network cannot split on it.
+- Bitcoin Cash shares carry no transfers until a Bitcoin Cash script
+  interpreter checks them.
+- `p2poolv2_cli bch-share-address` gives a miner their share address.
+- The three open Stratum V2 review findings are fixed (request ids per
+  connection, host-name bind that stops the node on failure, counted
+  `coinbase_outputs`).
+
+Still unfinished: a share accepted into the share chain from live mining,
+two-node share propagation on chipnet, a retuned PPLNS window, and Noise
+encryption for remote Stratum V2.
+
 ## Startup selection (2026-10-13)
 
 Design checks for every porting item are in [bch-design.md](bch-design.md).
@@ -125,6 +153,17 @@ move most BCH hashrate to the share chain.
 8. **Not adopted.** DATUM-style designs, where an operator sets the coinbase
    outputs and holds small balances, keep the central infrastructure this
    project wants to remove.
+9. **Donation and pool fee (2026-10-14).** Every Bitcoin Cash node donates
+   1.5% of each block it finds, from the coinbase, to the project address
+   `bitcoincash:qze95tc2dqrnltvxfa5yhunwx5952f34fvw4g6365k` unless its
+   operator changes it: `donation` raises or lowers the basis points and 0
+   opts out. The address is fixed in the share chain's rules, so a donation
+   cannot be redirected. Public pool operators set their own `fee_address`
+   and `fee`. Donation plus fee is capped at 10% by share-chain consensus so
+   no node can take a block's reward from the miners in its window.
+10. **Rust stays the implementation.** Ideas from P2Pool v1, CashStratum and
+    other BCH software are reimplemented in Rust here, never ported back as
+    Python or C.
 
 ## BCH porting checklist
 
@@ -161,7 +200,12 @@ check before code.
 - License: if v1 code is copied, relicense the fork as GPL-3.0 or AGPL-3.0
   (AGPL-3.0 matches Pickaxe).
 - PPLNS window length, share interval and share difficulty for the main and
-  mini share chains.
+  mini share chains. Wait for the outcome of CHIP-2025-03 (1-minute blocks,
+  lock-in 2026-11-15) before tuning; the window already scales with block
+  difficulty.
+- Whether 10% is the right consensus cap on donation plus fee.
+- A Bitcoin Cash script interpreter for share-chain transactions
+  (`SIGHASH_FORKID`, Schnorr), needed before share transfers or trading.
 - Keep P2Poolv2's share trading on BCH, or rely on the mini share chain.
 - Merge-mining commitment format and size budget (Stratum V2's
   `CoinbaseOutputConstraints` already declares coinbase space).
@@ -256,6 +300,19 @@ BCH pools, nodes and tokens:
 - BitcoinCash1: https://github.com/orgs/BitcoinCash1/repositories .
 - SAFA: https://bitcoincashresearch.org/t/safas-a-sha256-asic-minable-automated-token-market/2123 ;
   BTOP: https://bitcoincashresearch.org/t/block-tops-btop-a-minable-cashtoken/1703 .
+- Faster blocks, checked 2026-10-14: CHIP-2025-03
+  https://bitcoincashresearch.org/t/chip-2025-03-faster-blocks-for-bitcoin-cash/1513 ;
+  statements for the 2027 upgrade
+  https://bitcoincashresearch.org/t/chip-2025-03-faster-blocks-gathering-statements-of-support-and-dissent/2095 .
+- Coinbase size RFC (2025-06, not a CHIP), checked 2026-10-14:
+  https://bitcoincashresearch.org/t/rfc-limit-coinbase-tx-size/1602 .
+- BCHN 29.2.0 binaries used for the regtest run:
+  https://download.bitcoincashnode.org/releases/29.2.0/ (SHA-256 checked
+  against the release's signed sums file; the signature itself was not
+  verified).
+- Stratum V2 `coinbase_tx_outputs` encoding (CompactSize-prefixed output
+  array), checked 2026-10-14:
+  https://stratumprotocol.org/specification/06-job-declaration-protocol/ .
 
 Searches used on 2026-10-08, to repeat or extend:
 

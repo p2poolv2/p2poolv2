@@ -421,11 +421,32 @@ the hash. Tag `0x20` is outside witness versions 0 through 16, so a decoder
 of the Bitcoin layout rejects a cash share, and a decoder that still accepts
 those versions reads an old taproot share unchanged. The text form is
 CashAddr with prefixes `p2pool`, `tp2pool`, and `rp2pool`. That prefix
-comes from `bitcoin_cash_network`. The Bitcoin share-chain `network` still
-selects the bech32m prefix and genesis, and signet is not chipnet. Payout
-CashAddr (`bitcoincash`, `bchtest`, `bchreg`) is a different string and is
-not a share address. See `p2poolv2_wallet::bch_share` and
-`p2poolv2_wallet::share_owner`.
+comes from `bitcoin_cash_network`. On a Bitcoin Cash node the `network`
+field is replaced by the network `bitcoin_cash_network` implies (mainnet as
+`main`, chipnet as `test`, regtest as `regtest`), so it selects neither the
+prefix nor the genesis there. Payout CashAddr (`bitcoincash`, `bchtest`,
+`bchreg`) is a different string and is not a share address. See
+`p2poolv2_wallet::bch_share` and `p2poolv2_wallet::share_owner`.
+
+A miner gets a share address from their own wallet. Take a regular P2PKH
+receiving address (`q...`) for the key that should own shares, preferably
+not the payout address, and re-encode it:
+
+```sh
+p2poolv2_cli bch-share-address --network mainnet bitcoincash:q...
+# prints p2pool:q... with the same 20-byte hash and a new checksum
+```
+
+The command only changes the prefix and checksum. It takes no private key
+and rejects a P2SH address, because a share is owned by a P2PKH script.
+
+Bitcoin Cash shares carry their coinbase alone for now. Share transactions
+are checked by `bitcoinconsensus`, which applies Bitcoin script rules: a
+spend signed by a Bitcoin Cash wallet (`SIGHASH_FORKID`, Schnorr) would fail
+there and a Bitcoin legacy signature would pass. Until a Bitcoin Cash
+interpreter checks share transactions, the validator rejects a Bitcoin Cash
+share with any non-coinbase transaction. Shares still accrue to the P2PKH
+key, which a Bitcoin Cash wallet can spend once share transfers are enabled.
 
 ## Registration
 
