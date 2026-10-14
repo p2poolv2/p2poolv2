@@ -17,15 +17,17 @@ use p2poolv2_api::start_api_server;
 use p2poolv2_lib::accounting::payout::build_payout_for_mode;
 use p2poolv2_lib::accounting::stats::metrics;
 use p2poolv2_lib::address::bch_share::BchShareNetwork;
-use p2poolv2_lib::config::{BitcoinCashNetwork, Chain, Config};
+use p2poolv2_lib::config::{BitcoinCashNetwork, Chain, Config, bitcoin_cash_donation_cashaddr};
 use p2poolv2_lib::node::actor::NodeHandle;
 use p2poolv2_lib::pool_difficulty::PoolDifficulty;
 use p2poolv2_lib::shares::chain::chain_store_handle::ChainStoreHandle;
+use p2poolv2_lib::shares::merge_mining::MergeMiningCommitment;
 use p2poolv2_lib::store::Store;
 use p2poolv2_lib::store::writer::{StoreHandle, StoreWriter, write_channel};
 use p2poolv2_lib::stratum::client_connections::start_connections_handler;
 use p2poolv2_lib::stratum::emission::Emission;
 use p2poolv2_lib::stratum::server::StratumServerBuilder;
+use p2poolv2_lib::stratum::sv2;
 use p2poolv2_lib::stratum::work::gbt::start_gbt;
 use p2poolv2_lib::stratum::work::notify::start_notify;
 use p2poolv2_lib::stratum::work::prepared_notify::PreparedNotifyParams;
@@ -236,9 +238,16 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
 
     if stratum_config.chain == Chain::BitcoinCash {
         info!(
-            "Bitcoin Cash templates and share owners are selected for {:?}. Genesis and Stratum V2 are still the Bitcoin implementation.",
-            stratum_config.bitcoin_cash_network
+            "Bitcoin Cash templates, share owners, and {:?} share chain genesis are selected for {:?}.",
+            stratum_config.bch_share_chain, stratum_config.bitcoin_cash_network
         );
+        match (stratum_config.donation, stratum_config.bitcoin_cash_network) {
+            (Some(basis_points), Some(network)) => info!(
+                "Donating {basis_points} basis points of each block this node finds to {}. Set donation = 0 to opt out.",
+                bitcoin_cash_donation_cashaddr(network)
+            ),
+            _ => info!("Bitcoin Cash donation is off (donation = 0)."),
+        }
     }
 
     let exit_sender_gbt = exit_sender.clone();
@@ -319,40 +328,30 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
     let sv2_port = stratum_config.sv2_port;
     let sv2_hostname = stratum_config.hostname.clone();
     let sv2_merge_mining = match share_chain {
-        Chain::BitcoinCash => {
-            Some(p2poolv2_lib::shares::merge_mining::MergeMiningCommitment::reserved())
-        }
+        Chain::BitcoinCash => Some(MergeMiningCommitment::reserved()),
         Chain::Bitcoin => None,
     };
     let sv2_transactions = pool_transactions.clone();
-    let mut sv2_shutdown = exit_sender.subscribe();
+    let sv2_shutdown = exit_sender.subscribe();
+    let exit_sender_sv2 = exit_sender.clone();
     tokio::spawn(async move {
         let Some(port) = sv2_port else {
             return;
         };
-        let address = match format!("{sv2_hostname}:{port}").parse() {
-            Ok(address) => address,
-            Err(error) => {
-                error!("Invalid Stratum V2 address: {error}");
-                return;
+        // A configured SV2 port that cannot be bound is a startup failure, as
+        // it is for the SV1 port: the operator asked for a socket the node
+        // cannot open, so stop instead of running without it.
+        match sv2::bind(&sv2_hostname, port).await {
+            Ok(listener) => {
+                sv2::serve(listener, sv2_transactions, sv2_merge_mining, sv2_shutdown).await;
             }
-        };
-        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(());
-        tokio::spawn(async move {
-            if p2poolv2_lib::stratum::sv2::serve(
-                address,
-                sv2_transactions,
-                sv2_merge_mining,
-                shutdown_rx,
-            )
-            .await
-            .is_err()
-            {
-                error!("Stratum V2 listener stopped");
+            Err(bind_error) => {
+                error!("Failed to bind Stratum V2 on {sv2_hostname}:{port}: {bind_error}");
+                if *exit_sender_sv2.borrow() == ShutdownReason::None {
+                    let _ = exit_sender_sv2.send(ShutdownReason::Error);
+                }
             }
-        });
-        let _ = sv2_shutdown.changed().await;
-        let _ = shutdown_tx.send(());
+        }
     });
 
     tokio::spawn(async move {

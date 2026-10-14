@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use crate::address::{Address as P2PoolAddress, AddressError};
-use crate::config::Chain;
 use crate::config::PoolMode;
+use crate::config::{BitcoinCashNetwork, Chain};
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::stratum::parse_password::extract_string_value;
 use crate::stratum::{
@@ -174,23 +174,29 @@ pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
             )]);
         }
     };
-    let parsed_username =
-        match validate_username::validate(&username, ctx.validate_addresses, ctx.network) {
-            Ok(validated) => validated,
-            Err(_e) => {
-                if !session.auth_failed_once {
-                    session.auth_failed_once = true;
-                    return Ok(vec![Message::Response(
-                        Response::new_error(message.id, StratumErrorCode::UnauthorizedWorker)
-                            .with_message("Invalid username".to_string()),
-                    )]);
-                } else {
-                    return Err(Error::AuthorizationFailure(
-                        "Second invalid username. Disconnecting.".to_string(),
-                    ));
-                }
+    let parsed_username = match validate_username::validate_for_chain(
+        &username,
+        ctx.validate_addresses,
+        ctx.network,
+        ctx.share_chain,
+        ctx.bch_share_network
+            .map(BitcoinCashNetwork::from_share_network),
+    ) {
+        Ok(validated) => validated,
+        Err(_e) => {
+            if !session.auth_failed_once {
+                session.auth_failed_once = true;
+                return Ok(vec![Message::Response(
+                    Response::new_error(message.id, StratumErrorCode::UnauthorizedWorker)
+                        .with_message("Invalid username".to_string()),
+                )]);
+            } else {
+                return Err(Error::AuthorizationFailure(
+                    "Second invalid username. Disconnecting.".to_string(),
+                ));
             }
-        };
+        }
+    };
 
     // Parse once; the password carries both the difficulty hint and the share
     // chain address. Resolve the address before authorizing the session so an

@@ -5,7 +5,8 @@
 mod cashaddr;
 
 use bitcoin::address::NetworkChecked;
-use bitcoin::{Address, Network};
+use bitcoin::hashes::Hash;
+use bitcoin::{Address, Network, PubkeyHash};
 use bitcoindrpc::BitcoinRpcConfig;
 use p2poolv2_wallet::Address as ShareAddress;
 use p2poolv2_wallet::bch_share::{self, BchShareAddress, BchShareNetwork};
@@ -15,6 +16,59 @@ use std::str::FromStr;
 
 /// Default version mask for BIP 323 version rolling.
 pub const DEFAULT_VERSION_MASK: i32 = 0x1fffe000;
+
+/// One hundred percent, in basis points.
+pub const MAX_BASIS_POINTS: u16 = 10_000;
+
+/// P2Poolv2 Bitcoin Cash donation address, as shown on mainnet.
+///
+/// A Bitcoin Cash node pays its donation here. The address is fixed: the
+/// share chain rejects a Bitcoin Cash share whose donation output pays any
+/// other script, so an operator who wants a cut of their own uses
+/// `fee_address` and `fee` instead.
+pub const BITCOIN_CASH_DONATION_ADDRESS: &str =
+    "bitcoincash:qze95tc2dqrnltvxfa5yhunwx5952f34fvw4g6365k";
+
+/// The 20-byte public key hash [`BITCOIN_CASH_DONATION_ADDRESS`] encodes.
+///
+/// The same key is paid on chipnet (`bchtest:`) and regtest (`bchreg:`), so
+/// the donation path is exercised on test networks too.
+pub const BITCOIN_CASH_DONATION_PUBKEY_HASH: [u8; 20] = [
+    0xb2, 0x5a, 0x2f, 0x0a, 0x68, 0x07, 0x3f, 0xad, 0x86, 0x4f, 0x68, 0x4b, 0xf2, 0x6e, 0x35, 0x0b,
+    0x45, 0x26, 0x35, 0x4b,
+];
+
+/// Donation a Bitcoin Cash node makes when `donation` is not configured:
+/// 1.5%. An operator may raise it, lower it, or set 0 to opt out.
+pub const DEFAULT_BITCOIN_CASH_DONATION: u16 = 150;
+
+/// Most a Bitcoin Cash share may take before the PPLNS split: donation plus
+/// fee, 10%.
+///
+/// The share chain enforces this on every Bitcoin Cash share. Without it a
+/// node could set a 100% fee to itself and keep the whole reward of every
+/// block it finds, while its shares still earn a slice of everyone else's.
+pub const MAX_BITCOIN_CASH_POOL_CUT: u16 = 1_000;
+
+/// [`BITCOIN_CASH_DONATION_ADDRESS`] under a network's CashAddr prefix, for
+/// logs and documentation. Each string decodes to
+/// [`bitcoin_cash_donation_address`] for that network.
+pub fn bitcoin_cash_donation_cashaddr(network: BitcoinCashNetwork) -> &'static str {
+    match network {
+        BitcoinCashNetwork::Mainnet => BITCOIN_CASH_DONATION_ADDRESS,
+        BitcoinCashNetwork::Chipnet => "bchtest:qze95tc2dqrnltvxfa5yhunwx5952f34fv28vandn2",
+        BitcoinCashNetwork::Regtest => "bchreg:qze95tc2dqrnltvxfa5yhunwx5952f34fvsm6us7sv",
+    }
+}
+
+/// Donation output for a Bitcoin Cash network: P2PKH to
+/// [`BITCOIN_CASH_DONATION_PUBKEY_HASH`].
+pub fn bitcoin_cash_donation_address(network: BitcoinCashNetwork) -> Address {
+    Address::p2pkh(
+        PubkeyHash::from_byte_array(BITCOIN_CASH_DONATION_PUBKEY_HASH),
+        network.legacy_network(),
+    )
+}
 
 /// Error type for configuration parsing and validation.
 #[derive(Debug, Clone)]
@@ -161,10 +215,34 @@ impl BitcoinCashNetwork {
         }
     }
 
-    /// Legacy base58 network whose pubkey and script version bytes match this
-    /// Bitcoin Cash network. Used only so `bitcoin::Address` can carry the
-    /// decoded script. Difficulty and share-chain identity still use
-    /// [`bitcoin::Network`].
+    /// Share address network (`p2pool`, `tp2pool`, `rp2pool`) for this
+    /// Bitcoin Cash network.
+    pub fn share_network(self) -> BchShareNetwork {
+        match self {
+            BitcoinCashNetwork::Mainnet => BchShareNetwork::Mainnet,
+            BitcoinCashNetwork::Chipnet => BchShareNetwork::Chipnet,
+            BitcoinCashNetwork::Regtest => BchShareNetwork::Regtest,
+        }
+    }
+
+    /// The Bitcoin Cash network a share address network belongs to.
+    ///
+    /// Share addresses (`p2pool`, `tp2pool`, `rp2pool`) and payout addresses
+    /// (`bitcoincash`, `bchtest`, `bchreg`) name the same three networks.
+    pub fn from_share_network(share_network: BchShareNetwork) -> Self {
+        match share_network {
+            BchShareNetwork::Mainnet => BitcoinCashNetwork::Mainnet,
+            BchShareNetwork::Chipnet => BitcoinCashNetwork::Chipnet,
+            BchShareNetwork::Regtest => BitcoinCashNetwork::Regtest,
+        }
+    }
+
+    /// Bitcoin network whose base58 version bytes and proof-of-work limit
+    /// match this Bitcoin Cash network: mainnet `0x1d00ffff`, chipnet
+    /// `0x1d00ffff` (as testnet), regtest `0x207fffff`. It lets
+    /// `bitcoin::Address` carry a decoded CashAddr script, and it is the
+    /// `stratum.network` a Bitcoin Cash node uses for difficulty and its P2P
+    /// protocol id.
     pub fn legacy_network(self) -> Network {
         match self {
             BitcoinCashNetwork::Mainnet => Network::Bitcoin,
@@ -201,13 +279,21 @@ pub struct StratumConfig<State = Raw> {
     pub zmqpubhashblock: String,
     /// The bitcoin address to use for first jobs when there are no shares (string in Raw state)
     pub bootstrap_address: String,
-    /// The donation address for developers (string in Raw state)
+    /// The donation address for developers (string in Raw state).
+    ///
+    /// On Bitcoin it is required whenever `donation` is set. On Bitcoin Cash
+    /// it may be omitted; if given it must be [`BITCOIN_CASH_DONATION_ADDRESS`]
+    /// under the prefix for `bitcoin_cash_network`.
     pub donation_address: Option<String>,
-    /// The donation basis points
+    /// The donation basis points.
+    ///
+    /// In the Raw state this is what the operator wrote. After parsing it is
+    /// the donation actually paid: on Bitcoin Cash an unset value becomes
+    /// [`DEFAULT_BITCOIN_CASH_DONATION`], and 0 becomes `None` (no donation).
     pub donation: Option<u16>,
-    /// The fee address (string in Raw state)
+    /// The fee address (string in Raw state). A pool operator's own cut.
     pub fee_address: Option<String>,
-    /// The fee basis points
+    /// The fee basis points, taken after the donation.
     pub fee: Option<u16>,
     /// Share chain address owning every share this pool mines (string in Raw
     /// state). When set, miners need not send `p2p=` in the stratum password,
@@ -215,8 +301,10 @@ pub struct StratumConfig<State = Raw> {
     /// P2Poolv2 mode only; Hydrapool builds no share commitment.
     pub miner_address: Option<String>,
     /// The network can be "main", "testnet4" or "signet".
-    /// On Bitcoin this is also the share-address prefix. On Bitcoin Cash the
-    /// share address uses `bitcoin_cash_network` instead.
+    /// On Bitcoin this is also the share-address prefix. On Bitcoin Cash it is
+    /// ignored: [`Config::load`] and [`StratumConfig::parse`] replace it with
+    /// [`StratumConfig::effective_network`], derived from
+    /// `bitcoin_cash_network`.
     #[serde(deserialize_with = "deserialize_network")]
     pub network: bitcoin::Network,
     /// Block chain that supplies work templates and payout scripts.
@@ -272,9 +360,30 @@ pub struct StratumConfig<State = Raw> {
     _state: PhantomData<State>,
 }
 
+impl<State> StratumConfig<State> {
+    /// The network difficulty, P2P protocol id, and payout parsing use.
+    ///
+    /// Bitcoin uses `network` as configured. Bitcoin Cash uses the network
+    /// implied by `bitcoin_cash_network`, whatever `network` says, so every
+    /// node on one Bitcoin Cash network computes the same difficulty and
+    /// speaks the same protocol id. Without `bitcoin_cash_network`, `network`
+    /// is returned and parsing rejects the configuration.
+    pub fn effective_network(&self) -> Network {
+        match (self.chain, self.bitcoin_cash_network) {
+            (Chain::BitcoinCash, Some(bitcoin_cash_network)) => {
+                bitcoin_cash_network.legacy_network()
+            }
+            (Chain::Bitcoin, _) | (Chain::BitcoinCash, None) => self.network,
+        }
+    }
+}
+
 impl StratumConfig<Raw> {
-    /// Parse and validate addresses, converting from Raw to Parsed state
-    pub fn parse(self) -> Result<StratumConfig<Parsed>, ConfigError> {
+    /// Parse and validate addresses, converting from Raw to Parsed state.
+    ///
+    /// On Bitcoin Cash the parsed `network` is [`Self::effective_network`].
+    pub fn parse(mut self) -> Result<StratumConfig<Parsed>, ConfigError> {
+        self.network = self.effective_network();
         if self.pool_signature.clone().unwrap_or("".to_string()).len() > MAX_POOL_SIGNATURE_LENGTH {
             return Err(ConfigError {
                 message: format!("Pool signature length is limited to {MAX_POOL_SIGNATURE_LENGTH}"),
@@ -298,7 +407,11 @@ impl StratumConfig<Raw> {
             });
         }
 
-        if self.donation_address.is_some() != self.donation.is_some() {
+        // Bitcoin Cash has a built-in donation address, so `donation` alone is
+        // enough there. Bitcoin has none.
+        if self.chain == Chain::Bitcoin
+            && self.donation_address.is_some() != self.donation.is_some()
+        {
             return Err(ConfigError {
                 message: "donation_address and donation must both be set or both be unset"
                     .to_string(),
@@ -392,7 +505,7 @@ impl StratumConfig<Raw> {
                 let parsed = self
                     .miner_address
                     .as_ref()
-                    .map(|address| bch_share::parse(address, share_network(bitcoin_cash_network)))
+                    .map(|address| bch_share::parse(address, bitcoin_cash_network.share_network()))
                     .transpose()
                     .map_err(|error| ConfigError {
                         message: format!("Invalid Bitcoin Cash share address: {error}"),
@@ -401,13 +514,13 @@ impl StratumConfig<Raw> {
             }
         };
 
-        let donation_address_parsed = self
-            .donation_address
-            .as_ref()
-            .map(|addr| {
-                parse_payout_address(addr, self.chain, self.network, self.bitcoin_cash_network)
-            })
-            .transpose()?;
+        let (donation_address_parsed, donation) = resolve_donation(
+            self.chain,
+            self.network,
+            self.bitcoin_cash_network,
+            self.donation_address.as_deref(),
+            self.donation,
+        )?;
 
         let fee_address_parsed = self
             .fee_address
@@ -416,6 +529,8 @@ impl StratumConfig<Raw> {
                 parse_payout_address(addr, self.chain, self.network, self.bitcoin_cash_network)
             })
             .transpose()?;
+
+        validate_cuts(self.chain, donation, self.fee)?;
 
         Ok(StratumConfig {
             hostname: self.hostname,
@@ -427,7 +542,7 @@ impl StratumConfig<Raw> {
             zmqpubhashblock: self.zmqpubhashblock,
             bootstrap_address: self.bootstrap_address,
             donation_address: self.donation_address,
-            donation: self.donation,
+            donation,
             fee_address: self.fee_address,
             fee: self.fee,
             miner_address: self.miner_address,
@@ -485,12 +600,78 @@ impl StratumConfig<Parsed> {
     }
 }
 
-fn share_network(network: BitcoinCashNetwork) -> BchShareNetwork {
-    match network {
-        BitcoinCashNetwork::Mainnet => BchShareNetwork::Mainnet,
-        BitcoinCashNetwork::Chipnet => BchShareNetwork::Chipnet,
-        BitcoinCashNetwork::Regtest => BchShareNetwork::Regtest,
+/// Donation output and basis points this node puts in the shares it mines.
+///
+/// Bitcoin keeps the upstream rule: both fields or neither, and any address.
+/// Bitcoin Cash pays [`bitcoin_cash_donation_address`]: `donation` defaults
+/// to [`DEFAULT_BITCOIN_CASH_DONATION`], 0 opts out, and a configured
+/// `donation_address` must name that same key.
+fn resolve_donation(
+    chain: Chain,
+    network: Network,
+    bitcoin_cash_network: Option<BitcoinCashNetwork>,
+    donation_address: Option<&str>,
+    donation: Option<u16>,
+) -> Result<(Option<Address>, Option<u16>), ConfigError> {
+    match chain {
+        Chain::Bitcoin => {
+            let parsed = donation_address
+                .map(|address| parse_payout_address(address, chain, network, None))
+                .transpose()?;
+            Ok((parsed, donation))
+        }
+        Chain::BitcoinCash => {
+            let bitcoin_cash_network = bitcoin_cash_network.ok_or_else(|| ConfigError {
+                message: "bitcoin_cash_network is required when chain is bitcoin-cash".to_string(),
+            })?;
+            let built_in = bitcoin_cash_donation_address(bitcoin_cash_network);
+            if let Some(address) = donation_address {
+                let configured =
+                    parse_payout_address(address, chain, network, Some(bitcoin_cash_network))?;
+                if configured.script_pubkey() != built_in.script_pubkey() {
+                    return Err(ConfigError {
+                        message: format!(
+                            "donation_address on bitcoin-cash is fixed to {BITCOIN_CASH_DONATION_ADDRESS} \
+                             (this network's prefix). Remove donation_address, set donation = 0 to \
+                             opt out, or use fee_address and fee for your own pool fee"
+                        ),
+                    });
+                }
+            }
+            match donation.unwrap_or(DEFAULT_BITCOIN_CASH_DONATION) {
+                0 => Ok((None, None)),
+                basis_points => Ok((Some(built_in), Some(basis_points))),
+            }
+        }
     }
+}
+
+/// Reject donation and fee basis points the payout cannot honor.
+///
+/// Each cut is a share of what is left, so each must be at most 100%. A
+/// Bitcoin Cash node must also stay within [`MAX_BITCOIN_CASH_POOL_CUT`],
+/// which its peers enforce on every share it mines.
+fn validate_cuts(chain: Chain, donation: Option<u16>, fee: Option<u16>) -> Result<(), ConfigError> {
+    let donation = donation.unwrap_or(0);
+    let fee = fee.unwrap_or(0);
+    if donation > MAX_BASIS_POINTS || fee > MAX_BASIS_POINTS {
+        return Err(ConfigError {
+            message: format!(
+                "donation and fee are basis points and must each be at most {MAX_BASIS_POINTS}"
+            ),
+        });
+    }
+    if chain == Chain::BitcoinCash
+        && u32::from(donation) + u32::from(fee) > u32::from(MAX_BITCOIN_CASH_POOL_CUT)
+    {
+        return Err(ConfigError {
+            message: format!(
+                "donation ({donation}) plus fee ({fee}) on bitcoin-cash must be at most \
+                 {MAX_BITCOIN_CASH_POOL_CUT} basis points; peers reject shares above it"
+            ),
+        });
+    }
+    Ok(())
 }
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -764,8 +945,16 @@ pub struct Config {
 
 #[allow(dead_code)]
 impl Config {
+    /// Load the configuration file at `path`, with `P2POOL__` environment
+    /// overrides.
+    ///
+    /// On Bitcoin Cash, `stratum.network` is replaced by the network implied
+    /// by `bitcoin_cash_network` (see [`BitcoinCashNetwork::legacy_network`]).
+    /// The P2P protocol id and every difficulty calculation read that field,
+    /// so two Bitcoin Cash nodes on the same network must not disagree on it
+    /// because one left a Bitcoin value such as `signet` in its file.
     pub fn load(path: &str) -> Result<Self, config::ConfigError> {
-        config::Config::builder()
+        let loaded: Self = config::Config::builder()
             .add_source(config::File::with_name(path))
             // Nesting uses `__` so that a single `_` stays part of a field name.
             // With a single-underscore separator, P2POOL_STORE_PPLNS_TTL_DAYS
@@ -777,7 +966,15 @@ impl Config {
                     .separator("__"),
             )
             .build()?
-            .try_deserialize()
+            .try_deserialize()?;
+        Ok(loaded.with_bitcoin_cash_network_derived())
+    }
+
+    /// Set `stratum.network` from `bitcoin_cash_network` on a Bitcoin Cash
+    /// node. Bitcoin configurations are returned unchanged.
+    pub fn with_bitcoin_cash_network_derived(mut self) -> Self {
+        self.stratum.network = self.stratum.effective_network();
+        self
     }
 
     pub fn with_listen_address(mut self, listen_address: String) -> Self {
@@ -1533,6 +1730,41 @@ mod tests {
     }
 
     #[test]
+    fn bitcoin_cash_regtest_parses_on_the_regtest_network_whatever_network_says() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.chain = Chain::BitcoinCash;
+        config.bitcoin_cash_network = Some(BitcoinCashNetwork::Regtest);
+        config.network = Network::Signet;
+        config.bootstrap_address = "bchreg:qqzldt8u5mafprrw6uljppyqg30uhl97ey890dqm34".to_string();
+        assert_eq!(config.effective_network(), Network::Regtest);
+        assert_eq!(config.parse().unwrap().network, Network::Regtest);
+    }
+
+    #[test]
+    fn bitcoin_cash_mainnet_uses_the_bitcoin_network() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.chain = Chain::BitcoinCash;
+        config.bitcoin_cash_network = Some(BitcoinCashNetwork::Mainnet);
+        config.network = Network::Signet;
+        assert_eq!(config.effective_network(), Network::Bitcoin);
+    }
+
+    #[test]
+    fn bitcoin_cash_chipnet_uses_the_testnet_network() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.chain = Chain::BitcoinCash;
+        config.bitcoin_cash_network = Some(BitcoinCashNetwork::Chipnet);
+        config.network = Network::Signet;
+        assert_eq!(config.effective_network(), Network::Testnet);
+    }
+
+    #[test]
+    fn bitcoin_keeps_its_configured_network() {
+        let config = StratumConfig::<Raw>::new_for_test_default();
+        assert_eq!(config.effective_network(), Network::Signet);
+    }
+
+    #[test]
     fn bitcoin_cash_accepts_the_mini_share_chain() {
         let mut config = StratumConfig::<Raw>::new_for_test_default();
         config.chain = Chain::BitcoinCash;
@@ -1542,6 +1774,250 @@ mod tests {
 
         let parsed = config.parse().unwrap();
         assert_eq!(parsed.bch_share_chain, BchShareChain::Mini);
+    }
+}
+
+#[cfg(test)]
+mod bitcoin_cash_donation_tests {
+    use super::*;
+
+    const CHIPNET_BOOTSTRAP: &str = "bchtest:pr6m7j9njldwwzlg9v7v53unlr4jkmx6eyvwc0uz5t";
+    const MAINNET_BOOTSTRAP: &str = "bitcoincash:qr6m7j9njldwwzlg9v7v53unlr4jkmx6eylep8ekg2";
+
+    #[test]
+    fn mainnet_donation_string_decodes_to_the_built_in_key() {
+        let decoded = cashaddr::decode(BITCOIN_CASH_DONATION_ADDRESS, BitcoinCashNetwork::Mainnet)
+            .unwrap()
+            .to_address();
+        assert_eq!(
+            decoded,
+            bitcoin_cash_donation_address(BitcoinCashNetwork::Mainnet)
+        );
+    }
+
+    #[test]
+    fn chipnet_donation_string_decodes_to_the_built_in_key() {
+        let decoded = cashaddr::decode(
+            bitcoin_cash_donation_cashaddr(BitcoinCashNetwork::Chipnet),
+            BitcoinCashNetwork::Chipnet,
+        )
+        .unwrap()
+        .to_address();
+        assert_eq!(
+            decoded,
+            bitcoin_cash_donation_address(BitcoinCashNetwork::Chipnet)
+        );
+    }
+
+    #[test]
+    fn regtest_donation_string_decodes_to_the_built_in_key() {
+        let decoded = cashaddr::decode(
+            bitcoin_cash_donation_cashaddr(BitcoinCashNetwork::Regtest),
+            BitcoinCashNetwork::Regtest,
+        )
+        .unwrap()
+        .to_address();
+        assert_eq!(
+            decoded,
+            bitcoin_cash_donation_address(BitcoinCashNetwork::Regtest)
+        );
+    }
+
+    #[test]
+    fn bitcoin_cash_donates_one_and_a_half_percent_by_default() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.chain = Chain::BitcoinCash;
+        config.bitcoin_cash_network = Some(BitcoinCashNetwork::Chipnet);
+        config.bootstrap_address = CHIPNET_BOOTSTRAP.to_string();
+        let parsed = config.parse().unwrap();
+        assert_eq!(parsed.donation, Some(150));
+        assert_eq!(
+            parsed.donation_address(),
+            Some(&bitcoin_cash_donation_address(BitcoinCashNetwork::Chipnet))
+        );
+    }
+
+    #[test]
+    fn bitcoin_cash_mainnet_default_pays_the_published_address() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.chain = Chain::BitcoinCash;
+        config.bitcoin_cash_network = Some(BitcoinCashNetwork::Mainnet);
+        config.bootstrap_address = MAINNET_BOOTSTRAP.to_string();
+        let parsed = config.parse().unwrap();
+        let published =
+            cashaddr::decode(BITCOIN_CASH_DONATION_ADDRESS, BitcoinCashNetwork::Mainnet)
+                .unwrap()
+                .to_address();
+        assert_eq!(parsed.donation, Some(DEFAULT_BITCOIN_CASH_DONATION));
+        assert_eq!(parsed.donation_address(), Some(&published));
+    }
+
+    #[test]
+    fn bitcoin_cash_donation_can_be_raised() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.chain = Chain::BitcoinCash;
+        config.bitcoin_cash_network = Some(BitcoinCashNetwork::Chipnet);
+        config.bootstrap_address = CHIPNET_BOOTSTRAP.to_string();
+        config.donation = Some(300);
+        let parsed = config.parse().unwrap();
+        assert_eq!(parsed.donation, Some(300));
+        assert!(parsed.donation_address().is_some());
+    }
+
+    #[test]
+    fn bitcoin_cash_donation_can_be_lowered() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.chain = Chain::BitcoinCash;
+        config.bitcoin_cash_network = Some(BitcoinCashNetwork::Chipnet);
+        config.bootstrap_address = CHIPNET_BOOTSTRAP.to_string();
+        config.donation = Some(50);
+        let parsed = config.parse().unwrap();
+        assert_eq!(parsed.donation, Some(50));
+        assert!(parsed.donation_address().is_some());
+    }
+
+    #[test]
+    fn bitcoin_cash_donation_of_zero_opts_out() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.chain = Chain::BitcoinCash;
+        config.bitcoin_cash_network = Some(BitcoinCashNetwork::Chipnet);
+        config.bootstrap_address = CHIPNET_BOOTSTRAP.to_string();
+        config.donation = Some(0);
+        let parsed = config.parse().unwrap();
+        assert_eq!(parsed.donation, None);
+        assert!(parsed.donation_address().is_none());
+    }
+
+    #[test]
+    fn bitcoin_cash_accepts_the_built_in_donation_address_written_out() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.chain = Chain::BitcoinCash;
+        config.bitcoin_cash_network = Some(BitcoinCashNetwork::Chipnet);
+        config.bootstrap_address = CHIPNET_BOOTSTRAP.to_string();
+        config.donation_address =
+            Some(bitcoin_cash_donation_cashaddr(BitcoinCashNetwork::Chipnet).to_string());
+        let parsed = config.parse().unwrap();
+        assert_eq!(parsed.donation, Some(DEFAULT_BITCOIN_CASH_DONATION));
+        assert_eq!(
+            parsed.donation_address(),
+            Some(&bitcoin_cash_donation_address(BitcoinCashNetwork::Chipnet))
+        );
+    }
+
+    #[test]
+    fn bitcoin_cash_rejects_another_donation_address() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.chain = Chain::BitcoinCash;
+        config.bitcoin_cash_network = Some(BitcoinCashNetwork::Chipnet);
+        config.bootstrap_address = CHIPNET_BOOTSTRAP.to_string();
+        config.donation_address = Some(CHIPNET_BOOTSTRAP.to_string());
+        config.donation = Some(150);
+        let error = config.parse().unwrap_err();
+        assert!(
+            error
+                .message
+                .contains("donation_address on bitcoin-cash is fixed"),
+            "unexpected message: {}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn bitcoin_cash_pays_an_operator_fee_beside_the_donation() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.chain = Chain::BitcoinCash;
+        config.bitcoin_cash_network = Some(BitcoinCashNetwork::Chipnet);
+        config.bootstrap_address = CHIPNET_BOOTSTRAP.to_string();
+        config.fee_address = Some(CHIPNET_BOOTSTRAP.to_string());
+        config.fee = Some(100);
+        let parsed = config.parse().unwrap();
+        assert_eq!(parsed.donation, Some(DEFAULT_BITCOIN_CASH_DONATION));
+        assert_eq!(parsed.fee, Some(100));
+        assert!(parsed.fee_address().is_some());
+    }
+
+    #[test]
+    fn bitcoin_cash_accepts_cuts_at_the_share_chain_cap() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.chain = Chain::BitcoinCash;
+        config.bitcoin_cash_network = Some(BitcoinCashNetwork::Chipnet);
+        config.bootstrap_address = CHIPNET_BOOTSTRAP.to_string();
+        config.fee_address = Some(CHIPNET_BOOTSTRAP.to_string());
+        config.fee = Some(MAX_BITCOIN_CASH_POOL_CUT - DEFAULT_BITCOIN_CASH_DONATION);
+        assert!(config.parse().is_ok());
+    }
+
+    #[test]
+    fn bitcoin_cash_rejects_cuts_above_the_share_chain_cap() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.chain = Chain::BitcoinCash;
+        config.bitcoin_cash_network = Some(BitcoinCashNetwork::Chipnet);
+        config.bootstrap_address = CHIPNET_BOOTSTRAP.to_string();
+        config.fee_address = Some(CHIPNET_BOOTSTRAP.to_string());
+        config.fee = Some(MAX_BITCOIN_CASH_POOL_CUT - DEFAULT_BITCOIN_CASH_DONATION + 1);
+        let error = config.parse().unwrap_err();
+        assert!(
+            error.message.contains("must be at most 1000 basis points"),
+            "unexpected message: {}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn bitcoin_cash_fee_may_use_the_whole_cap_when_the_donation_is_off() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.chain = Chain::BitcoinCash;
+        config.bitcoin_cash_network = Some(BitcoinCashNetwork::Chipnet);
+        config.bootstrap_address = CHIPNET_BOOTSTRAP.to_string();
+        config.donation = Some(0);
+        config.fee_address = Some(CHIPNET_BOOTSTRAP.to_string());
+        config.fee = Some(MAX_BITCOIN_CASH_POOL_CUT);
+        let parsed = config.parse().unwrap();
+        assert_eq!(parsed.donation, None);
+        assert_eq!(parsed.fee, Some(MAX_BITCOIN_CASH_POOL_CUT));
+    }
+
+    #[test]
+    fn bitcoin_has_no_default_donation() {
+        let parsed = StratumConfig::<Raw>::new_for_test_default()
+            .parse()
+            .unwrap();
+        assert_eq!(parsed.donation, None);
+        assert!(parsed.donation_address().is_none());
+    }
+
+    #[test]
+    fn bitcoin_rejects_a_donation_above_one_hundred_percent() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.donation_address = Some("tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string());
+        config.donation = Some(MAX_BASIS_POINTS + 1);
+        let error = config.parse().unwrap_err();
+        assert!(
+            error.message.contains("must each be at most 10000"),
+            "unexpected message: {}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn bitcoin_rejects_a_fee_above_one_hundred_percent() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.fee_address = Some("tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string());
+        config.fee = Some(MAX_BASIS_POINTS + 1);
+        let error = config.parse().unwrap_err();
+        assert!(
+            error.message.contains("must each be at most 10000"),
+            "unexpected message: {}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn bitcoin_still_accepts_a_full_donation() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.donation_address = Some("tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string());
+        config.donation = Some(MAX_BASIS_POINTS);
+        assert_eq!(config.parse().unwrap().donation, Some(MAX_BASIS_POINTS));
     }
 }
 

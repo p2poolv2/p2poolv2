@@ -11,9 +11,9 @@
 use super::sort_ctor;
 use crate::shares::merge_mining::MergeMiningCommitment;
 use binary_sv2::{B064K, B0255, Deserialize, Seq064K, Str0255};
-use bitcoin::Transaction;
-use bitcoin::consensus::deserialize;
+use bitcoin::consensus::{deserialize, serialize};
 use bitcoin::hashes::Hash;
+use bitcoin::{Transaction, TxOut};
 use codec_sv2::{Decoded, Decoder, Encoder};
 use common_messages_sv2::{
     MESSAGE_TYPE_SETUP_CONNECTION, MESSAGE_TYPE_SETUP_CONNECTION_ERROR,
@@ -141,6 +141,11 @@ pub struct Sv2Connection {
     inbox: Vec<u8>,
     mode: Option<JobDeclarationMode>,
     mining: bool,
+    /// Full-Template declarations made on this connection that still wait
+    /// for `ProvideMissingTransactionsSuccess`, by the client's request id.
+    /// Request ids are chosen by each client, so two connections can use the
+    /// same one; the token is looked up here, never across the registry.
+    pending_declarations: HashMap<u32, Vec<u8>>,
 }
 
 impl Sv2Connection {
@@ -153,6 +158,7 @@ impl Sv2Connection {
             inbox: Vec::new(),
             mode: None,
             mining: false,
+            pending_declarations: HashMap::with_capacity(4),
         }
     }
 
@@ -291,16 +297,16 @@ impl Sv2Connection {
         registry
             .tokens
             .insert(token.clone(), TokenState::Open { mode });
-        let output_bytes = registry
+        let coinbase_outputs = registry
             .merge_mining
-            .map(MergeMiningCommitment::output_bytes)
-            .unwrap_or_default();
+            .map(MergeMiningCommitment::coinbase_outputs_bytes)
+            .unwrap_or_else(empty_output_list);
         drop(registry);
         self.respond(
             AllocateMiningJobTokenSuccess {
                 request_id,
                 mining_job_token: bytes_255(&token)?,
-                coinbase_outputs: bytes_field(&output_bytes)?,
+                coinbase_outputs: bytes_field(&coinbase_outputs)?,
             },
             MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN_SUCCESS,
         )
@@ -308,6 +314,12 @@ impl Sv2Connection {
 
     fn on_declare(&mut self, request: &DeclareMiningJob) -> Result<Vec<Vec<u8>>, String> {
         if self.mode != Some(JobDeclarationMode::FullTemplate) {
+            return self.declare_error(
+                request.request_id,
+                ERROR_CODE_DECLARE_MINING_JOB_INVALID_JOB,
+            );
+        }
+        if self.pending_declarations.contains_key(&request.request_id) {
             return self.declare_error(
                 request.request_id,
                 ERROR_CODE_DECLARE_MINING_JOB_INVALID_JOB,
@@ -344,13 +356,14 @@ impl Sv2Connection {
             })
             .collect::<Result<Vec<_>, String>>()?;
         registry.tokens.insert(
-            token,
+            token.clone(),
             TokenState::AwaitingTransactions {
                 request_id: request.request_id,
                 wtxids,
             },
         );
         drop(registry);
+        self.pending_declarations.insert(request.request_id, token);
         self.respond(
             ProvideMissingTransactions {
                 request_id: request.request_id,
@@ -365,20 +378,18 @@ impl Sv2Connection {
         &mut self,
         request: &ProvideMissingTransactionsSuccess,
     ) -> Result<Vec<Vec<u8>>, String> {
+        let token = self
+            .pending_declarations
+            .remove(&request.request_id)
+            .ok_or("transactions arrived with no open declaration")?;
         let mut registry = self.registry.lock().expect("job registry lock");
-        let awaiting = registry
-            .tokens
-            .iter()
-            .find_map(|(token, state)| match state {
-                TokenState::AwaitingTransactions { request_id, wtxids }
-                    if *request_id == request.request_id =>
-                {
-                    Some((token.clone(), wtxids.clone()))
-                }
-                _ => None,
-            });
-        let Some((token, wtxids)) = awaiting else {
-            return Err("transactions arrived with no open declaration".to_string());
+        let wtxids = match registry.tokens.get(&token) {
+            Some(TokenState::AwaitingTransactions { request_id, wtxids })
+                if *request_id == request.request_id =>
+            {
+                wtxids.clone()
+            }
+            _ => return Err("transactions arrived with no open declaration".to_string()),
         };
         if request.transaction_list.len() != wtxids.len() {
             return Err("transaction list length does not match the declaration".to_string());
@@ -495,6 +506,11 @@ fn bytes_field(value: &[u8]) -> Result<B064K<'_>, String> {
 
 fn bytes_255(value: &[u8]) -> Result<B0255<'_>, String> {
     B0255::new(value).map_err(|error| error.to_string())
+}
+
+/// A CompactSize-prefixed output list with no outputs: the single byte zero.
+fn empty_output_list() -> Vec<u8> {
+    serialize(&Vec::<TxOut>::with_capacity(0))
 }
 
 /// Encode `message` as one unencrypted Stratum V2 frame.
@@ -623,7 +639,8 @@ mod tests {
         assert_eq!(allocate.len(), 1);
         let mut payload = response_payload(&allocate[0]);
         let allocated = AllocateMiningJobTokenSuccess::from_bytes(&mut payload).unwrap();
-        assert!(!allocated.coinbase_outputs.as_bytes().is_empty());
+        let outputs: Vec<TxOut> = deserialize(allocated.coinbase_outputs.as_bytes()).unwrap();
+        assert_eq!(outputs, vec![MergeMiningCommitment::reserved().output()]);
         let token = allocated.mining_job_token.as_bytes().to_vec();
 
         let first = transaction_with_lock(1);
@@ -683,6 +700,226 @@ mod tests {
         sort_ctor(&mut expected);
         assert_eq!(stored, expected);
         assert_ne!(stored[0].lock_time, declared_first);
+    }
+
+    #[test]
+    fn two_connections_reusing_a_request_id_keep_their_own_transactions() {
+        let shared = registry();
+        let mut first_connection = Sv2Connection::new(Arc::clone(&shared));
+        let mut second_connection = Sv2Connection::new(Arc::clone(&shared));
+        accept_message(
+            &mut first_connection,
+            setup(1, Protocol::JobDeclarationProtocol),
+            MESSAGE_TYPE_SETUP_CONNECTION,
+        );
+        accept_message(
+            &mut second_connection,
+            setup(1, Protocol::JobDeclarationProtocol),
+            MESSAGE_TYPE_SETUP_CONNECTION,
+        );
+        let first_allocate = accept_message(
+            &mut first_connection,
+            AllocateMiningJobToken {
+                user_identifier: "first".try_into().unwrap(),
+                request_id: 1,
+            },
+            MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN,
+        );
+        let second_allocate = accept_message(
+            &mut second_connection,
+            AllocateMiningJobToken {
+                user_identifier: "second".try_into().unwrap(),
+                request_id: 1,
+            },
+            MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN,
+        );
+        let mut first_payload = response_payload(&first_allocate[0]);
+        let first_token = AllocateMiningJobTokenSuccess::from_bytes(&mut first_payload)
+            .unwrap()
+            .mining_job_token
+            .as_bytes()
+            .to_vec();
+        let mut second_payload = response_payload(&second_allocate[0]);
+        let second_token = AllocateMiningJobTokenSuccess::from_bytes(&mut second_payload)
+            .unwrap()
+            .mining_job_token
+            .as_bytes()
+            .to_vec();
+
+        let first_transaction = transaction_with_lock(1);
+        let second_transaction = transaction_with_lock(2);
+        let first_wtxid = first_transaction.compute_wtxid().to_byte_array();
+        let second_wtxid = second_transaction.compute_wtxid().to_byte_array();
+        accept_message(
+            &mut first_connection,
+            DeclareMiningJob {
+                request_id: 1,
+                mining_job_token: B0255::new(&first_token).unwrap(),
+                version: 1,
+                coinbase_tx_prefix: B064K::new(&[]).unwrap(),
+                coinbase_tx_suffix: B064K::new(&[]).unwrap(),
+                wtxid_list: Seq064K::new(vec![U256::new(first_wtxid.as_slice()).unwrap()]).unwrap(),
+                excess_data: B064K::new(&[]).unwrap(),
+            },
+            MESSAGE_TYPE_DECLARE_MINING_JOB,
+        );
+        accept_message(
+            &mut second_connection,
+            DeclareMiningJob {
+                request_id: 1,
+                mining_job_token: B0255::new(&second_token).unwrap(),
+                version: 1,
+                coinbase_tx_prefix: B064K::new(&[]).unwrap(),
+                coinbase_tx_suffix: B064K::new(&[]).unwrap(),
+                wtxid_list: Seq064K::new(vec![U256::new(second_wtxid.as_slice()).unwrap()])
+                    .unwrap(),
+                excess_data: B064K::new(&[]).unwrap(),
+            },
+            MESSAGE_TYPE_DECLARE_MINING_JOB,
+        );
+
+        let second_serialized = serialize(&second_transaction);
+        let second_success = accept_message(
+            &mut second_connection,
+            ProvideMissingTransactionsSuccess {
+                request_id: 1,
+                transaction_list: Seq064K::new(vec![
+                    B016M::new(second_serialized.as_slice()).unwrap(),
+                ])
+                .unwrap(),
+            },
+            MESSAGE_TYPE_PROVIDE_MISSING_TRANSACTIONS_SUCCESS,
+        );
+        let first_serialized = serialize(&first_transaction);
+        let first_success = accept_message(
+            &mut first_connection,
+            ProvideMissingTransactionsSuccess {
+                request_id: 1,
+                transaction_list: Seq064K::new(vec![
+                    B016M::new(first_serialized.as_slice()).unwrap(),
+                ])
+                .unwrap(),
+            },
+            MESSAGE_TYPE_PROVIDE_MISSING_TRANSACTIONS_SUCCESS,
+        );
+
+        let mut second_success_payload = response_payload(&second_success[0]);
+        let second_ready = DeclareMiningJobSuccess::from_bytes(&mut second_success_payload)
+            .unwrap()
+            .new_mining_job_token
+            .as_bytes()
+            .to_vec();
+        let mut first_success_payload = response_payload(&first_success[0]);
+        let first_ready = DeclareMiningJobSuccess::from_bytes(&mut first_success_payload)
+            .unwrap()
+            .new_mining_job_token
+            .as_bytes()
+            .to_vec();
+        let registry = shared.lock().unwrap();
+        assert_eq!(
+            registry.transactions_for_token(&first_ready).unwrap(),
+            vec![first_transaction]
+        );
+        assert_eq!(
+            registry.transactions_for_token(&second_ready).unwrap(),
+            vec![second_transaction]
+        );
+    }
+
+    #[test]
+    fn a_second_declaration_with_a_pending_request_id_is_rejected() {
+        let mut connection = Sv2Connection::new(registry());
+        accept_message(
+            &mut connection,
+            setup(1, Protocol::JobDeclarationProtocol),
+            MESSAGE_TYPE_SETUP_CONNECTION,
+        );
+        let first_allocate = accept_message(
+            &mut connection,
+            AllocateMiningJobToken {
+                user_identifier: "miner".try_into().unwrap(),
+                request_id: 1,
+            },
+            MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN,
+        );
+        let second_allocate = accept_message(
+            &mut connection,
+            AllocateMiningJobToken {
+                user_identifier: "miner".try_into().unwrap(),
+                request_id: 2,
+            },
+            MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN,
+        );
+        let mut first_payload = response_payload(&first_allocate[0]);
+        let first_token = AllocateMiningJobTokenSuccess::from_bytes(&mut first_payload)
+            .unwrap()
+            .mining_job_token
+            .as_bytes()
+            .to_vec();
+        let mut second_payload = response_payload(&second_allocate[0]);
+        let second_token = AllocateMiningJobTokenSuccess::from_bytes(&mut second_payload)
+            .unwrap()
+            .mining_job_token
+            .as_bytes()
+            .to_vec();
+        accept_message(
+            &mut connection,
+            DeclareMiningJob {
+                request_id: 5,
+                mining_job_token: B0255::new(&first_token).unwrap(),
+                version: 1,
+                coinbase_tx_prefix: B064K::new(&[]).unwrap(),
+                coinbase_tx_suffix: B064K::new(&[]).unwrap(),
+                wtxid_list: Seq064K::new(vec![]).unwrap(),
+                excess_data: B064K::new(&[]).unwrap(),
+            },
+            MESSAGE_TYPE_DECLARE_MINING_JOB,
+        );
+        let rejected = accept_message(
+            &mut connection,
+            DeclareMiningJob {
+                request_id: 5,
+                mining_job_token: B0255::new(&second_token).unwrap(),
+                version: 1,
+                coinbase_tx_prefix: B064K::new(&[]).unwrap(),
+                coinbase_tx_suffix: B064K::new(&[]).unwrap(),
+                wtxid_list: Seq064K::new(vec![]).unwrap(),
+                excess_data: B064K::new(&[]).unwrap(),
+            },
+            MESSAGE_TYPE_DECLARE_MINING_JOB,
+        );
+        let mut error_payload = response_payload(&rejected[0]);
+        let error = DeclareMiningJobError::from_bytes(&mut error_payload).unwrap();
+        assert_eq!(
+            error.error_code.as_utf8_or_hex(),
+            ERROR_CODE_DECLARE_MINING_JOB_INVALID_JOB
+        );
+    }
+
+    #[test]
+    fn bitcoin_tokens_carry_an_empty_output_list() {
+        let shared = Arc::new(Mutex::new(JobRegistry::new(
+            PoolTransactionCache::new(),
+            None,
+        )));
+        let mut connection = Sv2Connection::new(shared);
+        accept_message(
+            &mut connection,
+            setup(0, Protocol::JobDeclarationProtocol),
+            MESSAGE_TYPE_SETUP_CONNECTION,
+        );
+        let allocate = accept_message(
+            &mut connection,
+            AllocateMiningJobToken {
+                user_identifier: "miner".try_into().unwrap(),
+                request_id: 1,
+            },
+            MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN,
+        );
+        let mut payload = response_payload(&allocate[0]);
+        let allocated = AllocateMiningJobTokenSuccess::from_bytes(&mut payload).unwrap();
+        let outputs: Vec<TxOut> = deserialize(allocated.coinbase_outputs.as_bytes()).unwrap();
+        assert!(outputs.is_empty());
     }
 
     fn ctor_is_reversed(first: &Transaction, second: &Transaction) -> bool {

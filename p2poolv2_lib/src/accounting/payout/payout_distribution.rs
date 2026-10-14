@@ -86,7 +86,12 @@ pub trait PayoutDistribution {
     }
 }
 
-/// Appends new output pair to distribution and returns remaining amount
+/// Appends new output pair to distribution and returns remaining amount.
+///
+/// A cut above 10,000 basis points would take more than `total_amount`; it is
+/// skipped with a warning instead of underflowing. Config parsing and share
+/// validation both reject such a cut first, so this only guards a caller
+/// that bypassed them, such as a header decoded from a peer.
 pub(crate) fn include_address_and_cut(
     distribution: &mut Vec<OutputPair>,
     total_amount: bitcoin::Amount,
@@ -97,11 +102,16 @@ pub(crate) fn include_address_and_cut(
     if let (Some(addr), Some(cut_bp)) = (address.as_ref(), cut.filter(|c| *c > 0)) {
         if let Some(amount) = total_amount.checked_mul(cut_bp.into()) {
             if let Some(div_amount) = amount.checked_div(BASIS_POINT_FACTOR) {
-                distribution.push(OutputPair {
-                    address: addr.clone(),
-                    amount: div_amount,
-                });
-                return total_amount - div_amount;
+                if let Some(remaining) = total_amount.checked_sub(div_amount) {
+                    distribution.push(OutputPair {
+                        address: addr.clone(),
+                        amount: div_amount,
+                    });
+                    return remaining;
+                }
+                tracing::warn!(
+                    "cut of {cut_bp} basis points exceeds total_amount: {total_amount:?}"
+                );
             } else {
                 tracing::warn!("checked_div failed for amount: {amount:?}");
             }
@@ -163,6 +173,34 @@ pub(crate) fn append_proportional_distribution(
 mod tests {
     use super::*;
     use crate::test_utils::parse_address_from_string;
+
+    #[test]
+    fn a_cut_above_one_hundred_percent_is_skipped_instead_of_underflowing() {
+        let address = parse_address_from_string("bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq");
+        let mut distribution = Vec::with_capacity(1);
+        let remaining = include_address_and_cut(
+            &mut distribution,
+            bitcoin::Amount::from_sat(100_000),
+            &Some(address),
+            Some(10_001),
+        );
+        assert_eq!(remaining, bitcoin::Amount::from_sat(100_000));
+        assert!(distribution.is_empty());
+    }
+
+    #[test]
+    fn a_full_cut_takes_everything() {
+        let address = parse_address_from_string("bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq");
+        let mut distribution = Vec::with_capacity(1);
+        let remaining = include_address_and_cut(
+            &mut distribution,
+            bitcoin::Amount::from_sat(100_000),
+            &Some(address),
+            Some(10_000),
+        );
+        assert_eq!(remaining, bitcoin::Amount::ZERO);
+        assert_eq!(distribution[0].amount, bitcoin::Amount::from_sat(100_000));
+    }
 
     #[test]
     fn test_create_proportional_distribution() {

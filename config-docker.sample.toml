@@ -49,11 +49,22 @@ solo_address = "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk"
 # miner_address = "sp2pool1..."
 # The bitcoin address to use for first jobs when there are no shares
 bootstrap_address = "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk"
-# Any donation amount for developers to be sent to donation address. Default no donation.
+# Any donation amount for developers to be sent to donation address.
+# On Bitcoin the default is no donation, and both fields must be set together.
+# On Bitcoin Cash (chain = "bitcoin-cash") the donation goes to the built-in
+# P2Poolv2 address bitcoincash:qze95tc2dqrnltvxfa5yhunwx5952f34fvw4g6365k
+# (same key under bchtest: and bchreg:), and the default is 150 basis points
+# (1.5%) of each block this node finds. Set donation to raise or lower it, or
+# to 0 to opt out. donation_address may be left out there; if set it must be
+# that same address, because the share chain rejects a Bitcoin Cash donation
+# paid anywhere else.
 # donation_address = "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk"
-# In basis points, 1% = 100 basis points. Default 0
+# In basis points, 1% = 100 basis points. Default 0 on Bitcoin, 150 on Bitcoin Cash
 # donation = 0
 # Any fee amount for node/hydrapool provider to be sent to fee address. Default no fee.
+# This is where a public pool operator takes their own cut. It is taken after
+# the donation. On Bitcoin Cash, donation plus fee may not exceed 1000 basis
+# points (10%); peers reject shares above that.
 # fee_address = "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk"
 # In basis points, 1% = 100 basis points. Default 0
 # fee = 0
@@ -72,6 +83,7 @@ zmqpubhashblock = "tcp://bitcoind:28332"
 # Local frames are unencrypted. Bitcoin Cash jobs include one AuxPoW output.
 # sv2_port = 3336
 # The share-chain network can be "main", "testnet4" or "signet"
+# On Bitcoin Cash it is ignored and derived from bitcoin_cash_network.
 network = "signet"
 # Use BIP 323 mask for version rolling (see https://github.com/bitcoin/bips/blob/622e47722cd35514e96da37ae89f868e18d581e4/bip-0323.mediawiki#specification)
 version_mask = "1fffffe0"

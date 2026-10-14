@@ -4,6 +4,7 @@
 
 pub mod address;
 pub mod api_client;
+pub mod bch_share_address;
 pub mod blocked_ips;
 pub mod candidates;
 pub mod chain_info;
@@ -30,7 +31,7 @@ use std::path::Path;
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 pub struct Cli {
-    /// Path to p2poolv2 config file (not required for address, gen-auth or --db-path commands)
+    /// Path to p2poolv2 config file (not required for address, bch-share-address, gen-auth or --db-path commands)
     #[arg(short, long, env("P2POOL_CONFIG"), global = true)]
     pub config: Option<String>,
 
@@ -141,6 +142,19 @@ pub enum Commands {
         #[arg(short, long, value_parser = commands::address::parse_network)]
         network: Network,
     },
+    /// Print the Bitcoin Cash share chain address for a P2PKH CashAddr
+    ///
+    /// Takes a regular receiving address (q...) from the wallet whose key
+    /// should own your shares, and prints it under the share prefix
+    /// (p2pool:, tp2pool: or rp2pool:). Reads it from stdin when no argument
+    /// is given. Use it for `[stratum] miner_address` or a miner's `p2p=`.
+    BchShareAddress {
+        /// P2PKH CashAddr, with its prefix. Omit to read it from stdin.
+        cash_address: Option<String>,
+        /// Bitcoin Cash network: mainnet, chipnet or regtest
+        #[arg(short, long, value_parser = commands::bch_share_address::parse_network)]
+        network: BitcoinCashNetwork,
+    },
     /// Generate API authentication credentials (salt, password, HMAC)
     GenAuth {
         /// Username for API authentication
@@ -197,6 +211,12 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
             network,
         }) => {
             commands::address::execute(witness_program.clone(), *network)?;
+        }
+        Some(Commands::BchShareAddress {
+            cash_address,
+            network,
+        }) => {
+            commands::bch_share_address::execute(cash_address.clone(), *network)?;
         }
         Some(Commands::GenAuth { username, password }) => {
             commands::gen_auth::execute(username.clone(), password.clone())?;

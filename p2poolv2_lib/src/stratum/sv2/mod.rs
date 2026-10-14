@@ -17,7 +17,7 @@
 mod server;
 mod session;
 
-pub use server::serve;
+pub use server::{bind, serve};
 pub use session::{JobDeclarationMode, JobRegistry, PoolTransactionCache, Sv2Connection};
 
 use bitcoin::Transaction;

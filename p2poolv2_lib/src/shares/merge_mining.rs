@@ -59,10 +59,15 @@ impl MergeMiningCommitment {
         }
     }
 
-    /// Consensus encoding of [`Self::output`], for a Job Declaration token.
-    pub fn output_bytes(self) -> Vec<u8> {
+    /// Output list carrying [`Self::output`], for a Job Declaration token.
+    ///
+    /// The Stratum V2 Job Declaration specification defines
+    /// `AllocateMiningJobToken.Success.coinbase_tx_outputs` as a
+    /// CompactSize-prefixed array of consensus-serialized outputs, so the
+    /// bytes are the one-element list, count first.
+    pub fn coinbase_outputs_bytes(self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(64);
-        self.output()
+        vec![self.output()]
             .consensus_encode(&mut bytes)
             .expect("a vector writer does not fail");
         bytes
@@ -79,6 +84,7 @@ fn commitment_script(payload: [u8; AUXPOW_COMMITMENT_LENGTH]) -> ScriptBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bitcoin::consensus::deserialize;
 
     #[test]
     fn reserved_commitment_is_the_published_auxpow_layout() {
@@ -92,5 +98,13 @@ mod tests {
         assert_eq!(&script[38..42], &0u32.to_le_bytes());
         assert_eq!(&script[42..46], &0u32.to_le_bytes());
         assert_eq!(script.len(), 46);
+    }
+
+    #[test]
+    fn coinbase_outputs_bytes_decode_as_a_one_output_list() {
+        let bytes = MergeMiningCommitment::reserved().coinbase_outputs_bytes();
+        assert_eq!(bytes[0], 1);
+        let outputs: Vec<TxOut> = deserialize(&bytes).unwrap();
+        assert_eq!(outputs, vec![MergeMiningCommitment::reserved().output()]);
     }
 }
