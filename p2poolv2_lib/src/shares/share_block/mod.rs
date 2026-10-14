@@ -671,7 +671,9 @@ mod tests {
     use crate::accounting::payout::payout_distribution::{
         append_proportional_distribution, include_address_and_cut,
     };
-    use crate::accounting::payout::sharechain_pplns::pplns_window::PPLNS_WINDOW_SHARES;
+    use crate::accounting::payout::sharechain_pplns::pplns_window::{
+        COINBASE_MATURITY, PPLNS_WINDOW_SHARES,
+    };
     use crate::shares::share_commitment::ShareCommitment;
     use crate::shares::transactions::coinbase::compute_witness_root;
     use crate::stratum::work::coinbase::{
@@ -938,15 +940,24 @@ mod tests {
         let difficulty_scale: u128 = 10;
 
         // Build PPLNS distribution matching the production PplnsWindow logic:
-        // the last PPLNS_WINDOW_SHARES shares below the block, each weighted by
-        // its share chain difficulty (from header.bits). The fixture chain is
-        // shorter than the window, so every prior share is paid.
+        // skip the shares below the block that are not yet mature for it, then
+        // pay the next PPLNS_WINDOW_SHARES shares, each weighted by its share
+        // chain difficulty (from header.bits). The fixture chain is shorter than
+        // COINBASE_MATURITY, so its shares are all always mature and every
+        // prior share is paid.
         for (index, block) in blocks.iter().enumerate().skip(1) {
             let header = &block.header;
 
+            // The block at fixture index `index` is at share chain height `index`.
+            let immature_share_count =
+                (COINBASE_MATURITY - 1).min(index.saturating_sub(COINBASE_MATURITY));
             let mut address_difficulty_map: HashMap<bitcoin::Address, u128> =
                 HashMap::with_capacity(4);
-            for prior_index in (0..index).rev().take(PPLNS_WINDOW_SHARES) {
+            for prior_index in (0..index)
+                .rev()
+                .skip(immature_share_count)
+                .take(PPLNS_WINDOW_SHARES)
+            {
                 let prior_header = &blocks[prior_index].header;
                 let share_difficulty = prior_header.get_difficulty(network);
                 *address_difficulty_map
