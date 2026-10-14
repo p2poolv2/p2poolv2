@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- A found block's coinbase now pays only shares that are mature for it. The
+  PPLNS walk skips the shares less than `COINBASE_MATURITY` (6,048) below the
+  paying share, the same depth spending a share coinbase needs, then pays the
+  next `PPLNS_WINDOW_SHARES`. The first `COINBASE_MATURITY` shares of the chain
+  are always mature for payout, so a young chain pays its shares and the paid
+  set never shrinks; spending them still needs the full depth. This is a
+  consensus change and needs a chain reset.
+- Share chain outputs now expire at `PAYOUT_DEPTH` (`COINBASE_MATURITY +
+  PPLNS_WINDOW_SHARES`, 127,008) instead of `PPLNS_WINDOW_SHARES`, so an output
+  stays spendable for a full window after it matures. This is a consensus
+  change.
+- The full-validation zone, the PPLNS window cache and `PRUNE_DEPTH` grow with
+  the maturity skip: the zone is `PAYOUT_DEPTH`, the cache holds
+  `PAYOUT_DEPTH` plus its 1% buffer, and `PRUNE_DEPTH` is `2 * PAYOUT_DEPTH`
+  (254,016). Nodes retain about 5% more block bodies. No store migration is
+  needed.
+
+### Added
+
+- `docs/architecture/payout-distribution.md` describes the whole payout
+  scheme, including the maturity window.
+
 ## [v0.15.3] - 2026-09-21
 
 ### Changed

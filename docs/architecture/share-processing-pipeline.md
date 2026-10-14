@@ -172,8 +172,8 @@ and `collect_spent_outputs` would fail on a block that is perfectly valid.
 
 Blocks below `prune_height` are exempt because their bodies are never fetched;
 requiring one would stall the chain permanently at the boundary. Spends cannot
-reach below it either: `min_coinbase_root_height` caps them one window back
-(`PPLNS_WINDOW_SHARES`) while bodies are retained for two (`PRUNE_DEPTH`).
+reach below it either: `min_coinbase_root_height` caps them one payout depth
+back (`PAYOUT_DEPTH`) while bodies are retained for two (`PRUNE_DEPTH`).
 
 ### OrganiseEvent::InvalidBlock(BlockHash)
 - **Purpose**: Record that a block failed pre-context validation
@@ -390,7 +390,7 @@ Two of the prevout rules -- is the spent output's source on the confirmed chain,
 and is the output already spent -- are answered relative to whichever branch this
 node has confirmed, and a reorg changes both answers. `validate_prevouts` at
 ingest therefore does not judge them at all; it enforces only what the block
-itself fixes (the output exists, its coinbase root is within the payout window,
+itself fixes (the output exists, its coinbase root is within `PAYOUT_DEPTH`,
 a coinbase output is mature at this block's height, and no output is spent twice
 within the block), so its verdicts stay true under any reorg. Deciding the other
 two at ingest would mark a fork block `Invalid` for spending an output the
@@ -483,7 +483,7 @@ block that failed without a verdict").
 
 ### PPLNS zone tiering
 
-`is_in_pplns_zone(H, tip) = H > tip - PPLNS_WINDOW_SHARES` splits blocks
+`is_in_pplns_zone(H, tip) = H > tip - PAYOUT_DEPTH` splits blocks
 into two tiers, and `check_pplns_zone` is called independently by the
 validation worker (choosing full content validation vs PoW-only) and by the
 organise worker (choosing whether `validate_with_chain_context` runs).
@@ -502,7 +502,7 @@ it.
 sound.** The PPLNS window credits each share by the miner *bitcoin* address
 and difficulty in its *header*, which PoW validation already covers. A share's
 coinbase only matters if that share won a bitcoin block, and a block more than
-one window (~14 days at one share per 10s) below the tip has long since had any
+one payout depth (~14.7 days at one share per 10s) below the tip has long since had any
 such block settled on the bitcoin chain. This is the same trade as Bitcoin
 Core's `assumevalid`: old blocks are accepted on accumulated work rather than
 re-verified.
@@ -510,8 +510,8 @@ re-verified.
 **Because the tip moves between the two reads, a block can change tier
 mid-flight.** Exposure is `gap / 10s` per boundary block, where `gap` is the
 stage-1 to stage-2 latency. In steady state it is zero -- blocks are validated
-at `H ~ candidate_tip`, a full window above the boundary. It is systematic only
-for a node chronically ~1 window behind and syncing at roughly the network
+at `H ~ candidate_tip`, a full payout depth above the boundary. It is systematic only
+for a node chronically ~1 payout depth behind and syncing at roughly the network
 rate, whose frontier sits on the boundary. The organise channel bounds that
 gap: it is deliberately shallow (512) so a queued block waits behind at most a
 few hundred others rather than thousands.
@@ -543,10 +543,13 @@ Chain-context validation (`validate_bitcoin_payout` in
 window and checks it against the share's bitcoin merkle root. Success is what
 transitions a block from `HeaderValid` to `BlockValid`.
 
-The window is the last `PPLNS_WINDOW_SHARES` (120,960) shares, each weighted by
-its share difficulty: a fixed share count, about two weeks at the 10 s share
-target, with no node-local setting and no bitcoin difficulty in it. Every node
-must pay the same window, so it is a network constant rather than config.
+The distribution is the one described in `payout-distribution.md`: skip the
+shares not yet mature for the paying share (`COINBASE_MATURITY`, with the first
+`COINBASE_MATURITY` shares of the chain always mature), then pay the next
+`PPLNS_WINDOW_SHARES` (120,960) shares, each weighted by its share difficulty.
+Both counts are fixed share counts with no node-local setting and no bitcoin
+difficulty in them. Every node must pay the same window, so they are network
+constants rather than config.
 
 The window is anchored on the share's declared `prev_share_blockhash`, not the
 live confirmed tip, via `PplnsWindow::get_distribution_from_start_hash`. The
@@ -562,8 +565,8 @@ Resolving the window walks parent pointers back to a confirmed ancestor and:
   parent-gated, not because the walk itself checks;
 - returns an `Err` -- rather than a bootstrap or empty distribution -- on a
   store failure or an unresolvable anchor, so a transient read error cannot
-  silently misdirect the reward. The producer pays the bootstrap address only
-  for the explicit empty/genesis case (`PplnsWindow::is_empty`).
+  silently misdirect the reward. An empty window is an error too: the share
+  chain mode never pays the node-local bootstrap address.
 
 ### Header proof-of-work binding
 
@@ -669,7 +672,7 @@ it to a stricter standard than the block itself. Tiering it is also what keeps
 this in step with the BlockReceiver's admission gate, which exempts uncles below
 `prune_height` because those bodies are never fetched: an uncle sits at most
 `MAX_UNCLES_DEPTH` below its nephew, so a nephew with an exempt uncle is a full
-window below the zone boundary and never reaches the check. Requiring the body
+payout depth below the zone boundary and never reaches the check. Requiring the body
 in both tiers left such a block admitted, stored, and permanently
 unvalidatable. An earlier rule -- "an uncle must not be on the confirmed
 chain" -- was removed for exactly this reason after it deadlocked nodes in the

@@ -162,7 +162,8 @@ work, since validators would have to accept coinbases built either way.
 ### Why every node must know the same headers
 
 To check `S`'s coinbase, a node must place every bitcoin prev in the
-window, about 14 days of them, relative to `btc_prev(S)`, including
+window, about 14 days of them starting about 17 hours back (the maturity
+skip), relative to `btc_prev(S)`, including
 blocks that lost orphan races.
 
 The local bitcoind cannot supply that consistently. Bitcoin Core
@@ -284,11 +285,11 @@ remove the local difficulty code, but bitcoind's verdict on a header
 depends on what it has seen (it rejects headers below a block it found
 invalid), so nodes could disagree on acceptance.
 
-**Retention.** Payout checks place bitcoin prevs about 14 days back from
-the paying share, and nodes validate shares up to `PRUNE_DEPTH` (about 28
-days) deep. So the store keeps headers for at least the window plus
-`PRUNE_DEPTH` plus one retarget period: roughly six weeks, about 6,000
-headers.
+**Retention.** Payout checks place bitcoin prevs up to `PAYOUT_DEPTH`
+(about 14.7 days) back from the paying share, and nodes validate shares up
+to `PRUNE_DEPTH` (about 29.4 days) deep. So the store keeps headers for at
+least `PAYOUT_DEPTH` plus `PRUNE_DEPTH` plus one retarget period: about
+44 days of blocks (6,350 headers) plus 2,016, roughly 8,400 headers.
 
 **Eligible set.** Eligibility for `S` changes only when `btc_prev(S)`
 changes, about every 10 minutes. Compute the set of eligible bitcoin
@@ -369,15 +370,18 @@ If nothing in its window is eligible, the job builder stops the node (see
 
 ### The window
 
-- The window is the last `PPLNS_WINDOW_SHARES` (120,960) shares, counted
-  back from the anchor, the paying share's parent. Each share is weighted
-  by its difficulty and uses one slot (`accumulate_candidate_difficulty`,
-  `accumulate_confirmed_difficulty`).
+- Counting back from the anchor, the paying share's parent, the walk
+  first skips the shares not yet mature for the paying share, then takes
+  `PPLNS_WINDOW_SHARES` (120,960) shares (`accumulate_window_difficulty`).
+  The first `COINBASE_MATURITY` shares of the chain are always mature.
+  `payout-distribution.md` has the full rule. Each share is weighted by
+  its difficulty and uses one slot.
 - Uncles use no slots. An uncle's miner gets 9/10 of the uncle's
   difficulty, and the nephew's miner a 1/10 bonus (`add_entry_difficulty`).
-- The cache holds the window plus a 1% buffer (`cache_capacity`, about
-  122,000 entries). An anchor too deep for the buffer gives
-  `InsufficientEntries`, and the share is dropped as `Unresolvable`.
+- The cache holds the maturity skip and the window plus a 1% buffer of
+  the window (`cache_capacity`, about 128,000 entries). An anchor too deep
+  for the buffer gives `InsufficientEntries`, and the share is dropped as
+  `Unresolvable`.
 - The same `get_distribution_from_start_hash` builds jobs (`payout.rs`)
   and checks payouts (`validate_bitcoin_payout`).
 

@@ -37,6 +37,9 @@ Read `docs/architecture/` when working in the relevant area:
 - `store-schema.md` -- RocksDB column families, key encoding, merge ops
 - `store-architecture.md` -- read/write separation, StoreWriter thread
 - `pruning.md` -- TTL-based share pruning
+- `payout-distribution.md` -- how a found block's coinbase is split:
+  anchor, maturity skip, PPLNS window, uncle weighting, cuts, and the
+  depths sized by `PAYOUT_DEPTH`
 - `metrics.md` -- Prometheus exposition, metric sources, Grafana panels
 - `address-format.md` -- share chain address encoding, parser rules,
   test vectors, and how a miner supplies one over stratum
