@@ -40,13 +40,19 @@ impl Payout {
         }
     }
 
-    /// Test-only constructor with a short window, so the share-count cutoff
-    /// can be driven without a `PPLNS_WINDOW_SHARES`-sized fixture.
+    /// Test-only constructor with a short maturity depth and window, so the
+    /// share-count cutoff can be driven without a `PAYOUT_DEPTH`-sized
+    /// fixture.
     #[cfg(test)]
-    fn new_with_max_window_shares(network: bitcoin::Network, max_window_shares: usize) -> Self {
+    fn new_with_window_sizes(
+        network: bitcoin::Network,
+        maturity_skip: usize,
+        max_window_shares: usize,
+    ) -> Self {
         Self {
-            pplns_window: Arc::new(RwLock::new(PplnsWindow::new_with_max_window_shares(
+            pplns_window: Arc::new(RwLock::new(PplnsWindow::new_with_window_sizes(
                 network,
+                maturity_skip,
                 max_window_shares,
             ))),
         }
@@ -526,7 +532,7 @@ mod tests {
         mock.expect_get_share_headers()
             .returning(|_| Ok(Vec::new()));
 
-        let mut payout = Payout::new_with_max_window_shares(bitcoin::Network::Signet, 1);
+        let mut payout = Payout::new_with_window_sizes(bitcoin::Network::Signet, 0, 1);
         let config = make_test_config();
         let total_amount = Amount::from_sat(100_000_000);
 
@@ -596,7 +602,7 @@ mod tests {
         mock.expect_get_share_headers()
             .returning(|_| Ok(Vec::new()));
 
-        let mut payout = Payout::new_with_max_window_shares(bitcoin::Network::Signet, 2);
+        let mut payout = Payout::new_with_window_sizes(bitcoin::Network::Signet, 0, 2);
         let config = make_test_config();
         let total_amount = Amount::from_sat(100_000_000);
 

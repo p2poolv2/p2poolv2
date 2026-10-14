@@ -30,8 +30,20 @@ use tracing::debug;
 /// target that is 6 * 60 * 24 * 14 = 120,960 shares, about two weeks.
 ///
 /// The cache, its eviction buffer, `PRUNE_DEPTH`, the PPLNS zone and the
-/// prevout depth are all sized by it.
+/// prevout depth are all sized by it, together with `COINBASE_MATURITY`
+/// through `PAYOUT_DEPTH`.
 pub const PPLNS_WINDOW_SHARES: usize = 120960;
+
+/// Coinbase outputs cannot be spent until the containing block is this
+/// many blocks deep. 70% of blocks-per-day at 10s block time (0.70 * 86400 / 10).
+pub const COINBASE_MATURITY: usize = 6048;
+
+/// Shares from a paying share down to the oldest share it can pay: the
+/// coinbase maturity depth plus the PPLNS window.
+///
+/// Sizes the full-validation zone, the expiry of share chain outputs, and,
+/// doubled, `PRUNE_DEPTH`.
+pub const PAYOUT_DEPTH: usize = COINBASE_MATURITY + PPLNS_WINDOW_SHARES;
 
 /// Divisor for the retained eviction buffer beyond the window: the cache
 /// keeps the window plus `window / PPLNS_WINDOW_BUFFER_DIVISOR` extra shares
@@ -42,8 +54,8 @@ pub const PPLNS_WINDOW_SHARES: usize = 120960;
 /// This buffer is what bounds how deep a fork this node can still pay out for,
 /// and so which forks it can follow at all. A payout walk starting at an anchor
 /// `n` entries below the confirmed tip has `cache_capacity() - n` entries left
-/// beneath it, so it can only span a full `PPLNS_WINDOW_SHARES` while `n`
-/// is within the buffer. Past that the walk is truncated by eviction, the
+/// beneath it, so it can only span the maturity skip and a full
+/// `PPLNS_WINDOW_SHARES` while `n` is within the buffer. Past that the walk is truncated by eviction, the
 /// distribution would depend on where this node's cache happens to end rather
 /// than on the chain, and `get_distribution_from_start_hash` refuses it --
 /// which drops the share (`FailureKind::Unresolvable`).
@@ -57,9 +69,9 @@ pub const PPLNS_WINDOW_SHARES: usize = 120960;
 const PPLNS_WINDOW_BUFFER_DIVISOR: usize = 100;
 
 /// Number of blocks from the chain tip that must be retained by each node.
-/// Equals 2x the PPLNS window: one window for full tx validation and one
-/// window for PoW-only validation that provides output availability.
-pub const PRUNE_DEPTH: usize = 2 * PPLNS_WINDOW_SHARES;
+/// Equals 2x `PAYOUT_DEPTH`: one payout depth for full tx validation and one
+/// for PoW-only validation that provides output availability.
+pub const PRUNE_DEPTH: usize = 2 * PAYOUT_DEPTH;
 
 /// Pruning runs every PRUNE_INTERVAL blocks (approximately 1 hour at
 /// 10s/block: 60 * 6 = 360).
@@ -179,10 +191,10 @@ impl From<Box<dyn Error + Send + Sync>> for WindowError {
 /// allowing incremental loading of only newly confirmed headers on each
 /// update rather than re-reading the full window from RocksDB.
 ///
-/// Caches PPLNS_WINDOW_SHARES number of confirmed entries and
-/// their uncles, no matter how far back in time we need to go to get
-/// to those many entries. This simplifies eviction and the cache
-/// maintenance logic.
+/// Caches `COINBASE_MATURITY + PPLNS_WINDOW_SHARES` confirmed entries, plus
+/// the eviction buffer, and their uncles, no matter how far back in time we
+/// need to go to get to those many entries. This simplifies eviction and the
+/// cache maintenance logic.
 pub struct PplnsWindow {
     /// Confirmed share entries ordered newest-to-oldest, capped at the window
     /// plus its eviction buffer (`cache_capacity`).
@@ -195,10 +207,13 @@ pub struct PplnsWindow {
     address_keys: AddressKeys,
     /// Bitcoin network used for computing integer difficulty from Target.
     pub(crate) network: bitcoin::Network,
-    /// Maximum confirmed entries retained before eviction. Defaults to
+    /// Number of shares in the payout window. Defaults to
     /// `PPLNS_WINDOW_SHARES`; overridable in tests so eviction can be
     /// exercised without a full-capacity fixture.
     max_window_shares: usize,
+    /// Depth a share must reach before it is paid. Defaults to
+    /// `COINBASE_MATURITY`
+    maturity_skip: usize,
 }
 
 impl PplnsWindow {
@@ -211,18 +226,21 @@ impl PplnsWindow {
             address_keys: AddressKeys::default(),
             network,
             max_window_shares: PPLNS_WINDOW_SHARES,
+            maturity_skip: COINBASE_MATURITY,
         }
     }
 
-    /// Test-only constructor with an injectable eviction cap, so the
-    /// eviction path can be driven without building a
-    /// `PPLNS_WINDOW_SHARES`-sized fixture.
+    /// Test-only constructor with an injectable maturity depth and window
+    /// size, so the eviction path can be driven without building a
+    /// `PAYOUT_DEPTH`-sized fixture.
     #[cfg(test)]
-    pub(super) fn new_with_max_window_shares(
+    pub(super) fn new_with_window_sizes(
         network: bitcoin::Network,
+        maturity_skip: usize,
         max_window_shares: usize,
     ) -> Self {
         let mut window = Self::new(network);
+        window.maturity_skip = maturity_skip;
         window.max_window_shares = max_window_shares;
         window
     }
@@ -730,17 +748,21 @@ impl PplnsWindow {
         Ok(())
     }
 
-    /// Total confirmed entries the cache loads and retains: the window cap
-    /// plus a ~1% buffer (see `PPLNS_WINDOW_BUFFER_DIVISOR`) so an anchor
-    /// slightly behind the tip still has its full window available.
+    /// Total confirmed entries the cache loads and retains: the maturity depth
+    /// and the window, plus a ~1% buffer of the window (see
+    /// `PPLNS_WINDOW_BUFFER_DIVISOR`) so an anchor slightly behind the tip
+    /// still has its full window available.
     ///
     /// The buffer is therefore the supported anchor depth: an anchor at most
     /// `max_window_shares / PPLNS_WINDOW_BUFFER_DIVISOR` entries behind the tip
-    /// still has `max_window_shares` entries cached below it, which is what
-    /// `get_distribution_from_start_hash` needs to apply its count bound. A
-    /// deeper anchor is reported as an error rather than silently truncated.
+    /// still has `maturity_skip + max_window_shares` entries cached below it,
+    /// which is what `get_distribution_from_start_hash` needs to apply its
+    /// count bound. A deeper anchor is reported as an error rather than
+    /// silently truncated.
     fn cache_capacity(&self) -> usize {
-        self.max_window_shares + self.max_window_shares.div_ceil(PPLNS_WINDOW_BUFFER_DIVISOR)
+        self.maturity_skip
+            + self.max_window_shares
+            + self.max_window_shares.div_ceil(PPLNS_WINDOW_BUFFER_DIVISOR)
     }
 
     /// Trim the oldest confirmed entries down to `cache_capacity`.
@@ -1323,7 +1345,7 @@ mod tests {
         // Injected small window cap so eviction runs without a 120,960-entry
         // fixture. Eviction retains cache_capacity() = cap + ~1% buffer.
         const CAP: usize = 200;
-        let mut window = PplnsWindow::new_with_max_window_shares(TEST_NETWORK, CAP);
+        let mut window = PplnsWindow::new_with_window_sizes(TEST_NETWORK, 0, CAP);
         let capacity = window.cache_capacity();
 
         // Newest-to-oldest at the front: header_b, header_a, then padding.
@@ -2029,7 +2051,7 @@ mod tests {
 
         // cache_capacity for cap 2 is 2 + ceil(2/100) = 3, so heights 0 and 1
         // are evicted, leaving heights 2-4 (all PUBKEY_G).
-        let mut window = PplnsWindow::new_with_max_window_shares(TEST_NETWORK, 2);
+        let mut window = PplnsWindow::new_with_window_sizes(TEST_NETWORK, 0, 2);
         window.update(&mock).unwrap();
 
         assert_eq!(window.confirmed_entries.len(), 3);
@@ -2258,7 +2280,7 @@ mod tests {
         // Window of exactly MAX_SHARES (3) shares: parent, c, b. The ~1%
         // buffer keeps b alive when the sibling promotion evicts the oldest
         // cache entry.
-        let mut window = PplnsWindow::new_with_max_window_shares(TEST_NETWORK, MAX_SHARES);
+        let mut window = PplnsWindow::new_with_window_sizes(TEST_NETWORK, 0, MAX_SHARES);
 
         // Update 1: tip = parent (height 3). Loads [parent, c, b, a]; the
         // buffer (cap 3 + 1) retains all four.
@@ -2353,7 +2375,7 @@ mod tests {
         let sibling = build_test_header(&parent.block_hash().to_string(), PUBKEY_5G, 2);
         let parent_hash = parent.block_hash();
 
-        let mut window = PplnsWindow::new_with_max_window_shares(TEST_NETWORK, MAX_SHARES);
+        let mut window = PplnsWindow::new_with_window_sizes(TEST_NETWORK, 0, MAX_SHARES);
 
         // Tip = parent (height 3). Cache holds [parent, c, b, a].
         let to_parent = vec![
@@ -2476,7 +2498,7 @@ mod tests {
         store
             .expect_get_confirmed_headers_in_range()
             .returning(move |_, _| Ok(cached.clone()));
-        let mut window = PplnsWindow::new_with_max_window_shares(TEST_NETWORK, MAX_SHARES);
+        let mut window = PplnsWindow::new_with_window_sizes(TEST_NETWORK, 0, MAX_SHARES);
         window.update(&store).unwrap();
 
         let distribution = window
@@ -2531,7 +2553,7 @@ mod tests {
         store
             .expect_get_confirmed_headers_in_range()
             .returning(move |_, _| Ok(cached.clone()));
-        let mut window = PplnsWindow::new_with_max_window_shares(TEST_NETWORK, MAX_SHARES);
+        let mut window = PplnsWindow::new_with_window_sizes(TEST_NETWORK, 0, MAX_SHARES);
         window.update(&store).unwrap();
 
         let distribution = window
@@ -2557,7 +2579,7 @@ mod tests {
         let parent = build_test_header(&c.block_hash().to_string(), PUBKEY_4G, 2);
         let sibling = build_test_header(&parent.block_hash().to_string(), PUBKEY_5G, 2);
 
-        let mut window = PplnsWindow::new_with_max_window_shares(TEST_NETWORK, MAX_SHARES);
+        let mut window = PplnsWindow::new_with_window_sizes(TEST_NETWORK, 0, MAX_SHARES);
 
         let all_headers = vec![
             ConfirmedHeaderResult {
