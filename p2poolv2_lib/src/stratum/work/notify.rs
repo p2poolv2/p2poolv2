@@ -14,6 +14,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::sim_overrides;
+use crate::stratum::sv2::PoolTransactionCache;
 use crate::stratum::work::prepared_notify::{PreparedNotifyParams, PreparedNotifyParamsBuilder};
 use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
@@ -28,6 +29,8 @@ pub(crate) struct NotifyContext {
     pub pool_signature: Vec<u8>,
     pub pool_difficulty: pool_difficulty::PoolDifficulty,
     pub payout: Box<dyn PayoutDistribution + Send>,
+    /// Latest template transactions, in CTOR, for Stratum V2 coinbase-only jobs.
+    pub pool_transactions: PoolTransactionCache,
 }
 
 /// Build the output distribution for the coinbase transaction using
@@ -72,6 +75,22 @@ fn build_output_distribution(
         })
 }
 
+fn cache_template_transactions(
+    template: &BlockTemplate,
+    cache: &PoolTransactionCache,
+) -> Result<(), WorkError> {
+    let mut transactions = Vec::with_capacity(template.transactions.len());
+    for template_transaction in &template.transactions {
+        let transaction =
+            bitcoin::Transaction::try_from(template_transaction).map_err(|error| WorkError {
+                message: format!("template transaction: {error}"),
+            })?;
+        transactions.push(transaction);
+    }
+    cache.set(transactions);
+    Ok(())
+}
+
 /// Build a PreparedNotifyParams from a template using the notify context.
 ///
 /// Queries chain state (tip, uncles, difficulty) and prepares the
@@ -101,6 +120,7 @@ fn build_prepared_notify(
     //* below, so a confirmed-chain advance between reads cannot make the
     //* coinbase pay a window inconsistent with its declared prev.
     let output_distribution = build_output_distribution(template, target, tip, context)?;
+    cache_template_transactions(template, &context.pool_transactions)?;
 
     PreparedNotifyParamsBuilder::new(
         Arc::clone(template),
@@ -115,6 +135,7 @@ fn build_prepared_notify(
     .donation(context.config.donation)
     .fee_address(context.config.fee_address().cloned())
     .fee(context.config.fee)
+    .include_merge_mining(context.config.chain == crate::config::Chain::BitcoinCash)
     .build()
 }
 
@@ -176,6 +197,7 @@ pub async fn start_notify(
     config: &StratumConfig<crate::config::Parsed>,
     payout: Box<dyn PayoutDistribution + Send>,
     pool_difficulty: pool_difficulty::PoolDifficulty,
+    pool_transactions: PoolTransactionCache,
 ) {
     let pool_signature = match config.pool_signature {
         Some(ref sig) => sig.as_bytes().to_vec(),
@@ -188,6 +210,7 @@ pub async fn start_notify(
         pool_signature,
         pool_difficulty,
         payout,
+        pool_transactions,
     };
 
     let mut latest_template: Option<Arc<BlockTemplate>> = None;
@@ -354,6 +377,7 @@ mod tests {
                 &stratum_config,
                 Box::new(mock_payout),
                 pool_difficulty,
+                PoolTransactionCache::new(),
             )
             .await;
         });
@@ -429,6 +453,7 @@ mod tests {
                 &stratum_config,
                 Box::new(mock_payout),
                 pool_difficulty,
+                PoolTransactionCache::new(),
             )
             .await;
         });
@@ -528,6 +553,7 @@ mod tests {
             pool_signature: b"test_pool".to_vec(),
             pool_difficulty,
             payout: Box::new(mock_payout),
+            pool_transactions: PoolTransactionCache::new(),
         };
 
         // Build prepared notify

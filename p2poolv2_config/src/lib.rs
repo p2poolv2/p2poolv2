@@ -231,6 +231,10 @@ pub struct StratumConfig<State = Raw> {
     /// `bitcoin-cash`. `mini` on a Bitcoin node is rejected.
     #[serde(default)]
     pub bch_share_chain: BchShareChain,
+    /// Stratum V2 listen port. Absent means the node does not open an SV2
+    /// socket, which is what every existing configuration does.
+    #[serde(default)]
+    pub sv2_port: Option<u16>,
     /// The version mask to use for version-rolling
     #[serde(deserialize_with = "deserialize_version_mask")]
     pub version_mask: i32,
@@ -431,6 +435,7 @@ impl StratumConfig<Raw> {
             chain: self.chain,
             bitcoin_cash_network: self.bitcoin_cash_network,
             bch_share_chain: self.bch_share_chain,
+            sv2_port: self.sv2_port,
             version_mask: self.version_mask,
             difficulty_multiplier: self.difficulty_multiplier,
             ignore_difficulty: self.ignore_difficulty,
@@ -511,6 +516,7 @@ impl StratumConfig<Raw> {
             chain: Chain::Bitcoin,
             bitcoin_cash_network: None,
             bch_share_chain: BchShareChain::Main,
+            sv2_port: None,
             version_mask: DEFAULT_VERSION_MASK,
             difficulty_multiplier: 1.0,
             ignore_difficulty: None,

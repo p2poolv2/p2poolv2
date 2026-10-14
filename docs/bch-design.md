@@ -1,9 +1,9 @@
 # Bitcoin Cash design checks
 
-Written 2026-10-13, before the startup-selection change. Each porting item
-from [bch-plan.md](bch-plan.md) gets a decision here. Open questions stay
-open: this file does not invent PPLNS lengths, a merge-mining commitment,
-or a license change.
+Written 2026-10-13, before the startup-selection change, and updated
+2026-10-14 for genesis, local Stratum V2, and the AuxPoW output. Open
+questions stay open: this file does not invent a PPLNS window length or a
+license change.
 
 ## Startup selection, decided in this change
 
@@ -64,13 +64,30 @@ ZMQ paths both use this check.
   share interval are unchanged. Bitcoin Cash main and mini now have separate
   genesis shares. Mini is easier by the compact exponent above; it is not a
   retune of the PPLNS window.
-- **Stratum V2.** Not started. SV1 remains the server. Both Job Declaration
-  modes stay future work, and declared jobs will have to keep CTOR.
+- **Stratum V2.** A local listener starts when `stratum.sv2_port` is set.
+  SV1 stays. Frames are the unencrypted framing the Stratum V2 specification
+  allows between local roles. This node does not generate a Noise static key.
+  `SetupConnection` flag bit 0 (`DECLARE_TX_DATA`) selects the Job Declaration
+  mode. Set, the client uses Full-Template: `DeclareMiningJob`, then
+  `ProvideMissingTransactions` for every transaction, because this node has
+  no mempool. Clear, `DeclareMiningJob` is rejected and `SetCustomMiningJob`
+  mines the pool template. Both paths store the non-coinbase transactions in
+  CTOR. Bitcoin Cash puts the AuxPoW output in
+  `AllocateMiningJobTokenSuccess.coinbase_outputs`. Bitcoin leaves that field
+  empty. Omitting `sv2_port` does not open the socket.
+- **Merge mining.** One zero-value `OP_RETURN` on the Bitcoin Cash block
+  coinbase, after the payouts and before the share-commitment padding. The
+  payload is the published AuxPoW commitment: magic `fa be 6d 6d`, a 32-byte
+  merkle root, a little-endian tree size, and a little-endian nonce (44
+  bytes). With no aux chain declared, the root, size, and nonce are zero.
+  The share coinbase stays one P2PKH output. Bitcoin block coinbases omit
+  the output. A per-share aux choice is not stored in the share header.
 
 ## Still unfinished
 
-Stratum V2 with both Job Declaration modes, the merge-mining commitment, and
-live regtest or chipnet mining. A node started with `chain = "bitcoin-cash"`
+Live regtest or chipnet mining. A node started with `chain = "bitcoin-cash"`
 can validate BCHN templates, pay a CashAddr script, record a P2PKH share
-owner, and start from a main or mini P2PKH genesis. It must not be treated
-as a working Bitcoin Cash pool until those remaining items land.
+owner, start from a main or mini P2PKH genesis, speak both local Job
+Declaration modes, and commit a reserved AuxPoW output. It must not be
+treated as a working Bitcoin Cash pool until a live node has accepted a
+mined share or block.

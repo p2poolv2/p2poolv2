@@ -10,6 +10,7 @@ pub(crate) mod compact_block;
 pub(crate) mod extranonce;
 pub mod genesis;
 pub mod handle_stratum_share;
+pub mod merge_mining;
 pub mod share_block;
 pub mod share_commitment;
 pub mod transactions;

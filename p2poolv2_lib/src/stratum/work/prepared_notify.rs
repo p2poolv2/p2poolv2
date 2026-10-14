@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use super::block_template::{BlockTemplate, parse_flags};
-use super::coinbase::{
-    LOCKTIME_LENGTH, build_bitcoin_coinbase_transaction, get_timestamp_bytes, split_coinbase,
-};
+#[cfg(test)]
+use super::coinbase::build_bitcoin_coinbase_transaction;
+use super::coinbase::{LOCKTIME_LENGTH, build_coinbase, get_timestamp_bytes, split_coinbase};
 use super::error::WorkError;
 use super::gbt::build_merkle_branches_for_template;
 use super::tracker::JobTracker;
@@ -237,6 +237,7 @@ pub(crate) struct PreparedNotifyParamsBuilder {
     donation: Option<u16>,
     fee_address: Option<Address>,
     fee: Option<u16>,
+    include_merge_mining: bool,
 }
 
 impl PreparedNotifyParamsBuilder {
@@ -259,6 +260,7 @@ impl PreparedNotifyParamsBuilder {
             donation: None,
             fee_address: None,
             fee: None,
+            include_merge_mining: false,
         }
     }
 
@@ -297,6 +299,12 @@ impl PreparedNotifyParamsBuilder {
         self
     }
 
+    /// Append the reserved AuxPoW output. Bitcoin Cash sets this.
+    pub fn include_merge_mining(mut self, include_merge_mining: bool) -> Self {
+        self.include_merge_mining = include_merge_mining;
+        self
+    }
+
     /// Build the PreparedNotifyParams by constructing the coinbase transaction
     /// with a dummy commitment hash, splitting it, and constructing the
     /// pre-serialized JSON template.
@@ -322,7 +330,12 @@ impl PreparedNotifyParamsBuilder {
         // [commitment_hash][locktime].
         let dummy_commitment_hash = hashes::sha256::Hash::from_byte_array([0xab_u8; 32]);
 
-        let coinbase = build_bitcoin_coinbase_transaction(
+        let merge_mining = if self.include_merge_mining {
+            Some(crate::shares::merge_mining::MergeMiningCommitment::reserved())
+        } else {
+            None
+        };
+        let coinbase = build_coinbase(
             Version::TWO,
             self.output_distribution.as_slice(),
             self.template.height as i64,
@@ -332,6 +345,7 @@ impl PreparedNotifyParamsBuilder {
             Some(dummy_commitment_hash),
             0u64,
             None,
+            merge_mining,
         )?;
 
         let (coinbase1, coinbase2_full) = split_coinbase(&coinbase)?;

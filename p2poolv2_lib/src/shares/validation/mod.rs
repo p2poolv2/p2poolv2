@@ -44,7 +44,9 @@ use crate::store::block_tx_metadata::{BlockMetadata, Status};
 use crate::store::dag_store::MAX_UNCLES_DEPTH;
 use crate::store::transaction_store::PrevoutCheck;
 use crate::store::writer::StoreError;
+#[cfg(test)]
 use crate::stratum::work::coinbase::build_bitcoin_coinbase_transaction;
+use crate::stratum::work::coinbase::build_coinbase;
 use crate::stratum::work::gbt::compute_merkle_root_from_branches;
 use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
 use bitcoin::hashes::Hash as HashTrait;
@@ -1051,7 +1053,12 @@ impl DefaultShareValidator {
             None => PushBytesBuf::from(&[0u8]),
         };
         let pool_signature = &self.pool_signature;
-        let reconstructed_coinbase = build_bitcoin_coinbase_transaction(
+        let merge_mining = if self.chain == Chain::BitcoinCash {
+            Some(crate::shares::merge_mining::MergeMiningCommitment::reserved())
+        } else {
+            None
+        };
+        let reconstructed_coinbase = build_coinbase(
             Version::TWO,
             &expected_outputs,
             share.header.bitcoin_height as i64,
@@ -1061,6 +1068,7 @@ impl DefaultShareValidator {
             Some(expected_commitment_hash),
             share.header.coinbase_nsecs,
             Some(share.header.extranonce.as_bytes()),
+            merge_mining,
         )
         .map_err(|error| ValidationError::consensus(format!("Error building coinbase {error}")))?;
 

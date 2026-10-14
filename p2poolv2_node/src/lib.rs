@@ -268,11 +268,13 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
     let pool_difficulty_for_notify =
         PoolDifficulty::build(&chain_store_handle).expect("Failed to build pool difficulty");
 
+    let pool_transactions = p2poolv2_lib::stratum::sv2::PoolTransactionCache::new();
     let cloned_stratum_config = stratum_config.clone();
     let (payout, shared_pplns_window) =
         build_payout_for_mode(stratum_config.mode, cloned_stratum_config.network);
     let exit_sender_notify = exit_sender.clone();
     let exit_receiver_notify = exit_sender.subscribe();
+    let notify_transactions = pool_transactions.clone();
     tokio::spawn(async move {
         info!("Starting Stratum notifier...");
         start_notify(
@@ -282,6 +284,7 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
             &cloned_stratum_config,
             payout,
             pool_difficulty_for_notify,
+            notify_transactions,
         )
         .await;
         if *exit_receiver_notify.borrow() == ShutdownReason::None {
@@ -313,6 +316,44 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
     let cash_share = stratum_config
         .bch_miner_address()
         .map(|address| address.hash);
+    let sv2_port = stratum_config.sv2_port;
+    let sv2_hostname = stratum_config.hostname.clone();
+    let sv2_merge_mining = match share_chain {
+        Chain::BitcoinCash => {
+            Some(p2poolv2_lib::shares::merge_mining::MergeMiningCommitment::reserved())
+        }
+        Chain::Bitcoin => None,
+    };
+    let sv2_transactions = pool_transactions.clone();
+    let mut sv2_shutdown = exit_sender.subscribe();
+    tokio::spawn(async move {
+        let Some(port) = sv2_port else {
+            return;
+        };
+        let address = match format!("{sv2_hostname}:{port}").parse() {
+            Ok(address) => address,
+            Err(error) => {
+                error!("Invalid Stratum V2 address: {error}");
+                return;
+            }
+        };
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(());
+        tokio::spawn(async move {
+            if p2poolv2_lib::stratum::sv2::serve(
+                address,
+                sv2_transactions,
+                sv2_merge_mining,
+                shutdown_rx,
+            )
+            .await
+            .is_err()
+            {
+                error!("Stratum V2 listener stopped");
+            }
+        });
+        let _ = sv2_shutdown.changed().await;
+        let _ = shutdown_tx.send(());
+    });
 
     tokio::spawn(async move {
         let mut stratum_server = StratumServerBuilder::default()

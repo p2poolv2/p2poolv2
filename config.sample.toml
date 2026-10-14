@@ -71,6 +71,9 @@ zmqpubhashblock = "tcp://127.0.0.1:28332"
 # Main or mini Bitcoin Cash share chain. Default "main". "mini" is rejected
 # unless chain is "bitcoin-cash". Mini's share target is 256 times easier.
 # bch_share_chain = "main"
+# Stratum V2 listen port. Absent means the node does not open an SV2 socket.
+# Local frames are unencrypted. Bitcoin Cash jobs include one AuxPoW output.
+# sv2_port = 3336
 # The share-chain network can be "main", "testnet4" or "signet".
 # On Bitcoin this also selects the bech32m share address.
 network = "signet"

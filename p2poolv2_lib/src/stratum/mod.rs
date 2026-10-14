@@ -12,6 +12,7 @@ pub(crate) mod parse_password;
 pub mod server;
 pub mod session;
 pub mod session_timeout;
+pub mod sv2;
 pub mod util;
 mod validate_username;
 pub mod work;

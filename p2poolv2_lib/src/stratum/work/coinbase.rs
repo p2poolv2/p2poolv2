@@ -201,6 +201,35 @@ pub(crate) fn build_bitcoin_coinbase_transaction(
     nsecs: u64,
     extranonce: Option<&[u8]>,
 ) -> Result<Transaction, WorkError> {
+    build_coinbase(
+        version,
+        output_data,
+        height,
+        aux_flags,
+        default_witness_commitment,
+        pool_signature,
+        commitment_hash,
+        nsecs,
+        extranonce,
+        None,
+    )
+}
+
+/// Build a coinbase, optionally appending the Bitcoin Cash merge-mining output
+/// after the payouts and before the share-commitment padding.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_coinbase(
+    version: Version,
+    output_data: &[OutputPair],
+    height: i64,
+    aux_flags: PushBytesBuf,
+    default_witness_commitment: Option<&WitnessCommitment>,
+    pool_signature: &[u8],
+    commitment_hash: Option<sha256::Hash>,
+    nsecs: u64,
+    extranonce: Option<&[u8]>,
+    merge_mining: Option<crate::shares::merge_mining::MergeMiningCommitment>,
+) -> Result<Transaction, WorkError> {
     if output_data.is_empty() {
         return Err(WorkError {
             message: "Empty output distribution".to_string(),
@@ -227,6 +256,9 @@ pub(crate) fn build_bitcoin_coinbase_transaction(
 
     let mut outputs = build_outputs(output_data);
     append_default_witness_commitment(&mut outputs, default_witness_commitment);
+    if let Some(commitment) = merge_mining {
+        outputs.push(commitment.output());
+    }
     let lock_time = LockTime::from_height(height as u32 - 1).map_err(|_| WorkError {
         message: "Error getting locktime from height".into(),
     })?;

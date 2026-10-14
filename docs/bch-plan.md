@@ -33,9 +33,10 @@ script and does not add a BIP141 witness commitment. Stratum `p2p=` on a
 Bitcoin Cash node parses that CashAddr form. Payout CashAddr and Bitcoin
 bech32m share addresses are rejected there.
 
-Still unfinished: Stratum V2 with both Job Declaration modes, merge-mining
-commitments, and live regtest or chipnet mining. The upstream Bitcoin test
-suite passing does not validate those BCH requirements.
+Still unfinished: live regtest or chipnet mining. Local Stratum V2 now
+serves both Job Declaration modes when `sv2_port` is set, and a Bitcoin
+Cash block coinbase carries one reserved AuxPoW output. The upstream
+Bitcoin test suite passing does not validate live BCH mining.
 
 ## Startup selection (2026-10-13)
 
@@ -54,8 +55,12 @@ The share-chain `network` field still selects the Bitcoin genesis. On
 `bitcoin-cash`, genesis is a P2PKH share anchored at the published BCHN
 genesis block. `bch_share_chain` is `main` or `mini`. A configured
 `miner_address` is a CashAddr share address (`p2pool`, `tp2pool`, or
-`rp2pool`) and the header stores that P2PKH hash. Stratum V2 is unchanged.
-This is still not a working Bitcoin Cash pool.
+`rp2pool`) and the header stores that P2PKH hash. `sv2_port`, when set,
+opens a local unencrypted Stratum V2 listener beside SV1. Both Job
+Declaration modes keep CTOR, and a Bitcoin Cash block coinbase carries one
+reserved AuxPoW output. Noise, a retuned PPLNS window, and a per-share aux
+choice are not part of this. Live regtest or chipnet mining is still
+unfinished. This is still not a working Bitcoin Cash pool.
 
 ## Goal
 
