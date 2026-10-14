@@ -64,6 +64,11 @@ pub const EXTRANONCE_SIZE: u16 = 8;
 /// for 15 minutes, far longer than this many templates take to arrive.
 const MAX_CHANNEL_JOBS: usize = 32;
 
+/// Channels one connection may open. Every template builds a job per
+/// channel, so an unbounded count would let one client make the node do
+/// unbounded work; a proxy aggregating many devices uses extended channels.
+pub const MAX_CHANNELS_PER_CONNECTION: usize = 32;
+
 /// Message types this module handles.
 pub fn is_mining_channel_message(message_type: u8) -> bool {
     matches!(
@@ -212,6 +217,9 @@ impl MiningChannels {
         min_extranonce_size: u16,
         current: Option<Arc<PreparedNotifyParams>>,
     ) -> Result<Vec<Vec<u8>>, String> {
+        if self.channels.len() >= MAX_CHANNELS_PER_CONNECTION {
+            return open_error(request_id, "max-channels-reached");
+        }
         if kind == ChannelKind::Extended && min_extranonce_size > EXTRANONCE_SIZE {
             return open_error(request_id, "min-extranonce-size-too-large");
         }
@@ -1169,6 +1177,74 @@ mod tests {
         assert_eq!(requests.len(), 1);
         assert!(String::from_utf8_lossy(&requests[0].body).contains("submitblock"));
         assert!(emissions_rx.try_recv().is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_connection_cannot_open_more_than_the_channel_cap() {
+        let (emissions_tx, _emissions_rx) = mpsc::channel(10);
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
+        let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(true).await;
+        let ctx = StratumContext {
+            tracker_handle: start_tracker_actor(),
+            bitcoindrpc_client: BitcoindRpcClient::new("http://127.0.0.1:1", "user", "pass")
+                .unwrap(),
+            start_difficulty: 1,
+            minimum_difficulty: 1,
+            maximum_difficulty: None,
+            ignore_difficulty: true,
+            validate_addresses: true,
+            emissions_tx,
+            network: Network::Signet,
+            metrics: metrics_handle,
+            chain_store_handle,
+            mode: PoolMode::P2poolv2,
+            miner_address: Some(make_test_share_address(1, Network::Signet)),
+            share_chain: Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
+        };
+        let mut channels = MiningChannels::new(ctx, DEFAULT_VERSION_MASK);
+        let open = encode_message(
+            OpenExtendedMiningChannel {
+                request_id: 1,
+                user_identity: USERNAME.try_into().unwrap(),
+                nominal_hash_rate: 1.0,
+                max_target: U256::new(&[0xff; 32]).unwrap(),
+                min_extranonce_size: 8,
+            },
+            MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL,
+        )
+        .unwrap();
+        for _ in 0..MAX_CHANNELS_PER_CONNECTION {
+            let mut request = payload(&open);
+            let opened = channels
+                .handle(
+                    MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL,
+                    &mut request,
+                    None,
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                frame_type(&opened[0]),
+                MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL_SUCCESS
+            );
+        }
+        let mut one_more = payload(&open);
+        let refused = channels
+            .handle(
+                MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL,
+                &mut one_more,
+                None,
+            )
+            .await
+            .unwrap();
+        let mut refused_payload = payload(&refused[0]);
+        let refusal = OpenMiningChannelError::from_bytes(&mut refused_payload).unwrap();
+        assert_eq!(refusal.error_code.as_utf8_or_hex(), "max-channels-reached");
     }
 
     #[tokio::test]
