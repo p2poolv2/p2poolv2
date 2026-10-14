@@ -70,8 +70,9 @@ impl Payout {
 impl PayoutDistribution for Payout {
     /// Fill payout distribution from the incrementally maintained PPLNS window.
     ///
-    /// The window is the last `PPLNS_WINDOW_SHARES` shares, so the bitcoin
-    /// difficulty plays no part. An empty window is an error.
+    /// The window is `PPLNS_WINDOW_SHARES` shares below the ones not yet
+    /// mature for the paying share, so the bitcoin difficulty plays no part.
+    /// An empty window is an error.
     fn fill_distribution_from_shares(
         &mut self,
         distribution: &mut Vec<OutputPair>,

@@ -23,8 +23,9 @@ use std::error::Error;
 use std::fmt;
 use tracing::debug;
 
-/// The PPLNS window: a coinbase pays the last `PPLNS_WINDOW_SHARES` shares
-/// below its share's parent, each weighted by its difficulty.
+/// The PPLNS window: a coinbase pays `PPLNS_WINDOW_SHARES` shares, each
+/// weighted by its difficulty, starting at the newest share that is mature
+/// for it (see `COINBASE_MATURITY`).
 ///
 /// A share count, not a difficulty target or a time span. At the 10 s share
 /// target that is 6 * 60 * 24 * 14 = 120,960 shares, about two weeks.
@@ -36,6 +37,9 @@ pub const PPLNS_WINDOW_SHARES: usize = 120960;
 
 /// Coinbase outputs cannot be spent until the containing block is this
 /// many blocks deep. 70% of blocks-per-day at 10s block time (0.70 * 86400 / 10).
+///
+/// A share is paid by a found block only at the same depth, except that the
+/// first `COINBASE_MATURITY` shares of the chain are always mature for payout.
 pub const COINBASE_MATURITY: usize = 6048;
 
 /// Shares from a paying share down to the oldest share it can pay: the
@@ -117,7 +121,7 @@ struct ConfirmedEntry {
 /// the cache ends depends on this node's own confirmed tip.
 #[derive(Debug, PartialEq, Eq)]
 enum WindowStopReason {
-    /// `max_window_shares` shares were counted, starting at the anchor.
+    /// `max_window_shares` shares were counted after the immature skip.
     WindowFull,
     /// The walk consumed every entry available to it.
     OutOfEntries,
@@ -261,22 +265,26 @@ impl PplnsWindow {
     ///
     /// Walks backward from start_hash through parent pointers until
     /// finding a confirmed entry in the window. Candidate entries
-    /// along the walk contribute to the distribution first, then
-    /// confirmed entries from that entry point onward.
+    /// along the walk come first, then confirmed entries from that
+    /// entry point onward.
     ///
     /// When start_hash is already in the confirmed entries, no store
     /// reads are needed and the walk produces zero candidate entries.
     ///
-    /// The window is the last `max_window_shares` shares, each weighted by its
-    /// difficulty; bitcoin difficulty plays no part. The count starts at the
-    /// anchor -- `start_hash`, the share's
-    /// declared parent -- and spans the unconfirmed shares back to the
-    /// confirmed chain before continuing into confirmed entries: candidate
-    /// shares contribute to the payout, so they consume the same window budget
-    /// as confirmed ones. The count is a property of the chain, so every
-    /// node derives the same distribution for the same anchor whatever its own
-    /// confirmed tip -- which is the point: the producer and a validator that
-    /// has since advanced must reconstruct an identical coinbase.
+    /// The walk first skips the shares that are not yet mature for the paying
+    /// share -- the share whose parent is `start_hash` -- and then pays the
+    /// next `max_window_shares` shares, each weighted by its difficulty;
+    /// bitcoin difficulty plays no part. A share at height `h` is mature for a
+    /// paying share at height `p` when `p - h >= maturity_skip`, the same
+    /// depth spending a coinbase needs, or when `h < maturity_skip`: the first
+    /// `maturity_skip` shares are always mature for payout, so a young chain
+    /// pays its shares instead of nothing (see `immature_share_count`).
+    ///
+    /// Candidate shares count towards the skip and the window like confirmed
+    /// ones. Both counts are properties of the chain, so every node derives the
+    /// same distribution for the same anchor whatever its own confirmed tip --
+    /// which is the point: the producer and a validator that has since
+    /// advanced must reconstruct an identical coinbase.
     ///
     /// Errors when `start_hash` cannot be resolved to a confirmed ancestor
     /// (e.g. an anchor whose ancestry is not stored) or when a store read
@@ -285,8 +293,9 @@ impl PplnsWindow {
     /// explicit empty/genesis case is handled by callers before this call
     /// (they check `is_empty`).
     ///
-    /// Also errors when the walk exhausts the cache before counting a full
-    /// window and the cache no longer reaches the chain start. The result would
+    /// Also errors when the walk exhausts the cache before skipping the
+    /// immature shares and counting a full window, and the cache no longer
+    /// reaches the chain start. The result would
     /// then depend on where eviction has trimmed the back, which is a function
     /// of this node's tip rather than of the chain, so a truncated distribution
     /// is refused rather than returned.
@@ -297,26 +306,16 @@ impl PplnsWindow {
     ) -> Result<HashMap<Address, u128>, WindowError> {
         let (candidate_entries, confirmed_start_index) =
             self.resolve_start_hash(start_hash, chain_store_handle)?;
+        let paying_height = self.paying_height(&candidate_entries, confirmed_start_index);
+        let immature_share_count = self.immature_share_count(paying_height);
 
         let mut difficulty_by_key = vec![0u128; self.address_keys.len()];
-        let mut shares_remaining = self.max_window_shares;
-
-        let window_stop_reason = Self::accumulate_candidate_difficulty(
+        let stop_reason = self.accumulate_window_difficulty(
             &candidate_entries,
+            confirmed_start_index,
+            immature_share_count,
             &mut difficulty_by_key,
-            &mut shares_remaining,
         );
-
-        let stop_reason = match window_stop_reason {
-            Some(reason) => reason,
-            // Budget left over from the candidate shares carries into the
-            // confirmed entries, starting at the confirmed entry point.
-            None => self.accumulate_confirmed_difficulty(
-                &mut difficulty_by_key,
-                confirmed_start_index,
-                shares_remaining,
-            ),
-        };
 
         if stop_reason == WindowStopReason::OutOfEntries && !self.reaches_chain_start() {
             return Err(WindowError::InsufficientEntries {
@@ -374,7 +373,7 @@ impl PplnsWindow {
     /// index of the confirmed entry point the walk lands on.
     ///
     /// The returned headers begin with `start_hash` itself, so the anchor
-    /// share is part of the window and consumes window budget like any other.
+    /// share counts towards the immature skip and the window like any other.
     ///
     /// The walk follows parent links regardless of validation `status`: the
     /// payout must be a pure function of the chain shape (headers), not of
@@ -451,49 +450,54 @@ impl PplnsWindow {
             .position(|entry| entry.blockhash == start_hash)
     }
 
-    /// Walk candidate entries -- the anchor share and the unconfirmed shares
-    /// below it -- accumulating difficulty per address.
+    /// Height of the paying share: the share whose parent is the anchor.
     ///
-    /// Consumes one share of `shares_remaining` per entry, so what is left for
-    /// the confirmed entries is the window budget minus the candidate shares.
-    /// Returns `WindowFull` when the budget runs out, or `None` when the
-    /// entries ran out with budget still unspent, which means the caller
-    /// should continue into the confirmed entries.
-    fn accumulate_candidate_difficulty(
+    /// The confirmed entry point is the parent of the oldest candidate entry,
+    /// or the anchor itself when there are no candidates. Heights are
+    /// contiguous along parent links, so no store read is needed.
+    fn paying_height(
+        &self,
         candidate_entries: &[ConfirmedEntry],
-        difficulty_by_key: &mut [u128],
-        shares_remaining: &mut usize,
-    ) -> Option<WindowStopReason> {
-        for entry in candidate_entries {
-            if *shares_remaining == 0 {
-                return Some(WindowStopReason::WindowFull);
-            }
-            *shares_remaining -= 1;
-            Self::add_entry_difficulty(entry, difficulty_by_key);
-        }
-        None
+        confirmed_start_index: usize,
+    ) -> usize {
+        self.confirmed_entries[confirmed_start_index].height as usize + candidate_entries.len() + 1
     }
 
-    /// Walk confirmed entries from the confirmed entry point, accumulating
-    /// difficulty per address until `shares_remaining` -- the window budget
-    /// left after the candidate shares -- runs out.
+    /// Number of shares, counted down from the anchor, that are not yet
+    /// mature for a paying share at `paying_height`.
+    ///
+    /// The shares at depth below `maturity_skip` are immature, which is
+    /// `maturity_skip - 1` shares starting at the anchor. Shares below height
+    /// `maturity_skip` are always mature, so the count is capped at the shares
+    /// from height `maturity_skip` up to the anchor. Below that height nothing
+    /// is skipped, and the paid set never shrinks as the chain grows.
+    fn immature_share_count(&self, paying_height: usize) -> usize {
+        self.maturity_skip
+            .saturating_sub(1)
+            .min(paying_height.saturating_sub(self.maturity_skip))
+    }
+
+    /// Walk the candidate entries and then the confirmed entries from the
+    /// confirmed entry point, skip the first `immature_share_count`, and
+    /// accumulate difficulty per address for the next `max_window_shares`.
     ///
     /// Returns the reason the walk stopped. `OutOfEntries` means the cache
     /// itself ran out, which is the one stop reason that is not a property of
     /// the chain: the caller must check whether eviction has trimmed the back
     /// before trusting the result.
-    fn accumulate_confirmed_difficulty(
+    fn accumulate_window_difficulty(
         &self,
+        candidate_entries: &[ConfirmedEntry],
+        confirmed_start_index: usize,
+        immature_share_count: usize,
         difficulty_by_key: &mut [u128],
-        start_index: usize,
-        shares_remaining: usize,
     ) -> WindowStopReason {
         let mut consumed = 0;
-        for entry in self
-            .confirmed_entries
+        for entry in candidate_entries
             .iter()
-            .skip(start_index)
-            .take(shares_remaining)
+            .chain(self.confirmed_entries.iter().skip(confirmed_start_index))
+            .skip(immature_share_count)
+            .take(self.max_window_shares)
         {
             consumed += 1;
             Self::add_entry_difficulty(entry, difficulty_by_key);
@@ -501,7 +505,7 @@ impl PplnsWindow {
 
         // Distinguish "counted a full window" from "the cache ran out": only
         // the latter depends on where eviction trimmed the back.
-        if consumed == shares_remaining {
+        if consumed == self.max_window_shares {
             WindowStopReason::WindowFull
         } else {
             WindowStopReason::OutOfEntries
@@ -2627,5 +2631,205 @@ mod tests {
             error.to_string().contains("truncated by eviction"),
             "unexpected error: {error}"
         );
+    }
+
+    //* Steady state: with a maturity of 3, a share is paid once the paying
+    //* share is at least 3 above it. The chain is heights 0..=5 and the
+    //* anchor is height 5, so the paying share is at height 6. Heights 5
+    //* and 4 (depth 1 and 2) are immature and skipped. Height 3 (depth 3,
+    //* the spend maturity depth) is the first paid, and the window of 2
+    //* ends at height 2.
+    #[test]
+    fn test_distribution_skips_immature_shares_from_anchor() {
+        let miners = [PUBKEY_G, PUBKEY_2G, PUBKEY_3G, PUBKEY_4G, PUBKEY_5G];
+        // Newest first: index 0 is height 5 (PUBKEY_G), index 1 is height 4
+        // (PUBKEY_5G), index 2 is height 3 (PUBKEY_4G), index 3 is height 2
+        // (PUBKEY_3G).
+        let (headers, tip_hash) = build_test_chain(6, &miners);
+        let height_four_miner = headers[1].header.miner_bitcoin_address.clone();
+        let height_three_miner = headers[2].header.miner_bitcoin_address.clone();
+        let height_two_miner = headers[3].header.miner_bitcoin_address.clone();
+        let mut store = MockChainStoreHandle::default();
+        store.expect_get_chain_tip().returning(move || Ok(tip_hash));
+        store
+            .expect_get_block_metadata()
+            .returning(|_| Ok(metadata_at_height(5)));
+        store
+            .expect_get_confirmed_headers_in_range()
+            .returning(move |_, _| Ok(headers.clone()));
+        let mut window = PplnsWindow::new_with_window_sizes(TEST_NETWORK, 3, 2);
+        window.update(&store).unwrap();
+
+        let distribution = window
+            .get_distribution_from_start_hash(tip_hash, &MockChainStoreHandle::default())
+            .unwrap();
+
+        assert_eq!(distribution.len(), 2);
+        assert!(distribution.contains_key(&height_three_miner));
+        assert!(distribution.contains_key(&height_two_miner));
+        assert!(!distribution.contains_key(&height_four_miner));
+    }
+
+    //* The skip counts candidate and confirmed shares alike. The confirmed
+    //* chain is heights 0..=4 and the anchor is a candidate at height 5, so
+    //* the paying share is at height 6. The skip of 2 covers the candidate
+    //* (height 5) and the confirmed tip (height 4), and the window pays
+    //* heights 3 and 2.
+    #[test]
+    fn test_distribution_skip_spans_candidate_and_confirmed_entries() {
+        let miners = [PUBKEY_G, PUBKEY_2G, PUBKEY_3G, PUBKEY_4G, PUBKEY_5G];
+        // Newest first: index 0 is height 4 (PUBKEY_5G), index 1 is height 3
+        // (PUBKEY_4G), index 2 is height 2 (PUBKEY_3G).
+        let (headers, tip_hash) = build_test_chain(5, &miners);
+        let height_four_miner = headers[0].header.miner_bitcoin_address.clone();
+        let height_three_miner = headers[1].header.miner_bitcoin_address.clone();
+        let height_two_miner = headers[2].header.miner_bitcoin_address.clone();
+        let candidate = build_test_header(&tip_hash.to_string(), PUBKEY_G, 2);
+        let candidate_hash = candidate.block_hash();
+        let mut store = MockChainStoreHandle::default();
+        store.expect_get_chain_tip().returning(move || Ok(tip_hash));
+        store
+            .expect_get_block_metadata()
+            .returning(|_| Ok(metadata_at_height(4)));
+        store
+            .expect_get_confirmed_headers_in_range()
+            .returning(move |_, _| Ok(headers.clone()));
+        let mut window = PplnsWindow::new_with_window_sizes(TEST_NETWORK, 3, 2);
+        window.update(&store).unwrap();
+        let mut candidate_store = MockChainStoreHandle::default();
+        candidate_store
+            .expect_get_share_header()
+            .withf(move |hash| *hash == candidate_hash)
+            .returning(move |_| Ok(candidate.clone()));
+        candidate_store
+            .expect_get_share_headers()
+            .returning(|_| Ok(Vec::new()));
+
+        let distribution = window
+            .get_distribution_from_start_hash(candidate_hash, &candidate_store)
+            .unwrap();
+
+        assert_eq!(distribution.len(), 2);
+        assert!(distribution.contains_key(&height_three_miner));
+        assert!(distribution.contains_key(&height_two_miner));
+        assert!(!distribution.contains_key(&height_four_miner));
+    }
+
+    //* The cache holds maturity + window + buffer = 3 + 2 + 1 = 6 entries, so
+    //* loading heights 0..=7 evicts heights 0 and 1. Anchored at height 4 the
+    //* walk skips heights 4 and 3, pays height 2, and then runs out of cached
+    //* entries one share short of the window. The back is not the chain
+    //* start, so the truncated result is refused.
+    #[test]
+    fn test_distribution_refuses_when_skip_and_window_exceed_cache() {
+        let miners = [PUBKEY_G, PUBKEY_2G, PUBKEY_3G, PUBKEY_4G, PUBKEY_5G];
+        // Newest first: index 3 is height 4.
+        let (headers, tip_hash) = build_test_chain(8, &miners);
+        let height_four_hash = headers[3].blockhash;
+        let mut store = MockChainStoreHandle::default();
+        store.expect_get_chain_tip().returning(move || Ok(tip_hash));
+        store
+            .expect_get_block_metadata()
+            .returning(|_| Ok(metadata_at_height(7)));
+        store
+            .expect_get_confirmed_headers_in_range()
+            .returning(move |_, _| Ok(headers.clone()));
+        let mut window = PplnsWindow::new_with_window_sizes(TEST_NETWORK, 3, 2);
+        window.update(&store).unwrap();
+
+        let error = window
+            .get_distribution_from_start_hash(height_four_hash, &MockChainStoreHandle::default())
+            .expect_err("the skip leaves one cached entry below the anchor, short of the window");
+
+        assert!(
+            error.to_string().contains("truncated by eviction"),
+            "unexpected error: {error}"
+        );
+    }
+
+    //* Before the paying height reaches the maturity depth every share is
+    //* below it, so all are mature and nothing is skipped. Heights 0 and 1,
+    //* anchored at height 1: the paying share is at height 2, below 3.
+    #[test]
+    fn test_distribution_does_not_skip_before_maturity_height() {
+        let miners = [PUBKEY_G, PUBKEY_2G];
+        let (headers, tip_hash) = build_test_chain(2, &miners);
+        let mut store = MockChainStoreHandle::default();
+        store.expect_get_chain_tip().returning(move || Ok(tip_hash));
+        store
+            .expect_get_block_metadata()
+            .returning(|_| Ok(metadata_at_height(1)));
+        store
+            .expect_get_confirmed_headers_in_range()
+            .returning(move |_, _| Ok(headers.clone()));
+        let mut window = PplnsWindow::new_with_window_sizes(TEST_NETWORK, 3, 10);
+        window.update(&store).unwrap();
+
+        let distribution = window
+            .get_distribution_from_start_hash(tip_hash, &MockChainStoreHandle::default())
+            .unwrap();
+
+        assert_eq!(distribution.len(), 2);
+    }
+
+    //* Shares below the maturity depth stay mature after it is passed. Heights
+    //* 0..=3, anchored at height 3: the paying share is at height 4. Height 3
+    //* is at or above the maturity depth and only 1 deep, so it is skipped.
+    //* Heights 2, 1 and 0 are below the maturity depth and all paid.
+    #[test]
+    fn test_distribution_keeps_early_shares_mature_after_bootstrap() {
+        let miners = [PUBKEY_G, PUBKEY_2G, PUBKEY_3G, PUBKEY_4G];
+        // Newest first: index 0 is height 3 (PUBKEY_4G).
+        let (headers, tip_hash) = build_test_chain(4, &miners);
+        let height_three_miner = headers[0].header.miner_bitcoin_address.clone();
+        let mut store = MockChainStoreHandle::default();
+        store.expect_get_chain_tip().returning(move || Ok(tip_hash));
+        store
+            .expect_get_block_metadata()
+            .returning(|_| Ok(metadata_at_height(3)));
+        store
+            .expect_get_confirmed_headers_in_range()
+            .returning(move |_, _| Ok(headers.clone()));
+        let mut window = PplnsWindow::new_with_window_sizes(TEST_NETWORK, 3, 10);
+        window.update(&store).unwrap();
+
+        let distribution = window
+            .get_distribution_from_start_hash(tip_hash, &MockChainStoreHandle::default())
+            .unwrap();
+
+        assert_eq!(distribution.len(), 3);
+        assert!(!distribution.contains_key(&height_three_miner));
+    }
+
+    //* At paying height 2 * maturity - 1 the skip reaches its full
+    //* maturity - 1. Heights 0..=4, anchored at height 4: the paying share is
+    //* at height 5. Heights 4 and 3 are skipped, and heights 2, 1 and 0 are
+    //* paid.
+    #[test]
+    fn test_distribution_skips_full_maturity_after_early_shares_age_out() {
+        let miners = [PUBKEY_G, PUBKEY_2G, PUBKEY_3G, PUBKEY_4G, PUBKEY_5G];
+        // Newest first: index 0 is height 4 (PUBKEY_5G), index 1 is height 3
+        // (PUBKEY_4G).
+        let (headers, tip_hash) = build_test_chain(5, &miners);
+        let height_four_miner = headers[0].header.miner_bitcoin_address.clone();
+        let height_three_miner = headers[1].header.miner_bitcoin_address.clone();
+        let mut store = MockChainStoreHandle::default();
+        store.expect_get_chain_tip().returning(move || Ok(tip_hash));
+        store
+            .expect_get_block_metadata()
+            .returning(|_| Ok(metadata_at_height(4)));
+        store
+            .expect_get_confirmed_headers_in_range()
+            .returning(move |_, _| Ok(headers.clone()));
+        let mut window = PplnsWindow::new_with_window_sizes(TEST_NETWORK, 3, 10);
+        window.update(&store).unwrap();
+
+        let distribution = window
+            .get_distribution_from_start_hash(tip_hash, &MockChainStoreHandle::default())
+            .unwrap();
+
+        assert_eq!(distribution.len(), 3);
+        assert!(!distribution.contains_key(&height_four_miner));
+        assert!(!distribution.contains_key(&height_three_miner));
     }
 }
