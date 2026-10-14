@@ -209,7 +209,9 @@ a full donation (10,000) still skips miner address validation.
   - Live check: a Python SV2 client on an extended channel mined BCHN regtest
     blocks 117 to 457 through this listener; block 300's coinbase carries the
     channel's extranonce prefix, the 1.5% donation, the 1% fee, the AuxPoW
-    output, and the share commitment.
+    output, and the share commitment. A stricter run is under "Live regtest
+    run" below: every block the node built from a client share had the
+    client's own hash.
   - Not done: group channels, `UpdateChannel`, `CloseChannel`, and
     `SetExtranoncePrefix`.
 
@@ -270,6 +272,25 @@ Observed:
   about one block's work of real shares before a block is likely, so the
   genesis share's weight is negligible, but it is not zero until it leaves
   the window.
+
+Header check. On regtest about half of all hashes meet the block target, so
+a block BCHN accepts does not by itself show that the node rebuilt the
+header the miner hashed. Both Python test miners had such a bug, found
+while chasing a share that node1 did not take: the SV1 miner put the
+previous block hash in the header in display order, and the SV2 miner
+sometimes mined a future job before its `SetNewPrevHash`. The node's
+headers were right in both cases; the blocks above were accepted because
+the node's own header met the regtest target. With both miners fixed and
+every share ground to a 1-in-65,536 target, so that a header mismatch would
+show:
+
+- Stratum V1, a node on commit `f97ffb7`: eight shares, eight blocks
+  submitted, each with the hash the miner computed; BCHN height 692 to 700.
+  The same check against the node's earlier build also matched eight of
+  eight.
+- Stratum V2 extended channel, the same node: 441 shares, 441 blocks
+  submitted, all 441 with the client's hash; BCHN height 471 to 692 (the
+  remaining blocks lost races at the same height).
 
 Not covered by this run: a share meeting the share-chain target accepted
 into the share chain, two P2Poolv2 nodes exchanging shares, chipnet, Stratum
