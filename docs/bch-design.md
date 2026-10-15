@@ -263,8 +263,8 @@ Observed:
   push of 116; 0.75 BCH (1.5% of 50) to the donation address; 0.4925 BCH
   (1% of the remainder) to the fee address; the remainder to the PPLNS
   window; a zero-value AuxPoW `OP_RETURN` (`fabe6d6d`, zero root, size and
-  nonce); the coinbase-aux and share-commitment `OP_RETURN`s. Version 2,
-  303 bytes.
+  nonce); the padding `OP_RETURN` that aligns the share commitment to a
+  SHA256 block, and the share-commitment `OP_RETURN`. Version 2, 303 bytes.
 - The PPLNS remainder went to the genesis share's P2PKH, the NUMS key,
   because the genesis share was the only share in the window and regtest
   block difficulty is far below the mini share target. Upstream Bitcoin
