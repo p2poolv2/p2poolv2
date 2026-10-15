@@ -17,6 +17,9 @@ pub struct TemplateTransaction {
     pub txid: String,
     #[serde(default)]
     pub hash: String,
+    /// Indexes of earlier template transactions this one spends. BCHN omits
+    /// the field: its templates are in canonical order, not dependency order.
+    #[serde(default)]
     pub depends: Vec<u32>,
     pub fee: u64,
     pub sigops: u32,

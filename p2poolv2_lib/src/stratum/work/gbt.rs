@@ -258,6 +258,32 @@ mod gbt_load_tests {
         );
     }
 
+    /// A chipnet template from BCHN 29.2.0 with 65 transactions. BCHN lists
+    /// no `depends` for its transactions; requiring the field made every
+    /// chipnet template with a transaction fail to parse.
+    #[tokio::test]
+    async fn bch_chipnet_template_with_transactions_flows_through_rpc_and_validation() {
+        let (server, config) = setup_mock_bitcoin_rpc().await;
+        mock_method(
+            &server,
+            "getblocktemplate",
+            serde_json::json!([{"capabilities": ["coinbasetxn", "coinbase/append", "workid"]}]),
+            include_str!("../../../../bitcoindrpc/test_data/bchn-chipnet-template.json").into(),
+        )
+        .await;
+        let client =
+            BitcoindRpcClient::new(&config.url, &config.username, &config.password).unwrap();
+        let template = get_bch_block_template(&client).await.unwrap();
+        assert_eq!(template.height, 327_985);
+        assert_eq!(template.transactions.len(), 65);
+        assert!(template.transactions[0].depends.is_empty());
+        assert!(
+            !build_merkle_branches_for_template(&template)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
     #[test]
     fn malformed_transaction_id_returns_an_error() {
         let mut template: BlockTemplate =
