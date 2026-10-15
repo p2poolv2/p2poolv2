@@ -108,13 +108,24 @@ a full donation (10,000) still skips miner address validation.
   genesis share uses the same P2PKH form.
   `p2poolv2_cli bch-share-address` re-encodes a P2PKH CashAddr from the
   miner's wallet under the share prefix; it takes no private key.
-- **Share trading.** Waits. The mini share chain is the stand-in named in the
-  plan, and the atomic-swap scripts are not ported. No v1 code is copied.
-  Share transactions are verified by `bitcoinconsensus` with Bitcoin rules,
-  which would reject a Bitcoin Cash wallet's `SIGHASH_FORKID` signature and
-  accept a Bitcoin legacy one, so a Bitcoin Cash share with any non-coinbase
-  transaction is rejected until a Bitcoin Cash interpreter checks them. No
-  node builds such shares today (`handle_stratum_share` adds none).
+- **Share trading.** The atomic-swap scripts are not ported, and the mini
+  share chain stays the stand-in named in the plan. No v1 code is copied.
+  Share transfers are checked by a Bitcoin Cash interpreter
+  (`shares/bch_script.rs`, 2026-10-15) instead of `bitcoinconsensus`, whose
+  Bitcoin rules reject a Bitcoin Cash wallet's `SIGHASH_FORKID` signature and
+  accept a Bitcoin legacy one. It accepts one spend: a P2PKH output and a
+  `<signature> <public key>` input of two direct pushes, signed with
+  `SIGHASH_FORKID` (`ALL`, `NONE` or `SINGLE`, optionally `ANYONECANPAY`) by
+  ECDSA (strict DER, low S) or Bitcoin Cash Schnorr (64 bytes, not BIP340),
+  with a compressed or uncompressed key and no witness. Spending P2SH,
+  multisig, token-prefixed outputs or the atomic-swap scripts, and
+  `SIGHASH_UTXOS`, are rejected, which is stricter than Bitcoin Cash. The
+  outputs a transfer creates are not restricted, so a share sent to any
+  other script cannot be spent on the share chain. The digest and both
+  signature checks are tested against transactions BCHN 29.2.0's
+  `bitcoin-tx` signed (Schnorr and ECDSA; `ALL`, `NONE`, `SINGLE` and
+  `ANYONECANPAY`). No node builds shares with transfers today
+  (`handle_stratum_share` adds none), the same as on Bitcoin.
 - **Block rules.** CTOR, compact-target agreement, witness exclusion, and the
   node size limit are checked on the template before use. The constructed
   coinbase starts with the BIP34 height push, and BCHN 29.2.0 accepted blocks
@@ -197,15 +208,26 @@ a full donation (10,000) still skips miner address validation.
     channel target, the order SV1 uses. Vardiff is the SV1 adjuster, sent as
     `SetTarget` and capped at the device's `max_target`.
   - `user_identity` is `<payout address>.<worker>`, parsed as an SV1
-    username (CashAddr on Bitcoin Cash). Stratum V2 has no password to carry
-    `p2p=`, so shares belong to the configured `miner_address`, and a
-    P2Poolv2 node without one refuses the channel
-    (`share-address-required`). Binding a per-miner share address over SV2
-    stays an open question.
+    username (CashAddr on Bitcoin Cash), optionally followed by a comma,
+    space, tab or semicolon and options in the SV1 password format.
+    `p2p=<share address>` there binds the channel's shares to the miner's
+    own share address (2026-10-15), with the SV1 authorize rules: a
+    configured `miner_address` owns every share and a different `p2p=` is
+    refused (`invalid-share-address`), and a P2Poolv2 node with neither
+    refuses the channel (`share-address-required`).
   - Frames for channel messages carry the channel bit the specification
     requires; `SetCustomMiningJob` replies were sent without it before.
   - One connection may open 32 channels (`max-channels-reached` after
     that), because every template builds a job per channel.
+  - Review fixes (2026-10-15): reading the current template for a new
+    channel no longer marks it seen, which had let a template that arrived
+    during a share submission skip every open channel, so they kept mining
+    the old one. SV2 connections take permits from the SV1 server's
+    connection limit, and a Noise handshake must finish within 10 seconds.
+    `UpdateChannel` (sent by proxies such as the reference translator) caps
+    the channel target and answers with `SetTarget`, and `CloseChannel`
+    frees the channel; both used to close the connection.
+    `sv2_cert_validity_secs` must fit the certificate's 32-bit field.
   - Live check: a Python SV2 client on an extended channel mined BCHN regtest
     blocks 117 to 457 through this listener; block 300's coinbase carries the
     channel's extranonce prefix, the 1.5% donation, the 1% fee, the AuxPoW
@@ -324,9 +346,10 @@ than the genesis share.
 ## Still unfinished
 
 Two-node share propagation on chipnet (the cloud container used here cannot
-reach BCH peers; steps are in `bch-quickstart.md`), a Bitcoin Cash script
-interpreter for share transfers, a retuned PPLNS window (after CHIP-2025-03
-is decided), and per-miner share addresses over Stratum V2. A node started
+reach BCH peers; steps are in `bch-quickstart.md`) and a retuned PPLNS window
+(after CHIP-2025-03 is decided). The Bitcoin Cash script interpreter for
+share transfers and per-miner share addresses over Stratum V2 were added on
+2026-10-15. A node started
 with `chain = "bitcoin-cash"` validates BCHN templates, pays CashAddr
 scripts including the donation and fee, records a P2PKH share owner, starts
 from a main or mini P2PKH genesis, speaks both local Job Declaration modes,

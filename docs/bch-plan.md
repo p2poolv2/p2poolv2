@@ -80,6 +80,26 @@ Still unfinished: two-node share propagation on chipnet, a retuned PPLNS
 window, a Bitcoin Cash script interpreter for share transfers, and
 per-miner share addresses over Stratum V2.
 
+## Implementation checkpoint (2026-10-15)
+
+- A Bitcoin Cash script interpreter checks share transactions
+  (`shares/bch_script.rs`, `shares/bch_sighash.rs`), so a Bitcoin Cash share
+  may carry transfers again. It accepts P2PKH spends signed with
+  `SIGHASH_FORKID` by ECDSA or Bitcoin Cash Schnorr and rejects every other
+  script. Transactions signed by BCHN 29.2.0's `bitcoin-tx` back its tests.
+  Details in [bch-design.md](bch-design.md).
+- A Stratum V2 miner names its own share address with `p2p=` after the
+  username in `user_identity`, under the SV1 password rules.
+- An independent review of the 2026-10-14 Stratum V2 commits found that a
+  template arriving during a share submission could skip a connection's
+  channels, that the SV2 port had no connection limit, and that
+  `UpdateChannel`/`CloseChannel` closed the connection. All three are
+  fixed (details in [bch-design.md](bch-design.md)). The review found no
+  consensus or payout bug in the donation, fee and coinbase flags commits.
+
+Still unfinished: two-node share propagation on chipnet and a retuned PPLNS
+window.
+
 ## Startup selection (2026-10-13)
 
 Design checks for every porting item are in [bch-design.md](bch-design.md).
@@ -218,13 +238,16 @@ check before code.
   lock-in 2026-11-15) before tuning; the window already scales with block
   difficulty.
 - Whether 10% is the right consensus cap on donation plus fee.
-- A Bitcoin Cash script interpreter for share-chain transactions
-  (`SIGHASH_FORKID`, Schnorr), needed before share transfers or trading.
+- Which scripts beyond P2PKH the share-chain interpreter should accept
+  (P2SH, the atomic-swap scripts, `SIGHASH_UTXOS`); P2PKH transfers with
+  `SIGHASH_FORKID` ECDSA or Schnorr are checked since 2026-10-15.
 - Keep P2Poolv2's share trading on BCH, or rely on the mini share chain.
 - Merge-mining commitment format and size budget (Stratum V2's
   `CoinbaseOutputConstraints` already declares coinbase space).
 - Binding each miner's payout address to their shares over SV2 (sv2-p2pool
-  lists it as open, its ADR 0002).
+  lists it as open, its ADR 0002). Since 2026-10-15 a `p2p=` option in
+  `user_identity` names the share address, as the SV1 password does; a
+  signed binding a miner could prove is still open.
 - Whether the covenant payout tree is needed at all; prove it within BCH's VM
   limits first.
 - Pool operators running this software beside the share chain.
