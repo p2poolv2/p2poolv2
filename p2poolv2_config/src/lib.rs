@@ -516,6 +516,12 @@ pub struct SimConfig {
     /// identical across nodes (ASERT consensus). Omit for the default 10s.
     #[serde(default)]
     pub ideal_block_time_secs: Option<u32>,
+    /// Sim-only override of the coinbase maturity depth (shares), which sets
+    /// both when a share coinbase can be spent and when a share can be paid.
+    /// Smaller = a short run reaches the payout maturity skip. MUST be
+    /// identical across nodes (consensus). Omit for the production 6,048.
+    #[serde(default)]
+    pub coinbase_maturity: Option<usize>,
 }
 
 /// Config for p2poolv2 nodes

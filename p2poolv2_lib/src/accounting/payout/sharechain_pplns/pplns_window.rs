@@ -16,6 +16,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ConfirmedHeaderResult;
 use crate::shares::share_block::ShareHeader;
+use crate::sim_overrides;
 use bitcoin::Address;
 use bitcoin::BlockHash;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -216,7 +217,8 @@ pub struct PplnsWindow {
     /// exercised without a full-capacity fixture.
     max_window_shares: usize,
     /// Depth a share must reach before it is paid. Defaults to
-    /// `COINBASE_MATURITY`
+    /// `sim_overrides::coinbase_maturity()`, which is `COINBASE_MATURITY`
+    /// outside sim builds.
     maturity_skip: usize,
 }
 
@@ -230,7 +232,7 @@ impl PplnsWindow {
             address_keys: AddressKeys::default(),
             network,
             max_window_shares: PPLNS_WINDOW_SHARES,
-            maturity_skip: COINBASE_MATURITY,
+            maturity_skip: sim_overrides::coinbase_maturity(),
         }
     }
 
