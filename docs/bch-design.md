@@ -177,7 +177,7 @@ a full donation (10,000) still skips miner address validation.
   mode. Set, the client uses Full-Template: `DeclareMiningJob`, then
   `ProvideMissingTransactions` for every transaction, because this node has
   no mempool. Clear, `DeclareMiningJob` is rejected and `SetCustomMiningJob`
-  mines the pool template. Both paths store the non-coinbase transactions in
+  records the pool transaction set. Both paths store the non-coinbase transactions in
   CTOR. Bitcoin Cash puts the AuxPoW output in
   `AllocateMiningJobTokenSuccess.coinbase_outputs`, encoded as the
   specification defines `coinbase_tx_outputs`: a CompactSize-prefixed array
@@ -371,13 +371,24 @@ and `p2p=<tp2pool share address>` in the password.
 
 ## Still unfinished
 
+Completion audit (2026-10-15): the Job Declaration exchange stops at token
+acceptance. `on_custom_job` returns a success job id without installing it
+in a mining channel, so neither declaration mode yet reaches actual share
+submission. Wiring the declared template and coinbase into channel jobs,
+validating the resulting candidate and its required payouts, and mining it
+with an independent Job Declarator remain required. The reserved zero-root
+AuxPoW output also does not implement miners choosing their auxiliary tokens.
+Final block size still needs to include the full PPLNS coinbase. API payout
+addresses still need CashAddr text. Hydrapool CashAddr payout parsing and SV2
+worker cleanup are fixed in the completion follow-up in `bch-plan.md`.
+
 A retuned PPLNS window (after CHIP-2025-03 is decided). Two-node share
 propagation on chipnet passed on 2026-10-15 (above). The Bitcoin Cash
 script interpreter for share transfers and per-miner share addresses over
 Stratum V2 were added on 2026-10-15. A node started
 with `chain = "bitcoin-cash"` validates BCHN templates, pays CashAddr
 scripts including the donation and fee, records a P2PKH share owner, starts
-from a main or mini P2PKH genesis, speaks both local Job Declaration modes,
+from a main or mini P2PKH genesis, handles both local declaration exchanges,
 commits a reserved AuxPoW output, and on regtest builds blocks BCHN accepts
 and shares that three nodes accept and relay, and on chipnet shares two
 nodes accept and relay. It is still not a proven production pool: no

@@ -15,6 +15,7 @@
 
 use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::address::Address as P2PoolAddress;
+use crate::address::share_owner::ShareOwner;
 use crate::shares::coinbase_proof::CoinbaseProof;
 use crate::shares::extranonce::Extranonce;
 use crate::stratum::emission::Emission;
@@ -85,7 +86,7 @@ pub fn build_sim_emission(params: SimShareParams<'_>) -> Result<BuiltShare, SimS
     build_notify_from_prepared(
         params.prepared,
         Some(params.miner_address),
-        Some(params.share_address),
+        Some(ShareOwner::Taproot(params.share_address.witness_program())),
         params.tracker,
     )
     .map_err(|e| SimShareError(format!("build notify: {e}")))?;

@@ -14,6 +14,6 @@ pub mod session;
 pub mod session_timeout;
 pub mod sv2;
 pub mod util;
-mod validate_username;
+pub(crate) mod validate_username;
 pub mod work;
 pub mod zmq_listener;

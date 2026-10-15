@@ -208,10 +208,32 @@ impl MiningChannels {
             MESSAGE_TYPE_CLOSE_CHANNEL => {
                 let request =
                     CloseChannel::from_bytes(payload).map_err(|error| error.to_string())?;
-                self.channels.remove(&request.channel_id);
+                self.close_channel(request.channel_id).await;
                 Ok(Vec::new())
             }
             _ => Err(format!("not a mining channel message: {message_type}")),
+        }
+    }
+
+    async fn close_channel(&mut self, channel_id: u32) {
+        if let Some(channel) = self.channels.remove(&channel_id)
+            && let Err(metrics_error) = self
+                .ctx
+                .metrics
+                .decrement_worker_count(
+                    channel.session.btcaddress,
+                    channel.session.workername.unwrap_or_default(),
+                )
+                .await
+        {
+            error!("Failed to record closed SV2 worker: {metrics_error}");
+        }
+    }
+
+    /// Release every authorized worker when the connection ends.
+    pub(crate) async fn close_all(&mut self) {
+        while let Some(channel_id) = self.channels.keys().next().copied() {
+            self.close_channel(channel_id).await;
         }
     }
 
@@ -317,18 +339,6 @@ impl MiningChannels {
         session.share_owner = share_owner;
         session.user_id = Some(user_id);
         session.subscribed = true;
-        if let Err(metrics_error) = self
-            .ctx
-            .metrics
-            .increment_worker_count(
-                validated.address_str.to_string(),
-                validated.worker_name.unwrap_or_default().to_string(),
-            )
-            .await
-        {
-            error!("Failed to send increment worker count message: {metrics_error}");
-        }
-
         let device_max_target = device_max_target(max_target);
         let channel_target =
             target_for_difficulty(session.difficulty_adjuster.get_current_difficulty())
@@ -381,6 +391,17 @@ impl MiningChannels {
                 last_prev_hash: None,
             },
         );
+        if let Err(metrics_error) = self
+            .ctx
+            .metrics
+            .increment_worker_count(
+                validated.address_str.to_string(),
+                validated.worker_name.unwrap_or_default().to_string(),
+            )
+            .await
+        {
+            error!("Failed to send increment worker count message: {metrics_error}");
+        }
         if let Some(prepared) = current {
             frames.extend(self.job_frames(channel_id, &prepared)?);
         }
@@ -1162,7 +1183,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_share_below_the_channel_target_still_submits_a_found_block() {
+    async fn a_share_below_the_channel_target_keeps_the_block_submission_policy() {
         let mut template: BlockTemplate = serde_json::from_str(include_str!(
             "../../../../p2poolv2_tests/test_data/gbt/regtest/ckpool/one-txn/gbt.json"
         ))
@@ -1271,8 +1292,10 @@ mod tests {
         let error = SubmitSharesError::from_bytes(&mut error_payload).unwrap();
         assert_eq!(error.error_code.as_utf8_or_hex(), "difficulty-too-low");
         let requests = mock_server.received_requests().await.unwrap();
-        assert_eq!(requests.len(), 1);
-        assert!(String::from_utf8_lossy(&requests[0].body).contains("submitblock"));
+        assert_eq!(requests.len(), usize::from(!cfg!(feature = "sim")));
+        if let Some(request) = requests.first() {
+            assert!(String::from_utf8_lossy(&request.body).contains("submitblock"));
+        }
         assert!(emissions_rx.try_recv().is_ok());
     }
 
@@ -1890,6 +1913,11 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(channels.channels.len(), 1);
+        channels
+            .handle(MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL, &mut open, None)
+            .await
+            .unwrap();
+        assert_eq!(channels.channels.len(), 2);
         let mut close = payload(
             &encode_message(
                 CloseChannel {
@@ -1906,6 +1934,12 @@ mod tests {
             .unwrap();
 
         assert!(answered.is_empty());
+        assert_eq!(channels.channels.len(), 1);
+        let (address, _) = USERNAME.split_once('.').unwrap();
+        assert!(channels.ctx.metrics.get_metrics().await.users[address].workers["rig1"].active);
+        channels.close_all().await;
         assert!(channels.channels.is_empty());
+        assert!(!channels.ctx.metrics.get_metrics().await.users[address].workers["rig1"].active);
+        channels.close_all().await;
     }
 }

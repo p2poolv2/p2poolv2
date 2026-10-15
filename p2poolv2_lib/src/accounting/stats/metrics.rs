@@ -157,6 +157,7 @@ pub enum MetricsMessage {
 pub struct MetricsActor {
     metrics: PoolMetrics,
     receiver: mpsc::Receiver<MetricsMessage>,
+    worker_connections: HashMap<(String, String), usize>,
 }
 
 impl MetricsActor {
@@ -165,6 +166,7 @@ impl MetricsActor {
         Self {
             metrics: PoolMetrics::default(),
             receiver,
+            worker_connections: HashMap::with_capacity(INITIAL_USER_MAP_CAPACITY),
         }
     }
 
@@ -174,7 +176,11 @@ impl MetricsActor {
         receiver: mpsc::Receiver<MetricsMessage>,
     ) -> Result<Self, std::io::Error> {
         let metrics = PoolMetrics::load_existing(log_dir)?;
-        Ok(Self { metrics, receiver })
+        Ok(Self {
+            metrics,
+            receiver,
+            worker_connections: HashMap::with_capacity(INITIAL_USER_MAP_CAPACITY),
+        })
     }
 
     /// Start the actor's message handling loop
@@ -319,6 +325,10 @@ impl MetricsActor {
     /// Increment worker counts - called after worker has authorised successfully.
     /// Uses entry().or_default() to preserve existing worker stats on reconnect.
     fn worker_authorized(&mut self, btcaddress: String, workername: String) {
+        *self
+            .worker_connections
+            .entry((btcaddress.clone(), workername.clone()))
+            .or_insert(0) += 1;
         let worker = self
             .metrics
             .users
@@ -332,13 +342,25 @@ impl MetricsActor {
     }
 
     /// Decrement pool wide worker counts, if worker found as authorised. Unauthorised workers are not counted.
-    /// Also marks Worker inactive, if found.
+    /// Keep a worker active until its last SV1 connection or SV2 channel closes.
     fn mark_worker_inactive(&mut self, btcaddress: Option<String>, workername: String) {
-        if let Some(btcaddress) = btcaddress
-            && let Some(user) = self.metrics.users.get_mut(&btcaddress)
-            && let Some(worker) = user.workers.get_mut(&workername)
-        {
-            worker.active = false;
+        if let Some(btcaddress) = btcaddress {
+            let identity = (btcaddress, workername);
+            let active = self
+                .worker_connections
+                .get_mut(&identity)
+                .is_some_and(|count| {
+                    *count = count.saturating_sub(1);
+                    *count > 0
+                });
+            if !active {
+                self.worker_connections.remove(&identity);
+            }
+            if let Some(user) = self.metrics.users.get_mut(&identity.0)
+                && let Some(worker) = user.workers.get_mut(&identity.1)
+            {
+                worker.active = active;
+            }
         }
     }
 
@@ -556,6 +578,22 @@ pub async fn start_metrics(log_dir: String) -> Result<MetricsHandle, std::io::Er
 mod tests {
     use super::*;
     use crate::accounting::stats::pool_local_stats::save_pool_local_stats;
+
+    #[test]
+    fn shared_worker_stays_active_until_the_last_connection_closes() {
+        let (_sender, receiver) = mpsc::channel(8);
+        let mut actor = MetricsActor::new(receiver);
+        actor.worker_authorized("miner".into(), "worker".into());
+        actor.worker_authorized("miner".into(), "worker".into());
+        actor.mark_worker_inactive(Some("miner".into()), "worker".into());
+        assert!(actor.metrics.users["miner"].workers["worker"].active);
+        actor.mark_worker_inactive(Some("miner".into()), "worker".into());
+        assert!(!actor.metrics.users["miner"].workers["worker"].active);
+        assert!(actor.worker_connections.is_empty());
+        actor.mark_worker_inactive(Some("miner".into()), "worker".into());
+        actor.worker_authorized("miner".into(), "worker".into());
+        assert!(actor.metrics.users["miner"].workers["worker"].active);
+    }
 
     #[test]
     fn test_pool_metrics_default() {

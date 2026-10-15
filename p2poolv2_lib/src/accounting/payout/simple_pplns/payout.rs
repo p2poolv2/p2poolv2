@@ -6,11 +6,13 @@ use crate::accounting::OutputPair;
 use crate::accounting::payout::payout_distribution::{
     PayoutDistribution, append_proportional_distribution,
 };
+use crate::config::BitcoinCashNetwork;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
+use crate::stratum::validate_username::validate_bitcoin_cash;
 use bitcoin::{Address, Amount, BlockHash};
 use std::collections::HashMap;
 use std::error::Error;
@@ -21,6 +23,7 @@ pub struct Payout {
     /// This determines how far back in time to query in each batch.
     /// Default: 86400 seconds (1 day) for typical pool configurations.
     step_size_seconds: u64,
+    bitcoin_cash_network: Option<BitcoinCashNetwork>,
 }
 
 impl PayoutDistribution for Payout {
@@ -44,10 +47,16 @@ impl PayoutDistribution for Payout {
                 self.accumulate_difficulty_by_address(chain_store_handle, total_difficulty)?;
 
             if address_difficulty_map.is_empty() {
-                *distribution = vec![OutputPair {
+                let amount = if self.bitcoin_cash_network.is_some() {
+                    remaining_total_amount
+                } else {
+                    distribution.clear();
+                    total_amount
+                };
+                distribution.push(OutputPair {
                     address: bootstrap_address,
-                    amount: total_amount,
-                }];
+                    amount,
+                });
             } else {
                 distribution.reserve(address_difficulty_map.len());
 
@@ -64,13 +73,17 @@ impl PayoutDistribution for Payout {
 }
 
 impl Payout {
-    /// Creates a new Payout with specified step size.
+    /// Create a payout with the batch step size and optional Bitcoin Cash network.
+    /// `None` keeps the Bitcoin address format used by existing pools.
     ///
     /// # Arguments
     /// * `step_size_seconds` - Batch size in seconds for querying shares from
     ///   Default: 86400 (1 day) for typical pool configurations
-    pub fn new(step_size_seconds: u64) -> Self {
-        Self { step_size_seconds }
+    pub fn new(step_size_seconds: u64, bitcoin_cash_network: Option<BitcoinCashNetwork>) -> Self {
+        Self {
+            step_size_seconds,
+            bitcoin_cash_network,
+        }
     }
 
     /// Accumulate difficulty per miner address from PPLNS shares.
@@ -113,12 +126,18 @@ impl Payout {
                     if accumulated_difficulty < total_difficulty {
                         accumulated_difficulty += share.difficulty as u128;
                         if let Some(btcaddress) = share.btcaddress {
-                            let address = btcaddress
-                                .parse::<bitcoin::Address<_>>()
-                                .map_err(|e| {
-                                    format!("Invalid bitcoin address '{btcaddress}': {e}")
-                                })?
-                                .assume_checked();
+                            let address = if let Some(network) = self.bitcoin_cash_network {
+                                validate_bitcoin_cash(&btcaddress, true, network)?
+                                    .parsed_address
+                                    .ok_or("Missing validated Bitcoin Cash payout address")?
+                            } else {
+                                btcaddress
+                                    .parse::<bitcoin::Address<_>>()
+                                    .map_err(|e| {
+                                        format!("Invalid bitcoin address '{btcaddress}': {e}")
+                                    })?
+                                    .assume_checked()
+                            };
                             *address_difficulty.entry(address).or_insert(0) +=
                                 share.difficulty as u128;
                         }
@@ -142,11 +161,167 @@ mod tests {
     use crate::accounting::payout::simple_pplns::SimplePplnsShare;
     use crate::test_utils::make_test_address;
     use bitcoin::hashes::Hash;
-    use p2poolv2_config::StratumConfig;
+    use p2poolv2_config::{Chain, StratumConfig, parse_payout_address};
+
+    #[tokio::test]
+    async fn bitcoin_cash_payout_combines_prefixed_and_prefixless_usernames() {
+        let mut config = StratumConfig::new_for_test_default();
+        config.chain = Chain::BitcoinCash;
+        config.bitcoin_cash_network = Some(BitcoinCashNetwork::Mainnet);
+        config.bootstrap_address = "bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a".into();
+        config.fee_address = Some("bitcoincash:qze95tc2dqrnltvxfa5yhunwx5952f34fvw4g6365k".into());
+        config.fee = Some(100);
+        let config = config.parse().unwrap();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let shares = vec![
+            SimplePplnsShare::new(
+                1,
+                100,
+                config.bootstrap_address.clone(),
+                "one".into(),
+                (now - 60) * 1_000_000,
+                "job".into(),
+                "extra".into(),
+                "nonce".into(),
+            ),
+            SimplePplnsShare::new(
+                2,
+                200,
+                "qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a".into(),
+                "two".into(),
+                (now - 60) * 1_000_000,
+                "job".into(),
+                "extra".into(),
+                "nonce".into(),
+            ),
+            SimplePplnsShare::new(
+                3,
+                100,
+                "bitcoincash:ppm2qsznhks23z7629mms6s4cwef74vcwvn0h829pq".into(),
+                "three".into(),
+                (now - 60) * 1_000_000,
+                "job".into(),
+                "extra".into(),
+                "nonce".into(),
+            ),
+        ];
+        let mut store = ChainStoreHandle::default();
+        store
+            .expect_get_pplns_shares_filtered()
+            .times(1)
+            .return_const(shares);
+        let mut payout = Payout::new(86400, config.bitcoin_cash_network);
+        let total = Amount::from_sat(100_000_000);
+        let distribution = payout
+            .get_output_distribution(&store, BlockHash::all_zeros(), 400, total, &config)
+            .unwrap();
+        assert_eq!(distribution.len(), 4);
+        assert_eq!(distribution[0].amount.to_sat(), 1_500_000);
+        assert_eq!(distribution[1].amount.to_sat(), 985_000);
+        assert_eq!(
+            distribution
+                .iter()
+                .map(|output| output.amount)
+                .sum::<Amount>(),
+            total
+        );
+        let public_key_hash_payout = distribution
+            .iter()
+            .find(|output| output.address == *config.bootstrap_address())
+            .unwrap();
+        assert_eq!(public_key_hash_payout.amount.to_sat(), 73_136_250);
+        let script_hash = parse_payout_address(
+            "bitcoincash:ppm2qsznhks23z7629mms6s4cwef74vcwvn0h829pq",
+            config.chain,
+            config.network,
+            config.bitcoin_cash_network,
+        )
+        .unwrap();
+        assert_eq!(
+            distribution
+                .iter()
+                .find(|output| output.address == script_hash)
+                .unwrap()
+                .amount
+                .to_sat(),
+            24_378_750
+        );
+    }
+
+    #[tokio::test]
+    async fn bitcoin_cash_payout_rejects_a_different_network() {
+        let payout = Payout::new(86400, Some(BitcoinCashNetwork::Chipnet));
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let mut store = ChainStoreHandle::default();
+        store
+            .expect_get_pplns_shares_filtered()
+            .times(1)
+            .return_const(vec![SimplePplnsShare::new(
+                1,
+                100,
+                "bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a".into(),
+                "worker".into(),
+                (now - 60) * 1_000_000,
+                "job".into(),
+                "extra".into(),
+                "nonce".into(),
+            )]);
+        let error = payout
+            .accumulate_difficulty_by_address(&store, 100)
+            .unwrap_err();
+        assert!(error.to_string().contains("prefix does not match"));
+    }
+
+    #[tokio::test]
+    async fn bootstrap_payout_preserves_donation_and_fee() {
+        let mut config = StratumConfig::new_for_test_default();
+        config.chain = Chain::BitcoinCash;
+        config.bitcoin_cash_network = Some(BitcoinCashNetwork::Mainnet);
+        config.bootstrap_address = "bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a".into();
+        config.fee_address = Some("bitcoincash:ppm2qsznhks23z7629mms6s4cwef74vcwvn0h829pq".into());
+        config.fee = Some(100);
+        let config = config.parse().unwrap();
+        let mut store = ChainStoreHandle::default();
+        store
+            .expect_get_pplns_shares_filtered()
+            .times(1)
+            .return_const(Vec::new());
+        let mut payout = Payout::new(86400, config.bitcoin_cash_network);
+        let total = Amount::from_sat(100_000_000);
+        let distribution = payout
+            .get_output_distribution(&store, BlockHash::all_zeros(), 400, total, &config)
+            .unwrap();
+        assert_eq!(distribution.len(), 3);
+        assert_eq!(
+            distribution[0].address,
+            *config.donation_address_parsed.as_ref().unwrap()
+        );
+        assert_eq!(distribution[0].amount.to_sat(), 1_500_000);
+        assert_eq!(
+            distribution[1].address,
+            *config.fee_address_parsed.as_ref().unwrap()
+        );
+        assert_eq!(distribution[1].amount.to_sat(), 985_000);
+        assert_eq!(distribution[2].address, *config.bootstrap_address());
+        assert_eq!(distribution[2].amount.to_sat(), 97_515_000);
+        assert_eq!(
+            distribution
+                .iter()
+                .map(|output| output.amount)
+                .sum::<Amount>(),
+            total
+        );
+    }
 
     #[tokio::test]
     async fn test_accumulate_difficulty_exact_match() {
-        let payout = Payout::new(86400);
+        let payout = Payout::new(86400, None);
         let mut chain_store_handle = ChainStoreHandle::default();
 
         let current_time = SystemTime::now()
@@ -220,7 +395,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_accumulate_difficulty_cutoff() {
-        let payout = Payout::new(86400);
+        let payout = Payout::new(86400, None);
         let current_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -294,7 +469,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_accumulate_difficulty_insufficient_shares() {
-        let payout = Payout::new(86400);
+        let payout = Payout::new(86400, None);
         let current_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -354,7 +529,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_accumulate_difficulty_empty_store() {
-        let payout = Payout::new(86400);
+        let payout = Payout::new(86400, None);
         let mut chain_store_handle = ChainStoreHandle::default();
 
         chain_store_handle
@@ -370,7 +545,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_accumulate_difficulty_single_share_exceeds_target() {
-        let payout = Payout::new(86400);
+        let payout = Payout::new(86400, None);
         let current_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -404,7 +579,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_accumulate_difficulty_same_address_aggregation() {
-        let payout = Payout::new(86400);
+        let payout = Payout::new(86400, None);
         let current_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -472,7 +647,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_accumulate_difficulty_multiple_batches() {
-        let payout = Payout::new(86400);
+        let payout = Payout::new(86400, None);
         let current_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -564,13 +739,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_payout_constructors() {
-        let payout1 = Payout::new(3600);
+        let payout1 = Payout::new(3600, None);
         assert_eq!(payout1.step_size_seconds, 3600);
     }
 
     #[tokio::test]
     async fn test_get_output_distribution_single_address() {
-        let mut payout = Payout::new(86400);
+        let mut payout = Payout::new(86400, None);
         let current_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -617,7 +792,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_output_distribution_multiple_addresses() {
-        let mut payout = Payout::new(86400);
+        let mut payout = Payout::new(86400, None);
         let current_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -692,7 +867,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_output_distribution_same_address_multiple_shares() {
-        let mut payout = Payout::new(86400);
+        let mut payout = Payout::new(86400, None);
         let current_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -767,7 +942,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_output_distribution_empty_shares() {
-        let mut payout = Payout::new(86400);
+        let mut payout = Payout::new(86400, None);
         let mut chain_store_handle = ChainStoreHandle::default();
 
         let total_amount = bitcoin::Amount::from_sat(100_000_000);
@@ -795,7 +970,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_output_distribution_with_donation() {
-        let mut payout = Payout::new(86400);
+        let mut payout = Payout::new(86400, None);
         let current_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -889,7 +1064,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_output_distribution_with_fee() {
-        let mut payout = Payout::new(86400);
+        let mut payout = Payout::new(86400, None);
         let current_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -986,7 +1161,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_output_distribution_with_donation_and_fee() {
-        let mut payout = Payout::new(86400);
+        let mut payout = Payout::new(86400, None);
         let current_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -1099,7 +1274,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_output_distribution_with_donation_empty_shares() {
-        let mut payout = Payout::new(86400);
+        let mut payout = Payout::new(86400, None);
         let mut chain_store_handle = ChainStoreHandle::default();
 
         chain_store_handle
@@ -1133,7 +1308,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_output_distribution_with_zero_donation() {
-        let mut payout = Payout::new(86400);
+        let mut payout = Payout::new(86400, None);
         let current_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -1224,7 +1399,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_output_distribution_with_zero_fee() {
-        let mut payout = Payout::new(86400);
+        let mut payout = Payout::new(86400, None);
         let current_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -1294,7 +1469,7 @@ mod tests {
     async fn test_get_output_distribution_with_full_donation_and_invalid_miner_addresses() {
         // This test verifies that when donation is 100%, we don't try to parse miner addresses
         // which allows non-standard usernames when validate_address is false
-        let mut payout = Payout::new(86400);
+        let mut payout = Payout::new(86400, None);
         let current_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()

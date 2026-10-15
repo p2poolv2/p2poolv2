@@ -103,7 +103,37 @@ per-miner share addresses over Stratum V2.
   template exposed a parser bug (BCHN omits `depends`), now fixed. Details
   in [bch-design.md](bch-design.md#chipnet-run-2026-10-15).
 
-Still unfinished: a retuned PPLNS window.
+## Completion follow-up (2026-10-15)
+
+Hydrapool payout calculation now reads stored Bitcoin Cash usernames with
+the same CashAddr parser as authorization, including prefixless usernames.
+Equivalent names combine into one payout script. A wrong-network address
+fails the distribution. With no shares, Bitcoin Cash keeps its donation and
+fee outputs and pays only the remainder to the bootstrap address. Bitcoin's
+existing bootstrap policy is unchanged.
+
+Stratum V2 closes its authorized workers on `CloseChannel`, disconnect,
+protocol errors and shutdown. Shared SV1/SV2 worker identities stay active
+until their last connection or channel closes. Tests cover CashAddr P2PKH
+and P2SH payouts, exact donation/fee amounts, wrong networks, shared worker
+identities, and a real socket disconnect releasing its worker and permit.
+
+Local validation: 1,651 workspace tests passed (1 skipped); 1,659 tests
+passed with all features (1 skipped). Clippy passed for all targets and
+features with warnings denied, and formatting passed. The all-features
+build also fixes the simulator's share-owner conversion and checks its
+existing block-submission suppression policy.
+
+Job Declaration is still incomplete: `Sv2Connection::on_custom_job` accepts
+a token and returns a job id, but does not install that job in
+`MiningChannels`. Declared jobs cannot yet be mined through the share/block
+submission pipeline. Declaration message tests and pool-issued SV2 mining
+tests do not prove this requirement. Miner-selected aux commitments are also
+unfinished; the coinbase currently carries the reserved zero commitment.
+
+Other pending work includes checking final coinbase-inclusive BCH block
+limits, CashAddr payout text in the API, the PPLNS settings decision, and
+independent ASIC/Job Declarator interoperability. This port is not complete.
 
 ## Startup selection (2026-10-13)
 

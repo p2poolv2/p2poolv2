@@ -278,8 +278,11 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
 
     let pool_transactions = p2poolv2_lib::stratum::sv2::PoolTransactionCache::new();
     let cloned_stratum_config = stratum_config.clone();
-    let (payout, shared_pplns_window) =
-        build_payout_for_mode(stratum_config.mode, cloned_stratum_config.network);
+    let (payout, shared_pplns_window) = build_payout_for_mode(
+        stratum_config.mode,
+        cloned_stratum_config.network,
+        stratum_config.bitcoin_cash_network,
+    );
     let exit_sender_notify = exit_sender.clone();
     let exit_receiver_notify = exit_sender.subscribe();
     let notify_transactions = pool_transactions.clone();

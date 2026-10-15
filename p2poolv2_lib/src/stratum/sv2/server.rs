@@ -157,11 +157,11 @@ async fn handle_connection<ShutdownSignal>(
     };
     let (mut reader, mut writer) = stream.into_split();
     let mut buffer = vec![0u8; 4096];
-    loop {
+    'connection: loop {
         let frames = tokio::select! {
             read = reader.read(&mut buffer) => {
                 let count = match read {
-                    Ok(0) | Err(_) => return,
+                    Ok(0) | Err(_) => break,
                     Ok(count) => count,
                 };
                 let messages = match noise.as_mut() {
@@ -182,7 +182,7 @@ async fn handle_connection<ShutdownSignal>(
                 };
                 match handled {
                     Ok(frames) => frames,
-                    Err(_) => return,
+                    Err(_) => break,
                 }
             }
             prepared = next_template(template_rx.as_mut()) => {
@@ -191,20 +191,23 @@ async fn handle_connection<ShutdownSignal>(
                     _ => Vec::new(),
                 }
             }
-            _ = shutdown.changed() => return,
+            _ = shutdown.changed() => break,
         };
         for frame in frames {
             let wire = match noise.as_mut() {
                 Some(transport) => match transport.encrypt(frame) {
                     Ok(encrypted) => encrypted,
-                    Err(_) => return,
+                    Err(_) => break 'connection,
                 },
                 None => frame,
             };
             if writer.write_all(&wire).await.is_err() {
-                return;
+                break 'connection;
             }
         }
+    }
+    if let Some(channels) = channels.as_mut() {
+        channels.close_all().await;
     }
 }
 
@@ -264,16 +267,138 @@ async fn next_template(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::StratumConfig;
+    use crate::accounting::stats::metrics;
+    use crate::config::{Chain, DEFAULT_VERSION_MASK, PoolMode, StratumConfig};
     use crate::stratum::sv2::session::encode_message;
+    use crate::stratum::work::tracker::start_tracker_actor;
+    use crate::test_utils::{make_test_share_address, setup_test_chain_store_handle};
+    use binary_sv2::U256;
+    use bitcoin::Network;
     use bitcoin::secp256k1::{Keypair, Secp256k1};
+    use bitcoindrpc::BitcoindRpcClient;
     use codec_sv2::{Decrypted, Handshake, NoiseDecoder, NoiseEncoder};
     use common_messages_sv2::{
         MESSAGE_TYPE_SETUP_CONNECTION, MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS, Protocol,
         SetupConnection,
     };
     use framing_sv2::framing::{MessageFrame, SerializedFrame};
+    use mining_sv2::{
+        MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL,
+        MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL_SUCCESS, OpenExtendedMiningChannel,
+    };
     use noise_sv2::{INITIATOR_EXPECTED_HANDSHAKE_MESSAGE_SIZE, Initiator};
+    use tokio::sync::mpsc;
+
+    #[tokio::test]
+    async fn disconnect_releases_the_authorized_worker_and_connection_permit() {
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
+        let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(true).await;
+        let (emissions_tx, _emissions_rx) = mpsc::channel(10);
+        let ctx = StratumContext {
+            tracker_handle: start_tracker_actor(),
+            bitcoindrpc_client: BitcoindRpcClient::new("http://127.0.0.1:1", "user", "pass")
+                .unwrap(),
+            start_difficulty: 1,
+            minimum_difficulty: 1,
+            maximum_difficulty: None,
+            ignore_difficulty: true,
+            validate_addresses: true,
+            emissions_tx,
+            network: Network::Signet,
+            metrics: metrics.clone(),
+            chain_store_handle,
+            mode: PoolMode::P2poolv2,
+            miner_address: Some(make_test_share_address(1, Network::Signet)),
+            share_chain: Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
+        };
+        let listener = bind("127.0.0.1", 0).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let mut client = TcpStream::connect(address).await.unwrap();
+        let (stream, _) = listener.accept().await.unwrap();
+        let registry = Arc::new(Mutex::new(JobRegistry::new(
+            PoolTransactionCache::new(),
+            None,
+        )));
+        let connection_limit = Arc::new(Semaphore::new(1));
+        let permit = Arc::clone(&connection_limit).acquire_owned().await.unwrap();
+        let (_template_sender, template_rx) = watch::channel(None);
+        let (_shutdown_sender, shutdown_rx) = watch::channel(());
+        let connection = tokio::spawn(handle_connection(
+            stream,
+            permit,
+            Arc::clone(&registry),
+            Some(Sv2Mining {
+                ctx,
+                version_mask: DEFAULT_VERSION_MASK,
+                template_rx,
+            }),
+            None,
+            shutdown_rx,
+        ));
+        let setup = encode_message(
+            SetupConnection {
+                protocol: Protocol::MiningProtocol,
+                min_version: 2,
+                max_version: 2,
+                flags: 0,
+                endpoint_host: "localhost".try_into().unwrap(),
+                endpoint_port: address.port(),
+                vendor: "p2poolv2".try_into().unwrap(),
+                hardware_version: "test".try_into().unwrap(),
+                firmware: "test".try_into().unwrap(),
+                device_id: "".try_into().unwrap(),
+            },
+            MESSAGE_TYPE_SETUP_CONNECTION,
+        )
+        .unwrap();
+        client.write_all(&setup).await.unwrap();
+        let payout = "tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d";
+        let username = format!("{payout}.rig1");
+        let open = encode_message(
+            OpenExtendedMiningChannel {
+                request_id: 1,
+                user_identity: username.as_str().try_into().unwrap(),
+                nominal_hash_rate: 1.0,
+                max_target: U256::new(&[0xff; 32]).unwrap(),
+                min_extranonce_size: 8,
+            },
+            MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL,
+        )
+        .unwrap();
+        client.write_all(&open).await.unwrap();
+        let mut decoder = Sv2Connection::new(registry);
+        timeout(Duration::from_secs(5), async {
+            let mut opened = false;
+            let mut buffer = [0u8; 512];
+            while !opened {
+                let count = client.read(&mut buffer).await.unwrap();
+                assert_ne!(count, 0);
+                opened =
+                    decoder
+                        .decode(&buffer[..count])
+                        .unwrap()
+                        .iter()
+                        .any(|(message_type, _)| {
+                            *message_type == MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL_SUCCESS
+                        });
+            }
+        })
+        .await
+        .unwrap();
+        assert!(metrics.get_metrics().await.users[payout].workers["rig1"].active);
+        drop(client);
+        timeout(Duration::from_secs(5), connection)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!metrics.get_metrics().await.users[payout].workers["rig1"].active);
+        assert_eq!(connection_limit.available_permits(), 1);
+    }
 
     #[test]
     fn reading_the_current_template_leaves_it_for_next_template() {
