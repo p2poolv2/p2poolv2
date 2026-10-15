@@ -1,9 +1,9 @@
 # Running P2Poolv2 on Bitcoin Cash
 
 A short operator guide. Design details are in [bch-design.md](bch-design.md)
-and status in [bch-plan.md](bch-plan.md). Bitcoin Cash support is not yet a
-proven production pool: shares have not yet propagated between nodes on
-chipnet. Try it on regtest or chipnet first.
+and status in [bch-plan.md](bch-plan.md). Bitcoin Cash support has passed
+a two-node check on chipnet (2026-10-15) but is not yet a proven production
+pool. Try it on regtest or chipnet first.
 
 ## 1. Run Bitcoin Cash Node
 
@@ -112,8 +112,8 @@ coinbase.
 
 ## 5. Check two nodes on chipnet
 
-This is the test still missing before calling this a working pool. It needs
-a machine that can reach BCH peers on port 48333.
+This check passed on 2026-10-15 (see [bch-design.md](bch-design.md#chipnet-run-2026-10-15)).
+It needs a machine that can reach BCH peers on port 48333.
 
 1. Run BCHN with `chipnet=1`, `server=1` and `zmqpubhashblock`, and let it
    sync (`bitcoin-cli -chipnet getblockchaininfo`).
@@ -121,10 +121,15 @@ a machine that can reach BCH peers on port 48333.
    same `bch_share_chain`, their own `store` paths and ports, and
    `dial_peers` on the second pointing at the first's `listen_address`.
    Both logs should show `Identified Peer ... /p2pool/test/<genesis>/1.0.0`
-   with the same genesis id.
+   with the same genesis id. On a new share chain the genesis share is old,
+   so the first node never counts its chain as current: set
+   `wait_for_chain_sync = false` there or its Stratum port never opens.
 3. Point a miner at the first node's Stratum port with a `bchtest:` username.
-   A share needs about 2e10 hashes on the mini chain; a CPU takes about an
-   hour, a small ASIC seconds.
+   A share needs about 2e10 hashes on the mini chain (stratum difficulty
+   about 4.7), so a CPU miner needs `start_difficulty` and
+   `minimum_difficulty` near 1; at the sample's 100000 it would almost never
+   submit. 24 CPU threads (about 150 MH/s) found a share every minute or
+   two; a small ASIC finds them in seconds.
 4. Pass: `curl http://<api>/chain_info` on both nodes shows the same
    `chain_tip_height` above 0, and neither log has `Chain-context validation
    failed`. A block found on chipnet appears in BCHN with the 1.5% donation

@@ -343,17 +343,43 @@ Not covered by this run: chipnet, Stratum V2 job declaration from a real
 Job Declarator client, real ASIC firmware, and a PPLNS window holding more
 than the genesis share.
 
+## Chipnet run (2026-10-15)
+
+Setup: one BCHN 29.2.0 node synced to chipnet height 327,984 on a Windows
+machine, and two P2Poolv2 nodes on it (`bitcoin_cash_network = "chipnet"`,
+`bch_share_chain = "mini"`, no `miner_address`), the second dialing the
+first. Both identified each other on `/p2pool/test/7b99261e/1.0.0`. A CPU
+miner (cpuminer `minerd`, sha256d, 24 threads, about 150 to 240 MH/s)
+mined through the first node's Stratum V1 port with a `bchtest:` username
+and `p2p=<tp2pool share address>` in the password.
+
+- The first chipnet template failed to parse: "Invalid BCH template JSON:
+  missing field `depends`". BCHN lists no `depends` for template
+  transactions (its templates are in canonical order), and the regtest
+  fixture had no transactions, so the parser had never seen one. `depends`
+  now defaults to empty; the chipnet template (height 327,985, 65
+  transactions) is a new fixture, `bitcoindrpc/test_data/bchn-chipnet-template.json`.
+- After the fix: shares at heights 1, 2 and 3 (tip `1d67686c...`) were built
+  by the first node, relayed to the second, and `BlockValid` on both, with
+  the same tip and total work on both and no validation errors in either
+  log. All 7 submissions were accepted. Each share is owned by the miner's
+  `tp2pool:` address from `p2p=`.
+- No chipnet block was found: network difficulty was about 619,000.
+- Found while checking: the API shows a Bitcoin Cash payout address
+  (`miner_bitcoin_address`) in Bitcoin's Base58 form instead of CashAddr.
+  It is the same key hash; only the display is wrong.
+
 ## Still unfinished
 
-Two-node share propagation on chipnet (the cloud container used here cannot
-reach BCH peers; steps are in `bch-quickstart.md`) and a retuned PPLNS window
-(after CHIP-2025-03 is decided). The Bitcoin Cash script interpreter for
-share transfers and per-miner share addresses over Stratum V2 were added on
-2026-10-15. A node started
+A retuned PPLNS window (after CHIP-2025-03 is decided). Two-node share
+propagation on chipnet passed on 2026-10-15 (above). The Bitcoin Cash
+script interpreter for share transfers and per-miner share addresses over
+Stratum V2 were added on 2026-10-15. A node started
 with `chain = "bitcoin-cash"` validates BCHN templates, pays CashAddr
 scripts including the donation and fee, records a P2PKH share owner, starts
 from a main or mini P2PKH genesis, speaks both local Job Declaration modes,
 commits a reserved AuxPoW output, and on regtest builds blocks BCHN accepts
-and shares that three nodes accept and relay. It should not be called a
-working Bitcoin Cash pool until shares have propagated between nodes on
-chipnet.
+and shares that three nodes accept and relay, and on chipnet shares two
+nodes accept and relay. It is still not a proven production pool: no
+chipnet block has been found through it, and no real ASIC firmware or
+Job Declarator client has mined against it.

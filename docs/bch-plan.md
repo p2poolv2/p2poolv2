@@ -97,8 +97,13 @@ per-miner share addresses over Stratum V2.
   fixed (details in [bch-design.md](bch-design.md)). The review found no
   consensus or payout bug in the donation, fee and coinbase flags commits.
 
-Still unfinished: two-node share propagation on chipnet and a retuned PPLNS
-window.
+- Two-node share propagation on chipnet passed: two P2Poolv2 nodes on one
+  synced BCHN chipnet node accepted and relayed shares at heights 1 to 3
+  mined by a CPU miner, with no validation errors. The first chipnet
+  template exposed a parser bug (BCHN omits `depends`), now fixed. Details
+  in [bch-design.md](bch-design.md#chipnet-run-2026-10-15).
+
+Still unfinished: a retuned PPLNS window.
 
 ## Startup selection (2026-10-13)
 
