@@ -22,6 +22,12 @@
 #                     dial chain, then all come back. Kademlia may keep the two
 #                     sides connected; the summary reports which happened
 #   all               the three above in sequence (local use, not CI)
+#   late-miner        payout maturity: node LATE_MINER, launched by run-swarm.sh
+#                     with its emitter off, starts mining once the chain is past
+#                     the maturity depth; maturity_check.py then checks against
+#                     the regtest coinbases that it is paid only once mature.
+#                     Needs a swarm launched with LATE_MINER and a small
+#                     MATURITY_SHARES; not part of `all`
 #
 # Env overrides:
 #   RUN_DIR                   swarm work dir                (default /tmp/p2pool-sim)
@@ -35,6 +41,10 @@
 #   FAILURE_SLOW_DOWN         restart-delayed downtime (s)  (default 330)
 #   FAILURE_PARTITION_DOWN    partition downtime (s)        (default 90)
 #   FAILURE_CATCHUP_TIMEOUT   max wait for catch-up (s)     (default 240)
+#   LATE_MINER                late-miner target node        (required for late-miner)
+#   LATE_MINER_MAX_MATURITY   refuse larger maturity (shares) (default 500)
+#   LATE_MINER_TIP_TIMEOUT    max wait for tip 2*maturity (s) (default 900)
+#   LATE_MINER_CHECK_TIMEOUT  max wait for a verdict (s)    (default 900)
 #
 # Node 0 is never a target: metrics.sh derives the share rate and uncle rate
 # from node-0.log alone, so killing it would corrupt the run's own metrics.
@@ -63,6 +73,12 @@ Scenarios:
                     dial chain, then all come back. Kademlia may keep the two
                     sides connected; the summary reports which happened
   all               the three above in sequence (local use, not CI)
+  late-miner        payout maturity: node LATE_MINER, launched by run-swarm.sh
+                    with its emitter off, starts mining once the chain is past
+                    the maturity depth; maturity_check.py then checks against
+                    the regtest coinbases that it is paid only once mature.
+                    Needs a swarm launched with LATE_MINER and a small
+                    MATURITY_SHARES; not part of `all`
 
 Env vars:
   RUN_DIR                   swarm work dir                (default /tmp/p2pool-sim)
@@ -76,6 +92,10 @@ Env vars:
   FAILURE_SLOW_DOWN         restart-delayed downtime (s)  (default 330)
   FAILURE_PARTITION_DOWN    partition downtime (s)        (default 90)
   FAILURE_CATCHUP_TIMEOUT   max wait for catch-up (s)     (default 240)
+  LATE_MINER                late-miner target node        (required for late-miner)
+  LATE_MINER_MAX_MATURITY   refuse larger maturity (shares) (default 500)
+  LATE_MINER_TIP_TIMEOUT    max wait for tip 2*maturity (s) (default 900)
+  LATE_MINER_CHECK_TIMEOUT  max wait for a verdict (s)    (default 900)
 
 Node 0 is never a target: metrics.sh derives the share rate and uncle rate
 from node-0.log alone, so killing it would corrupt the run's own metrics.
@@ -83,6 +103,7 @@ from node-0.log alone, so killing it would corrupt the run's own metrics.
 Examples:
   load-tests/sim/failures.sh restart-fast
   FAILURE_WARMUP=20 FAILURE_SLOW_DOWN=60 load-tests/sim/failures.sh restart-delayed
+  LATE_MINER=1 load-tests/sim/failures.sh late-miner
 
 Related scripts:
   load-tests/sim/run-swarm.sh N    launch the swarm this operates on
@@ -109,6 +130,10 @@ FAILURE_FAST_DOWN="${FAILURE_FAST_DOWN:-10}"
 FAILURE_SLOW_DOWN="${FAILURE_SLOW_DOWN:-330}"
 FAILURE_PARTITION_DOWN="${FAILURE_PARTITION_DOWN:-90}"
 FAILURE_CATCHUP_TIMEOUT="${FAILURE_CATCHUP_TIMEOUT:-240}"
+LATE_MINER="${LATE_MINER:-}"
+LATE_MINER_MAX_MATURITY="${LATE_MINER_MAX_MATURITY:-500}"
+LATE_MINER_TIP_TIMEOUT="${LATE_MINER_TIP_TIMEOUT:-900}"
+LATE_MINER_CHECK_TIMEOUT="${LATE_MINER_CHECK_TIMEOUT:-900}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -129,6 +154,8 @@ REJOINED_OK=0
 REJOINED_TOTAL=0
 # Tip height of each node just before it was killed, indexed by node number.
 TIP_AT_KILL=()
+# late-miner only: PASS, FAIL, INCONCLUSIVE or SETUP ERROR from maturity_check.py.
+MATURITY_VERDICT=""
 
 log_message() {
   echo "[$(date +%H:%M:%S)] $*"
@@ -357,6 +384,102 @@ scenario_partition() {
   restart_and_verify $killed
 }
 
+# Coinbase maturity depth the swarm was launched with, from the late node's
+# config (consensus, so every node has the same value).
+late_miner_maturity() {
+  awk -F' = ' '/^coinbase_maturity/ { print $2 }' "$RUN_DIR/node-$LATE_MINER.toml"
+}
+
+# Poll until the swarm tip reaches the given height. Returns non-zero on
+# timeout.
+wait_for_swarm_height() {
+  local target="$1" timeout="$2" start
+  start="$(date +%s)"
+  while [ "$(swarm_max_tip)" -lt "$target" ]; do
+    if [ $(($(date +%s) - start)) -ge "$timeout" ]; then
+      log_message "  swarm did not reach height $target within ${timeout}s (tip $(swarm_max_tip))"
+      return 1
+    fi
+    sleep 5
+  done
+}
+
+# Rewrite the late node's [sim] enabled flag so its next start runs the
+# emitter. Uses awk + mv like set_node_pid, so it works with BSD and GNU tools.
+enable_late_miner_emitter() {
+  local config="$RUN_DIR/node-$LATE_MINER.toml" tmp
+  tmp="$(mktemp "$RUN_DIR/config.XXXXXX")"
+  awk '/^enabled = false$/ { print "enabled = true"; next } { print }' "$config" > "$tmp"
+  mv "$tmp" "$config"
+}
+
+# Run maturity_check.py until it gives a verdict other than INCONCLUSIVE, or
+# the timeout passes. Sets MATURITY_VERDICT and keeps the last report.
+wait_for_maturity_verdict() {
+  local start exit_code
+  start="$(date +%s)"
+  while true; do
+    RUN_DIR="$RUN_DIR" LATE_MINER="$LATE_MINER" BASE_API="$BASE_API" \
+      python3 "$SCRIPT_DIR/maturity_check.py" > "$RUN_DIR/maturity-check.txt" 2>&1
+    exit_code=$?
+    case "$exit_code" in
+      0) MATURITY_VERDICT="PASS"; return 0 ;;
+      1) MATURITY_VERDICT="FAIL"; return 1 ;;
+      3) MATURITY_VERDICT="SETUP ERROR"; return 1 ;;
+    esac
+    if [ $(($(date +%s) - start)) -ge "$LATE_MINER_CHECK_TIMEOUT" ]; then
+      MATURITY_VERDICT="INCONCLUSIVE"
+      log_message "  no maturity verdict within ${LATE_MINER_CHECK_TIMEOUT}s"
+      return 1
+    fi
+    sleep 15
+  done
+}
+
+# Payout maturity. The late node has synced but mined nothing. Once the chain
+# is two maturity depths deep, so the payout skip is at its full size, restart
+# it with the emitter on and check the regtest coinbases pay it only once its
+# shares are mature.
+scenario_late_miner() {
+  local maturity target line
+  maturity="$(late_miner_maturity)"
+  target=$((2 * maturity))
+  log_message "--- late-miner: node $LATE_MINER starts mining once the tip reaches $target (maturity $maturity) ---"
+  TARGET_LIST="$TARGET_LIST $LATE_MINER"
+  if ! wait_for_swarm_height "$target" "$LATE_MINER_TIP_TIMEOUT"; then
+    MATURITY_VERDICT="INCONCLUSIVE"
+    return
+  fi
+  kill_nodes "$LATE_MINER"
+  enable_late_miner_emitter
+  restart_and_verify "$LATE_MINER"
+  wait_for_maturity_verdict
+  log_message "  maturity check: $MATURITY_VERDICT (report in $RUN_DIR/maturity-check.txt)"
+  while read -r line; do
+    OBSERVATION_LINES+=("$line")
+  done < "$RUN_DIR/maturity-check.txt"
+}
+
+# Refuse a late-miner run that cannot finish: the swarm must have a late node
+# with its emitter off, and a maturity small enough to reach in the run time.
+require_late_miner_setup() {
+  local maturity
+  if [ -z "$LATE_MINER" ]; then
+    echo "ERROR: late-miner needs LATE_MINER set to the node run-swarm.sh launched with its emitter off." >&2
+    exit 2
+  fi
+  if ! grep -q "^enabled = false$" "$RUN_DIR/node-$LATE_MINER.toml" 2>/dev/null; then
+    echo "ERROR: node $LATE_MINER is not a late miner; launch the swarm with LATE_MINER=$LATE_MINER." >&2
+    exit 2
+  fi
+  maturity="$(late_miner_maturity)"
+  if [ -z "$maturity" ] || [ "$maturity" -gt "$LATE_MINER_MAX_MATURITY" ]; then
+    echo "ERROR: coinbase maturity '${maturity:-unset}' is above LATE_MINER_MAX_MATURITY ($LATE_MINER_MAX_MATURITY);" \
+      "launch the swarm with a small MATURITY_SHARES (e.g. 50) or the run takes hours." >&2
+    exit 2
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
@@ -374,8 +497,11 @@ write_summary() {
     done
     echo "rejoined: $REJOINED_OK/$REJOINED_TOTAL"
     echo "unrecovered nodes: $unrecovered"
+    if [ -n "$MATURITY_VERDICT" ]; then
+      echo "maturity verdict: $MATURITY_VERDICT"
+    fi
   } | tee "$RESULTS_FILE"
-  [ "$unrecovered" -eq 0 ]
+  [ "$unrecovered" -eq 0 ] && { [ -z "$MATURITY_VERDICT" ] || [ "$MATURITY_VERDICT" = "PASS" ]; }
 }
 
 # ---------------------------------------------------------------------------
@@ -383,9 +509,9 @@ write_summary() {
 # ---------------------------------------------------------------------------
 
 case "$SCENARIO" in
-  clean|restart-fast|restart-delayed|partition|all) ;;
+  clean|restart-fast|restart-delayed|partition|all|late-miner) ;;
   *)
-    echo "ERROR: unknown scenario '$SCENARIO' (expected clean, restart-fast, restart-delayed, partition or all)" >&2
+    echo "ERROR: unknown scenario '$SCENARIO' (expected clean, restart-fast, restart-delayed, partition, all or late-miner)" >&2
     exit 2
     ;;
 esac
@@ -409,6 +535,9 @@ fi
 if [ ! -x "$BIN" ]; then
   echo "ERROR: sim binary not found at $BIN (set PROFILE, or build with run-swarm.sh)." >&2
   exit 1
+fi
+if [ "$SCENARIO" = "late-miner" ]; then
+  require_late_miner_setup
 fi
 if [ "$NODE_TOTAL" -lt 3 ]; then
   echo "ERROR: failure injection needs at least 3 nodes (node 0 is never a target); have $NODE_TOTAL." >&2
@@ -443,6 +572,7 @@ case "$SCENARIO" in
   restart-fast)    scenario_restart_fast ;;
   restart-delayed) scenario_restart_delayed ;;
   partition)       scenario_partition ;;
+  late-miner)      scenario_late_miner ;;
   all)
     scenario_restart_fast
     scenario_restart_delayed

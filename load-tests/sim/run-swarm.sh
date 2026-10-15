@@ -36,6 +36,9 @@
 #   MATURITY_SHARES  coinbase maturity depth in shares  (default 6048, the
 #                  production value; lower it so a short run reaches the
 #                  payout maturity skip. Consensus: one value for all nodes)
+#   LATE_MINER     node index launched with its emitter off (default unset).
+#                  It syncs but mines nothing until failures.sh late-miner
+#                  restarts it with the emitter on
 #   PROFILE        cargo profile: release | debug      (default release)
 #
 # NOTE: release is the default on purpose. libp2p-request-response has a
@@ -78,6 +81,7 @@ LATENCY_MS="${LATENCY_MS:-0}"
 # preserved; LATENCY_MS is thus given in 10s-interval terms.
 IDEAL_BLOCK_TIME="${IDEAL_BLOCK_TIME:-10}"
 MATURITY_SHARES="${MATURITY_SHARES:-6048}"
+LATE_MINER="${LATE_MINER:-}"
 LATENCY_MS=$(awk -v l="$LATENCY_MS" -v t="$IDEAL_BLOCK_TIME" 'BEGIN{printf "%.0f", l*t/10}')
 LATENCY_DIST="${LATENCY_DIST:-spread}"
 DIST_SEED="${DIST_SEED:-42}"
@@ -188,6 +192,8 @@ for i in $(seq 0 $((N - 1))); do
   seed=$((i + 1))
   node_hashrate="${HR_ARR[i]}"
   node_latency="${LAT_ARR[i]}"
+  sim_enabled="true"
+  if [ "$i" = "$LATE_MINER" ]; then sim_enabled="false"; fi
   cfg="$RUN_DIR/node-$i.toml"
   log="$RUN_DIR/node-$i.log"
   store="$RUN_DIR/store-$i.db"
@@ -270,7 +276,7 @@ hostname = "127.0.0.1"
 port = $api_port
 
 [sim]
-enabled = true
+enabled = $sim_enabled
 miner_address = "$node_addr"
 share_address = "$node_share_addr"
 hashrate = $node_hashrate

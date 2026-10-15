@@ -92,6 +92,12 @@ test with small values (for example 3 and 2).
 | Output expiry | `test_validate_prevouts_expires_coinbase_roots_below_payout_depth` (`shares/validation/mod.rs`) |
 | Fixture coinbases match | `test_fixture_coinbase_reconstruction_matches_bitcoin_merkle_root` (`shares/share_block/mod.rs`, mirrors the walk by hand) |
 
+End to end, the sim `late-miner` scenario checks the maturity rule against real
+regtest coinbases (`load-tests/sim/maturity_check.py`, RUNBOOK Test G). It
+lowers the maturity through `sim_overrides::coinbase_maturity()`, which is the
+value `PplnsWindow::new` and `validate_prevouts` read; production builds
+always use `COINBASE_MATURITY`.
+
 ## Example (N = 6,048)
 
 | `p` | skip | newest paid height |

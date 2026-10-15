@@ -192,7 +192,7 @@ uncle rate ≈ latency/10s (e.g. 750 ms → ~7%), but a 45s read is only ~4 bloc
 too noisy to trust. For a real number in ~5 min add `IDEAL_BLOCK_TIME=1` (10× more
 blocks, latency auto-scales), e.g.
 `IDEAL_BLOCK_TIME=1 LATENCY_MS=1500 SHARES_PER_BLOCK=20 ./load-tests/sim/run-swarm.sh 20`
-→ ~12% (≈50 min-equivalent). Knob in §10.
+→ ~12% (≈50 min-equivalent). Knob in §11.
 
 Under the hood it greps the `sim-uncle:` log lines:
 
@@ -245,9 +245,12 @@ witness commitment). That split is the PPLNS distribution, proportional to each
 miner's share contribution in the window.
 
 > Breadth: the number of payees = distinct miners with weight in the PPLNS
-> window. The PPLNS window is the last `PPLNS_WINDOW_SHARES` (120960) shares
-> on every network, sim included, so all active miners appear in the coinbase
-> once the chain has enough shares. With 20 nodes you'll see ~17-20 payees
+> window. The window is `PPLNS_WINDOW_SHARES` (120960) shares on every
+> network, sim included, starting below the shares not yet mature for the
+> paying share (`COINBASE_MATURITY`, see
+> `docs/architecture/payout-distribution.md`). The first `COINBASE_MATURITY`
+> shares are always mature, so at the default maturity every share of a sim
+> run is paid and all active miners appear in the coinbase. With 20 nodes you'll see ~17-20 payees
 > per block once the chain is deeper than the window.
 
 Stop everything:
@@ -335,7 +338,54 @@ The whole thing runs end to end, with the usual pass/fail verdict, via:
 
 ---
 
-## 9. Where things live
+## 9. Test G — payout maturity (late miner)
+
+Checks that a block-find pays a miner only once its shares are mature. A short
+run needs a small maturity, so the swarm is launched with `MATURITY_SHARES`
+(written to every node's `[sim] coinbase_maturity`; consensus, so one value for
+all) and `LATE_MINER`, the node that starts with its emitter off:
+
+```sh
+IDEAL_BLOCK_TIME=1 SHARES_PER_BLOCK=20 MATURITY_SHARES=50 LATE_MINER=1 \
+  ./load-tests/sim/run-swarm.sh 10
+LATE_MINER=1 ./load-tests/sim/failures.sh late-miner
+```
+
+Or end to end, with bitcoind setup and the nightly checks:
+
+```sh
+IDEAL_BLOCK_TIME=1 SHARES_PER_BLOCK=20 MATURITY_SHARES=50 LATE_MINER=1 \
+  NODE_COUNT=10 ./load-tests/sim/nightly.sh late-miner
+```
+
+The scenario waits for the tip to reach `2 * MATURITY_SHARES`, so the payout
+skip is at full size, restarts node 1 with its emitter on, and then runs
+`load-tests/sim/maturity_check.py` until it gives a verdict. The checker reads
+only the logs, the node 0 API and bitcoind. It maps each `sim block-find` line
+(`... prev_share <hash>`) to the paying share's height and decodes the regtest
+coinbase:
+
+```
+late miner: node 1 (bcrt1q...), coinbase maturity 50
+first late share: confirmed 131, confirmed or uncle 131
+bitcoin block        paying_h  p-first  mature  late_paid
+3f1c0b9e2a7d4c11..        150       19      no         no
+9a02d7e4b1c35f80..        183       52     yes        yes
+maturity check: PASS (late miner first paid at paying height 183)
+```
+
+It fails if the late miner is paid while `p - first < MATURITY_SHARES`, or is
+not paid by the first block-find past it. The full report is in
+`$RUN_DIR/maturity-check.txt`. Exit codes: 0 pass, 1 fail, 2 no qualifying
+block-find yet, 3 setup error (e.g. the late node shares its payout address
+with another node; keep `DISTINCT_ADDR=1` and a loaded wallet).
+
+Spend maturity is not covered: sim shares carry no share transactions. Unit
+tests pin it.
+
+---
+
+## 10. Where things live
 
 | Thing              | Path                                                      |
 |--------------------|-----------------------------------------------------------|
@@ -346,6 +396,7 @@ The whole thing runs end to end, with the usual pass/fail verdict, via:
 | Per-node store     | `/tmp/p2pool-sim/store-<i>.db`                            |
 | PIDs               | `/tmp/p2pool-sim/pids.txt` (line `i+1` is node `i`)        |
 | Failure summary    | `/tmp/p2pool-sim/failure-results.txt`                     |
+| Maturity report    | `/tmp/p2pool-sim/maturity-check.txt` (late-miner only)    |
 | Node APIs          | `http://127.0.0.1:760<i>` (node i)                        |
 | regtest bitcoind   | datadir `/tmp/p2pool-regtest`, RPC `:19443`, ZMQ `:28332` |
 
@@ -368,7 +419,7 @@ curl -s :7600/chain_info | jq            # tip/candidate heights (prefer logs fo
 
 ---
 
-## 10. Env knobs for `run-swarm.sh`
+## 11. Env knobs for `run-swarm.sh`
 
 `run-swarm.sh [N]` (default N=20). Override with env vars:
 
@@ -379,6 +430,8 @@ curl -s :7600/chain_info | jq            # tip/candidate heights (prefer logs fo
 | `IDEAL_BLOCK_TIME`                   | 10              | share interval (s); lower = time-compressed, more blocks/min for faster data (auto-scales `LATENCY_MS`); floor ~1s |
 | `WINDOW_SHARES`                      | = `SHARES_PER_BLOCK`       | PPLNS payout window in shares (how many miners appear in a coinbase)                                               |
 | `HASHRATE`                           | 1.0e12          | modeled per-node hashrate (higher = faster shares)                                                                 |
+| `MATURITY_SHARES`                    | 6048            | coinbase maturity in shares, for payout and spending; lower it so a short run reaches the payout maturity skip (Test G) |
+| `LATE_MINER`                         | unset           | node index launched with its emitter off, for `failures.sh late-miner` (Test G)                                    |
 | `DISTINCT_ADDR`                      | 1               | each node gets its own payout address via the wallet                                                               |
 | `DIAL_FANOUT`                        | 3               | how many earlier peers each node dials                                                                             |
 | `PROFILE`                            | release         | `release` or `debug`                                                                                               |
@@ -387,7 +440,7 @@ curl -s :7600/chain_info | jq            # tip/candidate heights (prefer logs fo
 
 ---
 
-## 11. Gotchas
+## 12. Gotchas
 
 1. **Swarms must run release.** A debug build hits a `debug_assert_eq!` inside
    `libp2p-request-response` under connection churn and nodes abort (you'd see

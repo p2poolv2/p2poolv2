@@ -149,10 +149,20 @@ impl SimEmitter {
                     let is_block = is_block_find(p_block, &mut rng);
                     let header = built.emission.header;
                     let template = built.emission.blocktemplate.clone();
-                    let coinbase = if is_block {
-                        Some(built.coinbase.clone())
-                    } else {
-                        None
+                    let prev_share_blockhash = built
+                        .emission
+                        .share_commitment
+                        .as_ref()
+                        .map(|commitment| commitment.prev_share_blockhash);
+                    let block_find = match (is_block, prev_share_blockhash) {
+                        (true, Some(prev_share_blockhash)) => {
+                            Some((built.coinbase.clone(), prev_share_blockhash))
+                        }
+                        (true, None) => {
+                            warn!("sim block-find skipped: share has no commitment to anchor on");
+                            None
+                        }
+                        (false, _) => None,
                     };
 
                     if self.emissions_tx.send(built.emission).await.is_err() {
@@ -164,8 +174,15 @@ impl SimEmitter {
                     // coinbase already carries the PPLNS payout; we just grind
                     // the trivial regtest nonce and submit. Rare (1/ratio), so
                     // awaiting inline does not meaningfully affect pacing.
-                    if let Some(coinbase) = coinbase {
-                        submit_sim_block(header, coinbase, &template, &self.bitcoindrpc).await;
+                    if let Some((coinbase, prev_share_blockhash)) = block_find {
+                        submit_sim_block(
+                            header,
+                            coinbase,
+                            &template,
+                            prev_share_blockhash,
+                            &self.bitcoindrpc,
+                        )
+                        .await;
                     }
 
                     emitted += 1;

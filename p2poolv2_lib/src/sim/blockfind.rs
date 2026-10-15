@@ -17,6 +17,7 @@
 
 use crate::stratum::message_handlers::submit::{build_full_block, submit_block};
 use crate::stratum::work::block_template::BlockTemplate;
+use bitcoin::BlockHash;
 use bitcoin::block::Header;
 use bitcoindrpc::BitcoindRpcClient;
 use tracing::{info, warn};
@@ -28,10 +29,15 @@ const MAX_GRIND: u64 = 1 << 7;
 /// Grind the regtest nonce until the header meets its (trivial) target, then
 /// assemble and submit the full block. Reuses `coinbase` (which carries the
 /// PPLNS payout) and the template's transactions.
+///
+/// `prev_share_blockhash` is the paying share's parent, the anchor its payout
+/// was computed from. It is logged so `load-tests/sim/maturity_check.py` can
+/// map each bitcoin block to the paying share's height.
 pub async fn submit_sim_block(
     mut header: Header,
     coinbase: bitcoin::Transaction,
     template: &BlockTemplate,
+    prev_share_blockhash: BlockHash,
     client: &BitcoindRpcClient,
 ) {
     let target = bitcoin::Target::from_compact(header.bits);
@@ -47,9 +53,10 @@ pub async fn submit_sim_block(
     }
 
     info!(
-        "sim block-find: header meets regtest target after {grinds} grind(s), submitting block {} at height {}",
+        "sim block-find: header meets regtest target after {grinds} grind(s), submitting block {} at height {} prev_share {}",
         header.block_hash(),
-        template.height
+        template.height,
+        prev_share_blockhash
     );
 
     let block = build_full_block(header, coinbase, template);
