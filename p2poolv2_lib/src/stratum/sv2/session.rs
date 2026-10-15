@@ -10,9 +10,12 @@
 
 use super::sort_ctor;
 use crate::shares::merge_mining::MergeMiningCommitment;
+use crate::stratum::work::prepared_notify::PreparedNotifyParams;
+use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
 use binary_sv2::{B064K, B0255, Deserialize, Seq064K, Str0255};
 use bitcoin::consensus::{deserialize, serialize};
 use bitcoin::hashes::Hash;
+use bitcoin::secp256k1::rand::random;
 use bitcoin::{Transaction, TxOut};
 use codec_sv2::{Decoded, Decoder, Encoder};
 use common_messages_sv2::{
@@ -44,14 +47,18 @@ use mining_sv2::{
 };
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, Instant};
 
 const PROTOCOL_VERSION: u16 = 2;
 const WORK_SELECTION_FLAG: u32 = 0b10;
+const MAX_JOB_TOKENS: usize = 64;
+const TOKEN_LIFETIME: Duration = Duration::from_secs(120);
+const MAX_DECLARED_TRANSACTION_BYTES: usize = 64 * 1024 * 1024;
 
 /// Which Job Declaration mode a connection negotiated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobDeclarationMode {
-    /// `DECLARE_TX_DATA` is clear. The pool template is the transaction set.
+    /// `DECLARE_TX_DATA` is clear. Only the declarator knows the transactions.
     CoinbaseOnly,
     /// `DECLARE_TX_DATA` is set. The client reveals every transaction.
     FullTemplate,
@@ -63,6 +70,7 @@ pub enum JobDeclarationMode {
 #[derive(Clone)]
 pub struct PoolTransactionCache {
     transactions: Arc<RwLock<Vec<Transaction>>>,
+    prepared: Arc<RwLock<Option<Arc<PreparedNotifyParams>>>>,
 }
 
 impl PoolTransactionCache {
@@ -70,6 +78,7 @@ impl PoolTransactionCache {
     pub fn new() -> Self {
         Self {
             transactions: Arc::new(RwLock::new(Vec::new())),
+            prepared: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -82,11 +91,9 @@ impl PoolTransactionCache {
             .expect("pool transaction cache lock") = transactions;
     }
 
-    fn get(&self) -> Vec<Transaction> {
-        self.transactions
-            .read()
-            .expect("pool transaction cache lock")
-            .clone()
+    /// Publish the immutable payout and template snapshot used by allocated tokens.
+    pub(crate) fn set_prepared(&self, prepared: Arc<PreparedNotifyParams>) {
+        *self.prepared.write().expect("pool prepared template lock") = Some(prepared);
     }
 }
 
@@ -103,17 +110,40 @@ enum TokenState {
     AwaitingTransactions {
         request_id: u32,
         wtxids: Vec<[u8; 32]>,
+        declaration: Declaration,
     },
     /// Transactions in CTOR, ready to mine.
-    Ready { transactions: Vec<Transaction> },
+    Ready {
+        transactions: Arc<Vec<Transaction>>,
+        declaration: Declaration,
+    },
+}
+
+#[derive(Clone)]
+pub(crate) struct Declaration {
+    pub version: u32,
+    pub prefix: Vec<u8>,
+    pub suffix: Vec<u8>,
+}
+
+struct JobToken {
+    allocated: Instant,
+    prepared: Option<Arc<PreparedNotifyParams>>,
+    state: TokenState,
+}
+
+/// A claimed declaration, removed from the registry before asynchronous validation.
+pub(crate) struct DeclaredJob {
+    pub prepared: Arc<PreparedNotifyParams>,
+    pub transactions: Option<Arc<Vec<Transaction>>>,
+    pub declaration: Option<Declaration>,
 }
 
 /// Tokens and the transaction set each one mines.
 pub struct JobRegistry {
     cache: PoolTransactionCache,
     merge_mining: Option<MergeMiningCommitment>,
-    next_token: u64,
-    tokens: HashMap<Vec<u8>, TokenState>,
+    tokens: HashMap<Vec<u8>, JobToken>,
 }
 
 impl JobRegistry {
@@ -124,17 +154,74 @@ impl JobRegistry {
         Self {
             cache,
             merge_mining,
-            next_token: 1,
             tokens: HashMap::with_capacity(8),
         }
     }
 
     /// Transactions a ready token will mine, in CTOR.
     pub fn transactions_for_token(&self, token: &[u8]) -> Option<Vec<Transaction>> {
-        match self.tokens.get(token) {
-            Some(TokenState::Ready { transactions }) => Some(transactions.clone()),
+        match self.tokens.get(token).map(|token| &token.state) {
+            Some(TokenState::Ready { transactions, .. }) => Some(transactions.as_ref().clone()),
             _ => None,
         }
+    }
+
+    fn expire_tokens(&mut self) {
+        self.tokens
+            .retain(|_, token| token.allocated.elapsed() < TOKEN_LIFETIME);
+    }
+
+    /// Claim a token exactly once; an invalid custom job needs a new allocation.
+    pub(crate) fn take_job(&mut self, token: &[u8]) -> Result<DeclaredJob, String> {
+        self.expire_tokens();
+        let token = self
+            .tokens
+            .remove(token)
+            .ok_or("invalid-mining-job-token")?;
+        let prepared = token.prepared.ok_or("template-unavailable")?;
+        match token.state {
+            TokenState::Open {
+                mode: JobDeclarationMode::CoinbaseOnly,
+            } => Ok(DeclaredJob {
+                prepared,
+                transactions: None,
+                declaration: None,
+            }),
+            TokenState::Ready {
+                transactions,
+                declaration,
+            } => Ok(DeclaredJob {
+                prepared,
+                transactions: Some(transactions),
+                declaration: Some(declaration),
+            }),
+            _ => Err("invalid-mining-job-token".into()),
+        }
+    }
+
+    fn declared_bytes(&self) -> usize {
+        self.tokens
+            .values()
+            .map(|token| match &token.state {
+                TokenState::Ready {
+                    transactions,
+                    declaration,
+                } => {
+                    transactions
+                        .iter()
+                        .map(Transaction::total_size)
+                        .sum::<usize>()
+                        + declaration.prefix.len()
+                        + declaration.suffix.len()
+                }
+                TokenState::AwaitingTransactions {
+                    wtxids,
+                    declaration,
+                    ..
+                } => wtxids.len() * 32 + declaration.prefix.len() + declaration.suffix.len(),
+                _ => 0,
+            })
+            .sum()
     }
 }
 
@@ -145,6 +232,7 @@ pub struct Sv2Connection {
     inbox: Vec<u8>,
     mode: Option<JobDeclarationMode>,
     mining: bool,
+    work_selection: bool,
     /// Full-Template declarations made on this connection that still wait
     /// for `ProvideMissingTransactionsSuccess`, by the client's request id.
     /// Request ids are chosen by each client, so two connections can use the
@@ -161,6 +249,7 @@ impl Sv2Connection {
             inbox: Vec::new(),
             mode: None,
             mining: false,
+            work_selection: false,
             pending_declarations: HashMap::with_capacity(4),
         }
     }
@@ -197,6 +286,17 @@ impl Sv2Connection {
     /// Whether this connection set up the Mining Protocol.
     pub fn is_mining(&self) -> bool {
         self.mining
+    }
+
+    pub(crate) fn can_select_work(&self) -> bool {
+        self.mining && self.work_selection
+    }
+
+    pub(crate) fn take_declared_job(&self, token: &[u8]) -> Result<DeclaredJob, String> {
+        self.registry
+            .lock()
+            .expect("job registry lock")
+            .take_job(token)
     }
 
     fn read_frames(&mut self) -> Result<Vec<(u8, Vec<u8>)>, String> {
@@ -276,20 +376,24 @@ impl Sv2Connection {
                 };
                 self.mode = Some(mode);
                 self.mining = false;
-                let flags = match mode {
-                    JobDeclarationMode::FullTemplate => 1,
-                    JobDeclarationMode::CoinbaseOnly => 0,
-                };
+                self.work_selection = false;
                 self.respond(
                     SetupConnectionSuccess {
                         used_version,
-                        flags,
+                        flags: 0,
                     },
                     MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS,
                 )
             }
             Protocol::MiningProtocol => {
-                if has_work_selection(setup.flags) {
+                if has_work_selection(setup.flags)
+                    && self
+                        .registry
+                        .lock()
+                        .expect("job registry lock")
+                        .merge_mining
+                        .is_none()
+                {
                     self.mining = false;
                     self.mode = None;
                     return self.respond(
@@ -301,6 +405,7 @@ impl Sv2Connection {
                     );
                 }
                 self.mining = true;
+                self.work_selection = has_work_selection(setup.flags);
                 self.mode = None;
                 self.respond(
                     SetupConnectionSuccess {
@@ -323,15 +428,42 @@ impl Sv2Connection {
     fn on_allocate(&mut self, request_id: u32) -> Result<Vec<Vec<u8>>, String> {
         let mode = self.mode.ok_or("job token requested before setup")?;
         let mut registry = self.registry.lock().expect("job registry lock");
-        registry.next_token = registry.next_token.wrapping_add(1);
-        let token = registry.next_token.to_le_bytes().to_vec();
-        registry
-            .tokens
-            .insert(token.clone(), TokenState::Open { mode });
-        let coinbase_outputs = registry
-            .merge_mining
-            .map(MergeMiningCommitment::coinbase_outputs_bytes)
-            .unwrap_or_else(empty_output_list);
+        registry.expire_tokens();
+        if registry.tokens.len() >= MAX_JOB_TOKENS {
+            return Err("job token limit reached".into());
+        }
+        let prepared = registry
+            .cache
+            .prepared
+            .read()
+            .expect("pool prepared template lock")
+            .clone();
+        let (token, coinbase_outputs) = if registry.merge_mining.is_some() {
+            let prepared = prepared.as_ref().ok_or("template-unavailable")?;
+            let outputs = prepared
+                .declared_outputs(prepared.template().coinbasevalue)
+                .map_err(|error| error.to_string())?
+                .into_iter()
+                .map(|pair| TxOut {
+                    value: bitcoin::Amount::ZERO,
+                    script_pubkey: pair.address.script_pubkey(),
+                })
+                .collect::<Vec<_>>();
+            let token = prepared
+                .mining_job_token(random(), SystemTimeProvider.seconds_since_epoch() as u32)
+                .map_err(|error| error.to_string())?;
+            (token, serialize(&outputs))
+        } else {
+            (random::<[u8; 32]>().to_vec(), empty_output_list())
+        };
+        registry.tokens.insert(
+            token.clone(),
+            JobToken {
+                allocated: Instant::now(),
+                prepared,
+                state: TokenState::Open { mode },
+            },
+        );
         drop(registry);
         self.respond(
             AllocateMiningJobTokenSuccess {
@@ -350,15 +482,19 @@ impl Sv2Connection {
                 ERROR_CODE_DECLARE_MINING_JOB_INVALID_JOB,
             );
         }
+        let token = request.mining_job_token.as_bytes().to_vec();
+        let mut registry = self.registry.lock().expect("job registry lock");
+        registry.expire_tokens();
+        self.pending_declarations
+            .retain(|_, token| registry.tokens.contains_key(token));
         if self.pending_declarations.contains_key(&request.request_id) {
+            drop(registry);
             return self.declare_error(
                 request.request_id,
                 ERROR_CODE_DECLARE_MINING_JOB_INVALID_JOB,
             );
         }
-        let token = request.mining_job_token.as_bytes().to_vec();
-        let mut registry = self.registry.lock().expect("job registry lock");
-        let state = registry.tokens.get(&token);
+        let state = registry.tokens.get(&token).map(|token| &token.state);
         if !matches!(
             state,
             Some(TokenState::Open {
@@ -380,19 +516,35 @@ impl Sv2Connection {
                 bytes
             })
             .collect::<Vec<_>>();
+        // shortcut: one response reveals every transaction; add cache negotiation for larger frames.
         let positions = (0..wtxids.len())
             .map(|index| {
                 u16::try_from(index)
                     .map_err(|_| "declaration has more transactions than u16".to_string())
             })
             .collect::<Result<Vec<_>, String>>()?;
-        registry.tokens.insert(
-            token.clone(),
-            TokenState::AwaitingTransactions {
-                request_id: request.request_id,
-                wtxids,
+        if self.pending_declarations.len() >= 8
+            || registry.declared_bytes()
+                + wtxids.len() * 32
+                + request.coinbase_tx_prefix.as_bytes().len()
+                + request.coinbase_tx_suffix.as_bytes().len()
+                > MAX_DECLARED_TRANSACTION_BYTES
+        {
+            return Err("job declaration limit reached".into());
+        }
+        registry
+            .tokens
+            .get_mut(&token)
+            .expect("token checked above")
+            .state = TokenState::AwaitingTransactions {
+            request_id: request.request_id,
+            wtxids,
+            declaration: Declaration {
+                version: request.version,
+                prefix: request.coinbase_tx_prefix.as_bytes().to_vec(),
+                suffix: request.coinbase_tx_suffix.as_bytes().to_vec(),
             },
-        );
+        };
         drop(registry);
         self.pending_declarations.insert(request.request_id, token);
         self.respond(
@@ -414,12 +566,13 @@ impl Sv2Connection {
             .remove(&request.request_id)
             .ok_or("transactions arrived with no open declaration")?;
         let mut registry = self.registry.lock().expect("job registry lock");
-        let wtxids = match registry.tokens.get(&token) {
-            Some(TokenState::AwaitingTransactions { request_id, wtxids })
-                if *request_id == request.request_id =>
-            {
-                wtxids.clone()
-            }
+        registry.expire_tokens();
+        let (wtxids, declaration) = match registry.tokens.get(&token).map(|token| &token.state) {
+            Some(TokenState::AwaitingTransactions {
+                request_id,
+                wtxids,
+                declaration,
+            }) if *request_id == request.request_id => (wtxids.clone(), declaration.clone()),
             _ => return Err("transactions arrived with no open declaration".to_string()),
         };
         if request.transaction_list.len() != wtxids.len() {
@@ -436,13 +589,30 @@ impl Sv2Connection {
             transactions.push(transaction);
         }
         sort_ctor(&mut transactions);
-        let new_token = registry.next_token.wrapping_add(1);
-        registry.next_token = new_token;
-        let new_token_bytes = new_token.to_le_bytes().to_vec();
-        registry.tokens.remove(&token);
-        registry
+        if registry.declared_bytes()
+            + transactions
+                .iter()
+                .map(Transaction::total_size)
+                .sum::<usize>()
+            > MAX_DECLARED_TRANSACTION_BYTES
+        {
+            return Err("declared transaction memory limit reached".into());
+        }
+        let mut job_token = registry
             .tokens
-            .insert(new_token_bytes.clone(), TokenState::Ready { transactions });
+            .remove(&token)
+            .ok_or("expired-mining-job-token")?;
+        let mut new_token_bytes = token;
+        if registry.merge_mining.is_some() {
+            new_token_bytes[1..33].copy_from_slice(&random::<[u8; 32]>());
+        } else {
+            new_token_bytes = random::<[u8; 32]>().to_vec();
+        }
+        job_token.state = TokenState::Ready {
+            transactions: Arc::new(transactions),
+            declaration,
+        };
+        registry.tokens.insert(new_token_bytes.clone(), job_token);
         drop(registry);
         self.respond(
             DeclareMiningJobSuccess {
@@ -458,20 +628,14 @@ impl Sv2Connection {
             return Err("SetCustomMiningJob requires a mining connection".to_string());
         }
         let token = request.token.as_bytes().to_vec();
-        let mut registry = self.registry.lock().expect("job registry lock");
-        let ready = match registry.tokens.get(&token) {
-            Some(TokenState::Ready { .. }) => true,
-            Some(TokenState::Open {
-                mode: JobDeclarationMode::CoinbaseOnly,
-            }) => {
-                let transactions = registry.cache.get();
-                registry
-                    .tokens
-                    .insert(token.clone(), TokenState::Ready { transactions });
-                true
-            }
-            _ => false,
-        };
+        let registry = self.registry.lock().expect("job registry lock");
+        let ready = matches!(
+            registry.tokens.get(&token).map(|token| &token.state),
+            Some(TokenState::Ready { .. })
+                | Some(TokenState::Open {
+                    mode: JobDeclarationMode::CoinbaseOnly,
+                })
+        );
         if !ready {
             drop(registry);
             return self.respond(
@@ -587,6 +751,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::test_bch_prepared;
     use binary_sv2::{B016M, U256};
     use bitcoin::absolute::LockTime;
     use bitcoin::consensus::serialize;
@@ -595,8 +760,10 @@ mod tests {
     use bitcoin::{Amount, OutPoint, ScriptBuf, Witness};
 
     fn registry() -> Arc<Mutex<JobRegistry>> {
+        let cache = PoolTransactionCache::new();
+        cache.set_prepared(test_bch_prepared());
         Arc::new(Mutex::new(JobRegistry::new(
-            PoolTransactionCache::new(),
+            cache,
             Some(MergeMiningCommitment::reserved()),
         )))
     }
@@ -683,7 +850,7 @@ mod tests {
             setup(1, Protocol::JobDeclarationProtocol),
             MESSAGE_TYPE_SETUP_CONNECTION,
         );
-        assert_eq!(decode_success_flags(&setup_response[0]), 1);
+        assert_eq!(decode_success_flags(&setup_response[0]), 0);
 
         let allocate = accept_message(
             &mut connection,
@@ -697,7 +864,16 @@ mod tests {
         let mut payload = response_payload(&allocate[0]);
         let allocated = AllocateMiningJobTokenSuccess::from_bytes(&mut payload).unwrap();
         let outputs: Vec<TxOut> = deserialize(allocated.coinbase_outputs.as_bytes()).unwrap();
-        assert_eq!(outputs, vec![MergeMiningCommitment::reserved().output()]);
+        let expected = test_bch_prepared()
+            .declared_outputs(0)
+            .unwrap()
+            .into_iter()
+            .map(|pair| TxOut {
+                value: pair.amount,
+                script_pubkey: pair.address.script_pubkey(),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(outputs, expected);
         let token = allocated.mining_job_token.as_bytes().to_vec();
 
         let first = transaction_with_lock(1);
@@ -1012,8 +1188,9 @@ mod tests {
     }
 
     #[test]
-    fn coinbase_only_rejects_declare_and_an_uninstalled_custom_job() {
+    fn coinbase_only_keeps_transactions_private_and_rejects_declare() {
         let cache = PoolTransactionCache::new();
+        cache.set_prepared(test_bch_prepared());
         let first = transaction_with_lock(1);
         let second = transaction_with_lock(2);
         let mut pool = vec![first.clone(), second.clone()];
@@ -1083,20 +1260,26 @@ mod tests {
             rejected.error_code.as_utf8_or_hex(),
             "job-not-yet-validated"
         );
-        let stored = mining
-            .registry
-            .lock()
-            .unwrap()
-            .transactions_for_token(&token)
-            .unwrap();
-        let mut expected = vec![first, second];
-        sort_ctor(&mut expected);
-        assert_eq!(stored, expected);
+        assert!(
+            mining
+                .registry
+                .lock()
+                .unwrap()
+                .transactions_for_token(&token)
+                .is_none()
+        );
+        let private = mining.take_declared_job(&token).unwrap();
+        assert!(private.transactions.is_none());
+        assert!(mining.take_declared_job(&token).is_err());
     }
 
     #[test]
-    fn work_selection_setup_is_rejected_until_custom_jobs_are_mineable() {
-        let mut mining = Sv2Connection::new(registry());
+    fn bitcoin_work_selection_setup_is_rejected() {
+        let shared = Arc::new(Mutex::new(JobRegistry::new(
+            PoolTransactionCache::new(),
+            None,
+        )));
+        let mut mining = Sv2Connection::new(shared);
         let responses = accept_message(
             &mut mining,
             setup(WORK_SELECTION_FLAG, Protocol::MiningProtocol),
@@ -1110,6 +1293,67 @@ mod tests {
             "unsupported-feature-flags"
         );
         assert!(!mining.is_mining());
+    }
+
+    #[test]
+    fn bch_work_selection_setup_is_negotiated() {
+        let mut mining = Sv2Connection::new(registry());
+        let responses = accept_message(
+            &mut mining,
+            setup(WORK_SELECTION_FLAG, Protocol::MiningProtocol),
+            MESSAGE_TYPE_SETUP_CONNECTION,
+        );
+        assert_eq!(decode_success_flags(&responses[0]), 0);
+        assert!(mining.is_mining());
+        assert!(mining.can_select_work());
+    }
+
+    #[test]
+    fn expired_tokens_cannot_install_a_job() {
+        let shared = registry();
+        let prepared = test_bch_prepared();
+        let token = prepared
+            .mining_job_token([1; 32], prepared.template().curtime)
+            .unwrap();
+        shared.lock().unwrap().tokens.insert(
+            token.clone(),
+            JobToken {
+                allocated: Instant::now() - TOKEN_LIFETIME - Duration::from_secs(1),
+                prepared: Some(prepared),
+                state: TokenState::Open {
+                    mode: JobDeclarationMode::CoinbaseOnly,
+                },
+            },
+        );
+        assert!(shared.lock().unwrap().take_job(&token).is_err());
+        assert!(shared.lock().unwrap().tokens.is_empty());
+    }
+
+    #[test]
+    fn allocations_are_unpredictable_and_bounded() {
+        let mut connection = Sv2Connection::new(registry());
+        accept_message(
+            &mut connection,
+            setup(0, Protocol::JobDeclarationProtocol),
+            MESSAGE_TYPE_SETUP_CONNECTION,
+        );
+        let first = connection.on_allocate(1).unwrap();
+        let second = connection.on_allocate(2).unwrap();
+        let mut first_payload = response_payload(&first[0]);
+        let mut second_payload = response_payload(&second[0]);
+        let first = AllocateMiningJobTokenSuccess::from_bytes(&mut first_payload).unwrap();
+        let second = AllocateMiningJobTokenSuccess::from_bytes(&mut second_payload).unwrap();
+        assert_ne!(
+            first.mining_job_token.as_bytes(),
+            second.mining_job_token.as_bytes()
+        );
+        for request_id in 2..MAX_JOB_TOKENS {
+            connection.on_allocate(request_id as u32).unwrap();
+        }
+        assert_eq!(
+            connection.on_allocate(99).unwrap_err(),
+            "job token limit reached"
+        );
     }
 
     fn custom_job(token: &[u8]) -> SetCustomMiningJob<'_> {

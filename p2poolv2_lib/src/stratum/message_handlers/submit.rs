@@ -215,6 +215,13 @@ pub(crate) async fn submit_found_block(
     coinbase: bitcoin::Transaction,
     job: &JobDetails,
 ) -> Result<(), Error> {
+    if !job.block_available {
+        info!(
+            "Private declared block {} must be broadcast by its declarator",
+            header.block_hash()
+        );
+        return Ok(());
+    }
     #[cfg(not(feature = "sim"))]
     {
         // Decode the template transactions only for this rare case.

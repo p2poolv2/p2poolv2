@@ -19,6 +19,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use bitcoin::{Address, Amount, BlockHash};
+use std::collections::HashMap;
 use std::error::Error;
 use std::sync::{Arc, RwLock};
 
@@ -30,6 +31,7 @@ use std::sync::{Arc, RwLock};
 /// acquires a write lock to update the window and compute the distribution.
 pub struct Payout {
     pplns_window: Arc<RwLock<PplnsWindow>>,
+    last_weights: Option<HashMap<Address, u128>>,
 }
 
 impl Payout {
@@ -37,6 +39,7 @@ impl Payout {
     pub fn new(network: bitcoin::Network) -> Self {
         Self {
             pplns_window: Arc::new(RwLock::new(PplnsWindow::new(network))),
+            last_weights: None,
         }
     }
 
@@ -50,6 +53,10 @@ impl Payout {
 }
 
 impl PayoutDistribution for Payout {
+    fn pplns_weights(&self) -> Option<HashMap<Address, u128>> {
+        self.last_weights.clone()
+    }
+
     /// Fill payout distribution from the incrementally maintained PPLNS window.
     ///
     /// A zero total difficulty and an empty window are both errors.
@@ -63,6 +70,7 @@ impl PayoutDistribution for Payout {
         remaining_total_amount: Amount,
         _bootstrap_address: Address,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        self.last_weights = None;
         if remaining_total_amount == Amount::ZERO {
             return Ok(());
         }
@@ -99,6 +107,7 @@ impl PayoutDistribution for Payout {
             remaining_total_amount,
             distribution,
         )?;
+        self.last_weights = Some(address_difficulty_map);
 
         Ok(())
     }

@@ -176,16 +176,17 @@ a full donation (10,000) still skips miner address validation.
   `SetupConnection` flag bit 0 (`DECLARE_TX_DATA`) selects the Job Declaration
   mode. Set, the client uses Full-Template: `DeclareMiningJob`, then
   `ProvideMissingTransactions` for every transaction, because this node has
-  no mempool. Clear, `DeclareMiningJob` is rejected. These are declaration
-  exchanges only: work-selection setup and `SetCustomMiningJob` are refused
-  until actual mining and payout validation are implemented. The full
-  declaration stores the non-coinbase transactions in CTOR. The existing
-  coinbase-only pool cache does not implement private miner transaction
-  selection. Bitcoin Cash puts the AuxPoW output in
-  `AllocateMiningJobTokenSuccess.coinbase_outputs`, encoded as the
-  specification defines `coinbase_tx_outputs`: a CompactSize-prefixed array
-  of consensus-serialized outputs (one output, count first). Bitcoin sends
-  the empty array, the single byte zero. A Full-Template declaration is
+  no mempool. Clear, `DeclareMiningJob` is rejected and the client keeps its
+  transaction list private. BCH extended channels can negotiate work
+  selection and install either mode. Full templates are stored in CTOR and
+  require local BCHN proposal acceptance. Private templates retain the
+  miner's Merkle path; the pool cannot validate hidden transactions or
+  broadcast their block. Bitcoin Cash allocation returns the required PPLNS
+  payout scripts with zero amounts in a CompactSize-prefixed output list;
+  the final amounts follow the frozen share weights and chosen template
+  revenue. Bitcoin sends an empty list. The BCH-specific coinbase and token
+  contract is documented in [bch-job-declaration.md](bch-job-declaration.md).
+  A Full-Template declaration is
   matched to its `ProvideMissingTransactionsSuccess` by request id within
   its own connection, so two clients that both start at request id 1 no
   longer collide, and a second declaration reusing a pending id is refused.
@@ -374,15 +375,14 @@ and `p2p=<tp2pool share address>` in the password.
 
 ## Still unfinished
 
-Completion audit (2026-10-15): the Job Declaration exchange stops at token
-acceptance. The old `on_custom_job` returned a success job id without
-installing it in a mining channel. The node now rejects work-selection setup
-and custom-job requests instead of promising rewards for unusable work.
-Neither declaration mode yet reaches actual share submission. Wiring the
-declared template and coinbase into channel jobs,
-validating the resulting candidate and its required payouts, and mining it
-with an independent Job Declarator remain required. The reserved zero-root
-AuxPoW output also does not implement miners choosing their auxiliary tokens.
+The completion audit (2026-10-15) found an unusable custom-job success id.
+Both modes now install tracker/channel jobs and reach share submission in
+server-handler tests, including mined regtest headers and peer-verifiable
+coinbase proofs. Full templates require BCHN proposal acceptance; private
+templates never substitute the pool's transactions. Independent Job Declarator
+interoperability and live BCHN validation of this new path remain required.
+Miners can choose a bounded aux root per declared job; auxiliary-token and
+covenant proof verification remains unfinished.
 Final job size now includes the full PPLNS coinbase and transaction count.
 API payouts now use CashAddr text. Hydrapool CashAddr payout parsing and
 SV2 worker cleanup are fixed in the completion follow-up in `bch-plan.md`.

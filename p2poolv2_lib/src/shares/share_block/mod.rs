@@ -171,7 +171,7 @@ fn decode_address<R: bitcoin::io::Read + ?Sized>(
 }
 
 /// Encode an optional address as a bool flag followed by the address when present.
-fn encode_optional_address<W: bitcoin::io::Write + ?Sized>(
+pub(crate) fn encode_optional_address<W: bitcoin::io::Write + ?Sized>(
     address: &Option<Address>,
     writer: &mut W,
 ) -> Result<usize, bitcoin::io::Error> {
@@ -182,7 +182,7 @@ fn encode_optional_address<W: bitcoin::io::Write + ?Sized>(
 }
 
 /// Decode an optional address from a bool flag followed by the address.
-fn decode_optional_address<R: bitcoin::io::Read + ?Sized>(
+pub(crate) fn decode_optional_address<R: bitcoin::io::Read + ?Sized>(
     reader: &mut R,
 ) -> Result<Option<Address>, bitcoin::consensus::encode::Error> {
     if bool::consensus_decode(reader)? {

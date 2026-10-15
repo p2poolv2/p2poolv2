@@ -23,6 +23,8 @@
 //! without either a P2Poolv2 node refuses the channel. For example
 //! `bchtest:qq...,p2p=tp2pool...` on chipnet.
 
+use super::custom_job::validate_custom_job;
+use super::session::DeclaredJob;
 use super::session::{encode_frame, string_field};
 use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::config::{BitcoinCashNetwork, Chain, PoolMode};
@@ -50,20 +52,23 @@ use mining_sv2::{
     MESSAGE_TYPE_NEW_EXTENDED_MINING_JOB, MESSAGE_TYPE_NEW_MINING_JOB,
     MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL, MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL_SUCCESS,
     MESSAGE_TYPE_OPEN_MINING_CHANNEL_ERROR, MESSAGE_TYPE_OPEN_STANDARD_MINING_CHANNEL,
-    MESSAGE_TYPE_OPEN_STANDARD_MINING_CHANNEL_SUCCESS, MESSAGE_TYPE_SET_TARGET,
+    MESSAGE_TYPE_OPEN_STANDARD_MINING_CHANNEL_SUCCESS, MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_ERROR,
+    MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_SUCCESS, MESSAGE_TYPE_SET_TARGET,
     MESSAGE_TYPE_SUBMIT_SHARES_ERROR, MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED,
     MESSAGE_TYPE_SUBMIT_SHARES_STANDARD, MESSAGE_TYPE_SUBMIT_SHARES_SUCCESS,
     MESSAGE_TYPE_UPDATE_CHANNEL, MESSAGE_TYPE_UPDATE_CHANNEL_ERROR, NewExtendedMiningJob,
     NewMiningJob, OpenExtendedMiningChannel, OpenExtendedMiningChannelSuccess,
     OpenMiningChannelError, OpenStandardMiningChannel, OpenStandardMiningChannelSuccess,
-    SetNewPrevHash, SetTarget, SubmitSharesError, SubmitSharesExtended, SubmitSharesStandard,
-    SubmitSharesSuccess, UpdateChannel, UpdateChannelError,
+    SetCustomMiningJob, SetCustomMiningJobError, SetCustomMiningJobSuccess, SetNewPrevHash,
+    SetTarget, SubmitSharesError, SubmitSharesExtended, SubmitSharesStandard, SubmitSharesSuccess,
+    UpdateChannel, UpdateChannelError,
 };
 use p2poolv2_wallet::share_owner::ShareOwner;
 use std::collections::BTreeMap;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
+use tokio::time::timeout;
 use tracing::{debug, error};
 
 /// Bytes of extranonce a miner rolls on an extended channel (SV1 enonce2).
@@ -121,6 +126,87 @@ pub struct MiningChannels {
 }
 
 impl MiningChannels {
+    /// Validate and install a declared BCH job before acknowledging reward eligibility.
+    pub(crate) async fn install_custom_job(
+        &mut self,
+        request: &SetCustomMiningJob<'_>,
+        declared: DeclaredJob,
+        current: Option<Arc<PreparedNotifyParams>>,
+    ) -> Result<Vec<Vec<u8>>, String> {
+        if self.ctx.share_chain != Chain::BitcoinCash || self.ctx.mode != PoolMode::P2poolv2 {
+            return custom_job_error(request, "unsupported-pool-mode");
+        }
+        let Some(channel) = self.channels.get_mut(&request.channel_id) else {
+            return custom_job_error(request, "invalid-channel-id");
+        };
+        if channel.kind != ChannelKind::Extended {
+            return custom_job_error(request, "invalid-channel-type");
+        }
+        let Some(current) = current else {
+            return custom_job_error(request, "template-unavailable");
+        };
+        if current.template().previousblockhash != declared.prepared.template().previousblockhash {
+            return custom_job_error(request, "stale-template");
+        }
+        let payout = channel
+            .session
+            .parsed_address
+            .clone()
+            .ok_or("authorized channel has no payout address")?;
+        let owner = channel
+            .session
+            .share_owner
+            .ok_or("authorized channel has no share owner")?;
+        let (job, proposal) =
+            match validate_custom_job(request, declared, payout, owner, self.version_mask) {
+                Ok(validated) => validated,
+                Err(reason) => {
+                    debug!("Rejected SV2 custom job: {reason}");
+                    return custom_job_error(request, "invalid-custom-job");
+                }
+            };
+        if let Some(proposal) = proposal {
+            match timeout(
+                Duration::from_secs(10),
+                self.ctx
+                    .bitcoindrpc_client
+                    .validate_block_proposal(&proposal),
+            )
+            .await
+            {
+                Ok(Ok(())) => (),
+                rejected => {
+                    debug!("Rejected declared BCH template: {rejected:?}");
+                    return custom_job_error(request, "invalid-template");
+                }
+            }
+        }
+        let prev_hash = BlockHash::from_str(&job.blocktemplate.previousblockhash)
+            .map_err(|error| error.to_string())?;
+        if channel.last_prev_hash != Some(prev_hash) {
+            channel.jobs.clear();
+        }
+        channel.last_prev_hash = Some(prev_hash);
+        let tracker_job_id = self.ctx.tracker_handle.get_next_job_id();
+        self.ctx
+            .tracker_handle
+            .insert_job_details(tracker_job_id, job);
+        let job_id = channel.next_job_id;
+        channel.next_job_id = channel.next_job_id.wrapping_add(1);
+        channel.jobs.insert(job_id, tracker_job_id);
+        while channel.jobs.len() > MAX_CHANNEL_JOBS {
+            channel.jobs.pop_first();
+        }
+        Ok(vec![encode_frame(
+            SetCustomMiningJobSuccess {
+                channel_id: request.channel_id,
+                request_id: request.request_id,
+                job_id,
+            },
+            MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_SUCCESS,
+        )?])
+    }
+
     /// Channels for one connection, sharing the SV1 stratum context.
     pub(crate) fn new(ctx: StratumContext, version_mask: i32) -> Self {
         Self {
@@ -473,11 +559,14 @@ impl MiningChannels {
         let version = template.version as u32;
         let channel_job_id = channel.next_job_id;
         channel.next_job_id = channel.next_job_id.wrapping_add(1);
+        let new_prev_hash = channel.last_prev_hash != Some(prev_hash);
+        if new_prev_hash {
+            channel.jobs.clear();
+        }
         channel.jobs.insert(channel_job_id, tracker_job_id);
         while channel.jobs.len() > MAX_CHANNEL_JOBS {
             channel.jobs.pop_first();
         }
-        let new_prev_hash = channel.last_prev_hash != Some(prev_hash);
         channel.last_prev_hash = Some(prev_hash);
         let min_ntime = if new_prev_hash {
             Sv2Option::new(None)
@@ -556,6 +645,14 @@ impl MiningChannels {
         };
         if submission.enonce2.len() != usize::from(EXTRANONCE_SIZE) {
             return submit_error(&submission, "invalid-extranonce-size");
+        }
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map_err(|error| error.to_string())?
+            .as_secs();
+        if submission.ntime < job.blocktemplate.curtime || u64::from(submission.ntime) > now + 7200
+        {
+            return submit_error(&submission, "invalid-ntime");
         }
         let template_version = job.blocktemplate.version;
         let rolled = submission.version as i32;
@@ -680,6 +777,20 @@ impl MiningChannels {
     }
 }
 
+pub(crate) fn custom_job_error(
+    request: &SetCustomMiningJob<'_>,
+    code: &'static str,
+) -> Result<Vec<Vec<u8>>, String> {
+    Ok(vec![encode_frame(
+        SetCustomMiningJobError {
+            channel_id: request.channel_id,
+            request_id: request.request_id,
+            error_code: string_field(code)?,
+        },
+        MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_ERROR,
+    )?])
+}
+
 struct Submission {
     channel_id: u32,
     sequence_number: u32,
@@ -800,18 +911,72 @@ mod tests {
     use crate::stratum::work::prepared_notify::PreparedNotifyParamsBuilder;
     use crate::stratum::work::tracker::start_tracker_actor;
     use crate::test_utils::{make_test_share_address, setup_test_chain_store_handle};
+    use crate::test_utils::{test_bch_custom_job, test_bch_prepared, test_bch_stratum_context};
     use bitcoin::consensus::deserialize;
     use bitcoin::hashes::sha256d;
     use bitcoin::{Address, Amount, CompressedPublicKey, Network, Transaction};
     use bitcoindrpc::BitcoindRpcClient;
     use bitcoindrpc::test_utils::{mock_submit_block_with_any_body, setup_mock_bitcoin_rpc};
     use p2poolv2_config::DEFAULT_VERSION_MASK;
+    use p2poolv2_wallet::bch_share::encode_payout_address;
     use p2poolv2_wallet::bch_share::{BchShareAddress, BchShareNetwork};
     use tokio::sync::mpsc;
+    use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 
     const USERNAME: &str = "tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d.rig1";
     /// Easier than almost every hash, so the test share meets the pool target.
     const EASY_POOL_BITS: u32 = 0x2100ffff;
+
+    #[tokio::test]
+    async fn node_rejection_does_not_install_a_custom_job() {
+        let rpc = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                serde_json::json!({"result": "bad-cb-amount", "error": null, "id": 0}),
+            ))
+            .expect(1)
+            .mount(&rpc)
+            .await;
+        let (ctx, _emissions, _dirs) = test_bch_stratum_context(&rpc.uri()).await;
+        let mut channels = MiningChannels::new(ctx, DEFAULT_VERSION_MASK);
+        let payout = Address::p2pkh(
+            bitcoin::PubkeyHash::from_byte_array([0x22; 20]),
+            Network::Regtest,
+        );
+        let identity = encode_payout_address(&payout, BchShareNetwork::Regtest).unwrap();
+        let mut open = binary_sv2::to_bytes(OpenExtendedMiningChannel {
+            request_id: 1,
+            user_identity: identity.as_str().try_into().unwrap(),
+            nominal_hash_rate: 1.0,
+            max_target: U256::new(&[0xff; 32]).unwrap(),
+            min_extranonce_size: 8,
+        })
+        .unwrap();
+        channels
+            .handle(MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL, &mut open, None)
+            .await
+            .unwrap();
+        let prepared = test_bch_prepared();
+        let token = prepared
+            .mining_job_token([1; 32], prepared.template().curtime)
+            .unwrap();
+        let (mut bytes, declared) = test_bch_custom_job(
+            Arc::clone(&prepared),
+            token,
+            vec![],
+            true,
+            prepared.template().coinbasevalue,
+        );
+        let request = SetCustomMiningJob::from_bytes(&mut bytes).unwrap();
+        let rejected = channels
+            .install_custom_job(&request, declared, Some(prepared))
+            .await
+            .unwrap();
+        let mut error_payload = payload(&rejected[0]);
+        let error = SetCustomMiningJobError::from_bytes(&mut error_payload).unwrap();
+        assert_eq!(error.error_code.as_utf8_or_hex(), "invalid-template");
+        assert!(channels.channels[&1].jobs.is_empty());
+    }
 
     fn frame_type(frame: &[u8]) -> u8 {
         frame[2]

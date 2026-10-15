@@ -106,12 +106,14 @@ Stratum V2: `<node>:<sv2_port>`, user identity `<payout CashAddr>.<worker>`
 (add `,p2p=<share address>` if `miner_address` is unset), and the authority
 public key when Noise is enabled.
 
-Use pool-issued standard or extended jobs. Job Declaration is unfinished:
-connections requiring work selection receive `unsupported-feature-flags`,
-and `SetCustomMiningJob` receives `job-not-yet-validated` for a ready token.
-These responses do not promise rewards for declared work. Full custom-job
-mining and miner-selected auxiliary commitments remain required before
-this port is complete; see the requirement checks in [bch-plan.md](bch-plan.md).
+Pool-issued standard and extended jobs are supported. BCH extended channels
+also support work selection with both Job Declaration modes. A BCH-aware
+declarator must follow the direct PPLNS coinbase contract in
+[bch-job-declaration.md](bch-job-declaration.md). Full-Template work requires
+local BCHN proposal validation; a Coinbase-Only declarator validates and
+broadcasts its own private block. Independent declarator and ASIC testing,
+auxiliary-token proofs and remote CI remain open in
+[bch-plan.md](bch-plan.md).
 
 Payouts appear in the miners' wallets in the coinbase of each block the pool
 finds and become spendable after 100 blocks, as for any Bitcoin Cash

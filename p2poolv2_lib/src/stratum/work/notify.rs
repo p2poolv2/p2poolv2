@@ -128,6 +128,7 @@ fn build_prepared_notify(
         &context.pool_signature,
         clean_jobs,
     )
+    .pplns_weights(context.payout.pplns_weights())
     .prev_share_blockhash(tip)
     .uncles(uncles)
     .bits(target)
@@ -168,12 +169,13 @@ fn publish_prepared_notify(
     context: &mut NotifyContext,
     template_tx: &watch::Sender<Option<Arc<PreparedNotifyParams>>>,
 ) -> Result<(), WorkError> {
-    let prepared = build_prepared_notify(template, clean_jobs, context)?;
-    template_tx
-        .send(Some(Arc::new(prepared)))
-        .map_err(|_| WorkError {
-            message: "All template receivers dropped".to_string(),
-        })
+    let prepared = Arc::new(build_prepared_notify(template, clean_jobs, context)?);
+    context
+        .pool_transactions
+        .set_prepared(Arc::clone(&prepared));
+    template_tx.send(Some(prepared)).map_err(|_| WorkError {
+        message: "All template receivers dropped".to_string(),
+    })
 }
 
 /// Start the notifier task that broadcasts prepared templates via a watch channel.
@@ -272,6 +274,7 @@ mod tests {
     /// Create a mock payout that returns a fixed output distribution.
     fn mock_payout_with_distribution(distribution: Vec<OutputPair>) -> MockPayoutDistribution {
         let mut mock_payout = MockPayoutDistribution::default();
+        mock_payout.expect_pplns_weights().returning(|| None);
         mock_payout
             .expect_get_output_distribution()
             .return_once(move |_, _, _, _, _| Ok(distribution));
@@ -441,6 +444,7 @@ mod tests {
             amount: Amount::from_sat(5000000000),
         }];
         let mut mock_payout = MockPayoutDistribution::default();
+        mock_payout.expect_pplns_weights().returning(|| None);
         mock_payout
             .expect_get_output_distribution()
             .returning(move |_, _, _, _, _| Ok(test_distribution.clone()));

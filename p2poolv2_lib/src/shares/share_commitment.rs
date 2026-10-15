@@ -5,9 +5,11 @@
 use super::address_serde;
 use super::bch_coinbase::BchCoinbase;
 use super::option_address_serde;
-use super::share_block::{ShareBlock, ShareHeader};
+use super::share_block::{ShareBlock, ShareHeader, decode_optional_address};
 use super::transactions::coinbase::compute_non_coinbase_root;
-use bitcoin::consensus::{Encodable, serialize};
+use super::validation::MAX_UNCLES;
+use bitcoin::consensus::encode::VarInt;
+use bitcoin::consensus::{Decodable, Encodable, serialize};
 use bitcoin::hashes::Hash;
 use bitcoin::io::Write;
 use bitcoin::{Address, BlockHash, CompactTarget, TxMerkleNode, hashes};
@@ -192,6 +194,53 @@ pub(crate) fn commitment_digest(
 }
 
 impl ShareCommitment {
+    /// Decode this pool's BCH job terms; authenticity is checked by the pool's token registry.
+    /// A declarator supplies its own identities and selected template revenue.
+    pub fn from_mining_job_token(
+        token: &[u8],
+        miner_bitcoin_address: Address,
+        miner_address: p2poolv2_wallet::share_owner::ShareOwner,
+        coinbase_value: u64,
+    ) -> Result<Self, bitcoin::consensus::encode::Error> {
+        let invalid = bitcoin::consensus::encode::Error::ParseFailed;
+        if token.len() < 33 || token.len() > 255 || token[0] != 1 {
+            return Err(invalid("unknown BCH job token format"));
+        }
+        let mut reader = &token[33..];
+        let prev_share_blockhash = BlockHash::consensus_decode(&mut reader)?;
+        let uncle_count = VarInt::consensus_decode(&mut reader)?.0;
+        if uncle_count > MAX_UNCLES as u64 {
+            return Err(invalid("too many job token uncles"));
+        }
+        let uncles = (0..uncle_count)
+            .map(|_| BlockHash::consensus_decode(&mut reader))
+            .collect::<Result<Vec<_>, _>>()?;
+        let bits = CompactTarget::consensus_decode(&mut reader)?;
+        let time = u32::consensus_decode(&mut reader)?;
+        let donation_address = decode_optional_address(&mut reader)?;
+        let donation = u16::consensus_decode(&mut reader)?;
+        let fee_address = decode_optional_address(&mut reader)?;
+        let fee = u16::consensus_decode(&mut reader)?;
+        if !reader.is_empty() {
+            return Err(invalid("trailing BCH job token data"));
+        }
+        Ok(Self {
+            prev_share_blockhash,
+            uncles,
+            miner_bitcoin_address,
+            miner_address,
+            non_coinbase_root: compute_non_coinbase_root(&[]),
+            bits,
+            time,
+            donation_address,
+            donation: (donation > 0).then_some(donation),
+            fee_address,
+            fee: (fee > 0).then_some(fee),
+            coinbase_value,
+            bch_coinbase: None,
+        })
+    }
+
     /// Make a SHA256 hash for commitment using consensus encoding.
     ///
     /// Hash of this commitment, as embedded in the bitcoin coinbase scriptSig.

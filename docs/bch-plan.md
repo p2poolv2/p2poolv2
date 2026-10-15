@@ -16,9 +16,9 @@ Audience: contributors and AI agents starting the BCH port. Read
 | Large BCH template proofs | Implemented; 25-level BCH branches round-trip through share blocks, storage and compressed header batches. Bitcoin proof validation keeps its 16-level limit. |
 | Pool-issued SV1/SV2 jobs and worker cleanup | Implemented; recorded CPU mining plus channel and socket tests. Independent ASIC firmware remains unverified. |
 | CashAddr text in the API | Implemented; P2PKH/P2SH vectors and a chipnet share lookup test. |
-| Declared BCH coinbase peer validation | Implemented; bounded header extension, prefix/aux proof tampering, payout diversion, storage and compressed-header tests. Custom jobs are not installed yet. |
-| Mineable Job Declaration in both modes | Incomplete. Work-selection setup is rejected; custom-job requests return an error instead of an unusable success id. |
-| Miner-selected auxiliary commitments | Incomplete; mining still uses the reserved zero-root output. The declared header can now bind an aux-tree choice. |
+| Declared BCH coinbase peer validation | Implemented; bounded header extension, prefix/aux proof tampering, payout diversion, storage and compressed-header tests. |
+| Mineable Job Declaration in both modes | Implemented in local server-handler tests: token allocation, declaration, job installation, mined regtest headers, submission and verifiable share proofs. Independent client and live BCHN checks remain pending. |
+| Miner-selected auxiliary commitments | A declared job can choose its aux root, tree size and nonce. Auxiliary-token and covenant proof verification remains incomplete. |
 | PPLNS tuning and independent ASIC/JD interoperability | Pending; retain the existing settings until a justified tuning decision. |
 | Remote CI and chipnet block | No GitHub Actions runs on this fork; no chipnet block found. Local checks and recorded propagation do not replace these. |
 
@@ -151,7 +151,7 @@ After these changes: 1,659 default workspace tests and 1,667 all-features
 tests passed (1 skipped in each suite), with all-target/all-feature Clippy
 warnings denied and formatting clean.
 
-Job Declaration is still incomplete. The audit found that
+At this checkpoint, the audit found that
 `Sv2Connection::on_custom_job` returned a success id without installing a
 job in `MiningChannels`. It now refuses work-selection negotiation with
 `unsupported-feature-flags` and rejects a custom-job request with
@@ -160,12 +160,9 @@ These errors mean the node has not committed to rewarding declared work.
 Both ready declaration modes have rejection coverage. Declaration-message
 tests and pool-issued SV2 mining tests do not prove mineable declarations.
 
-Declared BCH coinbases now have a bounded representation and use the same
-share-chain payout validation, as described below. Token validation and
-channel/tracker installation remain next. The current coinbase-only
-transaction cache also does not implement the specification's private
-miner-selected transaction set. Miner-selected aux commitments remain
-unfinished; the coinbase currently carries the reserved zero commitment.
+The subsequent coinbase and mining changes below add bounded declarations,
+token validation and channel/tracker installation. The current requirement
+table records the remaining independent validation and auxiliary-proof work.
 
 Other pending work is in the requirement table above. This port is not complete.
 
@@ -203,15 +200,41 @@ mining declared jobs. Existing stored headers require no rewrite. Header
 responses now stop at 650 entries before completing the last height, keeping
 the worst case with the descriptor and 25-level branches under 1 MiB.
 
-This supplies peer validation and storage support. Mining-protocol custom
-job installation still rejects requests until token validation and channel
-installation are wired through; both JD modes remain unfinished.
+This checkpoint supplied peer validation and storage support. Custom-job
+installation was completed in the subsequent change below.
 
 Local validation after this change: 1,669 default workspace tests and 1,677
 all-features tests passed, with one skipped in each suite. Clippy passed for
 all targets/features with warnings denied; formatting passed. The descriptor
 was checked through serialization, storage and payout validation, not through
 a live declared-job miner.
+
+## Declared BCH mining channels (2026-10-15)
+
+Both Job Declaration modes now install real extended-channel jobs. Allocation
+freezes the PPLNS weight snapshot and exposes bounded job terms in an
+unpredictable, expiring, single-use token. A changed transaction fee total
+recomputes every payment from the same weights and cuts used by peer
+validation. A custom job must match its frozen template anchor, header rules,
+coinbase layout and exact payouts before receiving a mineable job id.
+
+Full-Template work preserves the declared coinbase, verifies its transaction
+Merkle path and requires local BCHN proposal acceptance before installation.
+Coinbase-Only work keeps the miner's private Merkle path; its transaction list
+is never replaced with the pool cache, and its declarator must validate and
+broadcast the full block. Both modes can choose the bounded auxiliary-tree
+commitment. See [bch-job-declaration.md](bch-job-declaration.md) for client rules
+and limits.
+
+Server-handler coverage performs both exchanges, mines actual regtest-target
+headers and verifies their emitted coinbase proofs. The RPC is mocked in that
+test; it is not evidence of live BCHN or independent client interoperability.
+
+Local validation: 1,684 default workspace tests and 1,692 all-features tests
+passed, with one skipped in each suite. Clippy passed for all targets and
+features with warnings denied, and formatting passed. Additional cases cover
+node proposal rejection, token expiry/reuse/limits, declaration and payment
+tampering, and the 255-byte token budget with the maximum uncle count.
 
 ## Startup selection (2026-10-13)
 

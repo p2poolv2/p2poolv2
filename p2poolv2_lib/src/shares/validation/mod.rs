@@ -6,9 +6,7 @@ mod bitcoin_block_validation;
 
 use super::share_block::{MAX_POOL_TARGET, ShareHeader};
 use crate::accounting::OutputPair;
-use crate::accounting::payout::payout_distribution::{
-    append_proportional_distribution, include_address_and_cut,
-};
+use crate::accounting::payout::payout_distribution::build_pplns_outputs;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::accounting::payout::sharechain_pplns::PplnsWindow;
@@ -1184,37 +1182,17 @@ impl DefaultShareValidator {
         address_difficulty_map: &HashMap<Address, u128>,
         coinbase_value: u64,
     ) -> Result<Vec<OutputPair>, ValidationError> {
-        if address_difficulty_map.is_empty() {
-            return Err(ValidationError::consensus(
-                "Can't build output from empty distribution. There should be at least one payout address",
-            ));
-        }
-
-        let mut distribution = Vec::with_capacity(address_difficulty_map.len() + 2);
-
-        let remaining_after_donation = include_address_and_cut(
-            &mut distribution,
-            Amount::from_sat(coinbase_value),
+        build_pplns_outputs(
+            coinbase_value,
+            address_difficulty_map,
             &share_header.donation_address,
             share_header.donation,
-        );
-        let remaining_after_fees = include_address_and_cut(
-            &mut distribution,
-            remaining_after_donation,
             &share_header.fee_address,
             share_header.fee,
-        );
-
-        append_proportional_distribution(
-            address_difficulty_map,
-            remaining_after_fees,
-            &mut distribution,
         )
         .map_err(|error| {
             ValidationError::consensus(format!("Failed to compute payout distribution: {error}"))
-        })?;
-
-        Ok(distribution)
+        })
     }
 }
 

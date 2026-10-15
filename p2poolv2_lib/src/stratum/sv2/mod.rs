@@ -15,10 +15,12 @@
 //! `SetupConnection` flag bit 0 (`DECLARE_TX_DATA`) selects the mode.
 //! Set, the client uses Full-Template: `DeclareMiningJob` plus
 //! `ProvideMissingTransactions`. Clear, the client uses Coinbase-only:
-//! `DeclareMiningJob` is rejected. These declaration exchanges do not install
-//! mineable custom jobs yet: work-selection setup and `SetCustomMiningJob`
-//! are rejected until they can validate and reward the declared work.
+//! `DeclareMiningJob` is rejected and the client keeps its transactions private.
+//! BCH extended channels negotiate work selection and install declared jobs only
+//! after validating the token, header, coinbase and exact share-chain payouts.
+//! Full templates also require a successful local BCHN proposal check.
 
+mod custom_job;
 mod mining;
 mod noise;
 mod server;
@@ -27,6 +29,8 @@ mod session;
 pub use mining::EXTRANONCE_SIZE;
 pub use server::bind;
 pub(crate) use server::{Sv2Mining, serve};
+#[cfg(test)]
+pub(crate) use session::{Declaration, DeclaredJob};
 pub use session::{JobDeclarationMode, JobRegistry, PoolTransactionCache, Sv2Connection};
 
 use bitcoin::Transaction;

@@ -22,6 +22,11 @@ use std::error::Error;
 /// chain data.
 #[cfg_attr(test, mockall::automock)]
 pub trait PayoutDistribution {
+    /// Snapshot used by declared jobs to split a miner-selected fee revenue.
+    fn pplns_weights(&self) -> Option<HashMap<Address, u128>> {
+        None
+    }
+
     /// Fill distribution according to the the Payout mechanism.  The
     /// donation and fees amount have already been filled by the trait
     /// common implementation of get_outpoint_distribution
@@ -84,6 +89,30 @@ pub trait PayoutDistribution {
         )?;
         Ok(distribution)
     }
+}
+
+/// Apply donation, operator fee and the exact share-chain difficulty weights.
+pub(crate) fn build_pplns_outputs(
+    value: u64,
+    weights: &HashMap<Address, u128>,
+    donation_address: &Option<Address>,
+    donation: Option<u16>,
+    fee_address: &Option<Address>,
+    fee: Option<u16>,
+) -> Result<Vec<OutputPair>, Box<dyn Error + Send + Sync>> {
+    if weights.is_empty() {
+        return Err("Can't build output from empty distribution. There should be at least one payout address".into());
+    }
+    let mut outputs = Vec::with_capacity(weights.len() + 2);
+    let remaining = include_address_and_cut(
+        &mut outputs,
+        Amount::from_sat(value),
+        donation_address,
+        donation,
+    );
+    let remaining = include_address_and_cut(&mut outputs, remaining, fee_address, fee);
+    append_proportional_distribution(weights, remaining, &mut outputs)?;
+    Ok(outputs)
 }
 
 /// Appends new output pair to distribution and returns remaining amount.

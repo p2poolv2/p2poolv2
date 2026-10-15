@@ -39,12 +39,20 @@ use std::str::FromStr;
 // Imports only needed for internal tests
 #[cfg(any(test, feature = "test-utils"))]
 use crate::accounting::OutputPair;
+#[cfg(test)]
+use crate::accounting::stats::metrics;
 #[cfg(any(test, feature = "test-utils"))]
 use crate::address::Address as P2PoolAddress;
 #[cfg(test)]
+use crate::config::{Chain, PoolMode};
+#[cfg(test)]
 use crate::pool_difficulty::MockPoolDifficulty;
 #[cfg(test)]
+use crate::shares::bch_coinbase::BchCoinbase;
+#[cfg(test)]
 use crate::shares::chain::chain_store_handle::MockChainStoreHandle;
+#[cfg(test)]
+use crate::shares::merge_mining::MergeMiningCommitment;
 use crate::shares::share_commitment::ShareCommitment;
 use crate::shares::transactions::coinbase::compute_non_coinbase_root;
 #[cfg(test)]
@@ -54,11 +62,17 @@ use crate::store::block_tx_metadata::{BlockMetadata, ChainMembership, Status};
 #[cfg(test)]
 use crate::stratum;
 #[cfg(test)]
+use crate::stratum::emission::EmissionReceiver;
+#[cfg(test)]
 use crate::stratum::messages::Notify;
 #[cfg(test)]
 use crate::stratum::messages::Response;
 #[cfg(test)]
 use crate::stratum::messages::SimpleRequest;
+#[cfg(test)]
+use crate::stratum::server::StratumContext;
+#[cfg(test)]
+use crate::stratum::sv2::{Declaration, DeclaredJob};
 #[cfg(test)]
 use crate::stratum::work::block_template::BlockTemplate;
 #[cfg(test)]
@@ -66,14 +80,40 @@ use crate::stratum::work::block_template::TemplateTransaction;
 #[cfg(any(test, feature = "test-utils"))]
 use crate::stratum::work::coinbase::build_bitcoin_coinbase_transaction;
 #[cfg(test)]
+use crate::stratum::work::coinbase::{EXTRANONCE_SEPARATOR, build_declared_coinbase};
+#[cfg(test)]
 use crate::stratum::work::gbt::build_merkle_branches_for_template;
 #[cfg(test)]
+use crate::stratum::work::gbt::compute_merkle_root_from_branches;
+#[cfg(test)]
+use crate::stratum::work::prepared_notify::{PreparedNotifyParams, PreparedNotifyParamsBuilder};
+#[cfg(test)]
+use crate::stratum::work::tracker::start_tracker_actor;
+#[cfg(test)]
+use binary_sv2::{B064K, B0255, Seq0255, U256};
+#[cfg(test)]
 use bitcoin::TxMerkleNode;
+#[cfg(test)]
+use bitcoin::consensus::{deserialize, serialize};
+#[cfg(test)]
+use bitcoin::script::Builder;
 #[cfg(any(test, feature = "test-utils"))]
 use bitcoin::script::PushBytesBuf;
 use bitcoin::secp256k1::Secp256k1;
 #[cfg(test)]
+use bitcoindrpc::BitcoindRpcClient;
+#[cfg(test)]
+use common_messages_sv2::{Protocol, SetupConnection};
+#[cfg(test)]
+use mining_sv2::SetCustomMiningJob;
+#[cfg(test)]
+use p2poolv2_wallet::bch_share::BchShareNetwork;
+#[cfg(test)]
 use rand::{RngExt, rng};
+#[cfg(test)]
+use std::collections::HashMap;
+#[cfg(test)]
+use tokio::sync::mpsc;
 
 /// Well-known secp256k1 compressed public keys (multiples of the generator G).
 /// Use these when constructing test share blocks that need distinct, valid miner keys.
@@ -162,6 +202,236 @@ pub fn bch_template_transaction(index: u32) -> TemplateTransaction {
         sigops: 0,
         weight: 0,
     }
+}
+
+/// A BCH payout snapshot with distinct weights and independently encoded job terms.
+#[cfg(test)]
+pub fn test_bch_prepared() -> Arc<PreparedNotifyParams> {
+    let template: BlockTemplate = serde_json::from_str(include_str!(
+        "../../bitcoindrpc/test_data/bchn-regtest-template.json"
+    ))
+    .unwrap();
+    let first = Address::p2pkh(
+        bitcoin::PubkeyHash::from_byte_array([1; 20]),
+        bitcoin::Network::Regtest,
+    );
+    let second = Address::p2pkh(
+        bitcoin::PubkeyHash::from_byte_array([2; 20]),
+        bitcoin::Network::Regtest,
+    );
+    Arc::new(
+        PreparedNotifyParamsBuilder::new(
+            Arc::new(template.clone()),
+            vec![
+                OutputPair {
+                    address: first.clone(),
+                    amount: bitcoin::Amount::from_sat(template.coinbasevalue / 4),
+                },
+                OutputPair {
+                    address: second.clone(),
+                    amount: bitcoin::Amount::from_sat(template.coinbasevalue * 3 / 4),
+                },
+            ],
+            b"P2Poolv2",
+            true,
+        )
+        .pplns_weights(Some(HashMap::from([(first, 1), (second, 3)])))
+        .prev_share_blockhash(BlockHash::from_byte_array([0x33; 32]))
+        .bits(CompactTarget::from_consensus(0x2100ffff))
+        .include_merge_mining(true)
+        .build()
+        .unwrap(),
+    )
+}
+
+/// Build the client side of a BCH declared job, with miner-chosen aux data.
+#[cfg(test)]
+pub(crate) fn test_bch_custom_job(
+    prepared: Arc<PreparedNotifyParams>,
+    token: Vec<u8>,
+    transactions: Vec<Transaction>,
+    full: bool,
+    value: u64,
+) -> (Vec<u8>, DeclaredJob) {
+    let template = prepared.template();
+    let payout = Address::p2pkh(
+        bitcoin::PubkeyHash::from_byte_array([0x22; 20]),
+        bitcoin::Network::Regtest,
+    );
+    let mut commitment = ShareCommitment::from_mining_job_token(
+        &token,
+        payout,
+        ShareOwner::CashP2pkh([0x22; 20]),
+        value,
+    )
+    .unwrap();
+    let descriptor = BchCoinbase {
+        prefix: Builder::new()
+            .push_int(i64::from(template.height))
+            .push_slice(b"miner")
+            .into_script()
+            .into_bytes(),
+        merge_mining: MergeMiningCommitment {
+            merkle_root: [0x77; 32],
+            tree_size: 2,
+            nonce: 9,
+        },
+    };
+    commitment.bch_coinbase = Some(descriptor.clone());
+    let coinbase = build_declared_coinbase(
+        &prepared.declared_outputs(value).unwrap(),
+        u64::from(template.height),
+        commitment.hash(),
+        &EXTRANONCE_SEPARATOR,
+        &descriptor,
+    )
+    .unwrap();
+    let bytes = serialize(&coinbase);
+    let nonce_offset = 42 + descriptor.prefix.len();
+    let declaration = Declaration {
+        version: template.version as u32,
+        prefix: bytes[..nonce_offset].to_vec(),
+        suffix: bytes[nonce_offset + 12..].to_vec(),
+    };
+    let mut selected = template.as_ref().clone();
+    selected.transactions = transactions
+        .iter()
+        .map(|tx| TemplateTransaction {
+            data: hex::encode(serialize(tx)),
+            txid: tx.compute_txid().to_string(),
+            hash: tx.compute_wtxid().to_string(),
+            depends: vec![],
+            fee: 0,
+            sigops: 0,
+            weight: 0,
+        })
+        .collect();
+    let path_hashes = build_merkle_branches_for_template(&selected)
+        .unwrap()
+        .into_iter()
+        .map(|hash| hash.to_byte_array())
+        .collect::<Vec<_>>();
+    let path = path_hashes
+        .iter()
+        .map(|hash| U256::new(hash).unwrap())
+        .collect();
+    let prev_hash = BlockHash::from_str(&template.previousblockhash)
+        .unwrap()
+        .to_byte_array();
+    let outputs = serialize(&coinbase.output);
+    let request = SetCustomMiningJob {
+        channel_id: 1,
+        request_id: 9,
+        token: B0255::new(&token).unwrap(),
+        version: template.version as u32,
+        prev_hash: U256::new(&prev_hash).unwrap(),
+        min_ntime: template.curtime,
+        nbits: CompactTarget::from_unprefixed_hex(&template.bits)
+            .unwrap()
+            .to_consensus(),
+        coinbase_tx_version: 2,
+        coinbase_prefix: B0255::new(&descriptor.prefix).unwrap(),
+        coinbase_tx_input_n_sequence: 0xffff_fffe,
+        coinbase_tx_outputs: B064K::new(&outputs).unwrap(),
+        coinbase_tx_locktime: template.height - 1,
+        merkle_path: Seq0255::new(path).unwrap(),
+    };
+    (
+        binary_sv2::to_bytes(request).unwrap(),
+        DeclaredJob {
+            prepared,
+            transactions: full.then(|| Arc::new(transactions)),
+            declaration: full.then_some(declaration),
+        },
+    )
+}
+
+/// Disposable BCH mining context; keep the returned directories alive until the test ends.
+#[cfg(test)]
+pub(crate) async fn test_bch_stratum_context(
+    rpc_url: &str,
+) -> (StratumContext, EmissionReceiver, [TempDir; 2]) {
+    let (emissions_tx, emissions_rx) = mpsc::channel(10);
+    let stats_dir = tempdir().unwrap();
+    let metrics = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+        .await
+        .unwrap();
+    let (chain_store_handle, store_dir) = setup_test_chain_store_handle(true).await;
+    let ctx = StratumContext {
+        tracker_handle: start_tracker_actor(),
+        bitcoindrpc_client: BitcoindRpcClient::new(rpc_url, "user", "pass").unwrap(),
+        start_difficulty: 1,
+        minimum_difficulty: 1,
+        maximum_difficulty: None,
+        ignore_difficulty: true,
+        validate_addresses: true,
+        emissions_tx,
+        network: bitcoin::Network::Regtest,
+        metrics,
+        chain_store_handle,
+        mode: PoolMode::P2poolv2,
+        miner_address: None,
+        share_chain: Chain::BitcoinCash,
+        bch_share_network: Some(BchShareNetwork::Regtest),
+        cash_share: Some([0x22; 20]),
+    };
+    (ctx, emissions_rx, [stats_dir, store_dir])
+}
+
+#[cfg(test)]
+pub fn test_sv2_setup(protocol: Protocol, flags: u32) -> SetupConnection<'static> {
+    SetupConnection {
+        protocol,
+        min_version: 2,
+        max_version: 2,
+        flags,
+        endpoint_host: "127.0.0.1".try_into().unwrap(),
+        endpoint_port: 0,
+        vendor: "p2poolv2".try_into().unwrap(),
+        hardware_version: "test".try_into().unwrap(),
+        firmware: "test".try_into().unwrap(),
+        device_id: "".try_into().unwrap(),
+    }
+}
+
+/// Reconstruct and solve the declared regtest header as an extended-channel miner.
+#[cfg(test)]
+pub fn test_bch_solve_custom_job(request: &SetCustomMiningJob, extranonce_prefix: &[u8]) -> Header {
+    let mut script = request.coinbase_prefix.as_bytes().to_vec();
+    script.extend_from_slice(extranonce_prefix);
+    script.extend_from_slice(&[0; 8]);
+    let coinbase = Transaction {
+        version: bitcoin::transaction::Version::TWO,
+        lock_time: bitcoin::absolute::LockTime::from_consensus(request.coinbase_tx_locktime),
+        input: vec![bitcoin::TxIn {
+            previous_output: bitcoin::OutPoint::null(),
+            script_sig: bitcoin::ScriptBuf::from_bytes(script),
+            sequence: bitcoin::Sequence(request.coinbase_tx_input_n_sequence),
+            witness: bitcoin::Witness::new(),
+        }],
+        output: deserialize(request.coinbase_tx_outputs.as_bytes()).unwrap(),
+    };
+    let branches = request
+        .merkle_path
+        .iter()
+        .map(|hash| TxMerkleNode::from_byte_array(*hash.as_array()))
+        .collect::<Vec<_>>();
+    let mut header = Header {
+        version: bitcoin::block::Version::from_consensus(request.version as i32),
+        prev_blockhash: BlockHash::from_byte_array(*request.prev_hash.as_array()),
+        merkle_root: compute_merkle_root_from_branches(coinbase.compute_txid(), &branches),
+        time: request.min_ntime,
+        bits: CompactTarget::from_consensus(request.nbits),
+        nonce: 0,
+    };
+    while !bitcoin::Target::from_compact(header.bits).is_met_by(header.block_hash()) {
+        header.nonce = header.nonce.checked_add(1).unwrap();
+        assert!(
+            header.nonce < 10000,
+            "fixture must use the easy regtest target"
+        );
+    }
+    header
 }
 
 /// Setup returns both chain handle and tempdir (tempdir must stay alive)
