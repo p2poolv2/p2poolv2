@@ -5,6 +5,21 @@ with the maintainer of [Pickaxe](https://github.com/CyberAshven/pickaxe-miner).
 Audience: contributors and AI agents starting the BCH port. Read
 [AGENTS.md](../AGENTS.md) and `docs/architecture/` before changing code.
 
+## Current requirement checks (2026-10-15)
+
+| Requirement | Status and evidence |
+|---|---|
+| BCHN templates and CashAddr payouts | Implemented; RPC/transaction fixtures and address tests. Final job size includes the actual coinbase and CompactSize transaction count. |
+| Donation, operator fee and bootstrap accounting | Implemented; exact-amount tests and recorded BCHN regtest coinbases. Hydrapool accepts prefixed and prefixless CashAddr usernames. |
+| P2PKH share ownership and transfers | Implemented; BCHN-signed ECDSA/FORKID and BCH Schnorr vectors, plus rejection tests. |
+| Main/mini share chains and P2P propagation | Implemented; recorded three-node regtest and two-node chipnet share validation. |
+| Pool-issued SV1/SV2 jobs and worker cleanup | Implemented; recorded CPU mining plus channel and socket tests. Independent ASIC firmware remains unverified. |
+| CashAddr text in the API | Implemented; P2PKH/P2SH vectors and a chipnet share lookup test. |
+| Mineable Job Declaration in both modes | Incomplete. Work-selection setup is rejected; custom-job requests return an error instead of an unusable success id. |
+| Miner-selected auxiliary commitments | Incomplete; only the reserved zero-root output exists. |
+| PPLNS tuning and independent ASIC/JD interoperability | Pending; retain the existing settings until a justified tuning decision. |
+| Remote CI and chipnet block | No GitHub Actions runs on this fork; no chipnet block found. Local checks and recorded propagation do not replace these. |
+
 ## Implementation checkpoint (2026-10-13)
 
 The first checkpoint adds BCHN template fetching without Bitcoin SegWit or
@@ -124,16 +139,35 @@ features with warnings denied, and formatting passed. The all-features
 build also fixes the simulator's share-owner conversion and checks its
 existing block-submission suppression policy.
 
-Job Declaration is still incomplete: `Sv2Connection::on_custom_job` accepts
-a token and returns a job id, but does not install that job in
-`MiningChannels`. Declared jobs cannot yet be mined through the share/block
-submission pipeline. Declaration message tests and pool-issued SV2 mining
-tests do not prove this requirement. Miner-selected aux commitments are also
+The follow-up also checks final BCH job size with the actual PPLNS
+coinbase, including padding/commitments and the CompactSize transaction
+count. Exact-limit and one-byte-over tests cover the transaction-count
+encoding boundary. Share lookup returns network-correct CashAddr payout
+text; existing Bitcoin text is unchanged.
+
+After these changes: 1,659 default workspace tests and 1,667 all-features
+tests passed (1 skipped in each suite), with all-target/all-feature Clippy
+warnings denied and formatting clean.
+
+Job Declaration is still incomplete. The audit found that
+`Sv2Connection::on_custom_job` returned a success id without installing a
+job in `MiningChannels`. It now refuses work-selection negotiation with
+`unsupported-feature-flags` and rejects a custom-job request with
+`job-not-yet-validated` (or `invalid-mining-job-token` for an invalid token).
+These errors mean the node has not committed to rewarding declared work.
+Both ready declaration modes have rejection coverage. Declaration-message
+tests and pool-issued SV2 mining tests do not prove mineable declarations.
+
+Next implementation work must preserve share-chain payout validation:
+peers currently reconstruct the exact pool coinbase, including its script
+suffix after the extranonce. A custom coinbase must be represented and
+verified through that consensus path, with its required PPLNS outputs,
+before it can be installed in the tracker. The current coinbase-only
+transaction cache also does not implement the specification's private
+miner-selected transaction set. Miner-selected aux commitments remain
 unfinished; the coinbase currently carries the reserved zero commitment.
 
-Other pending work includes checking final coinbase-inclusive BCH block
-limits, CashAddr payout text in the API, the PPLNS settings decision, and
-independent ASIC/Job Declarator interoperability. This port is not complete.
+Other pending work is in the requirement table above. This port is not complete.
 
 ## Startup selection (2026-10-13)
 

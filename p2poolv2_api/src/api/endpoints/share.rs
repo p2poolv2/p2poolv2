@@ -9,7 +9,7 @@ use axum::{
     extract::{Query, State},
 };
 use bitcoin::{BlockHash, Network};
-use p2poolv2_lib::address::bch_share::BchShareNetwork;
+use p2poolv2_lib::address::bch_share::{BchShareNetwork, encode_payout_address};
 use p2poolv2_lib::address::share_owner::to_address_string;
 use p2poolv2_lib::shares::chain::chain_store_handle::ChainStoreHandle;
 use p2poolv2_lib::store::dag_store::MAX_UNCLES_DEPTH;
@@ -143,7 +143,11 @@ fn build_share_output(
             .iter()
             .map(|uncle| uncle.to_string())
             .collect(),
-        miner_bitcoin_address: share_header.miner_bitcoin_address.to_string(),
+        miner_bitcoin_address: match cash_network {
+            Some(network) => encode_payout_address(&share_header.miner_bitcoin_address, network)
+                .map_err(|error| ApiError::ServerError(error.to_string()))?,
+            None => share_header.miner_bitcoin_address.to_string(),
+        },
         miner_address: to_address_string(&share_header.miner_address, network, cash_network),
         merkle_root: share_header.merkle_root.to_string(),
         bits: format!("{:#x}", share_header.bits.to_consensus()),
@@ -262,6 +266,9 @@ mod tests {
     use crate::api::server::{AppConfig, AppState};
     use axum::extract::{Query, State};
     use p2poolv2_lib::accounting::stats::metrics;
+    use p2poolv2_lib::config::{
+        BitcoinCashNetwork, Chain, bitcoin_cash_donation_cashaddr, parse_payout_address,
+    };
     use p2poolv2_lib::monitoring_events::create_monitoring_event_channel;
     use p2poolv2_lib::node::actor::NodeHandle;
     use p2poolv2_lib::stratum::work::tracker::start_tracker_actor;
@@ -382,6 +389,38 @@ mod tests {
         let output = &result.unwrap().0;
         assert_eq!(output.len(), 1);
         assert_eq!(output[0].blockhash, genesis_hash);
+    }
+
+    #[tokio::test]
+    async fn bitcoin_cash_share_lookup_formats_the_chipnet_payout() {
+        let (mut state, _temp_dir) = build_test_state(NodeHandle::new_for_test()).await;
+        Arc::get_mut(&mut state).unwrap().app_config.cash_network = Some(BchShareNetwork::Chipnet);
+        let cashaddr = bitcoin_cash_donation_cashaddr(BitcoinCashNetwork::Chipnet);
+        let mut genesis = genesis_for_tests();
+        genesis.header.miner_bitcoin_address = parse_payout_address(
+            cashaddr,
+            Chain::BitcoinCash,
+            Network::Testnet4,
+            Some(BitcoinCashNetwork::Chipnet),
+        )
+        .unwrap();
+        let blockhash = genesis.block_hash();
+        state
+            .chain_store_handle
+            .init_or_setup_genesis(genesis)
+            .await
+            .unwrap();
+        let result = share(
+            State(state),
+            Query(ShareLookupQuery {
+                hash: Some(blockhash.to_string()),
+                height: None,
+                full: None,
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.0[0].miner_bitcoin_address, cashaddr);
     }
 
     #[tokio::test]

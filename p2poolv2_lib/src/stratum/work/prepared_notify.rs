@@ -299,7 +299,8 @@ impl PreparedNotifyParamsBuilder {
         self
     }
 
-    /// Append the reserved AuxPoW output. Bitcoin Cash sets this.
+    /// Append the reserved AuxPoW output and check final BCH block size.
+    /// Only Bitcoin Cash sets this.
     pub fn include_merge_mining(mut self, include_merge_mining: bool) -> Self {
         self.include_merge_mining = include_merge_mining;
         self
@@ -347,6 +348,10 @@ impl PreparedNotifyParamsBuilder {
             None,
             merge_mining,
         )?;
+
+        if self.include_merge_mining {
+            self.template.validate_bch_block_size(&coinbase)?;
+        }
 
         let (coinbase1, coinbase2_full) = split_coinbase(&coinbase)?;
 
@@ -632,6 +637,25 @@ mod tests {
             prepared.coinbase2_offset + prepared.coinbase2_placeholder_len
                 <= prepared.json_template.len()
         );
+    }
+
+    #[test]
+    fn bch_job_rejects_a_coinbase_that_exceeds_the_block_limit() {
+        let mut template: BlockTemplate = serde_json::from_str(include_str!(
+            "../../../../bitcoindrpc/test_data/bchn-regtest-template.json"
+        ))
+        .unwrap();
+        template.sizelimit = 81;
+        template.validate_bch().unwrap();
+        let distribution = vec![OutputPair {
+            address: Address::p2pkh(bitcoin::PubkeyHash::all_zeros(), Network::Regtest),
+            amount: bitcoin::Amount::from_sat(template.coinbasevalue),
+        }];
+        let result =
+            PreparedNotifyParamsBuilder::new(Arc::new(template), distribution, b"test_pool", true)
+                .include_merge_mining(true)
+                .build();
+        assert!(result.err().unwrap().message.contains("block size limit"));
     }
 
     #[tokio::test]

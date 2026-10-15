@@ -4,6 +4,8 @@
 
 use crate::shares::coinbaseaux_flags::CoinbaseAuxFlags;
 use crate::stratum::work::error::WorkError;
+use bitcoin::block::Header;
+use bitcoin::consensus::encode::VarInt;
 use bitcoin::hashes::Hash;
 use bitcoin::script::PushBytesBuf;
 use bitcoin::{BlockHash, CompactTarget, Target, Transaction, Txid};
@@ -174,6 +176,25 @@ impl BlockTemplate {
         Ok(())
     }
 
+    /// Check the final size of an already validated BCH template with its coinbase.
+    pub(crate) fn validate_bch_block_size(&self, coinbase: &Transaction) -> Result<(), WorkError> {
+        let prefix_size = Header::SIZE
+            + VarInt(self.transactions.len() as u64 + 1).size()
+            + coinbase.total_size();
+        let block_size = self
+            .transactions
+            .iter()
+            .try_fold(prefix_size, |size, transaction| {
+                size.checked_add(transaction.data.len() / 2)
+            });
+        if block_size.is_none_or(|size| size > self.sizelimit as usize) {
+            return Err(WorkError {
+                message: "BCH block including coinbase exceeds node block size limit".to_string(),
+            });
+        }
+        Ok(())
+    }
+
     /// The coinbase aux flags a share header records for this template.
     ///
     /// `parse_flags` pushes a single zero byte into the block coinbase both
@@ -211,7 +232,8 @@ pub(crate) fn parse_flags(flags: Option<String>) -> Result<PushBytesBuf, WorkErr
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::bch_template_transaction;
+    use crate::test_utils::{bch_template_transaction, test_coinbase_transaction};
+    use bitcoin::consensus::serialize;
 
     const BCHN_TEMPLATE: &str =
         include_str!("../../../../bitcoindrpc/test_data/bchn-regtest-template.json");
@@ -365,6 +387,37 @@ mod tests {
                 .message
                 .contains("block size limit")
         );
+    }
+
+    #[test]
+    fn bch_block_size_accepts_the_exact_limit_and_rejects_one_byte_less() {
+        let mut template: BlockTemplate = serde_json::from_str(BCHN_TEMPLATE).unwrap();
+        template.transactions = vec![bch_template_transaction(1)];
+        let coinbase = test_coinbase_transaction(1);
+        let transactions = vec![
+            coinbase.clone(),
+            Transaction::try_from(&template.transactions[0]).unwrap(),
+        ];
+        template.sizelimit = (Header::SIZE + serialize(&transactions).len()) as u32;
+        template.validate_bch().unwrap();
+        template.validate_bch_block_size(&coinbase).unwrap();
+        template.sizelimit -= 1;
+        assert!(template.validate_bch_block_size(&coinbase).is_err());
+    }
+
+    #[test]
+    fn bch_block_size_counts_the_compact_size_transaction_prefix() {
+        let mut template: BlockTemplate = serde_json::from_str(BCHN_TEMPLATE).unwrap();
+        let transaction = bch_template_transaction(1);
+        let decoded = Transaction::try_from(&transaction).unwrap();
+        template.transactions = vec![transaction; 252];
+        let coinbase = test_coinbase_transaction(1);
+        let mut transactions = vec![decoded; 253];
+        transactions[0] = coinbase.clone();
+        template.sizelimit = (Header::SIZE + serialize(&transactions).len()) as u32;
+        template.validate_bch_block_size(&coinbase).unwrap();
+        template.sizelimit -= 1;
+        assert!(template.validate_bch_block_size(&coinbase).is_err());
     }
 
     #[test]

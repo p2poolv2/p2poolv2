@@ -15,8 +15,9 @@
 //! `SetupConnection` flag bit 0 (`DECLARE_TX_DATA`) selects the mode.
 //! Set, the client uses Full-Template: `DeclareMiningJob` plus
 //! `ProvideMissingTransactions`. Clear, the client uses Coinbase-only:
-//! `DeclareMiningJob` is rejected and `SetCustomMiningJob` mines the pool
-//! template. Either way the non-coinbase transactions are stored in CTOR.
+//! `DeclareMiningJob` is rejected. These declaration exchanges do not install
+//! mineable custom jobs yet: work-selection setup and `SetCustomMiningJob`
+//! are rejected until they can validate and reward the declared work.
 
 mod mining;
 mod noise;

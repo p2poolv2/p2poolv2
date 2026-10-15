@@ -15,7 +15,7 @@
 //! consensus data: the chain already knows its network.
 
 use bitcoin::hashes::Hash;
-use bitcoin::{PubkeyHash, ScriptBuf};
+use bitcoin::{Address, PubkeyHash, ScriptBuf};
 
 const CHARSET: &[u8] = b"qpzry9x8gf2tvdw0s3jn54khce6mua7l";
 const GENERATOR: [u64; 5] = [
@@ -58,7 +58,7 @@ pub struct BchShareAddress {
     pub hash: [u8; 20],
 }
 
-/// Failure while decoding a Bitcoin Cash share address.
+/// Failure while encoding a Bitcoin Cash payout or decoding a share address.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BchShareAddressError {
     message: String,
@@ -88,17 +88,45 @@ impl BchShareAddress {
         let mut payload = [0u8; 21];
         payload[0] = P2PKH_VERSION;
         payload[1..].copy_from_slice(&self.hash);
-        let payload_five = convert_bits(&payload, 8, 5, true).expect("21 bytes convert to 5-bit");
-        let checksum = create_checksum(self.network.prefix(), &payload_five);
-        let prefix = self.network.prefix();
-        let mut characters = String::with_capacity(prefix.len() + 1 + payload_five.len() + 8);
-        characters.push_str(prefix);
-        characters.push(':');
-        for value in payload_five.iter().chain(checksum.iter()) {
-            characters.push(CHARSET[*value as usize] as char);
-        }
-        characters
+        encode_payload(self.network.prefix(), &payload)
     }
+}
+
+/// Format a 20-byte P2PKH or P2SH payout under the chain's CashAddr prefix.
+pub fn encode_payout_address(
+    address: &Address,
+    network: BchShareNetwork,
+) -> Result<String, BchShareAddressError> {
+    let script = address.script_pubkey();
+    let mut payload = [0u8; 21];
+    if script.is_p2pkh() {
+        payload[1..].copy_from_slice(&script.as_bytes()[3..23]);
+    } else if script.is_p2sh() {
+        payload[0] = 8;
+        payload[1..].copy_from_slice(&script.as_bytes()[2..22]);
+    } else {
+        return Err(BchShareAddressError {
+            message: "payout is not a 20-byte P2PKH or P2SH".to_string(),
+        });
+    }
+    let prefix = match network {
+        BchShareNetwork::Mainnet => "bitcoincash",
+        BchShareNetwork::Chipnet => "bchtest",
+        BchShareNetwork::Regtest => "bchreg",
+    };
+    Ok(encode_payload(prefix, &payload))
+}
+
+fn encode_payload(prefix: &str, payload: &[u8; 21]) -> String {
+    let payload_five = convert_bits(payload, 8, 5, true).expect("21 bytes convert to 5-bit");
+    let checksum = create_checksum(prefix, &payload_five);
+    let mut characters = String::with_capacity(prefix.len() + 1 + payload_five.len() + 8);
+    characters.push_str(prefix);
+    characters.push(':');
+    for value in payload_five.iter().chain(checksum.iter()) {
+        characters.push(CHARSET[*value as usize] as char);
+    }
+    characters
 }
 
 /// Decode `address` and require `expected`.
@@ -275,6 +303,39 @@ fn convert_bits(data: &[u8], from: u32, to: u32, pad: bool) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn p2pkh_payout_matches_the_cashaddr_vector() {
+        let address = "1BpEi6DfDAUFd7GtittLSdBeYJvcoaVggu"
+            .parse::<Address<_>>()
+            .unwrap()
+            .assume_checked();
+        assert_eq!(
+            encode_payout_address(&address, BchShareNetwork::Mainnet).unwrap(),
+            "bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a"
+        );
+    }
+
+    #[test]
+    fn p2sh_payout_matches_the_cashaddr_vector() {
+        let address = "3CWFddi6m4ndiGyKqzYvsFYagqDLPVMTzC"
+            .parse::<Address<_>>()
+            .unwrap()
+            .assume_checked();
+        assert_eq!(
+            encode_payout_address(&address, BchShareNetwork::Mainnet).unwrap(),
+            "bitcoincash:ppm2qsznhks23z7629mms6s4cwef74vcwvn0h829pq"
+        );
+    }
+
+    #[test]
+    fn witness_payout_has_no_cashaddr_encoding() {
+        let address = "tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d"
+            .parse::<Address<_>>()
+            .unwrap()
+            .assume_checked();
+        assert!(encode_payout_address(&address, BchShareNetwork::Chipnet).is_err());
+    }
 
     #[test]
     fn round_trip_keeps_the_hash_and_prefix() {

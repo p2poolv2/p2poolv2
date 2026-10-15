@@ -40,7 +40,7 @@ use mining_sv2::{
     MESSAGE_TYPE_SUBMIT_SHARES_ERROR, MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED,
     MESSAGE_TYPE_SUBMIT_SHARES_STANDARD, MESSAGE_TYPE_SUBMIT_SHARES_SUCCESS,
     MESSAGE_TYPE_UPDATE_CHANNEL, MESSAGE_TYPE_UPDATE_CHANNEL_ERROR, SetCustomMiningJob,
-    SetCustomMiningJobError, SetCustomMiningJobSuccess,
+    SetCustomMiningJobError,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
@@ -113,7 +113,6 @@ pub struct JobRegistry {
     cache: PoolTransactionCache,
     merge_mining: Option<MergeMiningCommitment>,
     next_token: u64,
-    next_job_id: u32,
     tokens: HashMap<Vec<u8>, TokenState>,
 }
 
@@ -126,7 +125,6 @@ impl JobRegistry {
             cache,
             merge_mining,
             next_token: 1,
-            next_job_id: 1,
             tokens: HashMap::with_capacity(8),
         }
     }
@@ -291,17 +289,23 @@ impl Sv2Connection {
                 )
             }
             Protocol::MiningProtocol => {
+                if has_work_selection(setup.flags) {
+                    self.mining = false;
+                    self.mode = None;
+                    return self.respond(
+                        SetupConnectionError {
+                            flags: WORK_SELECTION_FLAG,
+                            error_code: string_field("unsupported-feature-flags")?,
+                        },
+                        MESSAGE_TYPE_SETUP_CONNECTION_ERROR,
+                    );
+                }
                 self.mining = true;
                 self.mode = None;
-                let flags = if has_work_selection(setup.flags) {
-                    WORK_SELECTION_FLAG
-                } else {
-                    0
-                };
                 self.respond(
                     SetupConnectionSuccess {
                         used_version,
-                        flags,
+                        flags: 0,
                     },
                     MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS,
                 )
@@ -479,16 +483,15 @@ impl Sv2Connection {
                 MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_ERROR,
             );
         }
-        let job_id = registry.next_job_id;
-        registry.next_job_id = registry.next_job_id.wrapping_add(1);
         drop(registry);
+        // A token is not a validated tracker job; never promise rewards for it.
         self.respond(
-            SetCustomMiningJobSuccess {
+            SetCustomMiningJobError {
                 channel_id: request.channel_id,
                 request_id: request.request_id,
-                job_id,
+                error_code: string_field("job-not-yet-validated")?,
             },
-            MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_SUCCESS,
+            MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_ERROR,
         )
     }
 
@@ -754,6 +757,25 @@ mod tests {
         sort_ctor(&mut expected);
         assert_eq!(stored, expected);
         assert_ne!(stored[0].lock_time, declared_first);
+
+        let token = accepted.new_mining_job_token.as_bytes();
+        let mut mining = Sv2Connection::new(shared);
+        accept_message(
+            &mut mining,
+            setup(0, Protocol::MiningProtocol),
+            MESSAGE_TYPE_SETUP_CONNECTION,
+        );
+        let custom = accept_message(
+            &mut mining,
+            custom_job(token),
+            MESSAGE_TYPE_SET_CUSTOM_MINING_JOB,
+        );
+        let mut custom_payload = response_payload(&custom[0]);
+        let rejected = SetCustomMiningJobError::from_bytes(&mut custom_payload).unwrap();
+        assert_eq!(
+            rejected.error_code.as_utf8_or_hex(),
+            "job-not-yet-validated"
+        );
     }
 
     #[test]
@@ -990,7 +1012,7 @@ mod tests {
     }
 
     #[test]
-    fn coinbase_only_rejects_declare_and_mines_the_pool_template_in_ctor() {
+    fn coinbase_only_rejects_declare_and_an_uninstalled_custom_job() {
         let cache = PoolTransactionCache::new();
         let first = transaction_with_lock(1);
         let second = transaction_with_lock(2);
@@ -1045,7 +1067,7 @@ mod tests {
         let mut mining = Sv2Connection::new(shared);
         accept_message(
             &mut mining,
-            setup(WORK_SELECTION_FLAG, Protocol::MiningProtocol),
+            setup(0, Protocol::MiningProtocol),
             MESSAGE_TYPE_SETUP_CONNECTION,
         );
         let custom = accept_message(
@@ -1054,8 +1076,13 @@ mod tests {
             MESSAGE_TYPE_SET_CUSTOM_MINING_JOB,
         );
         let mut custom_payload = response_payload(&custom[0]);
-        let accepted = SetCustomMiningJobSuccess::from_bytes(&mut custom_payload).unwrap();
-        assert_eq!(accepted.request_id, 9);
+        let rejected = SetCustomMiningJobError::from_bytes(&mut custom_payload).unwrap();
+        assert_eq!(rejected.channel_id, 1);
+        assert_eq!(rejected.request_id, 9);
+        assert_eq!(
+            rejected.error_code.as_utf8_or_hex(),
+            "job-not-yet-validated"
+        );
         let stored = mining
             .registry
             .lock()
@@ -1065,6 +1092,24 @@ mod tests {
         let mut expected = vec![first, second];
         sort_ctor(&mut expected);
         assert_eq!(stored, expected);
+    }
+
+    #[test]
+    fn work_selection_setup_is_rejected_until_custom_jobs_are_mineable() {
+        let mut mining = Sv2Connection::new(registry());
+        let responses = accept_message(
+            &mut mining,
+            setup(WORK_SELECTION_FLAG, Protocol::MiningProtocol),
+            MESSAGE_TYPE_SETUP_CONNECTION,
+        );
+        let mut payload = response_payload(&responses[0]);
+        let rejected = SetupConnectionError::from_bytes(&mut payload).unwrap();
+        assert_eq!(rejected.flags, WORK_SELECTION_FLAG);
+        assert_eq!(
+            rejected.error_code.as_utf8_or_hex(),
+            "unsupported-feature-flags"
+        );
+        assert!(!mining.is_mining());
     }
 
     fn custom_job(token: &[u8]) -> SetCustomMiningJob<'_> {

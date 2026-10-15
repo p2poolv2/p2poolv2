@@ -176,9 +176,12 @@ a full donation (10,000) still skips miner address validation.
   `SetupConnection` flag bit 0 (`DECLARE_TX_DATA`) selects the Job Declaration
   mode. Set, the client uses Full-Template: `DeclareMiningJob`, then
   `ProvideMissingTransactions` for every transaction, because this node has
-  no mempool. Clear, `DeclareMiningJob` is rejected and `SetCustomMiningJob`
-  records the pool transaction set. Both paths store the non-coinbase transactions in
-  CTOR. Bitcoin Cash puts the AuxPoW output in
+  no mempool. Clear, `DeclareMiningJob` is rejected. These are declaration
+  exchanges only: work-selection setup and `SetCustomMiningJob` are refused
+  until actual mining and payout validation are implemented. The full
+  declaration stores the non-coinbase transactions in CTOR. The existing
+  coinbase-only pool cache does not implement private miner transaction
+  selection. Bitcoin Cash puts the AuxPoW output in
   `AllocateMiningJobTokenSuccess.coinbase_outputs`, encoded as the
   specification defines `coinbase_tx_outputs`: a CompactSize-prefixed array
   of consensus-serialized outputs (one output, count first). Bitcoin sends
@@ -372,15 +375,17 @@ and `p2p=<tp2pool share address>` in the password.
 ## Still unfinished
 
 Completion audit (2026-10-15): the Job Declaration exchange stops at token
-acceptance. `on_custom_job` returns a success job id without installing it
-in a mining channel, so neither declaration mode yet reaches actual share
-submission. Wiring the declared template and coinbase into channel jobs,
+acceptance. The old `on_custom_job` returned a success job id without
+installing it in a mining channel. The node now rejects work-selection setup
+and custom-job requests instead of promising rewards for unusable work.
+Neither declaration mode yet reaches actual share submission. Wiring the
+declared template and coinbase into channel jobs,
 validating the resulting candidate and its required payouts, and mining it
 with an independent Job Declarator remain required. The reserved zero-root
 AuxPoW output also does not implement miners choosing their auxiliary tokens.
-Final block size still needs to include the full PPLNS coinbase. API payout
-addresses still need CashAddr text. Hydrapool CashAddr payout parsing and SV2
-worker cleanup are fixed in the completion follow-up in `bch-plan.md`.
+Final job size now includes the full PPLNS coinbase and transaction count.
+API payouts now use CashAddr text. Hydrapool CashAddr payout parsing and
+SV2 worker cleanup are fixed in the completion follow-up in `bch-plan.md`.
 
 A retuned PPLNS window (after CHIP-2025-03 is decided). Two-node share
 propagation on chipnet passed on 2026-10-15 (above). The Bitcoin Cash

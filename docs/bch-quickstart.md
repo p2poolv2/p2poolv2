@@ -106,6 +106,13 @@ Stratum V2: `<node>:<sv2_port>`, user identity `<payout CashAddr>.<worker>`
 (add `,p2p=<share address>` if `miner_address` is unset), and the authority
 public key when Noise is enabled.
 
+Use pool-issued standard or extended jobs. Job Declaration is unfinished:
+connections requiring work selection receive `unsupported-feature-flags`,
+and `SetCustomMiningJob` receives `job-not-yet-validated` for a ready token.
+These responses do not promise rewards for declared work. Full custom-job
+mining and miner-selected auxiliary commitments remain required before
+this port is complete; see the requirement checks in [bch-plan.md](bch-plan.md).
+
 Payouts appear in the miners' wallets in the coinbase of each block the pool
 finds and become spendable after 100 blocks, as for any Bitcoin Cash
 coinbase.
