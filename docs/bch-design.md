@@ -306,22 +306,31 @@ Bitcoin shares were not affected. The header now records no flags for an
 empty entry (`BlockTemplate::share_coinbaseaux_flags`), and a test builds
 the coinbase the builder's way from the BCHN fixture and validates it on a
 Bitcoin Cash validator; that test fails without the fix with the error the
-nodes logged. A share accepted into the share chain after the fix has not
-been mined yet.
+nodes logged.
 
-Not covered by this run: a share accepted into the share chain (see above),
-chipnet, Stratum V2 job declaration from a real Job Declarator client, and
-real ASIC firmware.
+After the fix (2026-10-15, three nodes on `2b4ba97`): the CPU miner found
+share `5d5ed9792d427e09...` on node1. Its block `000000000ff7c699...` was
+accepted by BCHN at height 702, and the share is `BlockValid` on the
+confirmed share chain at height 1 on all three nodes: node1 built it, node2
+and node3 received it over P2P and validated it, with no validation errors
+on any node. Block 702's coinbase pays 0.046875 BCH (1.5%) to the donation
+address, 0.03078125 BCH (1%) to the fee address and the remainder to the
+PPLNS window, then the AuxPoW, padding and share-commitment outputs.
+
+Not covered by this run: chipnet, Stratum V2 job declaration from a real
+Job Declarator client, real ASIC firmware, and a PPLNS window holding more
+than the genesis share.
 
 ## Still unfinished
 
-A share accepted into the share chain from live mining, two-node share
-propagation on chipnet, a Bitcoin Cash script interpreter for share
-transfers, a retuned PPLNS window (after CHIP-2025-03 is decided), and
-per-miner share addresses over Stratum V2. A node started with `chain =
-"bitcoin-cash"` validates BCHN templates, pays CashAddr scripts including
-the donation and fee, records a P2PKH share owner, starts from a main or
-mini P2PKH genesis, speaks both local Job Declaration modes, and commits a
-reserved AuxPoW output, and BCHN has accepted blocks it built. It should not
-be called a working Bitcoin Cash pool until shares have propagated between
-nodes on chipnet.
+Two-node share propagation on chipnet (the cloud container used here cannot
+reach BCH peers; steps are in `bch-quickstart.md`), a Bitcoin Cash script
+interpreter for share transfers, a retuned PPLNS window (after CHIP-2025-03
+is decided), and per-miner share addresses over Stratum V2. A node started
+with `chain = "bitcoin-cash"` validates BCHN templates, pays CashAddr
+scripts including the donation and fee, records a P2PKH share owner, starts
+from a main or mini P2PKH genesis, speaks both local Job Declaration modes,
+commits a reserved AuxPoW output, and on regtest builds blocks BCHN accepts
+and shares that three nodes accept and relay. It should not be called a
+working Bitcoin Cash pool until shares have propagated between nodes on
+chipnet.

@@ -71,10 +71,14 @@ Also in this checkpoint:
 - Stratum V2 Noise encryption with the operator's authority key
   (`sv2_authority_public_key`, `sv2_authority_secret_key`), decision 2.
 
-Still unfinished: a share accepted into the share chain from live mining,
-two-node share propagation on chipnet, a retuned PPLNS window, a Bitcoin
-Cash script interpreter for share transfers, and per-miner share addresses
-over Stratum V2.
+On 2026-10-15 a share mined on BCHN regtest was accepted into the share
+chain by three nodes, after a fix for BCHN's empty coinbase flags entry,
+which had made every node reject the first such share (details in
+[bch-design.md](bch-design.md#live-regtest-run-2026-10-14)).
+
+Still unfinished: two-node share propagation on chipnet, a retuned PPLNS
+window, a Bitcoin Cash script interpreter for share transfers, and
+per-miner share addresses over Stratum V2.
 
 ## Startup selection (2026-10-13)
 
