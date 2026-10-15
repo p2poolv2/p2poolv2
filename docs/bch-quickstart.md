@@ -105,3 +105,23 @@ and the authority public key when Noise is enabled.
 Payouts appear in the miners' wallets in the coinbase of each block the pool
 finds and become spendable after 100 blocks, as for any Bitcoin Cash
 coinbase.
+
+## 5. Check two nodes on chipnet
+
+This is the test still missing before calling this a working pool. It needs
+a machine that can reach BCH peers on port 48333.
+
+1. Run BCHN with `chipnet=1`, `server=1` and `zmqpubhashblock`, and let it
+   sync (`bitcoin-cli -chipnet getblockchaininfo`).
+2. Start two P2Poolv2 nodes with `bitcoin_cash_network = "chipnet"`, the
+   same `bch_share_chain`, their own `store` paths and ports, and
+   `dial_peers` on the second pointing at the first's `listen_address`.
+   Both logs should show `Identified Peer ... /p2pool/test/<genesis>/1.0.0`
+   with the same genesis id.
+3. Point a miner at the first node's Stratum port with a `bchtest:` username.
+   A share needs about 2e10 hashes on the mini chain; a CPU takes about an
+   hour, a small ASIC seconds.
+4. Pass: `curl http://<api>/chain_info` on both nodes shows the same
+   `chain_tip_height` above 0, and neither log has `Chain-context validation
+   failed`. A block found on chipnet appears in BCHN with the 1.5% donation
+   output first.
