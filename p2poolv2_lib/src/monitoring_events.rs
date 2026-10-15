@@ -73,7 +73,7 @@ pub fn create_monitoring_event_channel() -> (MonitoringEventSender, MonitoringEv
 mod tests {
     use super::*;
     use crate::store::dag_store::UncleInfo;
-    use crate::test_utils::make_test_share_program;
+    use crate::test_utils::{make_test_share_program, parse_address_from_string};
     use bitcoin::hashes::Hash;
     use bitcoin::{BlockHash, CompactTarget};
     use p2poolv2_wallet::witness_program_codec::to_hex;
@@ -84,7 +84,9 @@ mod tests {
             blockhash: BlockHash::all_zeros(),
             prev_blockhash: BlockHash::all_zeros(),
             height: 100,
-            miner_bitcoin_address: "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q".to_string(),
+            miner_bitcoin_address: parse_address_from_string(
+                "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q",
+            ),
             miner_address: make_test_share_program(1).into(),
             timestamp: 1700000000,
             bits: CompactTarget::from_consensus(0x1d00ffff),
@@ -133,7 +135,9 @@ mod tests {
             blockhash: BlockHash::all_zeros(),
             prev_blockhash: BlockHash::all_zeros(),
             height: 42,
-            miner_bitcoin_address: "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q".to_string(),
+            miner_bitcoin_address: parse_address_from_string(
+                "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q",
+            ),
             miner_address: make_test_share_program(1).into(),
             timestamp: 1_700_000_000,
             bits: CompactTarget::from_consensus(0x1b4188f5),
@@ -160,7 +164,9 @@ mod tests {
         let uncle = UncleInfo {
             blockhash: BlockHash::all_zeros(),
             prev_blockhash: BlockHash::all_zeros(),
-            miner_bitcoin_address: "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string(),
+            miner_bitcoin_address: parse_address_from_string(
+                "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk",
+            ),
             miner_address: make_test_share_program(2).into(),
             timestamp: 1_700_000_010,
             height: Some(41),
@@ -170,7 +176,9 @@ mod tests {
             blockhash: BlockHash::all_zeros(),
             prev_blockhash: BlockHash::all_zeros(),
             height: 42,
-            miner_bitcoin_address: "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q".to_string(),
+            miner_bitcoin_address: parse_address_from_string(
+                "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q",
+            ),
             miner_address: make_test_share_program(1).into(),
             timestamp: 1_700_000_020,
             bits: CompactTarget::from_consensus(0x1b4188f5),

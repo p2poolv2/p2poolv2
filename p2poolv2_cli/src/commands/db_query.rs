@@ -7,11 +7,12 @@
 //! These functions open a RocksDB store in read-only mode and query it
 //! directly, without requiring a running node or API server.
 
+use bitcoin::Address;
 use bitcoin::BlockHash;
 use bitcoin::Network;
 use p2poolv2_lib::address::bch_share::BchShareNetwork;
 use p2poolv2_lib::address::share_owner::{self, ShareOwner};
-use p2poolv2_lib::address_display::{DagEntryDisplay, ShareInfoDisplay};
+use p2poolv2_lib::address_display::{DagEntryDisplay, ShareInfoDisplay, payout_address_string};
 use p2poolv2_lib::store::Store;
 use p2poolv2_lib::store::dag_store::{DagEntry, MAX_UNCLES_DEPTH};
 use p2poolv2_lib::store::writer::StoreError;
@@ -337,6 +338,19 @@ fn short_miner_address(
     ends(&miner_address_display(owner, network, cash_network), 6)
 }
 
+/// Render a payout address for a DOT label.
+///
+/// A Bitcoin address keeps its first ten characters, as before. A CashAddr
+/// begins with its network prefix, the same for every miner, so it is
+/// truncated from both ends like a share chain address.
+fn short_payout_address(address: &Address, cash_network: Option<BchShareNetwork>) -> String {
+    let rendered = payout_address_string(address, cash_network);
+    match cash_network {
+        Some(_) => ends(&rendered, 6),
+        None => short(&rendered, 10).to_string(),
+    }
+}
+
 /// Truncate to the first and last `n` characters, joined by an ellipsis.
 fn ends(value: &str, n: usize) -> String {
     if value.len() <= n * 2 + 3 {
@@ -385,7 +399,7 @@ fn print_shares_dot(
     for share in shares {
         let hash = share.blockhash.to_string();
         let id = short(&hash, 5);
-        let bitcoin_miner = short(&share.miner_bitcoin_address, 10);
+        let bitcoin_miner = short_payout_address(&share.miner_bitcoin_address, cash_network);
         let miner = short_miner_address(&share.miner_address, network, cash_network);
         let diff = format_difficulty(share.bits);
         let ts = format_ts_hms(share.timestamp);
@@ -401,7 +415,7 @@ fn print_shares_dot(
         for uncle in &share.uncles {
             let hash = uncle.blockhash.to_string();
             let id = short(&hash, 5);
-            let bitcoin_miner = short(&uncle.miner_bitcoin_address, 10);
+            let bitcoin_miner = short_payout_address(&uncle.miner_bitcoin_address, cash_network);
             let miner = short_miner_address(&uncle.miner_address, network, cash_network);
             let ts = format_ts_hms(uncle.timestamp);
             let height_str = uncle
@@ -471,7 +485,10 @@ fn print_dag_dot(
     for entry in entries {
         let hash = entry.blockhash.to_string();
         let identifier = short(&hash, 8);
-        let bitcoin_miner = short(&entry.miner_bitcoin_address, 10);
+        let bitcoin_miner = match &entry.miner_bitcoin_address {
+            Some(address) => short_payout_address(address, cash_network),
+            None => "unknown".to_string(),
+        };
         let miner = match &entry.miner_address {
             Some(program) => short_miner_address(program, network, cash_network),
             None => "unknown".to_string(),
@@ -636,7 +653,10 @@ fn build_share_output(
             .iter()
             .map(|uncle| uncle.to_string())
             .collect(),
-        miner_bitcoin_address: share_header.miner_bitcoin_address.to_string(),
+        miner_bitcoin_address: payout_address_string(
+            &share_header.miner_bitcoin_address,
+            cash_network,
+        ),
         miner_address: miner_address_display(&share_header.miner_address, network, cash_network),
         merkle_root: share_header.merkle_root.to_string(),
         bits: format!("{:#x}", share_header.bits.to_consensus()),
@@ -713,8 +733,10 @@ mod tests {
     use bitcoin::hashes::Hash as HashTrait;
     use p2poolv2_lib::address::witness_program_codec::{to_address_string, to_hex};
     use p2poolv2_lib::store::dag_store::UncleInfo;
-    use p2poolv2_lib::test_utils::make_test_share_program;
-    use p2poolv2_lib::test_utils::{genesis_for_tests, setup_test_chain_store_handle};
+    use p2poolv2_lib::test_utils::{
+        genesis_for_tests, make_test_share_program, parse_address_from_string,
+        setup_test_chain_store_handle,
+    };
 
     /// Helper: set up a store with genesis and return the Store reference and temp dir.
     /// The ChainStoreHandle populates the store; we then query it directly via Store.
@@ -940,14 +962,18 @@ mod tests {
             blockhash: BlockHash::all_zeros(),
             prev_blockhash: BlockHash::all_zeros(),
             height: 2,
-            miner_bitcoin_address: "tb1qx6e0gj7q7xurl08cwnpmeve6w6zf4tw6vfwe3f".to_string(),
+            miner_bitcoin_address: parse_address_from_string(
+                "tb1qx6e0gj7q7xurl08cwnpmeve6w6zf4tw6vfwe3f",
+            ),
             miner_address: make_test_share_program(1).into(),
             timestamp: 200,
             bits: CompactTarget::from_consensus(0x1d00ffff),
             uncles: vec![UncleInfo {
                 blockhash: BlockHash::all_zeros(),
                 prev_blockhash: BlockHash::all_zeros(),
-                miner_bitcoin_address: "tb1qx6e0gj7q7xurl08cwnpmeve6w6zf4tw6vfwe3f".to_string(),
+                miner_bitcoin_address: parse_address_from_string(
+                    "tb1qx6e0gj7q7xurl08cwnpmeve6w6zf4tw6vfwe3f",
+                ),
                 miner_address: make_test_share_program(2).into(),
                 timestamp: 100,
                 height: Some(1),
@@ -992,6 +1018,57 @@ mod tests {
         );
     }
 
+    /// A Bitcoin Cash payout is held under the legacy testnet network, so its
+    /// own form is base58. The CLI must print the CashAddr the operator
+    /// configured.
+    #[test]
+    fn shares_response_renders_a_cash_payout_as_cashaddr() {
+        let mut share = test_share_info();
+        share.miner_bitcoin_address =
+            parse_address_from_string("n28xPk5xbxNaaht399cZP9WDvyTMwaYaGe");
+        let response = shares_response(
+            0,
+            1,
+            &[share],
+            Some(Network::Testnet),
+            Some(BchShareNetwork::Chipnet),
+        );
+
+        assert_eq!(
+            response["shares"][0]["miner_bitcoin_address"],
+            "bchtest:qr3rryn6ugv8qpk82ccaqzk4ras92vpluvr2yclquu"
+        );
+    }
+
+    #[test]
+    fn shares_response_keeps_a_bitcoin_payout_unchanged() {
+        let response = shares_response(0, 1, &[test_share_info()], Some(Network::Signet), None);
+
+        assert_eq!(
+            response["shares"][0]["miner_bitcoin_address"],
+            "tb1qx6e0gj7q7xurl08cwnpmeve6w6zf4tw6vfwe3f"
+        );
+    }
+
+    /// Every CashAddr on a network begins with the same prefix, so a head
+    /// only truncation would label every miner identically.
+    #[test]
+    fn short_payout_address_keeps_both_ends_of_a_cashaddr() {
+        let address = parse_address_from_string("n28xPk5xbxNaaht399cZP9WDvyTMwaYaGe");
+
+        assert_eq!(
+            short_payout_address(&address, Some(BchShareNetwork::Chipnet)),
+            "bchtes..yclquu"
+        );
+    }
+
+    #[test]
+    fn short_payout_address_keeps_the_head_of_a_bitcoin_address() {
+        let address = parse_address_from_string("n28xPk5xbxNaaht399cZP9WDvyTMwaYaGe");
+
+        assert_eq!(short_payout_address(&address, None), "n28xPk5xbx");
+    }
+
     #[test]
     fn dag_response_renders_addresses() {
         let entries = vec![DagEntry {
@@ -1001,7 +1078,9 @@ mod tests {
             chain: "Confirmed".to_string(),
             parent: BlockHash::all_zeros(),
             uncles: vec![],
-            miner_bitcoin_address: "tb1qx6e0gj7q7xurl08cwnpmeve6w6zf4tw6vfwe3f".to_string(),
+            miner_bitcoin_address: Some(parse_address_from_string(
+                "tb1qx6e0gj7q7xurl08cwnpmeve6w6zf4tw6vfwe3f",
+            )),
             miner_address: Some(make_test_share_program(1).into()),
             has_block_data: true,
         }];
@@ -1027,7 +1106,9 @@ mod tests {
             )
             .unwrap(),
             height: 1,
-            miner_bitcoin_address: "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q".to_string(),
+            miner_bitcoin_address: parse_address_from_string(
+                "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q",
+            ),
             miner_address: make_test_share_program(1).into(),
             timestamp: 1700000000,
             bits: CompactTarget::from_consensus(0x1d00ffff),
@@ -1040,7 +1121,9 @@ mod tests {
                     "0000000000000000000000000000000000000000000000000000000000001234",
                 )
                 .unwrap(),
-                miner_bitcoin_address: "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string(),
+                miner_bitcoin_address: parse_address_from_string(
+                    "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk",
+                ),
                 miner_address: make_test_share_program(2).into(),
                 timestamp: 1699999990,
                 height: Some(1),

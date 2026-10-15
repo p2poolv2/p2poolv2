@@ -428,6 +428,13 @@ prefix nor the genesis there. Payout CashAddr (`bitcoincash`, `bchtest`,
 `bchreg`) is a different string and is not a share address. See
 `p2poolv2_wallet::bch_share` and `p2poolv2_wallet::share_owner`.
 
+A payout address is held as a `bitcoin::Address` under that implied
+network, so its own `Display` is Base58: the right key hash in Bitcoin's
+spelling. The API, the websocket feed and the CLI show `miner_bitcoin_address`,
+`donation_address` and `fee_address` as payout CashAddr under the
+`bitcoin_cash_network` prefix instead (`address_display::payout_address_string`).
+A Bitcoin node has no `bitcoin_cash_network` and shows them unchanged.
+
 A miner gets a share address from their own wallet. Take a regular P2PKH
 receiving address (`q...`) for the key that should own shares, preferably
 not the payout address, and re-encode it:

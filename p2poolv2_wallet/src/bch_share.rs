@@ -13,6 +13,9 @@
 //!
 //! The 20-byte hash is what a share header will store. The prefix is not
 //! consensus data: the chain already knows its network.
+//!
+//! The text encoding itself, [`encode_cashaddr`], is shared with payout
+//! display: a payout address is the same CashAddr under a payout prefix.
 
 use bitcoin::hashes::Hash;
 use bitcoin::{Address, PubkeyHash, ScriptBuf};
@@ -26,6 +29,45 @@ const GENERATOR: [u64; 5] = [
     0x1e4f43e470,
 ];
 const P2PKH_VERSION: u8 = 0x00;
+const P2SH_VERSION: u8 = 0x08;
+
+/// Script a 20-byte CashAddr payload pays, named by its version byte.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CashAddrType {
+    /// Pay to public key hash, version byte `0x00`.
+    PayToPublicKeyHash,
+    /// Pay to script hash, version byte `0x08`.
+    PayToScriptHash,
+}
+
+impl CashAddrType {
+    fn version(self) -> u8 {
+        match self {
+            CashAddrType::PayToPublicKeyHash => P2PKH_VERSION,
+            CashAddrType::PayToScriptHash => P2SH_VERSION,
+        }
+    }
+}
+
+/// CashAddr text for a 20-byte hash under `prefix`, including the prefix.
+///
+/// A share address is this encoding under a share prefix. A payout address
+/// is the same encoding under `bitcoincash`, `bchtest` or `bchreg`, which is
+/// how the API and CLI spell a Bitcoin Cash payout.
+pub fn encode_cashaddr(prefix: &str, address_type: CashAddrType, hash: &[u8; 20]) -> String {
+    let mut payload = [0u8; 21];
+    payload[0] = address_type.version();
+    payload[1..].copy_from_slice(hash);
+    let payload_five = convert_bits(&payload, 8, 5, true).expect("21 bytes convert to 5-bit");
+    let checksum = create_checksum(prefix, &payload_five);
+    let mut characters = String::with_capacity(prefix.len() + 1 + payload_five.len() + 8);
+    characters.push_str(prefix);
+    characters.push(':');
+    for value in payload_five.iter().chain(checksum.iter()) {
+        characters.push(CHARSET[*value as usize] as char);
+    }
+    characters
+}
 
 /// Network a Bitcoin Cash share address names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,48 +127,39 @@ impl BchShareAddress {
 
     /// CashAddr text form, including the prefix.
     pub fn encode(self) -> String {
-        let mut payload = [0u8; 21];
-        payload[0] = P2PKH_VERSION;
-        payload[1..].copy_from_slice(&self.hash);
-        encode_payload(self.network.prefix(), &payload)
+        encode_cashaddr(
+            self.network.prefix(),
+            CashAddrType::PayToPublicKeyHash,
+            &self.hash,
+        )
     }
 }
 
 /// Format a 20-byte P2PKH or P2SH payout under the chain's CashAddr prefix.
+///
+/// Errors for any other payout, which has no CashAddr form.
 pub fn encode_payout_address(
     address: &Address,
     network: BchShareNetwork,
 ) -> Result<String, BchShareAddressError> {
     let script = address.script_pubkey();
-    let mut payload = [0u8; 21];
-    if script.is_p2pkh() {
-        payload[1..].copy_from_slice(&script.as_bytes()[3..23]);
+    let (address_type, hash_bytes) = if script.is_p2pkh() {
+        (CashAddrType::PayToPublicKeyHash, &script.as_bytes()[3..23])
     } else if script.is_p2sh() {
-        payload[0] = 8;
-        payload[1..].copy_from_slice(&script.as_bytes()[2..22]);
+        (CashAddrType::PayToScriptHash, &script.as_bytes()[2..22])
     } else {
         return Err(BchShareAddressError {
             message: "payout is not a 20-byte P2PKH or P2SH".to_string(),
         });
-    }
+    };
+    let mut hash = [0u8; 20];
+    hash.copy_from_slice(hash_bytes);
     let prefix = match network {
         BchShareNetwork::Mainnet => "bitcoincash",
         BchShareNetwork::Chipnet => "bchtest",
         BchShareNetwork::Regtest => "bchreg",
     };
-    Ok(encode_payload(prefix, &payload))
-}
-
-fn encode_payload(prefix: &str, payload: &[u8; 21]) -> String {
-    let payload_five = convert_bits(payload, 8, 5, true).expect("21 bytes convert to 5-bit");
-    let checksum = create_checksum(prefix, &payload_five);
-    let mut characters = String::with_capacity(prefix.len() + 1 + payload_five.len() + 8);
-    characters.push_str(prefix);
-    characters.push(':');
-    for value in payload_five.iter().chain(checksum.iter()) {
-        characters.push(CHARSET[*value as usize] as char);
-    }
-    characters
+    Ok(encode_cashaddr(prefix, address_type, &hash))
 }
 
 /// Decode `address` and require `expected`.
@@ -370,6 +403,37 @@ mod tests {
         let error = decode("sp2pool1pvmde7zkgeg9qqcpsy7e6g3w6dm3d7mqwqnudcmuedk6wt8gwgkls4zffd6")
             .unwrap_err();
         assert!(error.to_string().contains("prefix"));
+    }
+
+    /// The CashAddr specification's 20-byte hash, as the payout decoder in
+    /// the config crate tests it.
+    const SPECIFICATION_HASH: [u8; 20] = [
+        0xf5, 0xbf, 0x48, 0xb3, 0x97, 0xda, 0xe7, 0x0b, 0xe8, 0x2b, 0x3c, 0xca, 0x47, 0x93, 0xf8,
+        0xeb, 0x2b, 0x6c, 0xda, 0xc9,
+    ];
+
+    #[test]
+    fn encodes_a_mainnet_public_key_hash_payout() {
+        assert_eq!(
+            encode_cashaddr(
+                "bitcoincash",
+                CashAddrType::PayToPublicKeyHash,
+                &SPECIFICATION_HASH
+            ),
+            "bitcoincash:qr6m7j9njldwwzlg9v7v53unlr4jkmx6eylep8ekg2"
+        );
+    }
+
+    #[test]
+    fn encodes_a_chipnet_script_hash_payout() {
+        assert_eq!(
+            encode_cashaddr(
+                "bchtest",
+                CashAddrType::PayToScriptHash,
+                &SPECIFICATION_HASH
+            ),
+            "bchtest:pr6m7j9njldwwzlg9v7v53unlr4jkmx6eyvwc0uz5t"
+        );
     }
 
     #[test]

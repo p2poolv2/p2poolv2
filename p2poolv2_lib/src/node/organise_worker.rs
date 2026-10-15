@@ -919,7 +919,7 @@ impl OrganiseWorker {
             blockhash: header.block_hash(),
             prev_blockhash: header.prev_share_blockhash,
             height,
-            miner_bitcoin_address: header.miner_bitcoin_address.to_string(),
+            miner_bitcoin_address: header.miner_bitcoin_address.clone(),
             miner_address: header.miner_address,
             timestamp: header.time,
             bits: header.bits,

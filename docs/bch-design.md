@@ -371,7 +371,11 @@ and `p2p=<tp2pool share address>` in the password.
 - No chipnet block was found: network difficulty was about 619,000.
 - Found while checking: the API shows a Bitcoin Cash payout address
   (`miner_bitcoin_address`) in Bitcoin's Base58 form instead of CashAddr.
-  It is the same key hash; only the display is wrong.
+  It is the same key hash; only the display is wrong. Fixed: the API, the
+  websocket feed and the CLI now show payout, donation and fee addresses as
+  CashAddr under the `bitcoin_cash_network` prefix
+  (`n28xPk5xbxNaaht399cZP9WDvyTMwaYaGe` is shown as
+  `bchtest:qr3rryn6ugv8qpk82ccaqzk4ras92vpluvr2yclquu`).
 
 ## Still unfinished
 
