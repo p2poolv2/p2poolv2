@@ -40,6 +40,8 @@ use std::str::FromStr;
 #[cfg(any(test, feature = "test-utils"))]
 use crate::accounting::OutputPair;
 #[cfg(test)]
+use crate::accounting::payout::payout_distribution::build_pplns_outputs;
+#[cfg(test)]
 use crate::accounting::stats::metrics;
 #[cfg(any(test, feature = "test-utils"))]
 use crate::address::Address as P2PoolAddress;
@@ -204,13 +206,19 @@ pub fn bch_template_transaction(index: u32) -> TemplateTransaction {
     }
 }
 
-/// A BCH payout snapshot with distinct weights and independently encoded job terms.
+/// A BCH payout snapshot with distinct weights.
 #[cfg(test)]
 pub fn test_bch_prepared() -> Arc<PreparedNotifyParams> {
     let template: BlockTemplate = serde_json::from_str(include_str!(
         "../../bitcoindrpc/test_data/bchn-regtest-template.json"
     ))
     .unwrap();
+    test_bch_prepared_for_template(template)
+}
+
+/// Apply the reusable BCH payout snapshot to an externally supplied template.
+#[cfg(test)]
+pub fn test_bch_prepared_for_template(template: BlockTemplate) -> Arc<PreparedNotifyParams> {
     let first = Address::p2pkh(
         bitcoin::PubkeyHash::from_byte_array([1; 20]),
         bitcoin::Network::Regtest,
@@ -219,28 +227,17 @@ pub fn test_bch_prepared() -> Arc<PreparedNotifyParams> {
         bitcoin::PubkeyHash::from_byte_array([2; 20]),
         bitcoin::Network::Regtest,
     );
+    let weights = HashMap::from([(first, 1), (second, 3)]);
+    let outputs =
+        build_pplns_outputs(template.coinbasevalue, &weights, &None, None, &None, None).unwrap();
     Arc::new(
-        PreparedNotifyParamsBuilder::new(
-            Arc::new(template.clone()),
-            vec![
-                OutputPair {
-                    address: first.clone(),
-                    amount: bitcoin::Amount::from_sat(template.coinbasevalue / 4),
-                },
-                OutputPair {
-                    address: second.clone(),
-                    amount: bitcoin::Amount::from_sat(template.coinbasevalue * 3 / 4),
-                },
-            ],
-            b"P2Poolv2",
-            true,
-        )
-        .pplns_weights(Some(HashMap::from([(first, 1), (second, 3)])))
-        .prev_share_blockhash(BlockHash::from_byte_array([0x33; 32]))
-        .bits(CompactTarget::from_consensus(0x2100ffff))
-        .include_merge_mining(true)
-        .build()
-        .unwrap(),
+        PreparedNotifyParamsBuilder::new(Arc::new(template), outputs, b"P2Poolv2", true)
+            .pplns_weights(Some(weights))
+            .prev_share_blockhash(BlockHash::from_byte_array([0x33; 32]))
+            .bits(CompactTarget::from_consensus(0x2100ffff))
+            .include_merge_mining(true)
+            .build()
+            .unwrap(),
     )
 }
 
@@ -394,13 +391,16 @@ pub fn test_sv2_setup(protocol: Protocol, flags: u32) -> SetupConnection<'static
     }
 }
 
-/// Reconstruct and solve the declared regtest header as an extended-channel miner.
+/// Reconstruct the declared coinbase with a zero-filled downstream extranonce.
 #[cfg(test)]
-pub fn test_bch_solve_custom_job(request: &SetCustomMiningJob, extranonce_prefix: &[u8]) -> Header {
+pub fn test_bch_custom_coinbase(
+    request: &SetCustomMiningJob,
+    extranonce_prefix: &[u8],
+) -> Transaction {
     let mut script = request.coinbase_prefix.as_bytes().to_vec();
     script.extend_from_slice(extranonce_prefix);
     script.extend_from_slice(&[0; 8]);
-    let coinbase = Transaction {
+    Transaction {
         version: bitcoin::transaction::Version::TWO,
         lock_time: bitcoin::absolute::LockTime::from_consensus(request.coinbase_tx_locktime),
         input: vec![bitcoin::TxIn {
@@ -410,7 +410,13 @@ pub fn test_bch_solve_custom_job(request: &SetCustomMiningJob, extranonce_prefix
             witness: bitcoin::Witness::new(),
         }],
         output: deserialize(request.coinbase_tx_outputs.as_bytes()).unwrap(),
-    };
+    }
+}
+
+/// Reconstruct and solve the declared regtest header as an extended-channel miner.
+#[cfg(test)]
+pub fn test_bch_solve_custom_job(request: &SetCustomMiningJob, extranonce_prefix: &[u8]) -> Header {
+    let coinbase = test_bch_custom_coinbase(request, extranonce_prefix);
     let branches = request
         .merkle_path
         .iter()

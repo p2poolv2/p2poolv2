@@ -46,7 +46,7 @@ use crate::stratum::work::tracker::{JobDetails, JobId};
 use binary_sv2::{B032, B064K, Deserialize, Seq0255, Sv2Option, U256};
 use bitcoin::block::{Header, Version};
 use bitcoin::hashes::Hash;
-use bitcoin::{BlockHash, CompactTarget, Target, TxMerkleNode};
+use bitcoin::{BlockHash, CompactTarget, Network, Target, TxMerkleNode};
 use mining_sv2::{
     CloseChannel, MESSAGE_TYPE_CLOSE_CHANNEL, MESSAGE_TYPE_MINING_SET_NEW_PREV_HASH,
     MESSAGE_TYPE_NEW_EXTENDED_MINING_JOB, MESSAGE_TYPE_NEW_MINING_JOB,
@@ -104,17 +104,49 @@ enum ChannelKind {
     Extended,
 }
 
+#[derive(Clone, Copy)]
+struct ChannelJob {
+    tracker_job_id: JobId,
+    target: Target,
+    difficulty: u64,
+}
+
 struct Channel {
     kind: ChannelKind,
     session: Session<DifficultyAdjuster>,
     /// enonce2 for a standard channel; unused on an extended one.
     standard_enonce2: [u8; 8],
-    /// Easiest target the device accepts, from the open request.
+    /// Easiest target the device accepts, from its latest open/update request.
     max_target: Target,
-    /// Channel job id to tracker job id.
-    jobs: BTreeMap<u32, JobId>,
+    /// Active jobs retain the target and credit assigned before hashing started.
+    jobs: BTreeMap<u32, ChannelJob>,
     next_job_id: u32,
     last_prev_hash: Option<BlockHash>,
+}
+
+impl Channel {
+    fn insert_job(&mut self, tracker_job_id: JobId) -> u32 {
+        let job_id = self.next_job_id;
+        self.next_job_id = self.next_job_id.wrapping_add(1);
+        let target =
+            target_for_difficulty(self.session.difficulty_adjuster.get_current_difficulty())
+                .min(self.max_target);
+        let difficulty = target
+            .difficulty(Network::Bitcoin)
+            .min(u128::from(u64::MAX)) as u64;
+        self.jobs.insert(
+            job_id,
+            ChannelJob {
+                tracker_job_id,
+                target,
+                difficulty,
+            },
+        );
+        while self.jobs.len() > MAX_CHANNEL_JOBS {
+            self.jobs.pop_first();
+        }
+        job_id
+    }
 }
 
 /// The mining channels of one SV2 connection.
@@ -191,12 +223,7 @@ impl MiningChannels {
         self.ctx
             .tracker_handle
             .insert_job_details(tracker_job_id, job);
-        let job_id = channel.next_job_id;
-        channel.next_job_id = channel.next_job_id.wrapping_add(1);
-        channel.jobs.insert(job_id, tracker_job_id);
-        while channel.jobs.len() > MAX_CHANNEL_JOBS {
-            channel.jobs.pop_first();
-        }
+        let job_id = channel.insert_job(tracker_job_id);
         Ok(vec![encode_frame(
             SetCustomMiningJobSuccess {
                 channel_id: request.channel_id,
@@ -337,7 +364,17 @@ impl MiningChannels {
                 MESSAGE_TYPE_UPDATE_CHANNEL_ERROR,
             )?]);
         };
-        channel.max_target = device_max_target(maximum_target);
+        let maximum_target = device_max_target(maximum_target);
+        if maximum_target == Target::ZERO {
+            return Ok(vec![encode_frame(
+                UpdateChannelError {
+                    channel_id,
+                    error_code: string_field("invalid-max-target")?,
+                },
+                MESSAGE_TYPE_UPDATE_CHANNEL_ERROR,
+            )?]);
+        }
+        channel.max_target = maximum_target;
         let target =
             target_for_difficulty(channel.session.difficulty_adjuster.get_current_difficulty())
                 .min(channel.max_target)
@@ -380,6 +417,10 @@ impl MiningChannels {
         }
         if kind == ChannelKind::Extended && min_extranonce_size > EXTRANONCE_SIZE {
             return open_error(request_id, "min-extranonce-size-too-large");
+        }
+        let device_max_target = device_max_target(max_target);
+        if device_max_target == Target::ZERO {
+            return open_error(request_id, "invalid-max-target");
         }
         let mut session = Session::<DifficultyAdjuster>::new(
             self.ctx.start_difficulty,
@@ -425,7 +466,6 @@ impl MiningChannels {
         session.share_owner = share_owner;
         session.user_id = Some(user_id);
         session.subscribed = true;
-        let device_max_target = device_max_target(max_target);
         let channel_target =
             target_for_difficulty(session.difficulty_adjuster.get_current_difficulty())
                 .min(device_max_target);
@@ -557,16 +597,11 @@ impl MiningChannels {
             BlockHash::from_str(&template.previousblockhash).map_err(|error| error.to_string())?;
         let nbits = u32::from_str_radix(&template.bits, 16).map_err(|error| error.to_string())?;
         let version = template.version as u32;
-        let channel_job_id = channel.next_job_id;
-        channel.next_job_id = channel.next_job_id.wrapping_add(1);
         let new_prev_hash = channel.last_prev_hash != Some(prev_hash);
         if new_prev_hash {
             channel.jobs.clear();
         }
-        channel.jobs.insert(channel_job_id, tracker_job_id);
-        while channel.jobs.len() > MAX_CHANNEL_JOBS {
-            channel.jobs.pop_first();
-        }
+        let channel_job_id = channel.insert_job(tracker_job_id);
         channel.last_prev_hash = Some(prev_hash);
         let min_ntime = if new_prev_hash {
             Sv2Option::new(None)
@@ -637,9 +672,10 @@ impl MiningChannels {
         let Some(channel) = self.channels.get_mut(&submission.channel_id) else {
             return submit_error(&submission, "invalid-channel-id");
         };
-        let Some(tracker_job_id) = channel.jobs.get(&submission.job_id).copied() else {
+        let Some(channel_job) = channel.jobs.get(&submission.job_id).copied() else {
             return submit_error(&submission, "invalid-job-id");
         };
+        let tracker_job_id = channel_job.tracker_job_id;
         let Some(job) = self.ctx.tracker_handle.get_job(tracker_job_id) else {
             return submit_error(&submission, "stale-share");
         };
@@ -697,7 +733,7 @@ impl MiningChannels {
                 .await
                 .map_err(|error| error.to_string())?;
         }
-        let difficulty = channel.session.difficulty_adjuster.get_current_difficulty();
+        let difficulty = channel_job.difficulty;
         let share = SimplePplnsShare::new(
             channel.session.user_id.unwrap_or_default(),
             difficulty,
@@ -729,7 +765,7 @@ impl MiningChannels {
         channel.session.last_share_time = Some(SystemTime::now());
         let truediff = get_true_difficulty(&block_hash);
         let meets_channel_target =
-            self.ctx.ignore_difficulty || target_for_difficulty(difficulty).is_met_by(block_hash);
+            self.ctx.ignore_difficulty || channel_job.target.is_met_by(block_hash);
         if meets_channel_target {
             let _ = self
                 .ctx
@@ -911,7 +947,9 @@ mod tests {
     use crate::stratum::work::prepared_notify::PreparedNotifyParamsBuilder;
     use crate::stratum::work::tracker::start_tracker_actor;
     use crate::test_utils::{make_test_share_address, setup_test_chain_store_handle};
-    use crate::test_utils::{test_bch_custom_job, test_bch_prepared, test_bch_stratum_context};
+    use crate::test_utils::{
+        test_bch_custom_job, test_bch_prepared, test_bch_solve_custom_job, test_bch_stratum_context,
+    };
     use bitcoin::consensus::deserialize;
     use bitcoin::hashes::sha256d;
     use bitcoin::{Address, Amount, CompressedPublicKey, Network, Transaction};
@@ -926,6 +964,112 @@ mod tests {
     const USERNAME: &str = "tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d.rig1";
     /// Easier than almost every hash, so the test share meets the pool target.
     const EASY_POOL_BITS: u32 = 0x2100ffff;
+
+    #[tokio::test]
+    async fn zero_maximum_target_is_refused_at_channel_opening() {
+        let (ctx, _emissions, _dirs) = test_bch_stratum_context("http://127.0.0.1:1").await;
+        let mut channels = MiningChannels::new(ctx, DEFAULT_VERSION_MASK);
+        let mut request = binary_sv2::to_bytes(OpenExtendedMiningChannel {
+            request_id: 1,
+            user_identity: "unused".try_into().unwrap(),
+            nominal_hash_rate: 1.0,
+            max_target: U256::new(&[0; 32]).unwrap(),
+            min_extranonce_size: 8,
+        })
+        .unwrap();
+        let rejected = channels
+            .handle(
+                MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL,
+                &mut request,
+                None,
+            )
+            .await
+            .unwrap();
+        let mut rejected_payload = payload(&rejected[0]);
+        let error = OpenMiningChannelError::from_bytes(&mut rejected_payload).unwrap();
+        assert_eq!(error.error_code.as_utf8_or_hex(), "invalid-max-target");
+        assert!(channels.channels.is_empty());
+    }
+
+    #[tokio::test]
+    async fn active_custom_job_keeps_its_share_credit_after_difficulty_changes() {
+        let (mut ctx, mut emissions, _dirs) = test_bch_stratum_context("http://127.0.0.1:1").await;
+        ctx.start_difficulty = 5;
+        let mut channels = MiningChannels::new(ctx, DEFAULT_VERSION_MASK);
+        let payout = Address::p2pkh(
+            bitcoin::PubkeyHash::from_byte_array([0x22; 20]),
+            Network::Regtest,
+        );
+        let identity = encode_payout_address(&payout, BchShareNetwork::Regtest).unwrap();
+        let mut open = binary_sv2::to_bytes(OpenExtendedMiningChannel {
+            request_id: 1,
+            user_identity: identity.as_str().try_into().unwrap(),
+            nominal_hash_rate: 1.0,
+            max_target: U256::new(&[0xff; 32]).unwrap(),
+            min_extranonce_size: 8,
+        })
+        .unwrap();
+        let opened = channels
+            .handle(MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL, &mut open, None)
+            .await
+            .unwrap();
+        let mut open_payload = payload(&opened[0]);
+        let opened = OpenExtendedMiningChannelSuccess::from_bytes(&mut open_payload).unwrap();
+        let prepared = test_bch_prepared();
+        let token = prepared
+            .mining_job_token([1; 32], prepared.template().curtime)
+            .unwrap();
+        let (mut bytes, declared) = test_bch_custom_job(
+            Arc::clone(&prepared),
+            token,
+            vec![],
+            false,
+            prepared.template().coinbasevalue,
+        );
+        let request = SetCustomMiningJob::from_bytes(&mut bytes).unwrap();
+        let installed = channels
+            .install_custom_job(&request, declared, Some(prepared))
+            .await
+            .unwrap();
+        let mut install_payload = payload(&installed[0]);
+        let installed = SetCustomMiningJobSuccess::from_bytes(&mut install_payload).unwrap();
+        channels
+            .channels
+            .get_mut(&1)
+            .unwrap()
+            .session
+            .difficulty_adjuster
+            .current_difficulty = 99;
+        let next_target = target_for_difficulty(1000);
+        channels.update(1, &next_target.to_le_bytes()).unwrap();
+        assert_eq!(
+            channels.channels[&1].jobs[&installed.job_id].target,
+            target_for_difficulty(5)
+        );
+        let header = test_bch_solve_custom_job(&request, opened.extranonce_prefix.as_bytes());
+        let mut submit = binary_sv2::to_bytes(SubmitSharesExtended {
+            channel_id: 1,
+            sequence_number: 1,
+            job_id: installed.job_id,
+            nonce: header.nonce,
+            ntime: header.time,
+            version: request.version,
+            extranonce: B032::new(&[0; 8]).unwrap(),
+        })
+        .unwrap();
+        let accepted = channels
+            .handle(MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED, &mut submit, None)
+            .await
+            .unwrap();
+        let mut accepted_payload = payload(&accepted[0]);
+        let accepted = SubmitSharesSuccess::from_bytes(&mut accepted_payload).unwrap();
+        assert_eq!(accepted.new_shares_sum, 5);
+        assert_eq!(emissions.try_recv().unwrap().pplns.difficulty, 5);
+        channels.on_template(&test_bch_prepared());
+        let next_job = channels.channels[&1].jobs.values().next_back().unwrap();
+        assert_eq!(next_job.target, next_target);
+        assert_eq!(next_job.difficulty, 1000);
+    }
 
     #[tokio::test]
     async fn node_rejection_does_not_install_a_custom_job() {
@@ -1144,6 +1288,13 @@ mod tests {
             .unwrap(),
         );
         let mut duplicate = submit.clone();
+        channels
+            .channels
+            .get_mut(&channel_id)
+            .unwrap()
+            .session
+            .difficulty_adjuster
+            .current_difficulty = 77;
         let accepted = channels
             .handle(MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED, &mut submit, None)
             .await
@@ -1151,6 +1302,14 @@ mod tests {
         assert_eq!(frame_type(&accepted[0]), MESSAGE_TYPE_SUBMIT_SHARES_SUCCESS);
         let emission = emissions_rx.try_recv().unwrap();
         assert_eq!(emission.header, header);
+        let mut accepted_payload = payload(&accepted[0]);
+        assert_eq!(
+            SubmitSharesSuccess::from_bytes(&mut accepted_payload)
+                .unwrap()
+                .new_shares_sum,
+            1
+        );
+        assert_eq!(emission.pplns.difficulty, 1);
         assert_eq!(
             emission.pplns.btcaddress.as_deref(),
             Some("tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d")
@@ -1977,6 +2136,14 @@ mod tests {
         let set_target = SetTarget::from_bytes(&mut set_target_payload).unwrap();
         assert_eq!(set_target.channel_id, 1);
         assert_eq!(set_target.maximum_target.as_bytes(), &lower_maximum);
+        let rejected = channels.update(1, &[0; 32]).unwrap();
+        let mut rejected_payload = payload(&rejected[0]);
+        let error = UpdateChannelError::from_bytes(&mut rejected_payload).unwrap();
+        assert_eq!(error.error_code.as_utf8_or_hex(), "invalid-max-target");
+        assert_eq!(
+            channels.channels[&1].max_target.to_le_bytes(),
+            lower_maximum
+        );
     }
 
     #[tokio::test]

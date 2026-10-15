@@ -17,7 +17,7 @@ Audience: contributors and AI agents starting the BCH port. Read
 | Pool-issued SV1/SV2 jobs and worker cleanup | Implemented; recorded CPU mining plus channel and socket tests. Independent ASIC firmware remains unverified. |
 | CashAddr text in the API | Implemented; P2PKH/P2SH vectors and a chipnet share lookup test. |
 | Declared BCH coinbase peer validation | Implemented; bounded header extension, prefix/aux proof tampering, payout diversion, storage and compressed-header tests. |
-| Mineable Job Declaration in both modes | Implemented in local server-handler tests: token allocation, declaration, job installation, mined regtest headers, submission and verifiable share proofs. Independent client and live BCHN checks remain pending. |
+| Mineable Job Declaration in both modes | Server-handler exchanges pass. Two real BCHN regtest nodes accepted Full-Template and private Coinbase-Only blocks, with verifiable emitted coinbase proofs. Independent client interoperability remains pending. |
 | Miner-selected auxiliary commitments | A declared job can choose its aux root, tree size and nonce. Auxiliary-token and covenant proof verification remains incomplete. |
 | PPLNS tuning and independent ASIC/JD interoperability | Pending; retain the existing settings until a justified tuning decision. |
 | Remote CI and chipnet block | No GitHub Actions runs on this fork; no chipnet block found. Local checks and recorded propagation do not replace these. |
@@ -235,6 +235,34 @@ passed, with one skipped in each suite. Clippy passed for all targets and
 features with warnings denied, and formatting passed. Additional cases cover
 node proposal rejection, token expiry/reuse/limits, declaration and payment
 tampering, and the 255-byte token budget with the maximum uncle count.
+
+## Declared-job BCHN validation (2026-10-15)
+
+The opt-in two-node test in `stratum/sv2/live_tests.rs` passed against BCHN
+29.2.0. The pool installed and submitted a Full-Template block containing a
+wallet transaction. For Coinbase-Only, neither node's mempool held the private
+transaction: the pool accepted its header without submitting an incomplete
+block, then both BCHN nodes accepted the full block broadcast by the client.
+Both emitted coinbase proofs reconstruct their mined Merkle roots. BCHN
+rejected a copy paying one extra satoshi with `bad-cb-amount`.
+
+The repeated run found blocks at heights 205 and 206. Each paid 2,500,000,219 satoshis
+across the PPLNS outputs, including 219 satoshis in transaction fees. Block
+hashes and reproducible setup are in
+[bch-job-declaration.md](bch-job-declaration.md#two-node-bchn-regtest-check).
+This test drives mining handlers directly; independent client, encrypted
+network Job Declaration and ASIC interoperability remain separate checks.
+
+SV2 jobs now retain their assigned target and credited difficulty when vardiff
+or `UpdateChannel` changes later work. A regression reproduced the old behavior:
+a job assigned difficulty 5 was credited as 99 after an update. Standard and
+custom jobs use the same corrected insertion path, including the device's
+maximum target. Zero targets are refused at channel opening and update.
+
+The combined workspace, including the CashAddr API follow-up, passed 1,705
+default tests (two skipped) and 1,713 all-features tests (one skipped). The
+opt-in BCHN check was run separately. All-target Clippy passed with default
+and all features, with warnings denied, as did formatting.
 
 ## Startup selection (2026-10-13)
 

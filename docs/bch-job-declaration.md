@@ -55,6 +55,10 @@ fees or total hidden block size. The declarator must validate and broadcast
 the complete block; the pool never broadcasts an incomplete substitute.
 This mode retains the protocol's withholding and hidden-invalid-work risk.
 
+Once a job is active, its target and credited difficulty remain fixed.
+Vardiff and `UpdateChannel` change later jobs. Device maximum targets apply
+when each job is assigned; zero maximum targets are rejected.
+
 Limits: 64 outstanding tokens and 64 MiB of declared transaction state per
 registry, eight pending declarations per connection, 25 Merkle siblings,
 SV2's 65,535-byte coinbase-output field and 16 MiB frame limit. All revealed
@@ -65,3 +69,71 @@ does not prove those assets or their rules.
 
 Protocol references: [SV2 Mining Protocol](https://stratumprotocol.org/specification/05-mining-protocol/)
 and [SV2 Job Declaration Protocol](https://stratumprotocol.org/specification/06-job-declaration-protocol/).
+
+## Two-node BCHN regtest check
+
+The ignored `bchn_declared_jobs_reach_both_real_nodes` test uses two disposable,
+connected BCHN nodes. It verifies Full-Template proposal validation and pool
+submission, then a private transaction absent from both mempools, Coinbase-Only
+header submission and client block broadcast. Both nodes must accept each
+block, both emitted coinbase proofs must match, and BCHN must reject an extra
+satoshi of coinbase value. Mining handlers run directly inside the test;
+this does not exercise an independent client or the encrypted network exchange.
+
+Use fresh data directories, outside the repository. The first node needs this
+`bitcoin.conf`:
+
+```ini
+regtest=1
+server=1
+discover=0
+dnsseed=0
+listenonion=0
+rpcuser=p2pool-jd-test
+rpcpassword=local-regtest-only
+rpcallowip=127.0.0.1
+[regtest]
+rpcbind=127.0.0.1
+rpcport=19453
+bind=127.0.0.1
+port=19454
+```
+
+The second uses the same settings with RPC port 19455 and P2P port 19456;
+add `connect=127.0.0.1:19454` under `[regtest]` and `disablewallet=1` before
+that section. The fixed credentials are solely for these loopback test nodes.
+Start both nodes, create/load a wallet named `jd-regtest` on the first, and
+mine at least 101 blocks to an address from that wallet. For example, in
+PowerShell with `$bchnBin` pointing to BCHN's `bin` directory and `$clientData`
+and `$poolData` pointing to the fresh directories:
+
+```powershell
+Start-Process "$bchnBin/bitcoind.exe" -ArgumentList "`"-datadir=$clientData`"" -WindowStyle Hidden
+Start-Process "$bchnBin/bitcoind.exe" -ArgumentList "`"-datadir=$poolData`"" -WindowStyle Hidden
+# Wait until both RPC endpoints respond, then initialize the disposable wallet.
+& "$bchnBin/bitcoin-cli.exe" "-datadir=$clientData" createwallet jd-regtest
+$testAddress = & "$bchnBin/bitcoin-cli.exe" "-datadir=$clientData" -rpcwallet=jd-regtest getnewaddress
+& "$bchnBin/bitcoin-cli.exe" "-datadir=$clientData" generatetoaddress 101 $testAddress
+$env:BCHN_JD_CLIENT_RPC = 'http://127.0.0.1:19453'
+$env:BCHN_JD_POOL_RPC = 'http://127.0.0.1:19455'
+cargo nextest run -p p2poolv2_lib --run-ignored ignored-only -E 'test(bchn_declared_jobs_reach_both_real_nodes)' --nocapture
+# Stop only these two disposable nodes when finished.
+& "$bchnBin/bitcoin-cli.exe" "-datadir=$clientData" stop
+& "$bchnBin/bitcoin-cli.exe" "-datadir=$poolData" stop
+```
+
+The test verifies loopback endpoints and `chain = regtest` before spending.
+It requires an otherwise empty mempool and enough mature wallet balance for
+two 1-BCH payments; do not run it concurrently against the same pair. Windows
+build prerequisites are the same as the workspace's other native Rust tests.
+
+Repeated with BCHN 29.2.0 on 2026-10-15 (one test passed, 0.158 seconds):
+
+| Mode | Height | Block hash | Coinbase value (sat) |
+|---|---|---|---|
+| Full-Template | 205 | `3e137beafcec73ffceb86ecf6937fd37c4e554b92f871a348d7c5ff90f200850` | 2500000219 |
+| Coinbase-Only | 206 | `4b67278077005751d6e25cbb058fc8e635d6761506c58757d2e2c8c554dbfe23` | 2500000219 |
+
+Each block included 219 satoshis in transaction fees. The Coinbase-Only
+transaction was signed with the disposable wallet but withheld from both
+mempools until its complete block was broadcast.

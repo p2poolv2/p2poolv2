@@ -21,6 +21,8 @@
 //! Full templates also require a successful local BCHN proposal check.
 
 mod custom_job;
+#[cfg(all(test, not(feature = "sim")))]
+mod live_tests;
 mod mining;
 mod noise;
 mod server;
