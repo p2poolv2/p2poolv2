@@ -386,6 +386,10 @@ AuxPoW output also does not implement miners choosing their auxiliary tokens.
 Final job size now includes the full PPLNS coinbase and transaction count.
 API payouts now use CashAddr text. Hydrapool CashAddr payout parsing and
 SV2 worker cleanup are fixed in the completion follow-up in `bch-plan.md`.
+BCH template proofs permit 25 Merkle-branch levels through storage and P2P,
+with smaller header batches to keep the 1 MiB message cap. Bitcoin proofs
+retain their 16-level limit. Boundary and codec tests cover these changes;
+there is no live large-block result.
 
 A retuned PPLNS window (after CHIP-2025-03 is decided). Two-node share
 propagation on chipnet passed on 2026-10-15 (above). The Bitcoin Cash

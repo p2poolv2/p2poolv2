@@ -7,7 +7,9 @@ pub mod short_ids;
 
 use super::transactions;
 use crate::address::Address as P2PoolAddress;
-use crate::shares::coinbase_proof::{CoinbaseProof, MAX_COINBASE_MERKLE_BRANCH_LENGTH};
+use crate::shares::coinbase_proof::{
+    CoinbaseProof, MAX_COINBASE_MERKLE_BRANCH_LENGTH, maximum_merkle_branch_length,
+};
 use crate::shares::coinbaseaux_flags::CoinbaseAuxFlags;
 use crate::shares::extranonce::Extranonce;
 use crate::shares::genesis;
@@ -595,7 +597,7 @@ impl Decodable for ShareBlock {
         }
         // Decode template merkle path
         let path_count = VarInt::consensus_decode(r)?.0 as usize;
-        if path_count > MAX_COINBASE_MERKLE_BRANCH_LENGTH {
+        if path_count > maximum_merkle_branch_length(header.miner_address) {
             return Err(ParseFailed("template merkle path too long"));
         }
         let mut template_merkle_branches = Vec::with_capacity(path_count);
@@ -710,6 +712,7 @@ mod tests {
     use bitcoin::consensus::{deserialize, serialize};
     use bitcoin::script::PushBytesBuf;
     use bitcoin::transaction::Version;
+    use p2poolv2_wallet::share_owner::ShareOwner;
     use std::collections::HashMap;
     use std::str::FromStr;
 
@@ -726,6 +729,18 @@ mod tests {
         block_share.header.bitcoin_header =
             bitcoin::blockdata::constants::genesis_block(bitcoin::Network::Regtest).header;
         assert!(block_share.is_bitcoin_block());
+    }
+
+    #[test]
+    fn bch_share_block_and_stored_branch_round_trip_25_levels() {
+        let mut share = TestShareBlockBuilder::new().build();
+        share.header.miner_address = ShareOwner::CashP2pkh([0x11; 20]);
+        share.template_merkle_branches = vec![TxMerkleNode::all_zeros(); 25];
+        let decoded: ShareBlock = deserialize(&serialize(&share)).unwrap();
+        assert_eq!(decoded, share);
+        let stored = MerkleBranches(share.template_merkle_branches);
+        let decoded: MerkleBranches = deserialize(&serialize(&stored)).unwrap();
+        assert_eq!(decoded, stored);
     }
 
     #[test]

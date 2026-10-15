@@ -29,17 +29,21 @@ use bitcoin::absolute::LockTime;
 use bitcoin::consensus::{Decodable, Encodable, serialize};
 use bitcoin::hashes::{Hash, HashEngine, sha256};
 use bitcoin::{Transaction, TxMerkleNode, Txid};
+use p2poolv2_wallet::share_owner::ShareOwner;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-/// Most entries a coinbase merkle branch may have.
-///
-/// A branch has one entry per level of the bitcoin block's merkle tree. A
-/// block of at most 4M weight units holds at most about 16.6k transactions
-/// (about 240 weight units each at the smallest), a tree of depth 15, so 16
-/// covers any bitcoin block while bounding what a peer can make a verifier
-/// hash and how large a header batch can grow.
-pub const MAX_COINBASE_MERKLE_BRANCH_LENGTH: usize = 16;
+/// Decoder cap for coinbase branches: 25 levels cover BCHN's 2 GB maximum
+/// with 65-byte transactions. Bitcoin proofs keep their existing 16-level cap.
+pub const MAX_COINBASE_MERKLE_BRANCH_LENGTH: usize = 25;
+
+/// Proof limit for the chain identified by the share owner.
+pub(crate) fn maximum_merkle_branch_length(owner: ShareOwner) -> usize {
+    match owner {
+        ShareOwner::Taproot(_) => 16,
+        ShareOwner::CashP2pkh(_) => MAX_COINBASE_MERKLE_BRANCH_LENGTH,
+    }
+}
 
 /// Error from building or verifying a `CoinbaseProof`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -140,9 +144,10 @@ impl CoinbaseProof {
         header: &ShareHeader,
         branch: &[TxMerkleNode],
     ) -> Result<TxMerkleNode, CoinbaseProofError> {
-        if branch.len() > MAX_COINBASE_MERKLE_BRANCH_LENGTH {
+        let maximum_length = maximum_merkle_branch_length(header.miner_address);
+        if branch.len() > maximum_length {
             return Err(CoinbaseProofError(format!(
-                "Coinbase merkle branch of {} entries exceeds {MAX_COINBASE_MERKLE_BRANCH_LENGTH}",
+                "Coinbase merkle branch of {} entries exceeds {maximum_length}",
                 branch.len()
             )));
         }
@@ -223,6 +228,7 @@ mod tests {
     use bitcoin::script::PushBytesBuf;
     use bitcoin::transaction::Version;
     use bitcoin::{Amount, BlockHash};
+    use p2poolv2_wallet::share_owner::ShareOwner;
 
     /// A share built the way a miner builds one: its bitcoin coinbase ends
     /// with its commitment, and the builder took the proof from that coinbase.
@@ -279,6 +285,29 @@ mod tests {
         let branch = vec![TxMerkleNode::all_zeros(); MAX_COINBASE_MERKLE_BRANCH_LENGTH + 1];
         let error = CoinbaseProof::verify(&header, &branch).unwrap_err();
         assert!(error.to_string().contains("exceeds"));
+    }
+
+    #[test]
+    fn bch_coinbase_proof_accepts_25_levels_and_rejects_26() {
+        let mut header = non_genesis_share_header();
+        header.miner_address = ShareOwner::CashP2pkh([0x11; 20]);
+        let mut branch = vec![TxMerkleNode::all_zeros(); 25];
+        header.bitcoin_header.merkle_root =
+            header.coinbase_proof.merkle_root(&header, &branch).unwrap();
+        CoinbaseProof::verify(&header, &branch).unwrap();
+        branch.push(TxMerkleNode::all_zeros());
+        assert!(CoinbaseProof::verify(&header, &branch).is_err());
+    }
+
+    #[test]
+    fn bitcoin_coinbase_proof_keeps_its_16_level_limit() {
+        let mut header = non_genesis_share_header();
+        let mut branch = vec![TxMerkleNode::all_zeros(); 16];
+        header.bitcoin_header.merkle_root =
+            header.coinbase_proof.merkle_root(&header, &branch).unwrap();
+        CoinbaseProof::verify(&header, &branch).unwrap();
+        branch.push(TxMerkleNode::all_zeros());
+        assert!(CoinbaseProof::verify(&header, &branch).is_err());
     }
 
     /// A block with more than the coinbase verifies only with its branch:

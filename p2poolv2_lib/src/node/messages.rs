@@ -557,6 +557,7 @@ mod tests {
     use crate::store::dag_store::MAX_BLOCKS_PER_HEIGHT;
     use crate::test_utils::TestShareBlockBuilder;
     use bitcoin::consensus::encode;
+    use p2poolv2_wallet::share_owner::ShareOwner;
     use std::str::FromStr;
 
     #[test]
@@ -649,6 +650,18 @@ mod tests {
             encoded.len(),
             MAX_P2P_MESSAGE_SIZE
         );
+    }
+
+    #[test]
+    fn bch_header_batch_round_trips_a_compressed_25_level_proof() {
+        let mut header = TestShareBlockBuilder::new().build().header;
+        header.miner_address = ShareOwner::CashP2pkh([0x11; 20]);
+        let branch = vec![TxMerkleNode::all_zeros(); 25];
+        header.bitcoin_header.merkle_root =
+            header.coinbase_proof.merkle_root(&header, &branch).unwrap();
+        let batch = ShareHeaderBatch::from_headers_with_branches(vec![(header, branch)]);
+        let decoded: ShareHeaderBatch = encode::deserialize(&encode::serialize(&batch)).unwrap();
+        assert_eq!(decoded, batch);
     }
 
     #[test]

@@ -13,6 +13,7 @@ Audience: contributors and AI agents starting the BCH port. Read
 | Donation, operator fee and bootstrap accounting | Implemented; exact-amount tests and recorded BCHN regtest coinbases. Hydrapool accepts prefixed and prefixless CashAddr usernames. |
 | P2PKH share ownership and transfers | Implemented; BCHN-signed ECDSA/FORKID and BCH Schnorr vectors, plus rejection tests. |
 | Main/mini share chains and P2P propagation | Implemented; recorded three-node regtest and two-node chipnet share validation. |
+| Large BCH template proofs | Implemented; 25-level BCH branches round-trip through share blocks, storage and compressed header batches. Bitcoin proof validation keeps its 16-level limit. |
 | Pool-issued SV1/SV2 jobs and worker cleanup | Implemented; recorded CPU mining plus channel and socket tests. Independent ASIC firmware remains unverified. |
 | CashAddr text in the API | Implemented; P2PKH/P2SH vectors and a chipnet share lookup test. |
 | Mineable Job Declaration in both modes | Incomplete. Work-selection setup is rejected; custom-job requests return an error instead of an unusable success id. |
@@ -168,6 +169,21 @@ miner-selected transaction set. Miner-selected aux commitments remain
 unfinished; the coinbase currently carries the reserved zero commitment.
 
 Other pending work is in the requirement table above. This port is not complete.
+
+The completion audit also found a Bitcoin-sized 16-level coinbase branch
+cap in proof verification, share decoding and stored/header-batch branches.
+BCH now permits 25 levels, covering BCHN 29.2.0's 2 GB context-free maximum
+and 65-byte minimum transactions ([source](https://github.com/bitcoin-cash-node/bitcoin-cash-node/blob/v29.2.0/src/consensus/consensus.h)).
+Bitcoin proof validation and share-block decoding keep their existing
+16-level cap. Header responses carry at most 700 headers before completing
+the final height, so even distinct maximum-size branches fit the existing
+1 MiB message cap; the worst-case message-size regression still passes.
+Proof tests accept the exact limits and reject the next level. No large
+block was mined for this check.
+
+Final local checks after the proof change: 1,663 default workspace tests
+and 1,671 all-features tests passed (1 skipped each). Clippy passed with all
+targets/features and warnings denied; formatting passed.
 
 ## Startup selection (2026-10-13)
 
