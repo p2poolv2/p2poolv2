@@ -509,6 +509,7 @@ pub(crate) fn insert_miner_job(
             fee_address: prepared.fee_address.clone(),
             fee: prepared.fee,
             coinbase_value: prepared.template.coinbasevalue,
+            bch_coinbase: None,
         }),
         _ => None,
     };
@@ -739,6 +740,7 @@ mod tests {
         // Build the same commitment directly using the fresh time that
         // build_notify_from_prepared stored in the tracker.
         let direct_commitment = ShareCommitment {
+            bch_coinbase: None,
             prev_share_blockhash: BlockHash::all_zeros(),
             uncles: Vec::new(),
             miner_bitcoin_address: address,
@@ -826,6 +828,7 @@ mod tests {
         );
 
         let commitment = ShareCommitment {
+            bch_coinbase: None,
             prev_share_blockhash: prepared.prev_share_blockhash,
             uncles: prepared.uncles.clone(),
             miner_bitcoin_address: bitcoin_address,

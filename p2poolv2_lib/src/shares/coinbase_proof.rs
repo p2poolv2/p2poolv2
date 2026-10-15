@@ -144,6 +144,20 @@ impl CoinbaseProof {
         header: &ShareHeader,
         branch: &[TxMerkleNode],
     ) -> Result<TxMerkleNode, CoinbaseProofError> {
+        if let Some(coinbase) = &header.bch_coinbase {
+            if !matches!(header.miner_address, ShareOwner::CashP2pkh(_))
+                || header.coinbase_nsecs != 0
+                || header.coinbaseaux_flags.is_some()
+                || header.witness_commitment.is_some()
+            {
+                return Err(CoinbaseProofError(
+                    "Noncanonical declared BCH header".into(),
+                ));
+            }
+            coinbase
+                .validate(header.bitcoin_height)
+                .map_err(|error| CoinbaseProofError(error.into()))?;
+        }
         let maximum_length = maximum_merkle_branch_length(header.miner_address);
         if branch.len() > maximum_length {
             return Err(CoinbaseProofError(format!(

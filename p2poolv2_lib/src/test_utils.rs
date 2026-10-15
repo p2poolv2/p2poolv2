@@ -370,6 +370,7 @@ pub fn create_test_commitment() -> ShareCommitment {
         fee_address: None,
         fee: None,
         coinbase_value: 100_000_000,
+        bch_coinbase: None,
     }
 }
 
@@ -464,6 +465,7 @@ pub fn build_block_from_work_components(path: &str, nsecs: u64) -> ShareBlock {
         fee_address: None,
         fee: None,
         coinbase_value: template.coinbasevalue,
+        bch_coinbase: None,
     };
     let commitment_hash = share_commitment.hash();
 
@@ -533,6 +535,7 @@ pub fn build_block_from_work_components(path: &str, nsecs: u64) -> ShareBlock {
         coinbase_nsecs: TEST_COINBASE_NSECS,
         extranonce: Extranonce::default(),
         coinbase_proof,
+        bch_coinbase: None,
     };
 
     let template_merkle_branches = build_merkle_branches_for_template(&template)
@@ -753,6 +756,7 @@ fn test_share_block(
                 fee_address: None,
                 fee: None,
                 coinbase_value: 5_000_000_000,
+                bch_coinbase: None,
             };
 
             let bitcoin_coinbase = build_bitcoin_coinbase_transaction(
@@ -833,6 +837,7 @@ fn test_share_block(
         coinbase_nsecs: TEST_COINBASE_NSECS,
         extranonce: Extranonce::default(),
         coinbase_proof,
+        bch_coinbase: None,
     };
 
     ShareBlock {
@@ -927,6 +932,7 @@ impl TestShareHeaderBuilder {
             coinbase_nsecs: TEST_COINBASE_NSECS,
             extranonce: Extranonce::default(),
             coinbase_proof: CoinbaseProof::default(),
+            bch_coinbase: None,
         }
     }
 }

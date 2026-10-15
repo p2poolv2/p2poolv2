@@ -7,6 +7,7 @@ pub mod short_ids;
 
 use super::transactions;
 use crate::address::Address as P2PoolAddress;
+use crate::shares::bch_coinbase::BchCoinbase;
 use crate::shares::coinbase_proof::{
     CoinbaseProof, MAX_COINBASE_MERKLE_BRANCH_LENGTH, maximum_merkle_branch_length,
 };
@@ -25,6 +26,7 @@ use bitcoin::{
     hashes::Hash,
 };
 use core::mem;
+use p2poolv2_wallet::share_owner::{self, ShareOwner};
 use serde::{Deserialize, Serialize};
 pub use share_transaction::{
     DuplicatePrevoutError, ShareTransaction, SpendingPrevouts, extract_spending_prevouts,
@@ -37,6 +39,9 @@ pub const MAX_POOL_TARGET: u32 = 0x1b384bd7;
 /// The cumulative chain work multipler. We need at least as much work
 /// on the cummulative chain as derived from MAX_POOL_TARGET times this constant.
 pub const MIN_CUMULATIVE_CHAIN_WORK_MULTIPLIER: u64 = 1;
+
+/// Header format with a declared BCH coinbase; legacy owner tags stay intact.
+const DECLARED_BCH_HEADER_TAG: u8 = 0x21;
 
 /// True when a blockhash is the terminal marker of a share's parent chain --
 /// the all-zeros value the genesis share stores as its `prev_share_blockhash`
@@ -113,6 +118,9 @@ pub struct ShareHeader {
     /// See `CoinbaseProof`.
     #[serde(default)]
     pub coinbase_proof: CoinbaseProof,
+    /// Present only for miner-declared BCH jobs. Legacy headers omit these bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bch_coinbase: Option<BchCoinbase>,
 }
 
 /// Network class an encoded address is rebuilt for: the part of an
@@ -236,6 +244,7 @@ impl ShareHeader {
             coinbase_nsecs,
             extranonce,
             coinbase_proof,
+            bch_coinbase: commitment.bch_coinbase,
         }
     }
 
@@ -275,7 +284,10 @@ impl ShareHeader {
         len += self.prev_share_blockhash.consensus_encode(w)?;
         len += self.uncles.consensus_encode(w)?;
         len += encode_address(&self.miner_bitcoin_address, w)?;
-        len += p2poolv2_wallet::share_owner::consensus_encode(&self.miner_address, w)?;
+        if self.bch_coinbase.is_some() {
+            len += DECLARED_BCH_HEADER_TAG.consensus_encode(w)?;
+        }
+        len += share_owner::consensus_encode(&self.miner_address, w)?;
         len += self.merkle_root.consensus_encode(w)?;
         len += self.bitcoin_header.version.consensus_encode(w)?;
         len += self.bitcoin_header.prev_blockhash.consensus_encode(w)?;
@@ -310,6 +322,9 @@ impl ShareHeader {
         len += self.coinbase_nsecs.consensus_encode(w)?;
         len += self.extranonce.consensus_encode(w)?;
         len += self.coinbase_proof.consensus_encode(w)?;
+        if let Some(coinbase) = &self.bch_coinbase {
+            len += coinbase.consensus_encode(w)?;
+        }
         Ok(len)
     }
 
@@ -322,7 +337,19 @@ impl ShareHeader {
         let prev_share_blockhash = BlockHash::consensus_decode(r)?;
         let uncles = Vec::<BlockHash>::consensus_decode(r)?;
         let miner_bitcoin_address = decode_address(r)?;
-        let miner_address = p2poolv2_wallet::share_owner::consensus_decode(r)?;
+        let owner_tag = u8::consensus_decode(r)?;
+        let declared_bch = owner_tag == DECLARED_BCH_HEADER_TAG;
+        let miner_address = if declared_bch {
+            let owner = share_owner::consensus_decode(r)?;
+            if !matches!(owner, ShareOwner::CashP2pkh(_)) {
+                return Err(ParseFailed(
+                    "declared BCH header requires a cash share owner",
+                ));
+            }
+            owner
+        } else {
+            share_owner::consensus_decode_from_tag(owner_tag, r)?
+        };
         let merkle_root = TxMerkleNode::consensus_decode(r)?;
         let bitcoin_version = bitcoin::block::Version::consensus_decode(r)?;
         let bitcoin_prev_blockhash = BlockHash::consensus_decode(r)?;
@@ -367,6 +394,11 @@ impl ShareHeader {
         let coinbase_nsecs = u64::consensus_decode(r)?;
         let extranonce = Extranonce::consensus_decode(r)?;
         let coinbase_proof = CoinbaseProof::consensus_decode(r)?;
+        let bch_coinbase = if declared_bch {
+            Some(BchCoinbase::consensus_decode(r)?)
+        } else {
+            None
+        };
 
         Ok(ShareHeader {
             prev_share_blockhash,
@@ -388,6 +420,7 @@ impl ShareHeader {
             coinbase_nsecs,
             extranonce,
             coinbase_proof,
+            bch_coinbase,
         })
     }
 }
@@ -545,6 +578,7 @@ impl ShareBlock {
             // The genesis coinbase predates the share chain and carries no
             // commitment; `CoinbaseProof::verify` exempts genesis.
             coinbase_proof: CoinbaseProof::default(),
+            bch_coinbase: None,
         };
         Ok(Self {
             header,
@@ -857,6 +891,7 @@ mod tests {
             fee_address: None,
             fee: None,
             coinbase_value: 100_000_000,
+            bch_coinbase: None,
         };
 
         let cloned = commitment.clone();

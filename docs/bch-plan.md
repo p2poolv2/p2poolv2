@@ -16,8 +16,9 @@ Audience: contributors and AI agents starting the BCH port. Read
 | Large BCH template proofs | Implemented; 25-level BCH branches round-trip through share blocks, storage and compressed header batches. Bitcoin proof validation keeps its 16-level limit. |
 | Pool-issued SV1/SV2 jobs and worker cleanup | Implemented; recorded CPU mining plus channel and socket tests. Independent ASIC firmware remains unverified. |
 | CashAddr text in the API | Implemented; P2PKH/P2SH vectors and a chipnet share lookup test. |
+| Declared BCH coinbase peer validation | Implemented; bounded header extension, prefix/aux proof tampering, payout diversion, storage and compressed-header tests. Custom jobs are not installed yet. |
 | Mineable Job Declaration in both modes | Incomplete. Work-selection setup is rejected; custom-job requests return an error instead of an unusable success id. |
-| Miner-selected auxiliary commitments | Incomplete; only the reserved zero-root output exists. |
+| Miner-selected auxiliary commitments | Incomplete; mining still uses the reserved zero-root output. The declared header can now bind an aux-tree choice. |
 | PPLNS tuning and independent ASIC/JD interoperability | Pending; retain the existing settings until a justified tuning decision. |
 | Remote CI and chipnet block | No GitHub Actions runs on this fork; no chipnet block found. Local checks and recorded propagation do not replace these. |
 
@@ -159,11 +160,9 @@ These errors mean the node has not committed to rewarding declared work.
 Both ready declaration modes have rejection coverage. Declaration-message
 tests and pool-issued SV2 mining tests do not prove mineable declarations.
 
-Next implementation work must preserve share-chain payout validation:
-peers currently reconstruct the exact pool coinbase, including its script
-suffix after the extranonce. A custom coinbase must be represented and
-verified through that consensus path, with its required PPLNS outputs,
-before it can be installed in the tracker. The current coinbase-only
+Declared BCH coinbases now have a bounded representation and use the same
+share-chain payout validation, as described below. Token validation and
+channel/tracker installation remain next. The current coinbase-only
 transaction cache also does not implement the specification's private
 miner-selected transaction set. Miner-selected aux commitments remain
 unfinished; the coinbase currently carries the reserved zero commitment.
@@ -184,6 +183,35 @@ block was mined for this check.
 Final local checks after the proof change: 1,663 default workspace tests
 and 1,671 all-features tests passed (1 skipped each). Clippy passed with all
 targets/features and warnings denied; formatting passed.
+
+## Declared BCH coinbase validation (2026-10-15)
+
+Declared jobs need a different scriptSig layout: SV2 appends the extranonce
+after the miner's raw prefix. `BchCoinbase` records that prefix and the single
+aux-tree commitment. The share commitment hashes both, and peer payout
+validation reconstructs the exact PPLNS outputs, padding and commitment tail.
+Changing a payee, prefix or aux choice invalidates the share. Declared jobs
+retain transaction version 2, sequence `0xfffffffe` and locktime `height - 1`.
+The prefix is at most 88 bytes, leaving 12 bytes for the extranonce under
+BCH's 100-byte coinbase scriptSig limit.
+
+The new header uses marker `0x21` before its normal cash owner encoding and
+appends the bounded descriptor after its coinbase proof. Existing Bitcoin
+headers, BCH headers without a declaration, and genesis encodings stay
+unchanged. Older binaries reject the new marker: peers must upgrade before
+mining declared jobs. Existing stored headers require no rewrite. Header
+responses now stop at 650 entries before completing the last height, keeping
+the worst case with the descriptor and 25-level branches under 1 MiB.
+
+This supplies peer validation and storage support. Mining-protocol custom
+job installation still rejects requests until token validation and channel
+installation are wired through; both JD modes remain unfinished.
+
+Local validation after this change: 1,669 default workspace tests and 1,677
+all-features tests passed, with one skipped in each suite. Clippy passed for
+all targets/features with warnings denied; formatting passed. The descriptor
+was checked through serialization, storage and payout validation, not through
+a live declared-job miner.
 
 ## Startup selection (2026-10-13)
 

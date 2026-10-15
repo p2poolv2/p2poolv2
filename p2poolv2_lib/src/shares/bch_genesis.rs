@@ -101,6 +101,7 @@ pub fn build(
         coinbase_nsecs: 0,
         extranonce: Extranonce::default(),
         coinbase_proof: CoinbaseProof::default(),
+        bch_coinbase: None,
     };
     Ok(ShareBlock {
         header,

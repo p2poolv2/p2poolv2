@@ -10,9 +10,10 @@
 //! reserved commitment (zero root, size 0, nonce 0) holds the output's place
 //! when the miner has not declared an aux chain. Bitcoin coinbases omit it.
 
-use bitcoin::consensus::Encodable;
+use bitcoin::consensus::{Decodable, Encodable};
 use bitcoin::script::Builder;
 use bitcoin::{Amount, ScriptBuf, TxOut};
+use serde::{Deserialize, Serialize};
 
 /// Magic that opens an AuxPoW commitment: `0xfa 0xbe 'm' 'm'`.
 pub const AUXPOW_MAGIC: [u8; 4] = [0xfa, 0xbe, 0x6d, 0x6d];
@@ -21,17 +22,29 @@ pub const AUXPOW_MAGIC: [u8; 4] = [0xfa, 0xbe, 0x6d, 0x6d];
 pub const AUXPOW_COMMITMENT_LENGTH: usize = 4 + 32 + 4 + 4;
 
 /// Aux merkle root, tree size, and nonce committed by one coinbase output.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MergeMiningCommitment {
     /// Merkle root of the aux chain hashes, in the byte order AuxPoW stores.
     pub merkle_root: [u8; 32],
-    /// Number of aux chains in the tree.
+    /// Number of leaf slots, a power of two; zero reserves an unused tree.
     pub tree_size: u32,
-    /// Slot of this chain in the tree.
+    /// Nonce used by AuxPoW chain-id slot selection.
     pub nonce: u32,
 }
 
 impl MergeMiningCommitment {
+    /// Reject ambiguous empty trees and impossible AuxPoW tree widths.
+    pub fn validate(self) -> Result<(), &'static str> {
+        if self.tree_size == 0 {
+            if self != Self::reserved() {
+                return Err("unused aux tree must have a zero root and nonce");
+            }
+        } else if !self.tree_size.is_power_of_two() || self.tree_size > (1 << 30) {
+            return Err("aux tree size must be a power of two no greater than 2^30");
+        }
+        Ok(())
+    }
+
     /// Commitment that reserves the output and names no aux chain.
     pub fn reserved() -> Self {
         Self {
@@ -71,6 +84,34 @@ impl MergeMiningCommitment {
             .consensus_encode(&mut bytes)
             .expect("a vector writer does not fail");
         bytes
+    }
+}
+
+impl Encodable for MergeMiningCommitment {
+    fn consensus_encode<W: bitcoin::io::Write + ?Sized>(
+        &self,
+        writer: &mut W,
+    ) -> Result<usize, bitcoin::io::Error> {
+        writer.write_all(&self.merkle_root)?;
+        Ok(32 + self.tree_size.consensus_encode(writer)? + self.nonce.consensus_encode(writer)?)
+    }
+}
+
+impl Decodable for MergeMiningCommitment {
+    fn consensus_decode<R: bitcoin::io::Read + ?Sized>(
+        reader: &mut R,
+    ) -> Result<Self, bitcoin::consensus::encode::Error> {
+        let mut merkle_root = [0; 32];
+        reader.read_exact(&mut merkle_root)?;
+        let commitment = Self {
+            merkle_root,
+            tree_size: u32::consensus_decode(reader)?,
+            nonce: u32::consensus_decode(reader)?,
+        };
+        commitment
+            .validate()
+            .map_err(bitcoin::consensus::encode::Error::ParseFailed)?;
+        Ok(commitment)
     }
 }
 

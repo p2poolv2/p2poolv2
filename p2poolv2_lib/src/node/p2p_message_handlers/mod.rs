@@ -36,11 +36,12 @@ use tracing::{debug, error};
 ///
 /// Sized so the worst case fits `MAX_P2P_MESSAGE_SIZE`: every header with
 /// worst-case fields, its bitcoin merkle root included, and its own coinbase
-/// branch of `MAX_COINBASE_MERKLE_BRANCH_LENGTH` entries -- about 1.4 KB a
+/// branch of `MAX_COINBASE_MERKLE_BRANCH_LENGTH` entries and a declared BCH
+/// coinbase descriptor -- about 1.5 KB a
 /// header. Real batches omit the root and share a branch per block template,
 /// at well under 1 KB a header.
 /// `test_full_share_headers_response_fits_max_message_size` guards it.
-pub(crate) const MAX_HEADERS_IN_RESPONSE: usize = 700;
+pub(crate) const MAX_HEADERS_IN_RESPONSE: usize = 650;
 
 /// The Tower service that processes inbound P2P requests.
 pub async fn handle_request<C: Send + Sync, T: TimeProvider + Send + Sync>(

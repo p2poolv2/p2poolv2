@@ -49,7 +49,7 @@ use crate::store::transaction_store::PrevoutCheck;
 use crate::store::writer::StoreError;
 #[cfg(test)]
 use crate::stratum::work::coinbase::build_bitcoin_coinbase_transaction;
-use crate::stratum::work::coinbase::build_coinbase;
+use crate::stratum::work::coinbase::{build_coinbase, build_declared_coinbase};
 use crate::stratum::work::gbt::compute_merkle_root_from_branches;
 use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
 use bitcoin::hashes::Hash as HashTrait;
@@ -1132,18 +1132,33 @@ impl DefaultShareValidator {
         } else {
             None
         };
-        let reconstructed_coinbase = build_coinbase(
-            Version::TWO,
-            &expected_outputs,
-            share.header.bitcoin_height as i64,
-            flags,
-            share.header.witness_commitment.as_ref(),
-            pool_signature,
-            Some(expected_commitment_hash),
-            share.header.coinbase_nsecs,
-            Some(share.header.extranonce.as_bytes()),
-            merge_mining,
-        )
+        let reconstructed_coinbase = if let Some(declared) = &share.header.bch_coinbase {
+            if self.chain != Chain::BitcoinCash {
+                return Err(ValidationError::consensus(
+                    "Declared BCH coinbase on Bitcoin chain",
+                ));
+            }
+            build_declared_coinbase(
+                &expected_outputs,
+                share.header.bitcoin_height,
+                expected_commitment_hash,
+                share.header.extranonce.as_bytes(),
+                declared,
+            )
+        } else {
+            build_coinbase(
+                Version::TWO,
+                &expected_outputs,
+                share.header.bitcoin_height as i64,
+                flags,
+                share.header.witness_commitment.as_ref(),
+                pool_signature,
+                Some(expected_commitment_hash),
+                share.header.coinbase_nsecs,
+                Some(share.header.extranonce.as_bytes()),
+                merge_mining,
+            )
+        }
         .map_err(|error| ValidationError::consensus(format!("Error building coinbase {error}")))?;
 
         let reconstructed_coinbase_txid = reconstructed_coinbase.compute_txid();
@@ -1626,6 +1641,7 @@ mockall::mock! {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shares::bch_coinbase::BchCoinbase;
     use crate::shares::extranonce::Extranonce;
     use crate::shares::merge_mining::MergeMiningCommitment;
     use crate::shares::share_block::ShareTransaction;
@@ -1645,10 +1661,11 @@ mod tests {
     use crate::utils::time_provider::TestTimeProvider;
     use bitcoin::consensus::encode::deserialize_hex;
     use bitcoin::pow::Work;
-    use bitcoin::script::PushBytesBuf;
+    use bitcoin::script::{Builder, PushBytesBuf};
     use bitcoin::transaction::Version;
     use bitcoin::{BlockHash, Network, ScriptBuf, TxOut, hashes::Hash};
     use mockall::predicate::*;
+    use p2poolv2_wallet::share_owner::ShareOwner;
     use std::collections::HashMap;
     use std::sync::{Arc, RwLock};
     use std::time::SystemTime;
@@ -4533,6 +4550,62 @@ mod tests {
             result.is_ok(),
             "Expected the BCHN share coinbase to rebuild, got: {}",
             result.unwrap_err()
+        );
+    }
+
+    #[test]
+    fn declared_bch_payouts_are_rebuilt_and_diverted_rewards_are_rejected() {
+        let address = make_test_address(1);
+        let mut share = TestShareBlockBuilder::new().build();
+        share.header.miner_address = ShareOwner::CashP2pkh([0x22; 20]);
+        share.header.coinbaseaux_flags = None;
+        share.header.witness_commitment = None;
+        share.header.coinbase_nsecs = 0;
+        share.header.bitcoin_height = 702;
+        share.header.bch_coinbase = Some(BchCoinbase {
+            prefix: Builder::new()
+                .push_int(702)
+                .push_slice(b"miner")
+                .into_bytes(),
+            merge_mining: MergeMiningCommitment {
+                merkle_root: [0x33; 32],
+                tree_size: 4,
+                nonce: 7,
+            },
+        });
+        let mut coinbase = build_declared_coinbase(
+            &[OutputPair {
+                address: address.clone(),
+                amount: Amount::from_sat(share.header.coinbase_value),
+            }],
+            702,
+            ShareCommitment::from_share_block(&share).hash(),
+            share.header.extranonce.as_bytes(),
+            share.header.bch_coinbase.as_ref().unwrap(),
+        )
+        .unwrap();
+        share.template_merkle_branches.clear();
+        share.header.bitcoin_header.merkle_root =
+            TxMerkleNode::from_raw_hash(coinbase.compute_txid().to_raw_hash());
+
+        let mut window = PplnsWindow::default();
+        window.expect_network().return_const(Network::Regtest);
+        window
+            .expect_get_distribution_from_start_hash()
+            .times(2)
+            .returning(move |_, _, _| Ok(HashMap::from([(address.clone(), 1000u128)])));
+        let window = Arc::new(RwLock::new(window));
+        let validator = validator().for_chain(Chain::BitcoinCash);
+        validator
+            .validate_bitcoin_payout(&share, &ChainStoreHandle::default(), window.clone())
+            .unwrap();
+        coinbase.output[0].script_pubkey = make_test_address(2).script_pubkey();
+        share.header.bitcoin_header.merkle_root =
+            TxMerkleNode::from_raw_hash(coinbase.compute_txid().to_raw_hash());
+        assert!(
+            validator
+                .validate_bitcoin_payout(&share, &ChainStoreHandle::default(), window)
+                .is_err()
         );
     }
 

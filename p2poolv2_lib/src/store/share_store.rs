@@ -620,11 +620,14 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shares::bch_coinbase::BchCoinbase;
+    use crate::shares::merge_mining::MergeMiningCommitment;
     use crate::store::block_tx_metadata::{BlockMetadata, ChainMembership, Status};
     use crate::test_utils::TestShareBlockBuilder;
     use bitcoin::TxMerkleNode;
     use bitcoin::Work;
     use bitcoin::hashes::Hash;
+    use p2poolv2_wallet::share_owner::ShareOwner;
     use tempfile::tempdir;
 
     /// mark_invalid downgrades a not-yet-validated (HeaderValid) block.
@@ -1259,6 +1262,23 @@ mod tests {
         assert_eq!(share.template_merkle_branches[0], branch_a);
         assert_eq!(share.template_merkle_branches[1], branch_b);
         assert_eq!(share.template_merkle_branches[2], branch_c);
+    }
+
+    #[test]
+    fn declared_bch_coinbase_metadata_survives_store_reconstruction() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let mut share = TestShareBlockBuilder::new().build();
+        share.header.miner_address = ShareOwner::CashP2pkh([0x22; 20]);
+        share.header.bch_coinbase = Some(BchCoinbase {
+            prefix: vec![0x51],
+            merge_mining: MergeMiningCommitment::reserved(),
+        });
+        let blockhash = share.block_hash();
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&share, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+        assert_eq!(store.get_share(&blockhash).unwrap(), share);
     }
 
     #[test]

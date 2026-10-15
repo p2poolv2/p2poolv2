@@ -551,12 +551,15 @@ impl Decodable for GetData {
 mod tests {
     use super::*;
     use crate::node::p2p_message_handlers::MAX_HEADERS_IN_RESPONSE;
+    use crate::shares::bch_coinbase::BchCoinbase;
     use crate::shares::coinbaseaux_flags::CoinbaseAuxFlags;
+    use crate::shares::merge_mining::MergeMiningCommitment;
     use crate::shares::validation::MAX_UNCLES;
     use crate::shares::witness_commitment::WitnessCommitment;
     use crate::store::dag_store::MAX_BLOCKS_PER_HEIGHT;
     use crate::test_utils::TestShareBlockBuilder;
     use bitcoin::consensus::encode;
+    use bitcoin::script::Builder;
     use p2poolv2_wallet::share_owner::ShareOwner;
     use std::str::FromStr;
 
@@ -630,6 +633,12 @@ mod tests {
             .unwrap(),
         );
 
+        header.miner_address = ShareOwner::CashP2pkh([0x11; 20]);
+        header.bch_coinbase = Some(BchCoinbase {
+            prefix: vec![0xff; 88],
+            merge_mining: MergeMiningCommitment::reserved(),
+        });
+
         let header_count = MAX_HEADERS_IN_RESPONSE + MAX_BLOCKS_PER_HEIGHT;
         let mut entries = Vec::with_capacity(header_count);
         for index in 0..header_count as u32 {
@@ -653,9 +662,18 @@ mod tests {
     }
 
     #[test]
-    fn bch_header_batch_round_trips_a_compressed_25_level_proof() {
+    fn declared_bch_header_batch_round_trips_a_compressed_25_level_proof() {
         let mut header = TestShareBlockBuilder::new().build().header;
         header.miner_address = ShareOwner::CashP2pkh([0x11; 20]);
+        header.coinbase_nsecs = 0;
+        header.coinbaseaux_flags = None;
+        header.witness_commitment = None;
+        header.bch_coinbase = Some(BchCoinbase {
+            prefix: Builder::new()
+                .push_int(header.bitcoin_height as i64)
+                .into_bytes(),
+            merge_mining: MergeMiningCommitment::reserved(),
+        });
         let branch = vec![TxMerkleNode::all_zeros(); 25];
         header.bitcoin_header.merkle_root =
             header.coinbase_proof.merkle_root(&header, &branch).unwrap();

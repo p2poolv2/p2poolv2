@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use crate::accounting::OutputPair;
+use crate::shares::bch_coinbase::BchCoinbase;
 use crate::shares::witness_commitment::WitnessCommitment;
 use crate::stratum::session::{EXTRANONCE1_SIZE, EXTRANONCE2_SIZE};
 use crate::stratum::work::error::WorkError;
@@ -281,6 +282,42 @@ pub(crate) fn build_coinbase(
         append_commitment_outputs(&mut coinbase_tx, &hash);
     }
     Ok(coinbase_tx)
+}
+
+/// Reconstruct a declared BCH coinbase with the same canonical payout tail.
+pub(crate) fn build_declared_coinbase(
+    output_data: &[OutputPair],
+    height: u64,
+    commitment_hash: sha256::Hash,
+    extranonce: &[u8],
+    declared: &BchCoinbase,
+) -> Result<Transaction, WorkError> {
+    declared.validate(height).map_err(|message| WorkError {
+        message: message.into(),
+    })?;
+    if extranonce.len() != EXTRANONCE_SEPARATOR.len() {
+        return Err(WorkError {
+            message: "declared BCH extranonce must be 12 bytes".into(),
+        });
+    }
+    let mut coinbase = build_coinbase(
+        Version::TWO,
+        output_data,
+        height as i64,
+        PushBytesBuf::new(),
+        None,
+        &[],
+        None,
+        0,
+        Some(extranonce),
+        Some(declared.merge_mining),
+    )?;
+    let mut script = Vec::with_capacity(declared.prefix.len() + extranonce.len());
+    script.extend_from_slice(&declared.prefix);
+    script.extend_from_slice(extranonce);
+    coinbase.input[0].script_sig = script.into();
+    append_commitment_outputs(&mut coinbase, &commitment_hash);
+    Ok(coinbase)
 }
 
 /// Splits the coinbase transaction into two parts: coinbase1 and coinbase2, separated by our

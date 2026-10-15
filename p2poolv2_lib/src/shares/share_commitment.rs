@@ -3,10 +3,11 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use super::address_serde;
+use super::bch_coinbase::BchCoinbase;
 use super::option_address_serde;
 use super::share_block::{ShareBlock, ShareHeader};
 use super::transactions::coinbase::compute_non_coinbase_root;
-use bitcoin::consensus::Encodable;
+use bitcoin::consensus::{Encodable, serialize};
 use bitcoin::hashes::Hash;
 use bitcoin::io::Write;
 use bitcoin::{Address, BlockHash, CompactTarget, TxMerkleNode, hashes};
@@ -69,6 +70,9 @@ pub struct ShareCommitment {
     pub fee: Option<u16>,
     /// Total bitcoin coinbase value
     pub coinbase_value: u64,
+    /// Declared BCH layout, committed before hashing begins. Legacy jobs omit it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bch_coinbase: Option<BchCoinbase>,
 }
 
 /// Bytes the timestamp contributes to the commitment encoding.
@@ -209,13 +213,17 @@ impl ShareCommitment {
     /// coinbase is bound separately, by rebuilding it during validation.
     pub fn hash(&self) -> hashes::sha256::Hash {
         let prefix = build_commitment_prefix(self.prev_share_blockhash, &self.uncles, self.bits);
-        let suffix = build_commitment_suffix(
+        let mut suffix = build_commitment_suffix(
             &self.donation_address,
             self.donation,
             &self.fee_address,
             self.fee,
             self.non_coinbase_root,
         );
+        if let Some(coinbase) = &self.bch_coinbase {
+            suffix.push(0x21);
+            suffix.extend_from_slice(&serialize(coinbase));
+        }
         commitment_digest(
             &prefix,
             self.time,
@@ -269,6 +277,7 @@ impl ShareCommitment {
             fee_address: header.fee_address.clone(),
             fee: header.fee,
             coinbase_value: header.coinbase_value,
+            bch_coinbase: header.bch_coinbase.clone(),
         }
     }
 }

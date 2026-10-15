@@ -87,6 +87,14 @@ pub fn consensus_decode<R: bitcoin::io::Read + ?Sized>(
     reader: &mut R,
 ) -> Result<ShareOwner, EncodeError> {
     let tag = u8::consensus_decode(reader)?;
+    consensus_decode_from_tag(tag, reader)
+}
+
+/// Decode an owner after its tag was read by a versioned share header.
+pub fn consensus_decode_from_tag<R: bitcoin::io::Read + ?Sized>(
+    tag: u8,
+    reader: &mut R,
+) -> Result<ShareOwner, EncodeError> {
     if tag == CASH_P2PKH_TAG {
         let hash_length = usize::from(u8::consensus_decode(reader)?);
         if hash_length != CASH_P2PKH_HASH_LENGTH {
