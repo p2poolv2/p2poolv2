@@ -718,10 +718,21 @@ fn parse_sv2_authority(
                 .to_string(),
         });
     }
+    // The certificate stores its validity window in 32-bit seconds; a longer
+    // value would wrap, and 0 would expire every certificate as it is issued.
+    let cert_validity_secs = cert_validity_secs.unwrap_or(DEFAULT_SV2_CERT_VALIDITY_SECS);
+    if cert_validity_secs == 0 || cert_validity_secs > u64::from(u32::MAX) {
+        return Err(ConfigError {
+            message: format!(
+                "sv2_cert_validity_secs must be between 1 and {}, got {cert_validity_secs}",
+                u32::MAX
+            ),
+        });
+    }
     Ok(Some(Sv2Authority {
         public_key: derived,
         secret_key: secret.secret_bytes(),
-        cert_validity_secs: cert_validity_secs.unwrap_or(DEFAULT_SV2_CERT_VALIDITY_SECS),
+        cert_validity_secs,
     }))
 }
 
@@ -2168,6 +2179,36 @@ mod sv2_authority_tests {
         let authority = config.parse().unwrap().sv2_authority().unwrap();
         assert_eq!(authority.cert_validity_secs, DEFAULT_SV2_CERT_VALIDITY_SECS);
         assert!(!format!("{authority:?}").contains(&format!("{:?}", authority.secret_key)));
+    }
+
+    #[test]
+    fn a_certificate_validity_that_does_not_fit_32_bits_is_rejected() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.sv2_port = Some(3336);
+        config.sv2_authority_public_key = Some(PUBLIC_KEY.to_string());
+        config.sv2_authority_secret_key = Some(SECRET_KEY.to_string());
+        config.sv2_cert_validity_secs = Some(u64::from(u32::MAX) + 1);
+        let error = config.parse().unwrap_err();
+        assert!(
+            error.message.contains("sv2_cert_validity_secs"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn a_zero_certificate_validity_is_rejected() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.sv2_port = Some(3336);
+        config.sv2_authority_public_key = Some(PUBLIC_KEY.to_string());
+        config.sv2_authority_secret_key = Some(SECRET_KEY.to_string());
+        config.sv2_cert_validity_secs = Some(0);
+        let error = config.parse().unwrap_err();
+        assert!(
+            error.message.contains("sv2_cert_validity_secs"),
+            "{}",
+            error.message
+        );
     }
 
     #[test]

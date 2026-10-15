@@ -83,8 +83,10 @@ zmqpubhashblock = "tcp://bitcoind:28332"
 # Local frames are unencrypted, so keep it on localhost or a trusted LAN.
 # A Mining connection opens standard or extended channels with
 # user_identity "<payout address>.<worker>"; its shares belong to
-# miner_address, which p2poolv2 mode then requires. Job Declaration
-# connections are served too. Bitcoin Cash jobs include one AuxPoW output.
+# miner_address. Without miner_address, a miner appends its own share
+# address as in the SV1 password: "<payout address>.<worker>,p2p=<address>".
+# Job Declaration connections are served too. Bitcoin Cash jobs include one
+# AuxPoW output.
 # sv2_port = 3336
 # Noise encryption for Stratum V2, signed by your authority key. Set both
 # keys, in the Stratum V2 reference implementation's text form, to require

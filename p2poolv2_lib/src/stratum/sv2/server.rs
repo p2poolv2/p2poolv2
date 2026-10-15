@@ -18,10 +18,15 @@ use crate::stratum::server::StratumContext;
 use crate::stratum::work::prepared_notify::PreparedNotifyParams;
 use std::future;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::watch;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, watch};
+use tokio::time::timeout;
 use tracing::{debug, error, info};
+
+/// Time a client has to complete the Noise handshake after connecting.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Watch channel the SV1 notifier publishes prepared templates on.
 pub(crate) type TemplateReceiver = watch::Receiver<Option<Arc<PreparedNotifyParams>>>;
@@ -54,8 +59,13 @@ pub async fn bind(hostname: &str, port: u16) -> Result<TcpListener, std::io::Err
 /// before any message; without it frames are unencrypted, which the
 /// specification allows only between local roles. A failed accept is logged
 /// and the listener keeps serving, as the SV1 server does.
+///
+/// Each connection holds a permit from `connection_limit`, the semaphore the
+/// SV1 server takes its own permits from, so the two ports share one
+/// connection cap. A connection arriving with no permit left is closed.
 pub(crate) async fn serve<ShutdownSignal>(
     listener: TcpListener,
+    connection_limit: Arc<Semaphore>,
     pool_transactions: PoolTransactionCache,
     merge_mining: Option<MergeMiningCommitment>,
     mining: Option<Sv2Mining>,
@@ -72,7 +82,14 @@ pub(crate) async fn serve<ShutdownSignal>(
         tokio::select! {
             accepted = listener.accept() => {
                 match accepted {
-                    Ok((stream, _peer)) => {
+                    Ok((stream, peer)) => {
+                        let permit = match Arc::clone(&connection_limit).try_acquire_owned() {
+                            Ok(permit) => permit,
+                            Err(_) => {
+                                debug!("Stratum connection limit reached, rejecting SV2 {peer}");
+                                continue;
+                            }
+                        };
                         let connection_mining = mining.as_ref().map(|services| Sv2Mining {
                             ctx: services.ctx.clone(),
                             version_mask: services.version_mask,
@@ -80,6 +97,7 @@ pub(crate) async fn serve<ShutdownSignal>(
                         });
                         tokio::spawn(handle_connection(
                             stream,
+                            permit,
                             Arc::clone(&registry),
                             connection_mining,
                             authority,
@@ -94,21 +112,39 @@ pub(crate) async fn serve<ShutdownSignal>(
     }
 }
 
+/// Serve one connection until it closes, fails, or the listener stops.
+///
+/// `_permit` is the connection's place under the shared cap, released when
+/// this returns. A Noise handshake that does not finish within
+/// [`HANDSHAKE_TIMEOUT`] closes the connection, so an idle socket cannot
+/// hold a permit before it has proven it speaks SV2.
 async fn handle_connection<ShutdownSignal>(
     mut stream: TcpStream,
+    _permit: OwnedSemaphorePermit,
     registry: Arc<Mutex<JobRegistry>>,
     mining: Option<Sv2Mining>,
     authority: Option<Sv2Authority>,
     mut shutdown: watch::Receiver<ShutdownSignal>,
 ) {
     let mut noise = match authority {
-        Some(authority) => match NoiseTransport::accept(&mut stream, &authority).await {
-            Ok(transport) => Some(transport),
-            Err(handshake_error) => {
-                debug!("Stratum V2 handshake failed: {handshake_error}");
-                return;
+        Some(authority) => {
+            match timeout(
+                HANDSHAKE_TIMEOUT,
+                NoiseTransport::accept(&mut stream, &authority),
+            )
+            .await
+            {
+                Ok(Ok(transport)) => Some(transport),
+                Ok(Err(handshake_error)) => {
+                    debug!("Stratum V2 handshake failed: {handshake_error}");
+                    return;
+                }
+                Err(_) => {
+                    debug!("Stratum V2 handshake timed out");
+                    return;
+                }
             }
-        },
+        }
         None => None,
     };
     let mut connection = Sv2Connection::new(registry);
@@ -137,7 +173,7 @@ async fn handle_connection<ShutdownSignal>(
                         handle_messages(
                             &mut connection,
                             channels.as_mut(),
-                            template_rx.as_mut(),
+                            template_rx.as_ref(),
                             messages,
                         )
                         .await
@@ -180,7 +216,7 @@ async fn handle_connection<ShutdownSignal>(
 async fn handle_messages(
     connection: &mut Sv2Connection,
     mut channels: Option<&mut MiningChannels>,
-    mut template_rx: Option<&mut TemplateReceiver>,
+    template_rx: Option<&TemplateReceiver>,
     messages: Vec<(u8, Vec<u8>)>,
 ) -> Result<Vec<Vec<u8>>, String> {
     let mut frames = Vec::with_capacity(messages.len());
@@ -191,9 +227,7 @@ async fn handle_messages(
                 (Some(_), false) => return Err("mining channel before Mining setup".to_string()),
                 (None, _) => return Err("mining channels are not enabled".to_string()),
             };
-            let current = template_rx
-                .as_mut()
-                .and_then(|receiver| receiver.borrow_and_update().clone());
+            let current = current_template(template_rx);
             channels.handle(message_type, &mut payload, current).await?
         } else {
             connection.handle_message(message_type, &mut payload)?
@@ -201,6 +235,16 @@ async fn handle_messages(
         frames.extend(responses);
     }
     Ok(frames)
+}
+
+/// The latest prepared template, for a new channel's first job.
+///
+/// Reads without marking the template seen: [`next_template`] must still
+/// wake for it so every open channel gets the job. Marking it here dropped
+/// a template that arrived while a share submission was being handled, and
+/// the connection's channels kept mining the old one.
+fn current_template(template_rx: Option<&TemplateReceiver>) -> Option<Arc<PreparedNotifyParams>> {
+    template_rx.and_then(|receiver| receiver.borrow().clone())
 }
 
 /// Wait for the next prepared template. Never resolves without a template
@@ -231,6 +275,14 @@ mod tests {
     use framing_sv2::framing::{MessageFrame, SerializedFrame};
     use noise_sv2::{INITIATOR_EXPECTED_HANDSHAKE_MESSAGE_SIZE, Initiator};
 
+    #[test]
+    fn reading_the_current_template_leaves_it_for_next_template() {
+        let (sender, receiver): (_, TemplateReceiver) = watch::channel(None);
+        sender.send(None).unwrap();
+        assert!(current_template(Some(&receiver)).is_none());
+        assert!(receiver.has_changed().unwrap());
+    }
+
     #[tokio::test]
     async fn bind_resolves_a_host_name() {
         let listener = bind("localhost", 0).await.unwrap();
@@ -256,6 +308,7 @@ mod tests {
         let (shutdown_sender, shutdown_receiver) = watch::channel(());
         let server = tokio::spawn(serve(
             listener,
+            Arc::new(Semaphore::new(8)),
             PoolTransactionCache::new(),
             None,
             None,
@@ -328,6 +381,7 @@ mod tests {
         let (shutdown_sender, shutdown_receiver) = watch::channel(());
         let server = tokio::spawn(serve(
             listener,
+            Arc::new(Semaphore::new(8)),
             PoolTransactionCache::new(),
             None,
             None,
@@ -364,6 +418,7 @@ mod tests {
         let (shutdown_sender, shutdown_receiver) = watch::channel(());
         let server = tokio::spawn(serve(
             listener,
+            Arc::new(Semaphore::new(8)),
             PoolTransactionCache::new(),
             Some(MergeMiningCommitment::reserved()),
             None,
@@ -397,6 +452,47 @@ mod tests {
             frame.header().msg_type(),
             MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS
         );
+
+        shutdown_sender.send(()).unwrap();
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_connection_over_the_shared_limit_is_closed() {
+        let listener = bind("localhost", 0).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (shutdown_sender, shutdown_receiver) = watch::channel(());
+        let server = tokio::spawn(serve(
+            listener,
+            Arc::new(Semaphore::new(0)),
+            PoolTransactionCache::new(),
+            Some(MergeMiningCommitment::reserved()),
+            None,
+            None,
+            shutdown_receiver,
+        ));
+
+        let mut stream = TcpStream::connect(address).await.unwrap();
+        let setup = encode_message(
+            SetupConnection {
+                protocol: Protocol::JobDeclarationProtocol,
+                min_version: 2,
+                max_version: 2,
+                flags: 0,
+                endpoint_host: "localhost".try_into().unwrap(),
+                endpoint_port: address.port(),
+                vendor: "p2poolv2".try_into().unwrap(),
+                hardware_version: "test".try_into().unwrap(),
+                firmware: "test".try_into().unwrap(),
+                device_id: "".try_into().unwrap(),
+            },
+            MESSAGE_TYPE_SETUP_CONNECTION,
+        )
+        .unwrap();
+        let _ = stream.write_all(&setup).await;
+        let mut response = vec![0u8; 64];
+        let read = stream.read(&mut response).await.unwrap_or(0);
+        assert_eq!(read, 0, "a connection without a permit gets no reply");
 
         shutdown_sender.send(()).unwrap();
         server.await.unwrap();

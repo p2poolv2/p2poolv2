@@ -73,8 +73,11 @@ donation in effect at startup.
 
 Set `sv2_port` to serve Stratum V2 beside Stratum V1. Mining connections open
 standard or extended channels with `user_identity = "<payout address>.<worker>"`;
-their shares belong to `miner_address`. Job Declaration connections are served
-too.
+their shares belong to `miner_address`. When `miner_address` is unset, each
+miner names its own share address after the username, as the Stratum V1
+password does: `user_identity = "<payout address>.<worker>,p2p=<share address>"`.
+A `p2p=` that differs from a configured `miner_address` is refused with
+`invalid-share-address`. Job Declaration connections are served too.
 
 Without keys, Stratum V2 frames are unencrypted, which the specification
 allows only between local roles; keep the port on localhost or a trusted LAN.
@@ -99,8 +102,9 @@ user:     <payout CashAddr>.<worker>      (the bitcoincash: prefix is optional)
 password: x                                (or p2p=<share address> if miner_address is unset)
 ```
 
-Stratum V2: `<node>:<sv2_port>`, user identity `<payout CashAddr>.<worker>`,
-and the authority public key when Noise is enabled.
+Stratum V2: `<node>:<sv2_port>`, user identity `<payout CashAddr>.<worker>`
+(add `,p2p=<share address>` if `miner_address` is unset), and the authority
+public key when Noise is enabled.
 
 Payouts appear in the miners' wallets in the coinbase of each block the pool
 finds and become spendable after 100 blocks, as for any Bitcoin Cash

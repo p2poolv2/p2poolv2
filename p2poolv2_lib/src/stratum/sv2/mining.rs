@@ -14,19 +14,26 @@
 //! and rolls the 8 enonce2 bytes itself; a standard channel is given all 12
 //! bytes and mines the merkle root the pool computes from them.
 //!
-//! The miner's payout address is the channel's `user_identity`
-//! (`<address>.<worker>`, as an SV1 username). Stratum V2 has no password to
-//! carry `p2p=`, so on the share chain a channel's shares belong to the
-//! node's configured `miner_address`; without one, a P2Poolv2 node refuses
-//! to open the channel.
+//! The channel's `user_identity` carries what an SV1 miner sends as username
+//! and password: `<address>.<worker>`, then optionally a separator (comma,
+//! space, tab or semicolon) and options in the SV1 password format. The
+//! address is the miner's payout address. `p2p=<share address>` names the
+//! owner of the channel's shares, with the SV1 rules: a share address the
+//! node configures owns every share and a different `p2p=` is refused, and
+//! without either a P2Poolv2 node refuses the channel. For example
+//! `bchtest:qq...,p2p=tp2pool...` on chipnet.
 
 use super::session::{encode_frame, string_field};
 use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::config::{BitcoinCashNetwork, Chain, PoolMode};
 use crate::stratum::difficulty_adjuster::{DifficultyAdjuster, DifficultyAdjusterTrait};
+use crate::stratum::message_handlers::authorize_response::{
+    resolve_cash_share, resolve_share_address,
+};
 use crate::stratum::message_handlers::submit::{
     PoolShare, emit_pool_share, get_true_difficulty, submit_found_block,
 };
+use crate::stratum::parse_password::{extract_string_value, parse_password};
 use crate::stratum::server::StratumContext;
 use crate::stratum::session::Session;
 use crate::stratum::validate_username;
@@ -39,16 +46,18 @@ use bitcoin::block::{Header, Version};
 use bitcoin::hashes::Hash;
 use bitcoin::{BlockHash, CompactTarget, Target, TxMerkleNode};
 use mining_sv2::{
-    MESSAGE_TYPE_MINING_SET_NEW_PREV_HASH, MESSAGE_TYPE_NEW_EXTENDED_MINING_JOB,
-    MESSAGE_TYPE_NEW_MINING_JOB, MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL,
-    MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL_SUCCESS, MESSAGE_TYPE_OPEN_MINING_CHANNEL_ERROR,
-    MESSAGE_TYPE_OPEN_STANDARD_MINING_CHANNEL, MESSAGE_TYPE_OPEN_STANDARD_MINING_CHANNEL_SUCCESS,
-    MESSAGE_TYPE_SET_TARGET, MESSAGE_TYPE_SUBMIT_SHARES_ERROR, MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED,
-    MESSAGE_TYPE_SUBMIT_SHARES_STANDARD, MESSAGE_TYPE_SUBMIT_SHARES_SUCCESS, NewExtendedMiningJob,
+    CloseChannel, MESSAGE_TYPE_CLOSE_CHANNEL, MESSAGE_TYPE_MINING_SET_NEW_PREV_HASH,
+    MESSAGE_TYPE_NEW_EXTENDED_MINING_JOB, MESSAGE_TYPE_NEW_MINING_JOB,
+    MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL, MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL_SUCCESS,
+    MESSAGE_TYPE_OPEN_MINING_CHANNEL_ERROR, MESSAGE_TYPE_OPEN_STANDARD_MINING_CHANNEL,
+    MESSAGE_TYPE_OPEN_STANDARD_MINING_CHANNEL_SUCCESS, MESSAGE_TYPE_SET_TARGET,
+    MESSAGE_TYPE_SUBMIT_SHARES_ERROR, MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED,
+    MESSAGE_TYPE_SUBMIT_SHARES_STANDARD, MESSAGE_TYPE_SUBMIT_SHARES_SUCCESS,
+    MESSAGE_TYPE_UPDATE_CHANNEL, MESSAGE_TYPE_UPDATE_CHANNEL_ERROR, NewExtendedMiningJob,
     NewMiningJob, OpenExtendedMiningChannel, OpenExtendedMiningChannelSuccess,
     OpenMiningChannelError, OpenStandardMiningChannel, OpenStandardMiningChannelSuccess,
     SetNewPrevHash, SetTarget, SubmitSharesError, SubmitSharesExtended, SubmitSharesStandard,
-    SubmitSharesSuccess,
+    SubmitSharesSuccess, UpdateChannel, UpdateChannelError,
 };
 use p2poolv2_wallet::share_owner::ShareOwner;
 use std::collections::BTreeMap;
@@ -77,6 +86,8 @@ pub fn is_mining_channel_message(message_type: u8) -> bool {
             | MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL
             | MESSAGE_TYPE_SUBMIT_SHARES_STANDARD
             | MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED
+            | MESSAGE_TYPE_UPDATE_CHANNEL
+            | MESSAGE_TYPE_CLOSE_CHANNEL
     )
 }
 
@@ -189,8 +200,47 @@ impl MiningChannels {
                 })
                 .await
             }
+            MESSAGE_TYPE_UPDATE_CHANNEL => {
+                let request =
+                    UpdateChannel::from_bytes(payload).map_err(|error| error.to_string())?;
+                self.update(request.channel_id, request.maximum_target.as_bytes())
+            }
+            MESSAGE_TYPE_CLOSE_CHANNEL => {
+                let request =
+                    CloseChannel::from_bytes(payload).map_err(|error| error.to_string())?;
+                self.channels.remove(&request.channel_id);
+                Ok(Vec::new())
+            }
             _ => Err(format!("not a mining channel message: {message_type}")),
         }
+    }
+
+    /// Apply a device's new `maximum_target` and answer with the channel's
+    /// target, capped by it. Proxies such as the reference translator send
+    /// `UpdateChannel` as their hashrate changes. The nominal hashrate is not
+    /// used: vardiff sets the target from submitted shares, as on SV1.
+    fn update(&mut self, channel_id: u32, maximum_target: &[u8]) -> Result<Vec<Vec<u8>>, String> {
+        let Some(channel) = self.channels.get_mut(&channel_id) else {
+            return Ok(vec![encode_frame(
+                UpdateChannelError {
+                    channel_id,
+                    error_code: string_field("invalid-channel-id")?,
+                },
+                MESSAGE_TYPE_UPDATE_CHANNEL_ERROR,
+            )?]);
+        };
+        channel.max_target = device_max_target(maximum_target);
+        let target =
+            target_for_difficulty(channel.session.difficulty_adjuster.get_current_difficulty())
+                .min(channel.max_target)
+                .to_le_bytes();
+        Ok(vec![encode_frame(
+            SetTarget {
+                channel_id,
+                maximum_target: u256(&target)?,
+            },
+            MESSAGE_TYPE_SET_TARGET,
+        )?])
     }
 
     /// Send every open channel a job for `prepared`.
@@ -229,8 +279,9 @@ impl MiningChannels {
             self.ctx.maximum_difficulty,
             self.version_mask,
         );
+        let (username, options) = split_user_identity(&user_identity);
         let validated = match validate_username::validate_for_chain(
-            &user_identity,
+            username,
             self.ctx.validate_addresses,
             self.ctx.network,
             self.ctx.share_chain,
@@ -241,17 +292,25 @@ impl MiningChannels {
             Ok(validated) => validated,
             Err(_) => return open_error(request_id, "invalid-user-identity"),
         };
-        let share_owner = self.configured_share_owner();
-        if self.ctx.mode == PoolMode::P2poolv2 && share_owner.is_none() {
-            return open_error(request_id, "share-address-required");
-        }
+        let share_owner = match self.resolve_share_owner(options) {
+            Ok(share_owner) => share_owner,
+            Err(reason) => {
+                debug!("Refusing SV2 channel for {username}: {reason}");
+                let code = if extract_string_value(options, "p2p=").is_some() {
+                    "invalid-share-address"
+                } else {
+                    "share-address-required"
+                };
+                return open_error(request_id, code);
+            }
+        };
         let user_id = self
             .ctx
             .chain_store_handle
             .add_user(validated.address_str.to_string())
             .await
             .map_err(|error| format!("Failed to store user: {error}"))?;
-        session.username = Some(user_identity.clone());
+        session.username = Some(username.to_string());
         session.btcaddress = Some(validated.address_str.to_string());
         session.workername = validated.worker_name.map(|name| name.to_string());
         session.parsed_address = validated.parsed_address;
@@ -328,13 +387,31 @@ impl MiningChannels {
         Ok(frames)
     }
 
-    fn configured_share_owner(&self) -> Option<ShareOwner> {
+    /// Owner of a channel's shares from the node's configured share address
+    /// and the identity's `p2p=` option, by the SV1 authorize rules.
+    ///
+    /// `Ok(None)` only in Hydrapool mode, which builds no share commitment.
+    fn resolve_share_owner(&self, options: &str) -> Result<Option<ShareOwner>, String> {
         match self.ctx.share_chain {
-            Chain::Bitcoin => self
-                .ctx
-                .miner_address
-                .map(|address| ShareOwner::Taproot(address.witness_program())),
-            Chain::BitcoinCash => self.ctx.cash_share.map(ShareOwner::CashP2pkh),
+            Chain::Bitcoin => {
+                let parsed = parse_password(options);
+                resolve_share_address(
+                    self.ctx.miner_address,
+                    parsed.miner_address.as_ref(),
+                    self.ctx.network,
+                    self.ctx.mode,
+                )
+                .map(|address| {
+                    address.map(|address| ShareOwner::Taproot(address.witness_program()))
+                })
+            }
+            Chain::BitcoinCash => {
+                let network = self
+                    .ctx
+                    .bch_share_network
+                    .ok_or("Bitcoin Cash share addresses need a network")?;
+                resolve_cash_share(self.ctx.cash_share, Some(options), network, self.ctx.mode)
+            }
         }
     }
 
@@ -617,6 +694,25 @@ fn device_max_target(max_target: &[u8]) -> Target {
     }
 }
 
+/// Split a `user_identity` into the SV1-style username and its options.
+///
+/// The options start at the first token, after a comma, space, tab or
+/// semicolon (the separators of the SV1 password options), that holds a
+/// `key=value` pair. Everything before that separator is the username, so a
+/// worker name containing a space keeps it, as before options existed. An
+/// identity without such a token is all username.
+fn split_user_identity(user_identity: &str) -> (&str, &str) {
+    const SEPARATORS: [char; 4] = [',', ' ', '\t', ';'];
+    for (separator, _) in user_identity.match_indices(SEPARATORS) {
+        let rest = &user_identity[separator + 1..];
+        let token_end = rest.find(SEPARATORS).unwrap_or(rest.len());
+        if rest[..token_end].contains('=') {
+            return (&user_identity[..separator], rest);
+        }
+    }
+    (user_identity, "")
+}
+
 /// enonce2 the pool fixes for a standard channel. Each channel of a
 /// connection has its own random enonce1, so this only has to differ between
 /// channels on one connection.
@@ -689,6 +785,7 @@ mod tests {
     use bitcoindrpc::BitcoindRpcClient;
     use bitcoindrpc::test_utils::{mock_submit_block_with_any_body, setup_mock_bitcoin_rpc};
     use p2poolv2_config::DEFAULT_VERSION_MASK;
+    use p2poolv2_wallet::bch_share::{BchShareAddress, BchShareNetwork};
     use tokio::sync::mpsc;
 
     const USERNAME: &str = "tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d.rig1";
@@ -1363,5 +1460,452 @@ mod tests {
             size_refusal.error_code.as_utf8_or_hex(),
             "min-extranonce-size-too-large"
         );
+    }
+
+    #[test]
+    fn user_identity_splits_into_username_and_sv1_options() {
+        assert_eq!(split_user_identity(USERNAME), (USERNAME, ""));
+        assert_eq!(
+            split_user_identity("address.rig1,p2p=share"),
+            ("address.rig1", "p2p=share")
+        );
+        assert_eq!(
+            split_user_identity("address.rig1 p2p=share;d=5"),
+            ("address.rig1", "p2p=share;d=5")
+        );
+    }
+
+    #[test]
+    fn a_worker_name_with_a_space_stays_in_the_username() {
+        assert_eq!(
+            split_user_identity("address.my rig"),
+            ("address.my rig", "")
+        );
+        assert_eq!(
+            split_user_identity("address.my rig,p2p=share"),
+            ("address.my rig", "p2p=share")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_bitcoin_channel_takes_its_share_address_from_p2p() {
+        let (emissions_tx, _emissions_rx) = mpsc::channel(10);
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
+        let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(true).await;
+        let ctx = StratumContext {
+            tracker_handle: start_tracker_actor(),
+            bitcoindrpc_client: BitcoindRpcClient::new("http://127.0.0.1:1", "user", "pass")
+                .unwrap(),
+            start_difficulty: 1,
+            minimum_difficulty: 1,
+            maximum_difficulty: None,
+            ignore_difficulty: true,
+            validate_addresses: true,
+            emissions_tx,
+            network: Network::Signet,
+            metrics: metrics_handle,
+            chain_store_handle,
+            mode: PoolMode::P2poolv2,
+            miner_address: None,
+            share_chain: Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
+        };
+        let mut channels = MiningChannels::new(ctx, DEFAULT_VERSION_MASK);
+        let share_address = make_test_share_address(2, Network::Signet);
+        let identity = format!("{USERNAME},p2p={share_address}");
+
+        let mut open = payload(
+            &encode_message(
+                OpenExtendedMiningChannel {
+                    request_id: 1,
+                    user_identity: identity.as_str().try_into().unwrap(),
+                    nominal_hash_rate: 1.0,
+                    max_target: U256::new(&[0xff; 32]).unwrap(),
+                    min_extranonce_size: 8,
+                },
+                MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL,
+            )
+            .unwrap(),
+        );
+        let opened = channels
+            .handle(MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL, &mut open, None)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            frame_type(&opened[0]),
+            MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL_SUCCESS
+        );
+        let session = &channels.channels[&1].session;
+        assert_eq!(
+            session.share_owner,
+            Some(ShareOwner::Taproot(share_address.witness_program()))
+        );
+        assert_eq!(session.username.as_deref(), Some(USERNAME));
+    }
+
+    #[tokio::test]
+    async fn a_channel_naming_another_share_address_than_the_node_is_refused() {
+        let (emissions_tx, _emissions_rx) = mpsc::channel(10);
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
+        let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(true).await;
+        let ctx = StratumContext {
+            tracker_handle: start_tracker_actor(),
+            bitcoindrpc_client: BitcoindRpcClient::new("http://127.0.0.1:1", "user", "pass")
+                .unwrap(),
+            start_difficulty: 1,
+            minimum_difficulty: 1,
+            maximum_difficulty: None,
+            ignore_difficulty: true,
+            validate_addresses: true,
+            emissions_tx,
+            network: Network::Signet,
+            metrics: metrics_handle,
+            chain_store_handle,
+            mode: PoolMode::P2poolv2,
+            miner_address: Some(make_test_share_address(1, Network::Signet)),
+            share_chain: Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
+        };
+        let mut channels = MiningChannels::new(ctx, DEFAULT_VERSION_MASK);
+        let identity = format!(
+            "{USERNAME},p2p={}",
+            make_test_share_address(2, Network::Signet)
+        );
+
+        let mut open = payload(
+            &encode_message(
+                OpenExtendedMiningChannel {
+                    request_id: 1,
+                    user_identity: identity.as_str().try_into().unwrap(),
+                    nominal_hash_rate: 1.0,
+                    max_target: U256::new(&[0xff; 32]).unwrap(),
+                    min_extranonce_size: 8,
+                },
+                MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL,
+            )
+            .unwrap(),
+        );
+        let refused = channels
+            .handle(MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL, &mut open, None)
+            .await
+            .unwrap();
+
+        let mut refused_payload = payload(&refused[0]);
+        let refusal = OpenMiningChannelError::from_bytes(&mut refused_payload).unwrap();
+        assert_eq!(refusal.error_code.as_utf8_or_hex(), "invalid-share-address");
+        assert!(channels.channels.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_bitcoin_cash_channel_takes_its_share_hash_from_p2p() {
+        let (emissions_tx, _emissions_rx) = mpsc::channel(10);
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
+        let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(true).await;
+        let ctx = StratumContext {
+            tracker_handle: start_tracker_actor(),
+            bitcoindrpc_client: BitcoindRpcClient::new("http://127.0.0.1:1", "user", "pass")
+                .unwrap(),
+            start_difficulty: 1,
+            minimum_difficulty: 1,
+            maximum_difficulty: None,
+            ignore_difficulty: true,
+            validate_addresses: true,
+            emissions_tx,
+            network: Network::Regtest,
+            metrics: metrics_handle,
+            chain_store_handle,
+            mode: PoolMode::P2poolv2,
+            miner_address: None,
+            share_chain: Chain::BitcoinCash,
+            bch_share_network: Some(BchShareNetwork::Regtest),
+            cash_share: None,
+        };
+        let mut channels = MiningChannels::new(ctx, DEFAULT_VERSION_MASK);
+        let share_address = BchShareAddress::new(BchShareNetwork::Regtest, [0x22; 20]).encode();
+        let identity =
+            format!("bchreg:qzh5k63rhy4jg6jtyssmzddju5kkng4jzu8ktcypfm.rig1,p2p={share_address}");
+
+        let mut open = payload(
+            &encode_message(
+                OpenStandardMiningChannel {
+                    request_id: 1,
+                    user_identity: identity.as_str().try_into().unwrap(),
+                    nominal_hash_rate: 1.0,
+                    max_target: U256::new(&[0xff; 32]).unwrap(),
+                },
+                MESSAGE_TYPE_OPEN_STANDARD_MINING_CHANNEL,
+            )
+            .unwrap(),
+        );
+        let opened = channels
+            .handle(MESSAGE_TYPE_OPEN_STANDARD_MINING_CHANNEL, &mut open, None)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            frame_type(&opened[0]),
+            MESSAGE_TYPE_OPEN_STANDARD_MINING_CHANNEL_SUCCESS
+        );
+        assert_eq!(
+            channels.channels[&1].session.share_owner,
+            Some(ShareOwner::CashP2pkh([0x22; 20]))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_bitcoin_cash_channel_with_a_taproot_share_address_is_refused() {
+        let (emissions_tx, _emissions_rx) = mpsc::channel(10);
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
+        let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(true).await;
+        let ctx = StratumContext {
+            tracker_handle: start_tracker_actor(),
+            bitcoindrpc_client: BitcoindRpcClient::new("http://127.0.0.1:1", "user", "pass")
+                .unwrap(),
+            start_difficulty: 1,
+            minimum_difficulty: 1,
+            maximum_difficulty: None,
+            ignore_difficulty: true,
+            validate_addresses: true,
+            emissions_tx,
+            network: Network::Regtest,
+            metrics: metrics_handle,
+            chain_store_handle,
+            mode: PoolMode::P2poolv2,
+            miner_address: None,
+            share_chain: Chain::BitcoinCash,
+            bch_share_network: Some(BchShareNetwork::Regtest),
+            cash_share: None,
+        };
+        let mut channels = MiningChannels::new(ctx, DEFAULT_VERSION_MASK);
+        let identity = format!(
+            "bchreg:qzh5k63rhy4jg6jtyssmzddju5kkng4jzu8ktcypfm.rig1,p2p={}",
+            make_test_share_address(2, Network::Regtest)
+        );
+
+        let mut open = payload(
+            &encode_message(
+                OpenStandardMiningChannel {
+                    request_id: 1,
+                    user_identity: identity.as_str().try_into().unwrap(),
+                    nominal_hash_rate: 1.0,
+                    max_target: U256::new(&[0xff; 32]).unwrap(),
+                },
+                MESSAGE_TYPE_OPEN_STANDARD_MINING_CHANNEL,
+            )
+            .unwrap(),
+        );
+        let refused = channels
+            .handle(MESSAGE_TYPE_OPEN_STANDARD_MINING_CHANNEL, &mut open, None)
+            .await
+            .unwrap();
+
+        let mut refused_payload = payload(&refused[0]);
+        let refusal = OpenMiningChannelError::from_bytes(&mut refused_payload).unwrap();
+        assert_eq!(refusal.error_code.as_utf8_or_hex(), "invalid-share-address");
+    }
+
+    #[tokio::test]
+    async fn update_channel_answers_with_a_target_capped_by_the_new_maximum() {
+        let (emissions_tx, _emissions_rx) = mpsc::channel(10);
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
+        let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(true).await;
+        let ctx = StratumContext {
+            tracker_handle: start_tracker_actor(),
+            bitcoindrpc_client: BitcoindRpcClient::new("http://127.0.0.1:1", "user", "pass")
+                .unwrap(),
+            start_difficulty: 1,
+            minimum_difficulty: 1,
+            maximum_difficulty: None,
+            ignore_difficulty: true,
+            validate_addresses: true,
+            emissions_tx,
+            network: Network::Signet,
+            metrics: metrics_handle,
+            chain_store_handle,
+            mode: PoolMode::P2poolv2,
+            miner_address: Some(make_test_share_address(1, Network::Signet)),
+            share_chain: Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
+        };
+        let mut channels = MiningChannels::new(ctx, DEFAULT_VERSION_MASK);
+        let mut open = payload(
+            &encode_message(
+                OpenExtendedMiningChannel {
+                    request_id: 1,
+                    user_identity: USERNAME.try_into().unwrap(),
+                    nominal_hash_rate: 1.0,
+                    max_target: U256::new(&[0xff; 32]).unwrap(),
+                    min_extranonce_size: 8,
+                },
+                MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL,
+            )
+            .unwrap(),
+        );
+        channels
+            .handle(MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL, &mut open, None)
+            .await
+            .unwrap();
+        let mut lower_maximum = [0u8; 32];
+        lower_maximum[..16].copy_from_slice(&[0xff; 16]);
+        let mut update = payload(
+            &encode_message(
+                UpdateChannel {
+                    channel_id: 1,
+                    nominal_hash_rate: 1.0,
+                    maximum_target: U256::new(&lower_maximum).unwrap(),
+                },
+                MESSAGE_TYPE_UPDATE_CHANNEL,
+            )
+            .unwrap(),
+        );
+        let answered = channels
+            .handle(MESSAGE_TYPE_UPDATE_CHANNEL, &mut update, None)
+            .await
+            .unwrap();
+
+        assert_eq!(answered.len(), 1);
+        assert_eq!(frame_type(&answered[0]), MESSAGE_TYPE_SET_TARGET);
+        assert!(frame_has_channel_bit(&answered[0]));
+        let mut set_target_payload = payload(&answered[0]);
+        let set_target = SetTarget::from_bytes(&mut set_target_payload).unwrap();
+        assert_eq!(set_target.channel_id, 1);
+        assert_eq!(set_target.maximum_target.as_bytes(), &lower_maximum);
+    }
+
+    #[tokio::test]
+    async fn update_channel_for_an_unknown_channel_gets_an_error_reply() {
+        let (emissions_tx, _emissions_rx) = mpsc::channel(10);
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
+        let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(true).await;
+        let ctx = StratumContext {
+            tracker_handle: start_tracker_actor(),
+            bitcoindrpc_client: BitcoindRpcClient::new("http://127.0.0.1:1", "user", "pass")
+                .unwrap(),
+            start_difficulty: 1,
+            minimum_difficulty: 1,
+            maximum_difficulty: None,
+            ignore_difficulty: true,
+            validate_addresses: true,
+            emissions_tx,
+            network: Network::Signet,
+            metrics: metrics_handle,
+            chain_store_handle,
+            mode: PoolMode::P2poolv2,
+            miner_address: Some(make_test_share_address(1, Network::Signet)),
+            share_chain: Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
+        };
+        let mut channels = MiningChannels::new(ctx, DEFAULT_VERSION_MASK);
+        let mut update = payload(
+            &encode_message(
+                UpdateChannel {
+                    channel_id: 7,
+                    nominal_hash_rate: 1.0,
+                    maximum_target: U256::new(&[0xff; 32]).unwrap(),
+                },
+                MESSAGE_TYPE_UPDATE_CHANNEL,
+            )
+            .unwrap(),
+        );
+        let answered = channels
+            .handle(MESSAGE_TYPE_UPDATE_CHANNEL, &mut update, None)
+            .await
+            .unwrap();
+
+        assert_eq!(frame_type(&answered[0]), MESSAGE_TYPE_UPDATE_CHANNEL_ERROR);
+        let mut error_payload = payload(&answered[0]);
+        let update_error = UpdateChannelError::from_bytes(&mut error_payload).unwrap();
+        assert_eq!(
+            update_error.error_code.as_utf8_or_hex(),
+            "invalid-channel-id"
+        );
+    }
+
+    #[tokio::test]
+    async fn close_channel_removes_the_channel() {
+        let (emissions_tx, _emissions_rx) = mpsc::channel(10);
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
+        let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(true).await;
+        let ctx = StratumContext {
+            tracker_handle: start_tracker_actor(),
+            bitcoindrpc_client: BitcoindRpcClient::new("http://127.0.0.1:1", "user", "pass")
+                .unwrap(),
+            start_difficulty: 1,
+            minimum_difficulty: 1,
+            maximum_difficulty: None,
+            ignore_difficulty: true,
+            validate_addresses: true,
+            emissions_tx,
+            network: Network::Signet,
+            metrics: metrics_handle,
+            chain_store_handle,
+            mode: PoolMode::P2poolv2,
+            miner_address: Some(make_test_share_address(1, Network::Signet)),
+            share_chain: Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
+        };
+        let mut channels = MiningChannels::new(ctx, DEFAULT_VERSION_MASK);
+        let mut open = payload(
+            &encode_message(
+                OpenExtendedMiningChannel {
+                    request_id: 1,
+                    user_identity: USERNAME.try_into().unwrap(),
+                    nominal_hash_rate: 1.0,
+                    max_target: U256::new(&[0xff; 32]).unwrap(),
+                    min_extranonce_size: 8,
+                },
+                MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL,
+            )
+            .unwrap(),
+        );
+        channels
+            .handle(MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL, &mut open, None)
+            .await
+            .unwrap();
+        assert_eq!(channels.channels.len(), 1);
+        let mut close = payload(
+            &encode_message(
+                CloseChannel {
+                    channel_id: 1,
+                    reason_code: "done".try_into().unwrap(),
+                },
+                MESSAGE_TYPE_CLOSE_CHANNEL,
+            )
+            .unwrap(),
+        );
+        let answered = channels
+            .handle(MESSAGE_TYPE_CLOSE_CHANNEL, &mut close, None)
+            .await
+            .unwrap();
+
+        assert!(answered.is_empty());
+        assert!(channels.channels.is_empty());
     }
 }

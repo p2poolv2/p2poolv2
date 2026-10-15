@@ -337,6 +337,12 @@ impl StratumServer {
             }
         };
 
+        // SV1 and SV2 connections share one limit, so opening the SV2 port
+        // does not raise the number of sockets and jobs a node may carry.
+        let max_connections = self.max_connections.unwrap_or_else(default_max_connections);
+        info!("Stratum server max connections: {}", max_connections);
+        let connection_semaphore = Arc::new(Semaphore::new(max_connections as usize));
+
         // The SV2 listener stops when this sender sends or is dropped, which
         // happens when the SV1 accept loop below ends for any reason.
         let (sv2_stop_sender, sv2_stop_receiver) = watch::channel(());
@@ -357,6 +363,7 @@ impl StratumServer {
             };
             tokio::spawn(sv2::serve(
                 sv2_listener,
+                Arc::clone(&connection_semaphore),
                 sv2.pool_transactions,
                 sv2.merge_mining,
                 Some(mining),
@@ -364,10 +371,6 @@ impl StratumServer {
                 sv2_stop_receiver,
             ));
         }
-
-        let max_connections = self.max_connections.unwrap_or_else(default_max_connections);
-        info!("Stratum server max connections: {}", max_connections);
-        let connection_semaphore = Arc::new(Semaphore::new(max_connections as usize));
 
         if let Some(ready_tx) = ready_tx {
             info!(

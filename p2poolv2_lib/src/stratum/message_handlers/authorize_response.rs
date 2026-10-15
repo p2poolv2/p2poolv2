@@ -46,7 +46,9 @@ async fn register_user<D: DifficultyAdjusterTrait>(
 /// be told rather than have shares assigned elsewhere.
 ///
 /// Hydrapool builds no share commitment, so no address is needed there.
-fn resolve_share_address(
+/// Stratum V2 channels apply the same rules to the `p2p=` option of their
+/// `user_identity`.
+pub(crate) fn resolve_share_address(
     configured: Option<P2PoolAddress>,
     supplied: Option<&Result<P2PoolAddress, AddressError>>,
     network: bitcoin::Network,
@@ -85,7 +87,8 @@ fn resolve_share_address(
 ///
 /// Same conflict rules as [`resolve_share_address`]: a configured hash owns
 /// every share, and a miner who names a different hash is told so.
-fn resolve_cash_share(
+/// `password` is the SV1 password or the options of an SV2 `user_identity`.
+pub(crate) fn resolve_cash_share(
     configured: Option<[u8; 20]>,
     password: Option<&str>,
     network: BchShareNetwork,
