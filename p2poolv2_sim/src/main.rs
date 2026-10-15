@@ -18,6 +18,8 @@ use clap::Parser;
 #[cfg(feature = "sim")]
 use config::SimNodeConfig;
 #[cfg(feature = "sim")]
+use p2poolv2_lib::accounting::payout::sharechain_pplns::pplns_window::COINBASE_MATURITY;
+#[cfg(feature = "sim")]
 use p2poolv2_lib::logging::setup_logging;
 #[cfg(feature = "sim")]
 use p2poolv2_lib::sim::emitter::SimEmitter;
@@ -75,6 +77,11 @@ async fn main() -> ExitCode {
         sim_cfg.network_hashrate.unwrap_or(0),
     );
     sim_overrides::init_propagation_delay(sim_cfg.propagation_delay_ms.unwrap_or(0));
+    sim_overrides::init_coinbase_maturity(sim_cfg.coinbase_maturity.unwrap_or(COINBASE_MATURITY));
+    info!(
+        "Sim coinbase maturity: {} shares",
+        sim_overrides::coinbase_maturity()
+    );
 
     let (handles, runner) = match p2poolv2_node::build_node(node_config.clone()).await {
         Ok(result) => result,

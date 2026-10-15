@@ -33,6 +33,9 @@
 #                  signatures are not consensus, so they differ per node to show
 #                  it; each must stay within the 16-byte config limit)
 #   DIAL_FANOUT    how many earlier peers each dials   (default 3)
+#   MATURITY_SHARES  coinbase maturity depth in shares  (default 6048, the
+#                  production value; lower it so a short run reaches the
+#                  payout maturity skip. Consensus: one value for all nodes)
 #   PROFILE        cargo profile: release | debug      (default release)
 #
 # NOTE: release is the default on purpose. libp2p-request-response has a
@@ -74,6 +77,7 @@ LATENCY_MS="${LATENCY_MS:-0}"
 # Scale the latency base by the same factor so uncle rate (latency/interval) is
 # preserved; LATENCY_MS is thus given in 10s-interval terms.
 IDEAL_BLOCK_TIME="${IDEAL_BLOCK_TIME:-10}"
+MATURITY_SHARES="${MATURITY_SHARES:-6048}"
 LATENCY_MS=$(awk -v l="$LATENCY_MS" -v t="$IDEAL_BLOCK_TIME" 'BEGIN{printf "%.0f", l*t/10}')
 LATENCY_DIST="${LATENCY_DIST:-spread}"
 DIST_SEED="${DIST_SEED:-42}"
@@ -276,6 +280,7 @@ propagation_delay_ms = $node_latency
 asert_anchor_time = $ASERT_ANCHOR
 network_hashrate = $NETWORK_HASHRATE
 ideal_block_time_secs = $IDEAL_BLOCK_TIME
+coinbase_maturity = $MATURITY_SHARES
 EOF
 
   "$BIN" --config "$cfg" > "$log" 2>&1 &
