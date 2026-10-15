@@ -44,6 +44,8 @@ zmq = { workspace = true }
 bitcoin = { workspace = true }
 p2poolv2_wallet = { workspace = true }
 bitcoinconsensus = { workspace = true }
+# Curve arithmetic for Bitcoin Cash Schnorr share signatures (shares/bch_script.rs).
+k256 = { workspace = true }
 base64 = { workspace = true }
 tower = { workspace = true, features = ["util", "limit"] }
 tokio-util = { workspace = true }

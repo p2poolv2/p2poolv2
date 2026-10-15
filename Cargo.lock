@@ -3197,6 +3197,7 @@ dependencies = [
  "hex",
  "hmac",
  "job_declaration_sv2",
+ "k256",
  "libp2p",
  "mining_sv2",
  "mockall",

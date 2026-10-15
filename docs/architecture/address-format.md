@@ -440,13 +440,13 @@ p2poolv2_cli bch-share-address --network mainnet bitcoincash:q...
 The command only changes the prefix and checksum. It takes no private key
 and rejects a P2SH address, because a share is owned by a P2PKH script.
 
-Bitcoin Cash shares carry their coinbase alone for now. Share transactions
-are checked by `bitcoinconsensus`, which applies Bitcoin script rules: a
-spend signed by a Bitcoin Cash wallet (`SIGHASH_FORKID`, Schnorr) would fail
-there and a Bitcoin legacy signature would pass. Until a Bitcoin Cash
-interpreter checks share transactions, the validator rejects a Bitcoin Cash
-share with any non-coinbase transaction. Shares still accrue to the P2PKH
-key, which a Bitcoin Cash wallet can spend once share transfers are enabled.
+Bitcoin Cash share transactions are checked by a Bitcoin Cash interpreter
+(`shares/bch_script.rs`), not by `bitcoinconsensus`, which applies Bitcoin
+script rules: a spend signed by a Bitcoin Cash wallet (`SIGHASH_FORKID`,
+Schnorr) would fail there and a Bitcoin legacy signature would pass. The
+interpreter accepts a P2PKH spend signed with `SIGHASH_FORKID` by ECDSA or
+Bitcoin Cash Schnorr, the form a Bitcoin Cash wallet uses for the share
+owner's P2PKH key, and rejects every other script.
 
 ## Registration
 

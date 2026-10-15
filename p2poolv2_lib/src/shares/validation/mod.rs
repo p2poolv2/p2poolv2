@@ -25,6 +25,7 @@ use crate::config::{
 use crate::pool_difficulty::PoolDifficulty;
 #[cfg(not(test))]
 use crate::pool_difficulty::PoolDifficulty;
+use crate::shares::bch_script;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -614,27 +615,9 @@ impl DefaultShareValidator {
                 "Transaction count {count} exceeds limit of {TXS_COUNT_LIMIT}"
             )));
         }
-        if self.chain == Chain::BitcoinCash && count > 1 {
-            // Share scripts are checked by libbitcoinconsensus, which applies
-            // Bitcoin rules: it would reject a spend signed by a Bitcoin Cash
-            // wallet (SIGHASH_FORKID, Schnorr) and accept a Bitcoin legacy
-            // signature. Until a Bitcoin Cash interpreter checks them, a
-            // Bitcoin Cash share carries its coinbase alone. Share trading is
-            // deferred in docs/bch-design.md, and no node builds such shares.
-            return Err(ValidationError::consensus(format!(
-                "Bitcoin Cash share carries {} non-coinbase transactions; share transfers are not enabled on Bitcoin Cash",
-                count - 1
-            )));
-        }
         Ok(())
     }
 
-    /// Validate scripts and signatures for all non-coinbase transactions.
-    ///
-    /// Iterates over each non-coinbase transaction, collects spent outputs
-    /// from the chain store, and verifies each input script using
-    /// libbitcoinconsensus. Coinbase transactions are skipped since they
-    /// have no inputs to validate.
     /// Validate scripts, input/output values, and sigop cost for all
     /// transactions in the share block.
     ///
@@ -642,6 +625,11 @@ impl DefaultShareValidator {
     /// script verification, input-vs-output value checks, and sigop cost
     /// accumulation in a single pass. The coinbase contributes sigop cost
     /// but is exempt from script and value validation.
+    ///
+    /// Bitcoin scripts are checked by libbitcoinconsensus. Bitcoin Cash
+    /// scripts are checked by [`bch_script::verify_transaction`], because
+    /// Bitcoin rules would reject a `SIGHASH_FORKID` or Schnorr signature
+    /// and accept a Bitcoin one.
     fn validate_scripts_values_and_sigops(
         &self,
         share: &ShareBlock,
@@ -657,7 +645,18 @@ impl DefaultShareValidator {
                 let txid = transaction.compute_txid();
                 let spent_outputs =
                     Self::collect_spent_outputs(transaction, chain_store_handle, &txid)?;
-                Self::validate_scripts_for_tx(transaction, &spent_outputs, &txid)?;
+                match self.chain {
+                    Chain::BitcoinCash => {
+                        Self::validate_bitcoin_cash_scripts_for_tx(
+                            transaction,
+                            &spent_outputs,
+                            &txid,
+                        )?;
+                    }
+                    Chain::Bitcoin => {
+                        Self::validate_scripts_for_tx(transaction, &spent_outputs, &txid)?;
+                    }
+                }
                 Self::validate_input_output_values(transaction, &spent_outputs, &txid)?;
                 let tx_sigop_cost =
                     Self::compute_transaction_sigop_cost(transaction, &spent_outputs);
@@ -744,6 +743,22 @@ impl DefaultShareValidator {
             })?;
         }
         Ok(())
+    }
+
+    /// Verify all input scripts of a Bitcoin Cash share transaction.
+    ///
+    /// Only P2PKH spends with `SIGHASH_FORKID` ECDSA or Schnorr signatures
+    /// pass; see [`bch_script`] for the rules.
+    fn validate_bitcoin_cash_scripts_for_tx(
+        transaction: &ShareTransaction,
+        spent_outputs: &[(usize, bitcoin::TxOut)],
+        txid: &bitcoin::Txid,
+    ) -> Result<(), ValidationError> {
+        bch_script::verify_transaction(&transaction.0, spent_outputs).map_err(|error| {
+            ValidationError::consensus(format!(
+                "Script verification failed for transaction {txid}: {error}"
+            ))
+        })
     }
 
     /// Check that total input value is at least total output value for a
@@ -1622,11 +1637,13 @@ mod tests {
     use crate::stratum::work::block_template::{BlockTemplate, parse_flags};
     use crate::stratum::work::gbt::build_merkle_branches_for_template;
     use crate::test_utils::{
-        TEST_COINBASE_NSECS, TestShareBlockBuilder, build_block_from_work_components,
-        genesis_for_tests, load_share_headers_test_data, make_test_address,
-        setup_pool_difficulty_mocks, test_coinbase_transaction,
+        BCH_TRANSFER_ECDSA_ALL_WITHOUT_FORK_ID, BCH_TRANSFER_SCHNORR_ALL,
+        BCH_TRANSFER_SCRIPT_PUBKEY, TEST_COINBASE_NSECS, TestShareBlockBuilder,
+        build_block_from_work_components, genesis_for_tests, load_share_headers_test_data,
+        make_test_address, setup_pool_difficulty_mocks, test_coinbase_transaction,
     };
     use crate::utils::time_provider::TestTimeProvider;
+    use bitcoin::consensus::encode::deserialize_hex;
     use bitcoin::pow::Work;
     use bitcoin::script::PushBytesBuf;
     use bitcoin::transaction::Version;
@@ -1690,17 +1707,103 @@ mod tests {
     }
 
     #[test]
-    fn bitcoin_cash_rejects_a_share_with_a_non_coinbase_transaction() {
+    fn bitcoin_cash_counts_a_non_coinbase_transaction_like_bitcoin() {
         let mut share = TestShareBlockBuilder::new().build();
         share
             .transactions
             .push(ShareTransaction(test_coinbase_transaction(5)));
+        assert!(
+            validator()
+                .for_chain(Chain::BitcoinCash)
+                .validate_transaction_count(&share)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn bitcoin_cash_accepts_a_schnorr_share_transfer_signed_by_bchn() {
+        let mut chain_store_handle = ChainStoreHandle::default();
+        let script = ScriptBuf::from_hex(BCH_TRANSFER_SCRIPT_PUBKEY).unwrap();
+        let spent = vec![
+            (
+                0,
+                TxOut {
+                    value: bitcoin::Amount::from_sat(50_000),
+                    script_pubkey: script.clone(),
+                },
+            ),
+            (
+                1,
+                TxOut {
+                    value: bitcoin::Amount::from_sat(70_000),
+                    script_pubkey: script,
+                },
+            ),
+        ];
+        chain_store_handle
+            .expect_get_all_prevouts()
+            .returning(move |_transaction| Ok(spent.clone()));
+        let share = TestShareBlockBuilder::new()
+            .add_transaction(deserialize_hex(BCH_TRANSFER_SCHNORR_ALL).unwrap())
+            .build();
+
+        let result = validator()
+            .for_chain(Chain::BitcoinCash)
+            .validate_scripts_values_and_sigops(&share, &chain_store_handle);
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn bitcoin_cash_rejects_a_share_transfer_signed_without_fork_id() {
+        let mut chain_store_handle = ChainStoreHandle::default();
+        let script = ScriptBuf::from_hex(BCH_TRANSFER_SCRIPT_PUBKEY).unwrap();
+        let spent = vec![
+            (
+                0,
+                TxOut {
+                    value: bitcoin::Amount::from_sat(50_000),
+                    script_pubkey: script.clone(),
+                },
+            ),
+            (
+                1,
+                TxOut {
+                    value: bitcoin::Amount::from_sat(70_000),
+                    script_pubkey: script,
+                },
+            ),
+        ];
+        chain_store_handle
+            .expect_get_all_prevouts()
+            .returning(move |_transaction| Ok(spent.clone()));
+        let share = TestShareBlockBuilder::new()
+            .add_transaction(deserialize_hex(BCH_TRANSFER_ECDSA_ALL_WITHOUT_FORK_ID).unwrap())
+            .build();
+
         let error = validator()
             .for_chain(Chain::BitcoinCash)
-            .validate_transaction_count(&share)
+            .validate_scripts_values_and_sigops(&share, &chain_store_handle)
             .unwrap_err();
         assert_eq!(error.kind(), FailureKind::Consensus);
-        assert!(error.to_string().contains("not enabled"), "{error}");
+        assert!(error.to_string().contains("SIGHASH_FORKID"), "{error}");
+    }
+
+    #[test]
+    fn bitcoin_cash_rejects_the_bitcoin_op_true_p2sh_spend_bitcoin_accepts() {
+        let mut chain_store_handle = ChainStoreHandle::default();
+        let (spent_output, spending_tx) = build_p2sh_op_true_spent_output_and_spending_tx();
+        chain_store_handle
+            .expect_get_all_prevouts()
+            .returning(move |_transaction| Ok(vec![(0, spent_output.clone())]));
+        let share = TestShareBlockBuilder::new()
+            .add_transaction(spending_tx)
+            .build();
+
+        let error = validator()
+            .for_chain(Chain::BitcoinCash)
+            .validate_scripts_values_and_sigops(&share, &chain_store_handle)
+            .unwrap_err();
+        assert!(error.to_string().contains("P2PKH"), "{error}");
     }
 
     #[test]
