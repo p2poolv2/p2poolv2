@@ -292,10 +292,26 @@ show:
   submitted, all 441 with the client's hash; BCHN height 471 to 692 (the
   remaining blocks lost races at the same height).
 
-Not covered by this run: a share meeting the share-chain target accepted
-into the share chain, two P2Poolv2 nodes exchanging shares, chipnet, Stratum
-V2 job declaration from a real Job Declarator client, and real ASIC
-firmware.
+First share at the mini share-chain target (2026-10-14, three nodes on
+`f97ffb7`). The CPU miner found share `b39a8c24...` on node1, whose block
+`0000000023dc6b8e...` BCHN accepted at height 701. Node1 relayed the share
+and node2 and node3 received it, but all three rejected it: "Coinbase and
+template merkle root don't match merkle root". Rebuilding the coinbase from
+the stored share showed one differing byte. BCHN's template carries
+`"coinbaseaux": {"flags": ""}`; the coinbase builder pushes one zero byte
+for an empty or missing flags entry, but the share header recorded the
+empty string as empty flags, so validators rebuilt an empty push (and a
+padding output one byte longer). Bitcoin Core omits the entry, which is why
+Bitcoin shares were not affected. The header now records no flags for an
+empty entry (`BlockTemplate::share_coinbaseaux_flags`), and a test builds
+the coinbase the builder's way from the BCHN fixture and validates it on a
+Bitcoin Cash validator; that test fails without the fix with the error the
+nodes logged. A share accepted into the share chain after the fix has not
+been mined yet.
+
+Not covered by this run: a share accepted into the share chain (see above),
+chipnet, Stratum V2 job declaration from a real Job Declarator client, and
+real ASIC firmware.
 
 ## Still unfinished
 

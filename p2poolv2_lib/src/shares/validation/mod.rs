@@ -1611,15 +1611,15 @@ mockall::mock! {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shares::coinbaseaux_flags::CoinbaseAuxFlags;
     use crate::shares::extranonce::Extranonce;
+    use crate::shares::merge_mining::MergeMiningCommitment;
     use crate::shares::share_block::ShareTransaction;
     use crate::shares::share_commitment::ShareCommitment;
     use crate::shares::witness_commitment::WitnessCommitment;
     use crate::store::block_tx_metadata::{BlockMetadata, ChainMembership};
     use crate::store::transaction_store::PrevoutRejection;
     use crate::store::writer::StoreError;
-    use crate::stratum::work::block_template::BlockTemplate;
+    use crate::stratum::work::block_template::{BlockTemplate, parse_flags};
     use crate::stratum::work::gbt::build_merkle_branches_for_template;
     use crate::test_utils::{
         TEST_COINBASE_NSECS, TestShareBlockBuilder, build_block_from_work_components,
@@ -4284,11 +4284,7 @@ mod tests {
             .build();
         share_block.header.coinbase_value = template.coinbasevalue;
         share_block.header.bitcoin_height = template.height as u64;
-        share_block.header.coinbaseaux_flags = template
-            .coinbaseaux
-            .get("flags")
-            .and_then(|flags| hex::decode(flags).ok())
-            .map(|bytes| CoinbaseAuxFlags::new(&bytes));
+        share_block.header.coinbaseaux_flags = template.share_coinbaseaux_flags();
         share_block.header.witness_commitment = template
             .default_witness_commitment
             .as_deref()
@@ -4365,6 +4361,75 @@ mod tests {
             share_block.template_merkle_branches.len(),
             3,
             "Expected 3 merkle branches for 4 template transactions"
+        );
+    }
+
+    #[test]
+    fn a_bchn_template_share_rebuilds_the_coinbase_the_stratum_builder_made() {
+        // BCHN sends `"coinbaseaux": {"flags": ""}`. The stratum builder
+        // pushes one zero byte for it; the header must record no flags so
+        // validators rebuild that same push. A live regtest share was
+        // rejected by every node before this.
+        let template: BlockTemplate = serde_json::from_str(include_str!(
+            "../../../../bitcoindrpc/test_data/bchn-regtest-template.json"
+        ))
+        .expect("Failed to parse BCHN template JSON");
+
+        let address_a = make_test_address(1);
+
+        let mut share_block = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+        share_block.header.coinbase_value = template.coinbasevalue;
+        share_block.header.bitcoin_height = template.height as u64;
+        share_block.header.coinbaseaux_flags = template.share_coinbaseaux_flags();
+        share_block.header.witness_commitment = None;
+
+        let commitment_hash = ShareCommitment::from_share_block(&share_block).hash();
+
+        let builder_flags = parse_flags(template.coinbaseaux.get("flags").cloned()).unwrap();
+        let coinbase_tx = build_coinbase(
+            Version::TWO,
+            &[OutputPair {
+                address: address_a.clone(),
+                amount: Amount::from_sat(template.coinbasevalue),
+            }],
+            template.height as i64,
+            builder_flags,
+            None,
+            b"P2Poolv2",
+            Some(commitment_hash),
+            TEST_COINBASE_NSECS,
+            Some(Extranonce::default().as_bytes()),
+            Some(MergeMiningCommitment::reserved()),
+        )
+        .unwrap();
+        share_block.header.bitcoin_header.merkle_root =
+            TxMerkleNode::from_raw_hash(coinbase_tx.compute_txid().to_raw_hash());
+        share_block.template_merkle_branches = Vec::new();
+
+        let mut mock_window = PplnsWindow::default();
+        mock_window
+            .expect_network()
+            .return_const(bitcoin::Network::Regtest);
+        let addr_a_clone = address_a.clone();
+        mock_window
+            .expect_get_distribution_from_start_hash()
+            .returning(move |_, _, _| Ok(HashMap::from([(addr_a_clone.clone(), 1000u128)])));
+        let pplns_window = Arc::new(RwLock::new(mock_window));
+
+        let validator =
+            DefaultShareValidator::new(PoolDifficulty::default(), 1, b"P2Poolv2".to_vec())
+                .for_chain(Chain::BitcoinCash);
+        let result = validator.validate_bitcoin_payout(
+            &share_block,
+            &ChainStoreHandle::default(),
+            pplns_window,
+        );
+        assert!(
+            result.is_ok(),
+            "Expected the BCHN share coinbase to rebuild, got: {}",
+            result.unwrap_err()
         );
     }
 

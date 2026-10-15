@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+use crate::shares::coinbaseaux_flags::CoinbaseAuxFlags;
 use crate::stratum::work::error::WorkError;
 use bitcoin::hashes::Hash;
 use bitcoin::script::PushBytesBuf;
@@ -169,6 +170,22 @@ impl BlockTemplate {
         }
         Ok(())
     }
+
+    /// The coinbase aux flags a share header records for this template.
+    ///
+    /// `parse_flags` pushes a single zero byte into the block coinbase both
+    /// when the template has no `flags` entry (Bitcoin Core) and when the
+    /// entry is an empty string (Bitcoin Cash Node). Validators rebuild that
+    /// zero-byte push only from a header without flags, so an empty entry is
+    /// recorded as no flags. Recording it as empty flags made every
+    /// validator rebuild an empty push and reject the share.
+    pub fn share_coinbaseaux_flags(&self) -> Option<CoinbaseAuxFlags> {
+        self.coinbaseaux
+            .get("flags")
+            .filter(|flags| !flags.is_empty())
+            .and_then(|flags| hex::decode(flags).ok())
+            .map(|bytes| CoinbaseAuxFlags::new(&bytes))
+    }
 }
 
 /// Extract flags from template coinbaseaux and convert to PushBytesBuf.
@@ -202,6 +219,32 @@ mod tests {
         template.validate_bch().unwrap();
         assert_eq!(template.sizelimit, 32_000_000);
         assert_eq!(template.weightlimit, 0);
+    }
+
+    #[test]
+    fn an_empty_bchn_flags_entry_is_recorded_as_no_share_flags() {
+        let template: BlockTemplate = serde_json::from_str(BCHN_TEMPLATE).unwrap();
+        assert_eq!(template.coinbaseaux.get("flags"), Some(&String::new()));
+        assert_eq!(template.share_coinbaseaux_flags(), None);
+    }
+
+    #[test]
+    fn a_missing_flags_entry_is_recorded_as_no_share_flags() {
+        let mut template: BlockTemplate = serde_json::from_str(BCHN_TEMPLATE).unwrap();
+        template.coinbaseaux.clear();
+        assert_eq!(template.share_coinbaseaux_flags(), None);
+    }
+
+    #[test]
+    fn hex_flags_are_recorded_as_share_flags() {
+        let mut template: BlockTemplate = serde_json::from_str(BCHN_TEMPLATE).unwrap();
+        template
+            .coinbaseaux
+            .insert("flags".to_string(), "0a0b".to_string());
+        assert_eq!(
+            template.share_coinbaseaux_flags(),
+            Some(CoinbaseAuxFlags::new(&[0x0a, 0x0b]))
+        );
     }
 
     #[test]

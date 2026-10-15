@@ -295,7 +295,6 @@ pub(crate) fn encode_optional_address<W: Write + ?Sized>(
 mod tests {
     use super::*;
     use crate::shares::coinbase_proof::CoinbaseProof;
-    use crate::shares::coinbaseaux_flags::CoinbaseAuxFlags;
     use crate::shares::extranonce::Extranonce;
     use crate::shares::share_block::{ShareHeader, ShareTransaction};
     use crate::shares::transactions::coinbase::build_sharechain_coinbase_transaction;
@@ -472,11 +471,7 @@ mod tests {
             commitment,
             share_merkle_root,
             bitcoin_header,
-            template
-                .coinbaseaux
-                .get("flags")
-                .and_then(|flags| hex::decode(flags).ok())
-                .map(|bytes| CoinbaseAuxFlags::new(&bytes)),
+            template.share_coinbaseaux_flags(),
             template
                 .default_witness_commitment
                 .as_deref()

@@ -33,6 +33,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Stratum V2: Full-Template declarations are matched per connection,
   `coinbase_outputs` is a counted output list, and the listener accepts host
   names and stops the node when it cannot bind.
+- Bitcoin Cash shares mined from a BCHN template are no longer rejected by
+  every node. BCHN sends an empty `coinbaseaux` flags string; the coinbase
+  builder pushed one zero byte for it while the share header recorded empty
+  flags, so validators rebuilt a different coinbase. The header now records
+  no flags, as it does for a template without the entry.
 
 ### Changed
 

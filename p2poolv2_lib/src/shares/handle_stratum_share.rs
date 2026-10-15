@@ -7,7 +7,6 @@
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
-use crate::shares::coinbaseaux_flags::CoinbaseAuxFlags;
 use crate::shares::share_block::{ShareBlock, ShareHeader, ShareTransaction};
 use crate::shares::transactions::coinbase::build_sharechain_coinbase_transaction;
 use crate::shares::witness_commitment::WitnessCommitment;
@@ -72,11 +71,7 @@ pub async fn handle_stratum_share(
             share_commitment,
             merkle_root,
             header,
-            blocktemplate
-                .coinbaseaux
-                .get("flags")
-                .and_then(|flags| hex::decode(flags).ok())
-                .map(|bytes| CoinbaseAuxFlags::new(&bytes)),
+            blocktemplate.share_coinbaseaux_flags(),
             blocktemplate
                 .default_witness_commitment
                 .as_deref()

@@ -45,8 +45,6 @@ use crate::address::Address as P2PoolAddress;
 use crate::pool_difficulty::MockPoolDifficulty;
 #[cfg(test)]
 use crate::shares::chain::chain_store_handle::MockChainStoreHandle;
-#[cfg(test)]
-use crate::shares::coinbaseaux_flags::CoinbaseAuxFlags;
 use crate::shares::share_commitment::ShareCommitment;
 use crate::shares::transactions::coinbase::compute_non_coinbase_root;
 #[cfg(test)]
@@ -526,11 +524,7 @@ pub fn build_block_from_work_components(path: &str, nsecs: u64) -> ShareBlock {
         fee_address: None,
         fee: None,
         coinbase_value: template.coinbasevalue,
-        coinbaseaux_flags: template
-            .coinbaseaux
-            .get("flags")
-            .and_then(|flags| hex::decode(flags).ok())
-            .map(|bytes| CoinbaseAuxFlags::new(&bytes)),
+        coinbaseaux_flags: template.share_coinbaseaux_flags(),
         witness_commitment: template
             .default_witness_commitment
             .as_deref()
