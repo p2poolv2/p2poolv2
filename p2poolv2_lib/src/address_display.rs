@@ -26,13 +26,10 @@
 //! `--db-path` mode and never goes through the API, so each would otherwise
 //! carry its own copy of the same mapping.
 
-use crate::config::BitcoinCashNetwork;
 use crate::shares::share_block::ShareHeader;
 use crate::store::dag_store::{DagEntry, ShareInfo, UncleInfo};
-use bitcoin::address::AddressData;
-use bitcoin::hashes::Hash;
 use bitcoin::{Address, BlockHash, CompactTarget, Network};
-use p2poolv2_wallet::bch_share::{BchShareNetwork, CashAddrType, encode_cashaddr};
+use p2poolv2_wallet::bch_share::{BchShareNetwork, encode_payout_address};
 use p2poolv2_wallet::share_owner::{self, ShareOwner};
 use serde::Serialize;
 use serde_json::Value;
@@ -61,30 +58,18 @@ fn address_for(
 /// Render a payout address for the chain this node mines.
 ///
 /// Without a cash network this is a Bitcoin node, and the address keeps its
-/// own form. With one, a pay to public key hash or pay to script hash payout
-/// is spelled as CashAddr under that network's prefix (`bitcoincash`,
-/// `bchtest` or `bchreg`). A Bitcoin Cash payout is always one of those two:
-/// any other address has no CashAddr form, so it keeps its own form rather
-/// than being hidden.
+/// own form. With one, the payout is spelled as CashAddr under that network's
+/// prefix (`bitcoincash`, `bchtest` or `bchreg`) by [`encode_payout_address`],
+/// the one place that maps a Bitcoin Cash network to its payout prefix.
+///
+/// A Bitcoin Cash payout is always pay to public key hash or pay to script
+/// hash. `encode_payout_address` refuses any other address because it has no
+/// CashAddr form, and such an address keeps its own form here rather than
+/// being hidden.
 pub fn payout_address_string(address: &Address, cash_network: Option<BchShareNetwork>) -> String {
-    match cash_network {
-        Some(cash_network) => {
-            let prefix = BitcoinCashNetwork::from_share_network(cash_network).cashaddr_prefix();
-            match address.to_address_data() {
-                AddressData::P2pkh { pubkey_hash } => encode_cashaddr(
-                    prefix,
-                    CashAddrType::PayToPublicKeyHash,
-                    pubkey_hash.as_byte_array(),
-                ),
-                AddressData::P2sh { script_hash } => encode_cashaddr(
-                    prefix,
-                    CashAddrType::PayToScriptHash,
-                    script_hash.as_byte_array(),
-                ),
-                _ => address.to_string(),
-            }
-        }
-        None => address.to_string(),
+    match cash_network.map(|cash_network| encode_payout_address(address, cash_network)) {
+        Some(Ok(cashaddr)) => cashaddr,
+        Some(Err(_)) | None => address.to_string(),
     }
 }
 
@@ -278,7 +263,9 @@ pub fn render_header_addresses<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{bitcoin_cash_donation_address, bitcoin_cash_donation_cashaddr};
+    use crate::config::{
+        BitcoinCashNetwork, bitcoin_cash_donation_address, bitcoin_cash_donation_cashaddr,
+    };
     use crate::test_utils::{
         TestShareBlockBuilder, make_test_share_program, parse_address_from_string,
     };
@@ -538,6 +525,18 @@ mod tests {
         assert_eq!(
             payout_address_string(&address, Some(BchShareNetwork::Chipnet)),
             "bchtest:pr6m7j9njldwwzlg9v7v53unlr4jkmx6eyvwc0uz5t"
+        );
+    }
+
+    /// A witness payout has no CashAddr form. It keeps its own form rather
+    /// than being hidden.
+    #[test]
+    fn keeps_a_payout_without_a_cashaddr_form_on_a_cash_node() {
+        let address = parse_address_from_string("tb1qx6e0gj7q7xurl08cwnpmeve6w6zf4tw6vfwe3f");
+
+        assert_eq!(
+            payout_address_string(&address, Some(BchShareNetwork::Chipnet)),
+            "tb1qx6e0gj7q7xurl08cwnpmeve6w6zf4tw6vfwe3f"
         );
     }
 
