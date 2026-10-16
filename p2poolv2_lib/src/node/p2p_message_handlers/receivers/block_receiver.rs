@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use crate::accounting::payout::sharechain_pplns::pplns_window::PRUNE_DEPTH;
 use crate::node::request_response_handler::block_fetcher::{BlockFetcherEvent, BlockFetcherHandle};
 use crate::node::validation_worker::{ValidationEvent, ValidationSender};
 #[cfg(test)]
@@ -13,6 +12,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::{ShareBlock, is_terminal_blockhash};
 use crate::shares::validation::ShareValidator;
 use crate::store::block_tx_metadata::Status;
+use crate::store::prune_blocks::prune_height_for_tip;
 use bitcoin::BlockHash;
 use std::collections::{HashMap, VecDeque};
 use std::error::Error;
@@ -67,6 +67,9 @@ pub struct BlockReceiver {
     chain_store_handle: ChainStoreHandle,
     block_fetcher_handle: BlockFetcherHandle,
     validation_tx: ValidationSender,
+    /// Prune height from the last successful candidate tip read, used when
+    /// the tip cannot be read.
+    last_prune_height: u32,
 }
 
 impl BlockReceiver {
@@ -86,6 +89,7 @@ impl BlockReceiver {
             chain_store_handle,
             block_fetcher_handle,
             validation_tx,
+            last_prune_height: 0,
         }
     }
 
@@ -161,16 +165,23 @@ impl BlockReceiver {
     /// Height below which block bodies are never fetched, so ancestry checks
     /// must not require them.
     ///
-    /// Falls back to 0 -- bodies required everywhere -- when the candidate tip
-    /// cannot be read. That can only hold a block back in `pending`, never
-    /// admit one whose ancestry is unverified.
-    fn current_prune_height(&self) -> u32 {
+    /// Is 0 -- bodies required everywhere -- before there is a candidate
+    /// chain. When the candidate tip cannot be read, falls back to the last
+    /// height read successfully rather than 0: once bodies are pruned, 0
+    /// would demand bodies that no longer exist.
+    fn current_prune_height(&mut self) -> u32 {
         match self.chain_store_handle.get_candidate_tip_height() {
-            Ok(Some(tip_height)) => tip_height.saturating_sub(PRUNE_DEPTH as u32),
+            Ok(Some(tip_height)) => {
+                self.last_prune_height = prune_height_for_tip(tip_height);
+                self.last_prune_height
+            }
             Ok(None) => 0,
             Err(error) => {
-                warn!("Could not read candidate tip height for prune boundary: {error}");
-                0
+                warn!(
+                    "Could not read candidate tip height for prune boundary, using last known {}: {error}",
+                    self.last_prune_height
+                );
+                self.last_prune_height
             }
         }
     }
@@ -302,7 +313,8 @@ impl BlockReceiver {
             .send(BlockFetcherEvent::BlockRequestCompleted(block_hash))
             .await;
 
-        if !self.ancestry_ready(&share_block, self.current_prune_height()) {
+        let prune_height = self.current_prune_height();
+        if !self.ancestry_ready(&share_block, prune_height) {
             debug!("Block {block_hash} has unready ancestors, buffering");
             self.add_to_pending(block_hash, share_block);
             return Ok(());
@@ -394,6 +406,7 @@ impl BlockReceiver {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::accounting::payout::sharechain_pplns::pplns_window::PRUNE_DEPTH;
     use crate::node::request_response_handler::block_fetcher;
     use crate::node::validation_worker;
     #[mockall_double::double]
@@ -404,6 +417,7 @@ mod tests {
     use crate::test_utils::TestShareBlockBuilder;
     use bitcoin::CompactTarget;
     use bitcoin::hashes::Hash;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn test_add_to_pending_inserts_block() {
@@ -671,7 +685,7 @@ mod tests {
         let (_, event_rx) = create_block_receiver_channel();
         let (block_fetcher_handle, _) = block_fetcher::create_block_fetcher_channel();
         let (validation_tx, _) = validation_worker::create_validation_channel();
-        let receiver = BlockReceiver::new(
+        let mut receiver = BlockReceiver::new(
             event_rx,
             Arc::new(MockDefaultShareValidator::default()),
             mock_store,
@@ -694,7 +708,7 @@ mod tests {
         let (_, event_rx) = create_block_receiver_channel();
         let (block_fetcher_handle, _) = block_fetcher::create_block_fetcher_channel();
         let (validation_tx, _) = validation_worker::create_validation_channel();
-        let receiver = BlockReceiver::new(
+        let mut receiver = BlockReceiver::new(
             event_rx,
             Arc::new(MockDefaultShareValidator::default()),
             mock_store,
@@ -705,10 +719,10 @@ mod tests {
         assert_eq!(receiver.current_prune_height(), 0);
     }
 
-    /// A store failure reading the tip falls back to the strict end of the
-    /// rule rather than exempting everything.
+    /// A store failure reading the tip before any successful read falls
+    /// back to the strict end of the rule rather than exempting everything.
     #[test]
-    fn test_prune_height_is_zero_when_tip_read_fails() {
+    fn test_prune_height_is_zero_when_first_tip_read_fails() {
         let mut mock_store = ChainStoreHandle::default();
         mock_store
             .expect_get_candidate_tip_height()
@@ -717,7 +731,7 @@ mod tests {
         let (_, event_rx) = create_block_receiver_channel();
         let (block_fetcher_handle, _) = block_fetcher::create_block_fetcher_channel();
         let (validation_tx, _) = validation_worker::create_validation_channel();
-        let receiver = BlockReceiver::new(
+        let mut receiver = BlockReceiver::new(
             event_rx,
             Arc::new(MockDefaultShareValidator::default()),
             mock_store,
@@ -726,6 +740,35 @@ mod tests {
         );
 
         assert_eq!(receiver.current_prune_height(), 0);
+    }
+
+    /// Once bodies below the prune height may have been pruned, a failed tip
+    /// read must not drop the boundary to 0, which would demand bodies that
+    /// no longer exist. It keeps the last height read successfully.
+    #[test]
+    fn test_prune_height_keeps_last_known_when_tip_read_fails() {
+        let mut mock_store = ChainStoreHandle::default();
+        let reads = Arc::new(AtomicUsize::new(0));
+        mock_store
+            .expect_get_candidate_tip_height()
+            .returning(move || match reads.fetch_add(1, Ordering::SeqCst) {
+                0 => Ok(Some(PRUNE_DEPTH as u32 + 5)),
+                _ => Err(StoreError::Database("read failed".to_string())),
+            });
+
+        let (_, event_rx) = create_block_receiver_channel();
+        let (block_fetcher_handle, _) = block_fetcher::create_block_fetcher_channel();
+        let (validation_tx, _) = validation_worker::create_validation_channel();
+        let mut receiver = BlockReceiver::new(
+            event_rx,
+            Arc::new(MockDefaultShareValidator::default()),
+            mock_store,
+            block_fetcher_handle,
+            validation_tx,
+        );
+
+        assert_eq!(receiver.current_prune_height(), 5);
+        assert_eq!(receiver.current_prune_height(), 5);
     }
 
     #[tokio::test]

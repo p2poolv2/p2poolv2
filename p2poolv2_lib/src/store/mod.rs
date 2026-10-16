@@ -19,6 +19,7 @@ pub mod dag_store;
 pub mod found_block;
 pub mod organise;
 mod pplns_shares;
+pub mod prune_blocks;
 mod prune_shares;
 pub mod share_store;
 pub mod stored_user;
