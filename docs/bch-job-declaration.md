@@ -73,6 +73,35 @@ their issuance.
 Protocol references: [SV2 Mining Protocol](https://stratumprotocol.org/specification/05-mining-protocol/)
 and [SV2 Job Declaration Protocol](https://stratumprotocol.org/specification/06-job-declaration-protocol/).
 
+## Encrypted network regression
+
+`encrypted_bch_job_declaration_modes_install_mine_and_emit` runs the real
+listener with a configured authority and three loopback TCP connections.
+The reference SV2 codec pins that authority for the mining connection and
+the separate Full-Template and Coinbase-Only declarators. It transfers their
+tokens to the mining connection, installs jobs, mines headers and checks both
+emitted coinbase proofs. Reusing a consumed token must fail.
+
+The clients send adjacent setup/allocation frames in one write and split
+other writes after the first byte. A 5,000-byte declaration field forces
+payload decoding across the listener's 4,096-byte reads; TCP decides the
+actual segmentation. The test also checks Full-Template proposal/submission
+calls, Coinbase-Only transaction privacy and connection cleanup. Simulation
+builds retain their existing block-submission suppression.
+
+```sh
+cargo nextest run -p p2poolv2_lib -E 'test(encrypted_bch_job_declaration_modes_install_mine_and_emit)'
+```
+
+BCHN responses are mocked in this test. It verifies the encrypted network
+exchange, separately from the real BCHN test below; it does not establish
+independent client, ASIC or combined encrypted-network/live-node compatibility.
+
+Validated locally on Windows on 2026-10-16: the focused exchange passed,
+followed by 1,719 default workspace tests (two skipped) and 1,727 all-features
+tests (one skipped). Clippy passed for all targets with default and all
+features and warnings denied. Formatting and `git diff --check` passed.
+
 ## Two-node BCHN regtest check
 
 The ignored `bchn_declared_jobs_reach_both_real_nodes` test uses two disposable,

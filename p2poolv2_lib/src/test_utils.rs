@@ -109,9 +109,20 @@ use bitcoin::secp256k1::Secp256k1;
 #[cfg(test)]
 use bitcoindrpc::BitcoindRpcClient;
 #[cfg(test)]
+use codec_sv2::{
+    Decrypted, Handshake, NoiseDecoder, NoiseEncoder, TransportDecryptState, TransportEncryptState,
+};
+#[cfg(test)]
 use common_messages_sv2::{Protocol, SetupConnection};
 #[cfg(test)]
-use mining_sv2::SetCustomMiningJob;
+use framing_sv2::framing::SerializedFrame;
+#[cfg(test)]
+use mining_sv2::{
+    MESSAGE_TYPE_MINING_SET_NEW_PREV_HASH, MESSAGE_TYPE_NEW_EXTENDED_MINING_JOB,
+    MESSAGE_TYPE_NEW_MINING_JOB, MESSAGE_TYPE_SET_TARGET, SetCustomMiningJob,
+};
+#[cfg(test)]
+use noise_sv2::{INITIATOR_EXPECTED_HANDSHAKE_MESSAGE_SIZE, Initiator};
 #[cfg(test)]
 use p2poolv2_wallet::bch_share::BchShareNetwork;
 #[cfg(test)]
@@ -119,7 +130,127 @@ use rand::{RngExt, rng};
 #[cfg(test)]
 use std::collections::HashMap;
 #[cfg(test)]
+use std::net::SocketAddr;
+#[cfg(test)]
+use std::time::Duration;
+#[cfg(test)]
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+#[cfg(test)]
+use tokio::net::TcpStream;
+#[cfg(test)]
 use tokio::sync::mpsc;
+#[cfg(test)]
+use tokio::time::timeout;
+
+/// Reference-codec client for tests of the authenticated SV2 wire exchange.
+#[cfg(test)]
+pub(crate) struct TestSv2Client {
+    stream: TcpStream,
+    encoder: NoiseEncoder,
+    decoder: NoiseDecoder,
+    encrypt: TransportEncryptState,
+    decrypt: Option<TransportDecryptState>,
+}
+
+#[cfg(test)]
+impl TestSv2Client {
+    /// Connect and authenticate the server against its configured authority.
+    pub(crate) async fn connect(address: SocketAddr, authority_public_key: [u8; 32]) -> Self {
+        timeout(Duration::from_secs(5), async {
+            let mut stream = TcpStream::connect(address).await.unwrap();
+            let initiator = Initiator::from_raw_k(authority_public_key).unwrap();
+            let (hello, waiting) = Handshake::initiator(initiator).step_0().unwrap();
+            let mut encoder = NoiseEncoder::new();
+            stream
+                .write_all(encoder.encode_handshake(hello).as_ref())
+                .await
+                .unwrap();
+            let mut reply = [0u8; INITIATOR_EXPECTED_HANDSHAKE_MESSAGE_SIZE];
+            stream.read_exact(&mut reply).await.unwrap();
+            let (encrypt, decrypt) = waiting.step_2(reply).unwrap().split();
+            Self {
+                stream,
+                encoder,
+                decoder: NoiseDecoder::new(),
+                encrypt,
+                decrypt: Some(decrypt),
+            }
+        })
+        .await
+        .expect("SV2 handshake timed out")
+    }
+
+    /// Send a frame with a separate first-byte write.
+    pub(crate) async fn send(&mut self, frame: Vec<u8>) {
+        timeout(Duration::from_secs(5), async {
+            let frame = SerializedFrame::<Vec<u8>>::from_bytes(frame).unwrap();
+            let wire: Vec<u8> = self
+                .encoder
+                .encode_transport(frame, &mut self.encrypt)
+                .unwrap();
+            self.stream.write_all(&wire[..1]).await.unwrap();
+            tokio::task::yield_now().await;
+            self.stream.write_all(&wire[1..]).await.unwrap();
+        })
+        .await
+        .expect("SV2 write timed out");
+    }
+
+    /// Send adjacent encrypted frames in one socket write.
+    pub(crate) async fn send_pair(&mut self, first: Vec<u8>, second: Vec<u8>) {
+        timeout(Duration::from_secs(5), async {
+            let first = SerializedFrame::<Vec<u8>>::from_bytes(first).unwrap();
+            let second = SerializedFrame::<Vec<u8>>::from_bytes(second).unwrap();
+            let mut wire: Vec<u8> = self
+                .encoder
+                .encode_transport(first, &mut self.encrypt)
+                .unwrap();
+            let next: Vec<u8> = self
+                .encoder
+                .encode_transport(second, &mut self.encrypt)
+                .unwrap();
+            wire.extend_from_slice(&next);
+            self.stream.write_all(&wire).await.unwrap();
+        })
+        .await
+        .expect("SV2 write timed out");
+    }
+
+    /// Read the expected message, allowing unsolicited mining job notifications.
+    pub(crate) async fn receive(&mut self, expected_type: u8) -> Vec<u8> {
+        timeout(Duration::from_secs(5), async {
+            loop {
+                self.stream
+                    .read_exact(self.decoder.writable())
+                    .await
+                    .unwrap();
+                let state = self.decrypt.take().unwrap();
+                match self.decoder.next_transport_frame(state).unwrap() {
+                    Decrypted::Frame(mut frame, state) => {
+                        self.decrypt = Some(state);
+                        if frame.header().msg_type() == expected_type {
+                            return frame.payload().to_vec();
+                        }
+                        assert!(
+                            matches!(
+                                frame.header().msg_type(),
+                                MESSAGE_TYPE_MINING_SET_NEW_PREV_HASH
+                                    | MESSAGE_TYPE_NEW_EXTENDED_MINING_JOB
+                                    | MESSAGE_TYPE_NEW_MINING_JOB
+                                    | MESSAGE_TYPE_SET_TARGET
+                            ),
+                            "unexpected SV2 message {} while waiting for {expected_type}",
+                            frame.header().msg_type()
+                        );
+                    }
+                    Decrypted::Incomplete(_, state) => self.decrypt = Some(state),
+                }
+            }
+        })
+        .await
+        .expect("SV2 response timed out")
+    }
+}
 
 /// Well-known secp256k1 compressed public keys (multiples of the generator G).
 /// Use these when constructing test share blocks that need distinct, valid miner keys.

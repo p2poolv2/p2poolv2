@@ -295,7 +295,7 @@ mod tests {
     use crate::stratum::sv2::session::encode_message;
     use crate::stratum::work::tracker::start_tracker_actor;
     use crate::test_utils::{
-        bch_template_transaction, test_bch_custom_job, test_bch_prepared,
+        TestSv2Client, bch_template_transaction, test_bch_custom_job, test_bch_prepared,
         test_bch_solve_custom_job, test_bch_stratum_context, test_sv2_setup,
     };
     use crate::test_utils::{make_test_share_address, setup_test_chain_store_handle};
@@ -306,16 +306,18 @@ mod tests {
     use bitcoin::hashes::Hash;
     use bitcoin::secp256k1::{Keypair, Secp256k1};
     use bitcoindrpc::BitcoindRpcClient;
-    use codec_sv2::{Decrypted, Handshake, NoiseDecoder, NoiseEncoder};
+    use codec_sv2::{Handshake, NoiseEncoder};
     use common_messages_sv2::{
         MESSAGE_TYPE_SETUP_CONNECTION, MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS, Protocol,
         SetupConnection,
     };
-    use framing_sv2::framing::{MessageFrame, SerializedFrame};
+    use framing_sv2::framing::SerializedFrame;
     use job_declaration_sv2::{
         AllocateMiningJobToken, AllocateMiningJobTokenSuccess, DeclareMiningJob,
         DeclareMiningJobSuccess, MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN,
-        MESSAGE_TYPE_DECLARE_MINING_JOB, MESSAGE_TYPE_PROVIDE_MISSING_TRANSACTIONS_SUCCESS,
+        MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN_SUCCESS, MESSAGE_TYPE_DECLARE_MINING_JOB,
+        MESSAGE_TYPE_DECLARE_MINING_JOB_SUCCESS, MESSAGE_TYPE_PROVIDE_MISSING_TRANSACTIONS,
+        MESSAGE_TYPE_PROVIDE_MISSING_TRANSACTIONS_SUCCESS, ProvideMissingTransactions,
         ProvideMissingTransactionsSuccess,
     };
     use mining_sv2::{
@@ -325,7 +327,8 @@ mod tests {
     use mining_sv2::{
         MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_ERROR, MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_SUCCESS,
         MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED, MESSAGE_TYPE_SUBMIT_SHARES_SUCCESS,
-        OpenExtendedMiningChannelSuccess, SetCustomMiningJobSuccess, SubmitSharesExtended,
+        OpenExtendedMiningChannelSuccess, SetCustomMiningJobError, SetCustomMiningJobSuccess,
+        SubmitSharesExtended, SubmitSharesSuccess,
     };
     use noise_sv2::{INITIATOR_EXPECTED_HANDSHAKE_MESSAGE_SIZE, Initiator};
     use p2poolv2_wallet::bch_share::{BchShareNetwork, encode_payout_address};
@@ -336,7 +339,7 @@ mod tests {
     };
 
     #[tokio::test]
-    async fn declared_bch_jobs_install_mine_and_emit_in_both_modes() {
+    async fn encrypted_bch_job_declaration_modes_install_mine_and_emit() {
         let rpc = MockServer::start().await;
         Mock::given(method("POST"))
             .and(body_partial_json(
@@ -363,64 +366,93 @@ mod tests {
         let prepared = test_bch_prepared();
         let cache = PoolTransactionCache::new();
         cache.set_prepared(Arc::clone(&prepared));
-        let registry = Arc::new(Mutex::new(JobRegistry::new(
+        let (_template_sender, template_rx) = watch::channel(Some(Arc::clone(&prepared)));
+        let (ctx, mut emissions, _dirs) = test_bch_stratum_context(&rpc.uri()).await;
+        let mut config = StratumConfig::new_for_test_default();
+        config.sv2_port = Some(3336);
+        config.sv2_authority_public_key =
+            Some("9bDuixKmZqAJnrmP746n8zU1wyAQRrus7th9dxnkPg6RzQvCnan".to_string());
+        config.sv2_authority_secret_key =
+            Some("zmBEmPhqo3A92FkiLVvyCz6htc3e53ph3ZbD4ASqGaLjwnFLi".to_string());
+        let authority = config.parse().unwrap().sv2_authority().unwrap();
+        let listener = bind("127.0.0.1", 0).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let connection_limit = Arc::new(Semaphore::new(3));
+        let (shutdown_sender, shutdown_receiver) = watch::channel(());
+        let server = tokio::spawn(serve(
+            listener,
+            Arc::clone(&connection_limit),
             cache,
             Some(MergeMiningCommitment::reserved()),
-        )));
-        let (_, receiver) = watch::channel(Some(Arc::clone(&prepared)));
-        let (ctx, mut emissions, _dirs) = test_bch_stratum_context(&rpc.uri()).await;
-        let mut channels = MiningChannels::new(ctx, DEFAULT_VERSION_MASK);
-        let mut mining = Sv2Connection::new(Arc::clone(&registry));
+            Some(Sv2Mining {
+                ctx,
+                version_mask: DEFAULT_VERSION_MASK,
+                template_rx,
+            }),
+            Some(authority),
+            shutdown_receiver,
+        ));
+        let mut mining = TestSv2Client::connect(address, authority.public_key).await;
         mining
-            .handle_message(
-                MESSAGE_TYPE_SETUP_CONNECTION,
-                &mut binary_sv2::to_bytes(test_sv2_setup(Protocol::MiningProtocol, 2)).unwrap(),
+            .send(
+                encode_message(
+                    test_sv2_setup(Protocol::MiningProtocol, 2),
+                    MESSAGE_TYPE_SETUP_CONNECTION,
+                )
+                .unwrap(),
             )
-            .unwrap();
+            .await;
+        mining.receive(MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS).await;
         let payout = bitcoin::Address::p2pkh(
             bitcoin::PubkeyHash::from_byte_array([0x22; 20]),
             Network::Regtest,
         );
         let identity = encode_payout_address(&payout, BchShareNetwork::Regtest).unwrap();
-        let opened = handle_messages(
-            &mut mining,
-            Some(&mut channels),
-            Some(&receiver),
-            vec![(
-                MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL,
-                binary_sv2::to_bytes(OpenExtendedMiningChannel {
-                    request_id: 1,
-                    user_identity: identity.as_str().try_into().unwrap(),
-                    nominal_hash_rate: 1.0,
-                    max_target: U256::new(&[0xff; 32]).unwrap(),
-                    min_extranonce_size: 8,
-                })
+        mining
+            .send(
+                encode_message(
+                    OpenExtendedMiningChannel {
+                        request_id: 1,
+                        user_identity: identity.as_str().try_into().unwrap(),
+                        nominal_hash_rate: 1.0,
+                        max_target: U256::new(&[0xff; 32]).unwrap(),
+                        min_extranonce_size: 8,
+                    },
+                    MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL,
+                )
                 .unwrap(),
-            )],
-        )
-        .await
-        .unwrap();
-        let mut open_payload = opened[0][6..].to_vec();
+            )
+            .await;
+        let mut open_payload = mining
+            .receive(MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL_SUCCESS)
+            .await;
         let open = OpenExtendedMiningChannelSuccess::from_bytes(&mut open_payload).unwrap();
         let extranonce_prefix = open.extranonce_prefix.as_bytes().to_vec();
 
-        let mut jdc = Sv2Connection::new(Arc::clone(&registry));
-        jdc.handle_message(
-            MESSAGE_TYPE_SETUP_CONNECTION,
-            &mut binary_sv2::to_bytes(test_sv2_setup(Protocol::JobDeclarationProtocol, 1)).unwrap(),
-        )
-        .unwrap();
-        let allocation = jdc
-            .handle_message(
-                MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN,
-                &mut binary_sv2::to_bytes(AllocateMiningJobToken {
-                    request_id: 2,
-                    user_identifier: "miner".try_into().unwrap(),
-                })
+        let mut declarator = TestSv2Client::connect(address, authority.public_key).await;
+        declarator
+            .send_pair(
+                encode_message(
+                    test_sv2_setup(Protocol::JobDeclarationProtocol, 1),
+                    MESSAGE_TYPE_SETUP_CONNECTION,
+                )
+                .unwrap(),
+                encode_message(
+                    AllocateMiningJobToken {
+                        request_id: 2,
+                        user_identifier: "miner".try_into().unwrap(),
+                    },
+                    MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN,
+                )
                 .unwrap(),
             )
-            .unwrap();
-        let mut allocation_payload = allocation[0][6..].to_vec();
+            .await;
+        declarator
+            .receive(MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS)
+            .await;
+        let mut allocation_payload = declarator
+            .receive(MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN_SUCCESS)
+            .await;
         let allocated = AllocateMiningJobTokenSuccess::from_bytes(&mut allocation_payload).unwrap();
         let token = allocated.mining_job_token.as_bytes().to_vec();
         let selected: bitcoin::Transaction =
@@ -434,80 +466,90 @@ mod tests {
         );
         let declaration = declared.declaration.unwrap();
         let wtxid = selected.compute_wtxid().to_byte_array();
-        jdc.handle_message(
-            MESSAGE_TYPE_DECLARE_MINING_JOB,
-            &mut binary_sv2::to_bytes(DeclareMiningJob {
-                request_id: 3,
-                mining_job_token: B0255::new(&token).unwrap(),
-                version: declaration.version,
-                coinbase_tx_prefix: B064K::new(&declaration.prefix).unwrap(),
-                coinbase_tx_suffix: B064K::new(&declaration.suffix).unwrap(),
-                wtxid_list: Seq064K::new(vec![U256::new(&wtxid).unwrap()]).unwrap(),
-                excess_data: B064K::new(&[]).unwrap(),
-            })
-            .unwrap(),
-        )
-        .unwrap();
-        let transaction_bytes = serialize(&selected);
-        let accepted = jdc
-            .handle_message(
-                MESSAGE_TYPE_PROVIDE_MISSING_TRANSACTIONS_SUCCESS,
-                &mut binary_sv2::to_bytes(ProvideMissingTransactionsSuccess {
-                    request_id: 3,
-                    transaction_list: Seq064K::new(vec![B016M::new(&transaction_bytes).unwrap()])
-                        .unwrap(),
-                })
+        declarator
+            .send(
+                encode_message(
+                    DeclareMiningJob {
+                        request_id: 3,
+                        mining_job_token: B0255::new(&token).unwrap(),
+                        version: declaration.version,
+                        coinbase_tx_prefix: B064K::new(&declaration.prefix).unwrap(),
+                        coinbase_tx_suffix: B064K::new(&declaration.suffix).unwrap(),
+                        wtxid_list: Seq064K::new(vec![U256::new(&wtxid).unwrap()]).unwrap(),
+                        excess_data: B064K::new(&[0; 5000]).unwrap(),
+                    },
+                    MESSAGE_TYPE_DECLARE_MINING_JOB,
+                )
                 .unwrap(),
             )
-            .unwrap();
-        let mut accepted_payload = accepted[0][6..].to_vec();
+            .await;
+        let mut missing_payload = declarator
+            .receive(MESSAGE_TYPE_PROVIDE_MISSING_TRANSACTIONS)
+            .await;
+        let missing = ProvideMissingTransactions::from_bytes(&mut missing_payload).unwrap();
+        assert_eq!(missing.request_id, 3);
+        assert_eq!(missing.unknown_tx_position_list.as_slice(), &[0]);
+        let transaction_bytes = serialize(&selected);
+        declarator
+            .send(
+                encode_message(
+                    ProvideMissingTransactionsSuccess {
+                        request_id: 3,
+                        transaction_list: Seq064K::new(vec![
+                            B016M::new(&transaction_bytes).unwrap(),
+                        ])
+                        .unwrap(),
+                    },
+                    MESSAGE_TYPE_PROVIDE_MISSING_TRANSACTIONS_SUCCESS,
+                )
+                .unwrap(),
+            )
+            .await;
+        let mut accepted_payload = declarator
+            .receive(MESSAGE_TYPE_DECLARE_MINING_JOB_SUCCESS)
+            .await;
         let declared = DeclareMiningJobSuccess::from_bytes(&mut accepted_payload).unwrap();
         let new_token = declared.new_mining_job_token.as_bytes().to_vec();
         let mut custom = SetCustomMiningJob::from_bytes(&mut custom_bytes).unwrap();
         custom.token = B0255::new(&new_token).unwrap();
-        let custom_payload = binary_sv2::to_bytes(custom.clone()).unwrap();
-        let installed = handle_messages(
-            &mut mining,
-            Some(&mut channels),
-            Some(&receiver),
-            vec![(MESSAGE_TYPE_SET_CUSTOM_MINING_JOB, custom_payload.clone())],
-        )
-        .await
-        .unwrap();
-        assert_eq!(installed[0][2], MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_SUCCESS);
-        let mut installed_payload = installed[0][6..].to_vec();
+        let custom_frame =
+            encode_message(custom.clone(), MESSAGE_TYPE_SET_CUSTOM_MINING_JOB).unwrap();
+        mining.send(custom_frame.clone()).await;
+        let mut installed_payload = mining
+            .receive(MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_SUCCESS)
+            .await;
         let installed = SetCustomMiningJobSuccess::from_bytes(&mut installed_payload).unwrap();
-        let replay = handle_messages(
-            &mut mining,
-            Some(&mut channels),
-            Some(&receiver),
-            vec![(MESSAGE_TYPE_SET_CUSTOM_MINING_JOB, custom_payload)],
-        )
-        .await
-        .unwrap();
-        assert_eq!(replay[0][2], MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_ERROR);
+        assert_eq!(installed.request_id, custom.request_id);
+        mining.send(custom_frame).await;
+        let mut replay_payload = mining
+            .receive(MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_ERROR)
+            .await;
+        let replay = SetCustomMiningJobError::from_bytes(&mut replay_payload).unwrap();
+        assert_eq!(
+            replay.error_code.as_utf8_or_hex(),
+            "invalid-mining-job-token"
+        );
         let header = test_bch_solve_custom_job(&custom, &extranonce_prefix);
-        let submitted = handle_messages(
-            &mut mining,
-            Some(&mut channels),
-            Some(&receiver),
-            vec![(
-                MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED,
-                binary_sv2::to_bytes(SubmitSharesExtended {
-                    channel_id: 1,
-                    sequence_number: 1,
-                    job_id: installed.job_id,
-                    nonce: header.nonce,
-                    ntime: header.time,
-                    version: custom.version,
-                    extranonce: B032::new(&[0; 8]).unwrap(),
-                })
+        mining
+            .send(
+                encode_message(
+                    SubmitSharesExtended {
+                        channel_id: 1,
+                        sequence_number: 1,
+                        job_id: installed.job_id,
+                        nonce: header.nonce,
+                        ntime: header.time,
+                        version: custom.version,
+                        extranonce: B032::new(&[0; 8]).unwrap(),
+                    },
+                    MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED,
+                )
                 .unwrap(),
-            )],
-        )
-        .await
-        .unwrap();
-        assert_eq!(submitted[0][2], MESSAGE_TYPE_SUBMIT_SHARES_SUCCESS);
+            )
+            .await;
+        let mut submitted_payload = mining.receive(MESSAGE_TYPE_SUBMIT_SHARES_SUCCESS).await;
+        let submitted = SubmitSharesSuccess::from_bytes(&mut submitted_payload).unwrap();
+        assert_eq!(submitted.last_sequence_number, 1);
         let emission = emissions.try_recv().unwrap();
         assert_eq!(emission.header, header);
         assert_eq!(
@@ -533,25 +575,30 @@ mod tests {
             header.merkle_root
         );
 
-        let mut private_jdc = Sv2Connection::new(registry);
-        private_jdc
-            .handle_message(
-                MESSAGE_TYPE_SETUP_CONNECTION,
-                &mut binary_sv2::to_bytes(test_sv2_setup(Protocol::JobDeclarationProtocol, 0))
-                    .unwrap(),
-            )
-            .unwrap();
-        let allocation = private_jdc
-            .handle_message(
-                MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN,
-                &mut binary_sv2::to_bytes(AllocateMiningJobToken {
-                    request_id: 4,
-                    user_identifier: "miner".try_into().unwrap(),
-                })
+        let mut private_declarator = TestSv2Client::connect(address, authority.public_key).await;
+        private_declarator
+            .send_pair(
+                encode_message(
+                    test_sv2_setup(Protocol::JobDeclarationProtocol, 0),
+                    MESSAGE_TYPE_SETUP_CONNECTION,
+                )
+                .unwrap(),
+                encode_message(
+                    AllocateMiningJobToken {
+                        request_id: 4,
+                        user_identifier: "miner".try_into().unwrap(),
+                    },
+                    MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN,
+                )
                 .unwrap(),
             )
-            .unwrap();
-        let mut allocation_payload = allocation[0][6..].to_vec();
+            .await;
+        private_declarator
+            .receive(MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS)
+            .await;
+        let mut allocation_payload = private_declarator
+            .receive(MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN_SUCCESS)
+            .await;
         let allocated = AllocateMiningJobTokenSuccess::from_bytes(&mut allocation_payload).unwrap();
         let private_tx =
             deserialize(&hex::decode(bch_template_transaction(9).data).unwrap()).unwrap();
@@ -563,42 +610,34 @@ mod tests {
             prepared.template().coinbasevalue,
         );
         let private = SetCustomMiningJob::from_bytes(&mut private_bytes).unwrap();
-        let installed = handle_messages(
-            &mut mining,
-            Some(&mut channels),
-            Some(&receiver),
-            vec![(
-                MESSAGE_TYPE_SET_CUSTOM_MINING_JOB,
-                binary_sv2::to_bytes(private.clone()).unwrap(),
-            )],
-        )
-        .await
-        .unwrap();
-        assert_eq!(installed[0][2], MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_SUCCESS);
-        let mut installed_payload = installed[0][6..].to_vec();
+        mining
+            .send(encode_message(private.clone(), MESSAGE_TYPE_SET_CUSTOM_MINING_JOB).unwrap())
+            .await;
+        let mut installed_payload = mining
+            .receive(MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_SUCCESS)
+            .await;
         let installed = SetCustomMiningJobSuccess::from_bytes(&mut installed_payload).unwrap();
         let private_header = test_bch_solve_custom_job(&private, &extranonce_prefix);
-        let submitted = handle_messages(
-            &mut mining,
-            Some(&mut channels),
-            Some(&receiver),
-            vec![(
-                MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED,
-                binary_sv2::to_bytes(SubmitSharesExtended {
-                    channel_id: 1,
-                    sequence_number: 2,
-                    job_id: installed.job_id,
-                    nonce: private_header.nonce,
-                    ntime: private_header.time,
-                    version: private.version,
-                    extranonce: B032::new(&[0; 8]).unwrap(),
-                })
+        mining
+            .send(
+                encode_message(
+                    SubmitSharesExtended {
+                        channel_id: 1,
+                        sequence_number: 2,
+                        job_id: installed.job_id,
+                        nonce: private_header.nonce,
+                        ntime: private_header.time,
+                        version: private.version,
+                        extranonce: B032::new(&[0; 8]).unwrap(),
+                    },
+                    MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED,
+                )
                 .unwrap(),
-            )],
-        )
-        .await
-        .unwrap();
-        assert_eq!(submitted[0][2], MESSAGE_TYPE_SUBMIT_SHARES_SUCCESS);
+            )
+            .await;
+        let mut submitted_payload = mining.receive(MESSAGE_TYPE_SUBMIT_SHARES_SUCCESS).await;
+        let submitted = SubmitSharesSuccess::from_bytes(&mut submitted_payload).unwrap();
+        assert_eq!(submitted.last_sequence_number, 2);
         let emission = emissions.try_recv().unwrap();
         assert_eq!(emission.header, private_header);
         assert!(emission.blocktemplate.transactions.is_empty());
@@ -628,6 +667,22 @@ mod tests {
         assert_eq!(received.len(), if cfg!(feature = "sim") { 1 } else { 2 });
         let proposal: serde_json::Value = serde_json::from_slice(&received[0].body).unwrap();
         assert_eq!(proposal["params"][0]["mode"], "proposal");
+        drop(mining);
+        drop(declarator);
+        drop(private_declarator);
+        shutdown_sender.send(()).unwrap();
+        timeout(Duration::from_secs(5), server)
+            .await
+            .unwrap()
+            .unwrap();
+        let permits = timeout(
+            Duration::from_secs(5),
+            connection_limit.acquire_many_owned(3),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        drop(permits);
     }
 
     #[tokio::test]
@@ -782,52 +837,17 @@ mod tests {
             shutdown_receiver,
         ));
 
-        let mut stream = TcpStream::connect(address).await.unwrap();
-        let initiator = Initiator::from_raw_k(authority.public_key).unwrap();
-        let (hello, waiting) = Handshake::initiator(initiator).step_0().unwrap();
-        let mut encoder = NoiseEncoder::new();
-        stream
-            .write_all(encoder.encode_handshake(hello).as_ref())
-            .await
-            .unwrap();
-        let mut reply = [0u8; INITIATOR_EXPECTED_HANDSHAKE_MESSAGE_SIZE];
-        stream.read_exact(&mut reply).await.unwrap();
-        let (mut encrypt, mut decrypt) = waiting.step_2(reply).unwrap().split();
-
-        let setup = MessageFrame::from_message(
-            SetupConnection {
-                protocol: Protocol::MiningProtocol,
-                min_version: 2,
-                max_version: 2,
-                flags: 0,
-                endpoint_host: "localhost".try_into().unwrap(),
-                endpoint_port: address.port(),
-                vendor: "p2poolv2".try_into().unwrap(),
-                hardware_version: "test".try_into().unwrap(),
-                firmware: "test".try_into().unwrap(),
-                device_id: "".try_into().unwrap(),
-            },
-            MESSAGE_TYPE_SETUP_CONNECTION,
-            0,
-            false,
-        )
-        .unwrap();
-        let encrypted: Vec<u8> = encoder.encode_transport(setup, &mut encrypt).unwrap();
-        stream.write_all(&encrypted).await.unwrap();
-
-        let mut decoder = NoiseDecoder::new();
-        let mut response_type = None;
-        while response_type.is_none() {
-            stream.read_exact(decoder.writable()).await.unwrap();
-            match decoder.next_transport_frame(decrypt).unwrap() {
-                Decrypted::Frame(frame, state) => {
-                    response_type = Some(frame.header().msg_type());
-                    decrypt = state;
-                }
-                Decrypted::Incomplete(_, state) => decrypt = state,
-            }
-        }
-        assert_eq!(response_type, Some(MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS));
+        let mut client = TestSv2Client::connect(address, authority.public_key).await;
+        client
+            .send(
+                encode_message(
+                    test_sv2_setup(Protocol::MiningProtocol, 0),
+                    MESSAGE_TYPE_SETUP_CONNECTION,
+                )
+                .unwrap(),
+            )
+            .await;
+        client.receive(MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS).await;
 
         shutdown_sender.send(()).unwrap();
         server.await.unwrap();
