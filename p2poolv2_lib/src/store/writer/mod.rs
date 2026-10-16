@@ -45,6 +45,9 @@ pub enum StoreError {
     /// compiled for. Raised at startup so a stale store is never mixed
     /// with a new chain.
     GenesisMismatch(String),
+    /// A block body below the prune target was offered for storage. Its
+    /// body would be deleted again, so it is refused.
+    BelowPruneHeight(BlockHash),
 }
 
 impl fmt::Display for StoreError {
@@ -58,6 +61,9 @@ impl fmt::Display for StoreError {
                 write!(f, "Invalid status transition: {msg}")
             }
             StoreError::GenesisMismatch(msg) => write!(f, "Genesis mismatch: {msg}"),
+            StoreError::BelowPruneHeight(blockhash) => {
+                write!(f, "Block {blockhash} is below the prune target")
+            }
         }
     }
 }

@@ -8,7 +8,7 @@ use crate::{
     store::{block_tx_metadata::BlockMetadata, writer::StoreError},
 };
 use bitcoin::BlockHash;
-use tracing::debug;
+use tracing::{debug, info};
 
 use super::{Height, Store, TopResult};
 
@@ -80,6 +80,14 @@ impl Store {
             if self.reorg_branch_has_invalid(&blockhash)? {
                 debug!(
                     "Refusing candidate reorg to {blockhash}: branch passes through an Invalid block"
+                );
+                return Ok(None);
+            }
+            // Refuse a reorg forking below the prune target: its fork point's
+            // body is deleted, so it could never be confirmed.
+            if self.reorg_branch_forks_below_prune_target(&blockhash, top_candidate.as_ref())? {
+                info!(
+                    "Refusing candidate reorg to {blockhash}: branch forks below the prune target"
                 );
                 return Ok(None);
             }

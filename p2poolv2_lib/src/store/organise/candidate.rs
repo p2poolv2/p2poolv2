@@ -19,7 +19,7 @@ use tracing::debug;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use super::{Chain, Height, TopResult, height_to_key_with_suffix};
-use crate::store::prune_blocks::prune_height_for_tip;
+use crate::store::prune_blocks::{prune_height_for_tip, prune_target_for_tip};
 
 const CANDIDATE_SUFFIX: &str = ":c";
 const TOP_CANDIDATE_KEY: &str = "meta:top_candidate_height";
@@ -549,6 +549,48 @@ impl Store {
         Ok(false)
     }
 
+    /// Whether the reorg branch ending at `blockhash` forks from the candidate
+    /// or confirmed chain below the prune target of `top_candidate`.
+    ///
+    /// Bodies below the prune target are deleted, so the confirmed chain can
+    /// never reorg onto such a branch: `reorg_confirmed` needs the fork
+    /// point's body. Refusing the candidate reorg turns that open-ended stall
+    /// into a clean refusal, a reorg depth limit. Following such a branch
+    /// would take out-working the whole pool for about `PRUNE_DEPTH` blocks.
+    ///
+    /// Returns false when there is no candidate tip, when the tip is too low
+    /// for any pruning, or when the branch does not reach either chain.
+    pub(super) fn reorg_branch_forks_below_prune_target(
+        &self,
+        blockhash: &BlockHash,
+        top_candidate: Option<&TopResult>,
+    ) -> Result<bool, StoreError> {
+        let Some(top) = top_candidate else {
+            return Ok(false);
+        };
+        let prune_target = prune_target_for_tip(top.height);
+        if prune_target == 0 {
+            return Ok(false);
+        }
+        let Some(branch) =
+            self.get_branch_to_chain(blockhash, |h| self.is_candidate(h) || self.is_confirmed(h))?
+        else {
+            return Ok(false);
+        };
+        let Some(branch_point) = branch.front() else {
+            return Ok(false);
+        };
+        let branch_point_height = self
+            .get_block_metadata(branch_point)?
+            .expected_height
+            .ok_or_else(|| {
+                StoreError::NotFound(format!(
+                    "Branch point {branch_point} missing expected_height"
+                ))
+            })?;
+        Ok(branch_point_height < prune_target)
+    }
+
     /// Reorgs the candidate chain to the branch ending at `blockhash`.
     ///
     /// Walks back from `blockhash` to the first ancestor on the
@@ -867,7 +909,7 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::accounting::payout::sharechain_pplns::pplns_window::PRUNE_DEPTH;
+    use crate::accounting::payout::sharechain_pplns::pplns_window::{PRUNE_DEPTH, PRUNE_INTERVAL};
     use crate::store::organise::TopResult;
     use crate::test_utils::TestShareBlockBuilder;
     use bitcoin::Work;
@@ -2558,6 +2600,146 @@ mod tests {
         store.set_top_candidate_height_after_rebuild(0, 0, &mut batch);
         store.commit_batch(batch).unwrap();
         assert_eq!(store.get_top_candidate_height().unwrap(), 0);
+    }
+
+    /// A branch forking one height below the prune target is refused.
+    #[test]
+    fn test_reorg_branch_forking_below_prune_target_is_refused() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+        let share_1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        store.push_to_candidate_chain(&share_1).unwrap();
+        let share_2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_1.block_hash().to_string())
+            .nonce(0xe9695793)
+            .build();
+        store.push_to_candidate_chain(&share_2).unwrap();
+        let fork = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_2.block_hash().to_string())
+            .nonce(0xe9695799)
+            .build();
+        store.store_with_valid_metadata(&fork);
+        let top_candidate = TopResult {
+            hash: share_2.block_hash(),
+            height: (PRUNE_DEPTH + PRUNE_INTERVAL) as u32 + 3,
+            work: Work::from_be_bytes([0u8; 32]),
+        };
+
+        assert!(
+            store
+                .reorg_branch_forks_below_prune_target(&fork.block_hash(), Some(&top_candidate))
+                .unwrap()
+        );
+    }
+
+    /// A branch forking exactly at the prune target still has its fork point's
+    /// body, so it is followed.
+    #[test]
+    fn test_reorg_branch_forking_at_prune_target_is_followed() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+        let share_1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        store.push_to_candidate_chain(&share_1).unwrap();
+        let share_2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_1.block_hash().to_string())
+            .nonce(0xe9695793)
+            .build();
+        store.push_to_candidate_chain(&share_2).unwrap();
+        let fork = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_2.block_hash().to_string())
+            .nonce(0xe9695799)
+            .build();
+        store.store_with_valid_metadata(&fork);
+        let top_candidate = TopResult {
+            hash: share_2.block_hash(),
+            height: (PRUNE_DEPTH + PRUNE_INTERVAL) as u32 + 2,
+            work: Work::from_be_bytes([0u8; 32]),
+        };
+
+        assert!(
+            !store
+                .reorg_branch_forks_below_prune_target(&fork.block_hash(), Some(&top_candidate))
+                .unwrap()
+        );
+    }
+
+    /// A branch forking above the prune target is followed.
+    #[test]
+    fn test_reorg_branch_forking_above_prune_target_is_followed() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+        let share_1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        store.push_to_candidate_chain(&share_1).unwrap();
+        let share_2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_1.block_hash().to_string())
+            .nonce(0xe9695793)
+            .build();
+        store.push_to_candidate_chain(&share_2).unwrap();
+        let fork = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_2.block_hash().to_string())
+            .nonce(0xe9695799)
+            .build();
+        store.store_with_valid_metadata(&fork);
+        let top_candidate = TopResult {
+            hash: share_2.block_hash(),
+            height: (PRUNE_DEPTH + PRUNE_INTERVAL) as u32 + 1,
+            work: Work::from_be_bytes([0u8; 32]),
+        };
+
+        assert!(
+            !store
+                .reorg_branch_forks_below_prune_target(&fork.block_hash(), Some(&top_candidate))
+                .unwrap()
+        );
+    }
+
+    /// With a candidate tip too low for any pruning, no reorg is refused.
+    #[test]
+    fn test_reorg_branch_with_tip_below_prune_depth_is_followed() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+        let share_1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        store.push_to_candidate_chain(&share_1).unwrap();
+        let fork = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695799)
+            .build();
+        store.store_with_valid_metadata(&fork);
+        let top_candidate = store.get_top_candidate().unwrap();
+
+        assert!(
+            !store
+                .reorg_branch_forks_below_prune_target(&fork.block_hash(), Some(&top_candidate))
+                .unwrap()
+        );
     }
 
     #[test]

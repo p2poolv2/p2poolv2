@@ -776,6 +776,9 @@ impl Store {
 
     /// Batch fetches candidate share headers and returns ShareInfo entries
     /// ordered from highest height to lowest.
+    ///
+    /// Pruning deletes candidate index entries below the prune target, so
+    /// heights in that range are omitted.
     pub fn query_candidates(
         &self,
         from_height: u32,
