@@ -9,6 +9,7 @@ use crate::shares::share_block::{
 };
 use crate::store::block_tx_metadata::ChainMembership;
 use crate::store::block_tx_metadata::Status::{BlockValid, HeaderValid, Invalid, Pending};
+use crate::store::transaction_store::{BLOCK_TXIDS_SUFFIX, txids_key};
 use bitcoin::BlockHash;
 use bitcoin::Transaction;
 use bitcoin::TxMerkleNode;
@@ -56,7 +57,7 @@ impl Store {
             &blockhash,
             &txids,
             batch,
-            b"_txids",
+            BLOCK_TXIDS_SUFFIX,
             ColumnFamily::BlockTxids,
         )?;
 
@@ -244,8 +245,7 @@ impl Store {
     /// TODO: Replace this with a has_block field in metadata. Will require migration, so pending till we add migration support. See `missing_share_blocks`.
     pub fn share_block_exists(&self, blockhash: &BlockHash) -> bool {
         let block_txids_cf = self.db.cf_handle(&ColumnFamily::BlockTxids).unwrap();
-        let mut key = consensus::serialize(blockhash);
-        key.extend_from_slice(b"_txids");
+        let key = txids_key(blockhash, BLOCK_TXIDS_SUFFIX);
         self.db
             .get_cf::<&[u8]>(&block_txids_cf, &key)
             .ok()
@@ -261,11 +261,7 @@ impl Store {
         let block_txids_cf = self.db.cf_handle(&ColumnFamily::BlockTxids).unwrap();
         let keys: Vec<_> = blockhashes
             .iter()
-            .map(|hash| {
-                let mut key = consensus::serialize(hash);
-                key.extend_from_slice(b"_txids");
-                (&block_txids_cf, key)
-            })
+            .map(|hash| (&block_txids_cf, txids_key(hash, BLOCK_TXIDS_SUFFIX)))
             .collect();
         let results = self.db.multi_get_cf(keys);
 

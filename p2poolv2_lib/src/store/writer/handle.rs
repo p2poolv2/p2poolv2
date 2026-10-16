@@ -13,6 +13,7 @@ use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::store::Store;
 use crate::store::found_block::FoundBlock;
+use crate::store::prune_blocks::PruneStats;
 use crate::store::stored_user::StoredUser;
 use crate::store::transaction_store::PrevoutCheck;
 use bitcoin::{BlockHash, TxMerkleNode, Work};
@@ -366,6 +367,23 @@ impl StoreHandle {
         reply_rx.await.map_err(|_| StoreError::ChannelClosed)?
     }
 
+    /// Delete the block bodies at heights `[from, to)` in one batch.
+    pub async fn prune_block_bodies_chunk(
+        &self,
+        from: u32,
+        to: u32,
+    ) -> Result<PruneStats, StoreError> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.write_tx
+            .send(WriteCommand::PruneBlockBodiesChunk {
+                from,
+                to,
+                reply: reply_tx,
+            })
+            .map_err(|_| StoreError::ChannelClosed)?;
+        reply_rx.await.map_err(|_| StoreError::ChannelClosed)?
+    }
+
     /// Add a PPLNS share for accounting.
     pub async fn add_pplns_share(&self, pplns_share: SimplePplnsShare) -> Result<(), StoreError> {
         let (reply_tx, reply_rx) = oneshot::channel();
@@ -430,6 +448,7 @@ mockall::mock! {
         pub async fn init_chain_state_from_store(&self, genesis_hash: BlockHash) -> Result<(), StoreError>;
         pub async fn add_user(&self, btcaddress: String) -> Result<u64, StoreError>;
         pub async fn add_pplns_share(&self, pplns_share: SimplePplnsShare) -> Result<(), StoreError>;
+        pub async fn prune_block_bodies_chunk(&self, from: u32, to: u32) -> Result<PruneStats, StoreError>;
 
         // Sync chain state updates
         pub fn set_genesis_blockhash(&self, hash: BlockHash);

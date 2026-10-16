@@ -18,6 +18,7 @@ pub use handle::StoreHandle;
 use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::store::Store;
+use crate::store::prune_blocks::PruneStats;
 use bitcoin::{BlockHash, TxMerkleNode};
 use std::error::Error;
 use std::fmt;
@@ -163,6 +164,13 @@ pub enum WriteCommand {
     AddHeaderTemplateMerkleBranches {
         entries: Vec<(BlockHash, Vec<TxMerkleNode>)>,
         reply: oneshot::Sender<Result<(), StoreError>>,
+    },
+
+    /// Delete the block bodies at heights `[from, to)` in one batch.
+    PruneBlockBodiesChunk {
+        from: u32,
+        to: u32,
+        reply: oneshot::Sender<Result<PruneStats, StoreError>>,
     },
 }
 
@@ -319,6 +327,17 @@ impl StoreWriter {
                     .store
                     .add_header_template_merkle_branches(&entries, &mut batch)
                     .and_then(|()| self.store.commit_batch(batch).map_err(StoreError::from));
+                let _ = reply.send(result);
+            }
+            WriteCommand::PruneBlockBodiesChunk { from, to, reply } => {
+                let mut batch = Store::get_write_batch();
+                let result = self
+                    .store
+                    .prune_block_bodies_chunk(from, to, &mut batch)
+                    .and_then(|stats| {
+                        self.store.commit_batch(batch).map_err(StoreError::from)?;
+                        Ok(stats)
+                    });
                 let _ = reply.send(result);
             }
         }

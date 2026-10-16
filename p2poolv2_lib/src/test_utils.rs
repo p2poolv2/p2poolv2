@@ -170,6 +170,76 @@ pub fn genesis_for_tests() -> ShareBlock {
     TestShareBlockBuilder::new().build()
 }
 
+/// Store a block, organise its header, mark it BlockValid and run
+/// confirmation, as a node does once a block passes validation.
+#[cfg(any(test, feature = "test-utils"))]
+pub async fn confirm_test_block(chain_store_handle: &ChainStoreHandle, block: &ShareBlock) {
+    chain_store_handle
+        .add_share_block(block.clone())
+        .await
+        .unwrap();
+    chain_store_handle
+        .organise_header(block.header.clone())
+        .await
+        .unwrap();
+    chain_store_handle
+        .mark_block_valid(block.block_hash())
+        .await
+        .unwrap();
+    chain_store_handle.organise_block().await.unwrap();
+}
+
+/// A coinbase-shaped transaction paying `value` sats, distinct for each
+/// value. Adding one to a block gives the block a transaction no other block
+/// holds, which `TestShareBlockBuilder` blocks otherwise lack.
+#[cfg(any(test, feature = "test-utils"))]
+pub fn test_funding_transaction(value: u64) -> bitcoin::Transaction {
+    bitcoin::Transaction {
+        version: bitcoin::transaction::Version::ONE,
+        lock_time: bitcoin::absolute::LockTime::ZERO,
+        input: vec![bitcoin::TxIn {
+            previous_output: bitcoin::OutPoint::new(bitcoin::Txid::all_zeros(), u32::MAX),
+            script_sig: bitcoin::ScriptBuf::new(),
+            sequence: bitcoin::Sequence::MAX,
+            witness: bitcoin::Witness::new(),
+        }],
+        output: vec![bitcoin::TxOut {
+            value: bitcoin::Amount::from_sat(value),
+            script_pubkey: bitcoin::ScriptBuf::new(),
+        }],
+    }
+}
+
+/// Set up `genesis_for_tests` and confirm a linear chain of `length` blocks
+/// above it.
+///
+/// The block at height `h` carries `test_funding_transaction(h)`, so every
+/// block holds a transaction no other block has. Returns the blocks indexed
+/// by height, genesis at 0.
+#[cfg(any(test, feature = "test-utils"))]
+pub async fn build_confirmed_test_chain(
+    chain_store_handle: &ChainStoreHandle,
+    length: usize,
+) -> Vec<ShareBlock> {
+    let genesis = genesis_for_tests();
+    chain_store_handle
+        .init_or_setup_genesis(genesis.clone())
+        .await
+        .unwrap();
+    let mut blocks = Vec::with_capacity(length + 1);
+    blocks.push(genesis);
+    for height in 1..=length {
+        let block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(blocks[height - 1].block_hash().to_string())
+            .time(1_700_000_000 + height as u32)
+            .add_transaction(test_funding_transaction(height as u64))
+            .build();
+        confirm_test_block(chain_store_handle, &block).await;
+        blocks.push(block);
+    }
+    blocks
+}
+
 /// Build a share header with a specific miner pubkey and work level.
 #[cfg(any(test, feature = "test-utils"))]
 pub fn build_test_header(

@@ -103,7 +103,7 @@ impl Store {
     }
 
     /// Delete a candidate index entry from the batch.
-    pub(super) fn delete_candidate_entry(&self, height: Height, batch: &mut rocksdb::WriteBatch) {
+    pub(crate) fn delete_candidate_entry(&self, height: Height, batch: &mut rocksdb::WriteBatch) {
         let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
         let key = height_to_key_with_suffix(height, CANDIDATE_SUFFIX);
         batch.delete_cf(&block_height_cf, key);
