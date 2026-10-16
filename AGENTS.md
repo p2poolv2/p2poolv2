@@ -36,7 +36,8 @@ Read `docs/architecture/` when working in the relevant area:
 - `async-flow.md` -- worker tasks, channel topology, backpressure
 - `store-schema.md` -- RocksDB column families, key encoding, merge ops
 - `store-architecture.md` -- read/write separation, StoreWriter thread
-- `pruning.md` -- TTL-based share pruning
+- `pruning.md` -- two-zone validation, output expiry, and block body
+  pruning (watermark, pruner, decisions)
 - `payout-distribution.md` -- how a found block's coinbase is split:
   anchor, maturity skip, PPLNS window, uncle weighting, cuts, and the
   depths sized by `PAYOUT_DEPTH`
