@@ -18,7 +18,7 @@ Audience: contributors and AI agents starting the BCH port. Read
 | CashAddr text in the API | Implemented; P2PKH/P2SH vectors and a chipnet share lookup test. |
 | Declared BCH coinbase peer validation | Implemented; bounded header extension, prefix/aux proof tampering, payout diversion, storage and compressed-header tests. |
 | Mineable Job Declaration in both modes | Server-handler exchanges pass. Two real BCHN regtest nodes accepted Full-Template and private Coinbase-Only blocks, with verifiable emitted coinbase proofs. Independent client interoperability remains pending. |
-| Miner-selected auxiliary commitments | A declared job can choose its aux root, tree size and nonce. Bounded shared tree construction and full coinbase/header proof verification are implemented. SAFA is the first covenant target; its issuance path remains incomplete. See [bch-auxpow.md](bch-auxpow.md). |
+| Miner-selected auxiliary commitments | Bounded shared trees and full coinbase/header proofs are implemented. An experimental SAFA variant verifies the proof inside the BCH VM and paid tokens in a real two-node regtest. Final SAFA policy, independent covenant review and chipnet issuance remain open. See [bch-auxpow.md](bch-auxpow.md). |
 | PPLNS tuning and independent ASIC/JD interoperability | Pending; retain the existing settings until a justified tuning decision. |
 | Remote CI and chipnet block | No GitHub Actions runs on this fork; no chipnet block found. Local checks and recorded propagation do not replace these. |
 
@@ -286,6 +286,30 @@ workspace tests passed (two skipped), and 1,727 all-features tests passed
 warnings denied. Formatting and whitespace checks passed. The two-node
 opt-in test passed separately. Independent clients/ASICs, the SAFA covenant,
 remote CI and a chipnet block remain unverified or incomplete.
+
+## SAFA reference covenant (2026-10-16)
+
+The first auxiliary-token adapter now has an executable covenant, pinned
+Libauth BCH 2026 VM, offline work/unlock commands and 39 passing tests.
+It binds category, covenant identity, previous baton and next baton to the
+shared work leaf. The covenant checks both Merkle paths, full coinbase,
+unsigned target, exact token reward, subsidy, recipient, CSV/CLTV and
+disjoint output groups. Its unchanged-baton market path remains available.
+
+The opt-in two-node JD test committed real SAFA-variant work in blocks 280
+and 281. Both proofs passed Rust and covenant verification. BCHN then
+accepted a withdrawal paying 1,000 tokens and continuing the mutable NFT
+with 419,999,000 tokens in block 282. An altered Merkle sibling was refused.
+The scriptSig was 1,266 bytes with a 839-byte redeem script; the standard
+VM also accepts both maximum Merkle depths and the exact 10,000-byte budget.
+Public genesis/withdrawal/proof vectors are replayed in the offline suite.
+
+This is an experimental SAFA variant, with its full rules and reproduction
+steps in [tools/safa-auxpow](../tools/safa-auxpow/README.md). The published
+draft's conflicting virtual-reserve multipliers need agreement before any
+real issuance. Independent covenant review, chipnet issuance, independent
+ASIC/JD interoperability and remote CI remain open. The Rust CI definition
+now includes the covenant tests; no remote run is claimed.
 
 ## Startup selection (2026-10-13)
 

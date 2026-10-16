@@ -88,11 +88,13 @@ SAFA is the first requested token target. Its
 [author's draft and linked Bitauth template](https://bitcoincashresearch.org/t/safas-a-sha256-asic-minable-automated-token-market/2123)
 check `SHA256d(next NFT baton)` against a difficulty target. The template has
 no parent header, coinbase or inclusion branch arguments. Committing its baton
-hash in BCH does not satisfy that mining rule. SAFA AuxPoW therefore needs a
-new covenant variant before issuance or end-to-end compatibility can be claimed.
+hash in BCH does not satisfy that mining rule. The experimental
+[SAFA AuxPoW variant](../tools/safa-auxpow/README.md) supplies that new covenant
+and has passed a real regtest withdrawal. It is not a deployed version of
+the author's token or a final SAFA specification.
 
-The proposed variant retains the draft's state, market, reward and payout
-binding, and replaces the mining hash check with a bounded AuxPoW check:
+The variant retains the draft's baton, market and payout binding, and replaces
+the mining hash check with a bounded AuxPoW check:
 
 1. Validate the current mutable NFT category, continuing covenant, age and
    target adjustment. Derive the target from that state, with unsigned
@@ -108,13 +110,13 @@ binding, and replaces the mining hash check with a bounded AuxPoW check:
    matching reward category. A successful shared proof alone cannot authorize
    a withdrawal.
 
-The exact leaf serialization and chain-id assignment are not frozen. The
-implementation must first prove a standard spend with real BCH VM execution,
-including its complete redeem script and proof bytes. Maximum-size Rust
-proofs need not fit a standard SAFA spend. Test payout diversion, replay,
-wrong targets/categories, malformed branches, market-path preservation and
-resource limits before treating the variant as usable. No SAFA covenant is
-deployed or claimed compatible at this checkpoint.
+The reference leaf serialization, chain-id assignment, precise rounding and
+output accounting are documented with the covenant. Its 839-byte redeem script
+and complete proof pass standard BCH 2026 VM execution. Tests cover payout
+diversion, replay, wrong targets/categories, malformed branches, market
+preservation, composed invocations and resource limits. Maximum-size Rust
+proofs need not fit a standard covenant spend. Independent review, the draft's
+conflicting virtual-reserve multipliers and a final SAFA policy remain open.
 
 The linked draft's release and swap scenarios both pass in Libauth
 `3.1.0-next.8`'s standard BCH 2026 VM. This is not a security endorsement:
@@ -144,3 +146,19 @@ withdrawals. See [the JD test setup](bch-job-declaration.md#two-node-bchn-regtes
 
 The built offline CLI verified both exported proofs, reproduced the independent
 two-leaf root above, and rejected a wrong chain id and a target of one.
+
+## SAFA covenant withdrawal (2026-10-16)
+
+The same JD test then used work derived from an actual regtest SAFA-variant
+baton. Both nodes accepted Full-Template block 280 with two work items and
+private Coinbase-Only block 281 with just SAFA. Both exported proofs passed
+the existing Rust verifier and the covenant VM.
+
+A mature baton spent using the private proof, continuing its mutable NFT
+with 419,999,000 tokens and paying 1,000 tokens to the committed recipient.
+Both BCHN nodes accepted the withdrawal in block 282. BCHN rejected a copy
+with an altered Merkle sibling. The full transaction, hashes, 1,266-byte
+scriptSig and reproducible setup are in the
+[variant's evidence record](../tools/safa-auxpow/README.md#regtest-evidence-and-reproduction).
+This demonstrates the experimental covenant's regtest issuance path; final
+SAFA compatibility and chipnet issuance remain separate checks.

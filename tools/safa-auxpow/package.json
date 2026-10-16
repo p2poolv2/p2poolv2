@@ -1,0 +1,11 @@
+{
+  "name": "bch-p2pool-safa-auxpow",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test verify.test.mjs cli.test.mjs"
+  },
+  "dependencies": {
+    "@bitauth/libauth": "3.1.0-next.8"
+  }
+}

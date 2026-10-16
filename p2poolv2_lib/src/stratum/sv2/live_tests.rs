@@ -27,6 +27,8 @@ use mining_sv2::{
 use p2poolv2_config::DEFAULT_VERSION_MASK;
 use p2poolv2_wallet::bch_share::{BchShareNetwork, encode_payout_address};
 use serde_json::{Value, json};
+use std::env::{self, VarError};
+use std::fs;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -35,8 +37,8 @@ use tokio::time::{sleep, timeout};
 #[tokio::test]
 #[ignore = "requires two disposable BCHN nodes and a funded jd-regtest wallet; see docs/bch-job-declaration.md"]
 async fn bchn_declared_jobs_reach_both_real_nodes() {
-    let client_url = std::env::var("BCHN_JD_CLIENT_RPC").expect("set BCHN_JD_CLIENT_RPC");
-    let pool_url = std::env::var("BCHN_JD_POOL_RPC").expect("set BCHN_JD_POOL_RPC");
+    let client_url = env::var("BCHN_JD_CLIENT_RPC").expect("set BCHN_JD_CLIENT_RPC");
+    let pool_url = env::var("BCHN_JD_POOL_RPC").expect("set BCHN_JD_POOL_RPC");
     let client_socket: SocketAddr = client_url.strip_prefix("http://").unwrap().parse().unwrap();
     let pool_socket: SocketAddr = pool_url.strip_prefix("http://").unwrap().parse().unwrap();
     assert!(client_socket.ip().is_loopback() && pool_socket.ip().is_loopback());
@@ -115,9 +117,20 @@ async fn bchn_declared_jobs_reach_both_real_nodes() {
         chain_id: 1,
         hash: sha256d::Hash::hash(b"token-A"),
     };
-    let second_work = AuxiliaryWork {
-        chain_id: 2,
-        hash: sha256d::Hash::hash(b"token-B"),
+    let second_work = match env::var("BCHN_JD_AUXILIARY_WORK") {
+        Ok(path) => {
+            let bytes = fs::read(path).expect("read auxiliary work JSON");
+            assert!(
+                bytes.len() <= 4096,
+                "auxiliary work JSON exceeds 4096 bytes"
+            );
+            serde_json::from_slice(&bytes).expect("decode auxiliary work JSON")
+        }
+        Err(VarError::NotPresent) => AuxiliaryWork {
+            chain_id: 2,
+            hash: sha256d::Hash::hash(b"token-B"),
+        },
+        Err(error) => panic!("invalid BCHN_JD_AUXILIARY_WORK: {error}"),
     };
     let auxiliary_tree = AuxiliaryTree::build(&[first_work, second_work], 0).unwrap();
     let (mut request_bytes, declared) = test_bch_custom_job_with_aux(

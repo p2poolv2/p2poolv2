@@ -65,8 +65,10 @@ SV2's 65,535-byte coinbase-output field and 16 MiB frame limit. All revealed
 transactions currently arrive in one response; larger declarations require
 transaction-cache negotiation before increasing those limits. The shared
 [auxiliary work verifier](bch-auxpow.md) checks inclusion through the full
-coinbase and parent header. Token-specific covenant rules remain unfinished;
-choosing an aux root does not prove those assets or authorize their issuance.
+coinbase and parent header. An experimental SAFA covenant now verifies that
+proof and its own issuance rules in a real regtest spend. Other assets need
+their own covenant adapters; choosing an aux root alone cannot authorize
+their issuance.
 
 Protocol references: [SV2 Mining Protocol](https://stratumprotocol.org/specification/05-mining-protocol/)
 and [SV2 Job Declaration Protocol](https://stratumprotocol.org/specification/06-job-declaration-protocol/).
