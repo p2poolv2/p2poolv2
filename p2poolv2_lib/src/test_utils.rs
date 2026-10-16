@@ -50,6 +50,8 @@ use crate::config::{Chain, PoolMode};
 #[cfg(test)]
 use crate::pool_difficulty::MockPoolDifficulty;
 #[cfg(test)]
+use crate::shares::auxpow::{AuxPowProof, AuxiliaryTree, AuxiliaryWork};
+#[cfg(test)]
 use crate::shares::bch_coinbase::BchCoinbase;
 #[cfg(test)]
 use crate::shares::chain::chain_store_handle::MockChainStoreHandle;
@@ -92,11 +94,13 @@ use crate::stratum::work::prepared_notify::{PreparedNotifyParams, PreparedNotify
 #[cfg(test)]
 use crate::stratum::work::tracker::start_tracker_actor;
 #[cfg(test)]
-use binary_sv2::{B064K, B0255, Seq0255, U256};
+use binary_sv2::{B064K, B0255, Deserialize, Seq0255, U256};
 #[cfg(test)]
 use bitcoin::TxMerkleNode;
 #[cfg(test)]
 use bitcoin::consensus::{deserialize, serialize};
+#[cfg(test)]
+use bitcoin::hashes::sha256d;
 #[cfg(test)]
 use bitcoin::script::Builder;
 #[cfg(any(test, feature = "test-utils"))]
@@ -250,6 +254,30 @@ pub(crate) fn test_bch_custom_job(
     full: bool,
     value: u64,
 ) -> (Vec<u8>, DeclaredJob) {
+    test_bch_custom_job_with_aux(
+        prepared,
+        token,
+        transactions,
+        full,
+        value,
+        MergeMiningCommitment {
+            merkle_root: [0x77; 32],
+            tree_size: 2,
+            nonce: 9,
+        },
+    )
+}
+
+/// A declared job with a caller-selected auxiliary commitment.
+#[cfg(test)]
+pub(crate) fn test_bch_custom_job_with_aux(
+    prepared: Arc<PreparedNotifyParams>,
+    token: Vec<u8>,
+    transactions: Vec<Transaction>,
+    full: bool,
+    value: u64,
+    merge_mining: MergeMiningCommitment,
+) -> (Vec<u8>, DeclaredJob) {
     let template = prepared.template();
     let payout = Address::p2pkh(
         bitcoin::PubkeyHash::from_byte_array([0x22; 20]),
@@ -268,11 +296,7 @@ pub(crate) fn test_bch_custom_job(
             .push_slice(b"miner")
             .into_script()
             .into_bytes(),
-        merge_mining: MergeMiningCommitment {
-            merkle_root: [0x77; 32],
-            tree_size: 2,
-            nonce: 9,
-        },
+        merge_mining,
     };
     commitment.bch_coinbase = Some(descriptor.clone());
     let coinbase = build_declared_coinbase(
@@ -340,6 +364,37 @@ pub(crate) fn test_bch_custom_job(
             transactions: full.then(|| Arc::new(transactions)),
             declaration: full.then_some(declaration),
         },
+    )
+}
+
+/// A mined regtest parent with two selected auxiliary work commitments.
+#[cfg(test)]
+pub fn test_bch_auxpow() -> (AuxPowProof, AuxiliaryWork) {
+    let work = AuxiliaryWork {
+        chain_id: 1,
+        hash: sha256d::Hash::hash(b"token-A"),
+    };
+    let other = AuxiliaryWork {
+        chain_id: 2,
+        hash: sha256d::Hash::hash(b"token-B"),
+    };
+    let tree = AuxiliaryTree::build(&[work, other], 0).unwrap();
+    let prepared = test_bch_prepared();
+    let token = prepared
+        .mining_job_token([1; 32], prepared.template().curtime)
+        .unwrap();
+    let value = prepared.template().coinbasevalue;
+    let (mut request, _) =
+        test_bch_custom_job_with_aux(prepared, token, vec![], false, value, tree.commitment);
+    let request = SetCustomMiningJob::from_bytes(&mut request).unwrap();
+    (
+        AuxPowProof {
+            parent_header: test_bch_solve_custom_job(&request, &[1; 4]),
+            coinbase: test_bch_custom_coinbase(&request, &[1; 4]),
+            coinbase_branch: vec![],
+            auxiliary: tree.proofs[0].clone(),
+        },
+        work,
     )
 }
 

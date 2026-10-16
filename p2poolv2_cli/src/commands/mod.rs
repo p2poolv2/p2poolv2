@@ -4,6 +4,7 @@
 
 pub mod address;
 pub mod api_client;
+pub mod bch_auxpow;
 pub mod bch_share_address;
 pub mod blocked_ips;
 pub mod candidates;
@@ -31,7 +32,7 @@ use std::path::Path;
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 pub struct Cli {
-    /// Path to p2poolv2 config file (not required for address, bch-share-address, gen-auth or --db-path commands)
+    /// Path to p2poolv2 config file (not required for address, bch-share-address, bch-auxpow, gen-auth or --db-path commands)
     #[arg(short, long, env("P2POOL_CONFIG"), global = true)]
     pub config: Option<String>,
 
@@ -155,6 +156,11 @@ pub enum Commands {
         #[arg(short, long, value_parser = commands::bch_share_address::parse_network)]
         network: BitcoinCashNetwork,
     },
+    /// Build or verify BCH auxiliary work proofs offline
+    BchAuxpow {
+        #[command(subcommand)]
+        command: bch_auxpow::AuxpowCommand,
+    },
     /// Generate API authentication credentials (salt, password, HMAC)
     GenAuth {
         /// Username for API authentication
@@ -220,6 +226,9 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
         }
         Some(Commands::GenAuth { username, password }) => {
             commands::gen_auth::execute(username.clone(), password.clone())?;
+        }
+        Some(Commands::BchAuxpow { command }) => {
+            commands::bch_auxpow::execute(command)?;
         }
         Some(Commands::Db { command }) => {
             let db_path = cli

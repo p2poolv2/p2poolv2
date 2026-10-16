@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+pub mod auxpow;
 pub mod bch_coinbase;
 pub mod bch_genesis;
 pub mod bch_script;

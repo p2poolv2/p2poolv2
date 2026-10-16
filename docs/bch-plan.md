@@ -18,7 +18,7 @@ Audience: contributors and AI agents starting the BCH port. Read
 | CashAddr text in the API | Implemented; P2PKH/P2SH vectors and a chipnet share lookup test. |
 | Declared BCH coinbase peer validation | Implemented; bounded header extension, prefix/aux proof tampering, payout diversion, storage and compressed-header tests. |
 | Mineable Job Declaration in both modes | Server-handler exchanges pass. Two real BCHN regtest nodes accepted Full-Template and private Coinbase-Only blocks, with verifiable emitted coinbase proofs. Independent client interoperability remains pending. |
-| Miner-selected auxiliary commitments | A declared job can choose its aux root, tree size and nonce. Auxiliary-token and covenant proof verification remains incomplete. |
+| Miner-selected auxiliary commitments | A declared job can choose its aux root, tree size and nonce. Bounded shared tree construction and full coinbase/header proof verification are implemented. SAFA is the first covenant target; its issuance path remains incomplete. See [bch-auxpow.md](bch-auxpow.md). |
 | PPLNS tuning and independent ASIC/JD interoperability | Pending; retain the existing settings until a justified tuning decision. |
 | Remote CI and chipnet block | No GitHub Actions runs on this fork; no chipnet block found. Local checks and recorded propagation do not replace these. |
 
@@ -263,6 +263,29 @@ The combined workspace, including the CashAddr API follow-up, passed 1,705
 default tests (two skipped) and 1,713 all-features tests (one skipped). The
 opt-in BCHN check was run separately. All-target Clippy passed with default
 and all features, with warnings denied, as did formatting.
+
+## Auxiliary work proofs (2026-10-16)
+
+The shared verifier now builds bounded sparse trees for up to 64 selected
+work items and checks each inclusion proof through the full coinbase to the
+parent header, against independently supplied work and target. The offline
+`bch-auxpow build` and `verify` commands use that same implementation. Exact
+hash ordering, collision handling and transport limits are documented in
+[bch-auxpow.md](bch-auxpow.md).
+
+Both BCHN regtest nodes accepted Full-Template block 207 with two selected
+items and private Coinbase-Only block 208 with one. Their exported proofs
+also passed the built CLI; a wrong chain id and a target of one were refused.
+These synthetic work items do not prove token issuance. SAFA is the selected
+covenant target, and its draft needs an AuxPoW variant and unsigned hash
+comparison before that requirement can pass.
+
+With the concurrent address-renderer cleanup included: 1,719 default
+workspace tests passed (two skipped), and 1,727 all-features tests passed
+(one skipped). All-target Clippy passed with default and all features, with
+warnings denied. Formatting and whitespace checks passed. The two-node
+opt-in test passed separately. Independent clients/ASICs, the SAFA covenant,
+remote CI and a chipnet block remain unverified or incomplete.
 
 ## Startup selection (2026-10-13)
 
