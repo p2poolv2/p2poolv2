@@ -21,6 +21,9 @@ impl Store {
     /// Add a share to the store.
     ///
     /// Returns early if the block already exists (duplicate guard).
+    /// Returns `StoreError::BelowPruneHeight` for a block below the prune
+    /// target, whose body would be deleted again; this also closes the race
+    /// between a block passing the receiver's check and a prune committing.
     /// Stores the header in the Header CF, transaction indexes in
     /// BlockTxids CF, template merkle branches in TemplateMerkleBranches
     /// CF, and the bitcoin coinbase in BitcoinCoinbase CF. All writes are
@@ -47,6 +50,9 @@ impl Store {
 
         let block_height =
             self.compute_block_height_from_parent(&share.header.prev_share_blockhash)?;
+        if block_height < self.prune_target()? {
+            return Err(StoreError::BelowPruneHeight(blockhash));
+        }
 
         // Store transactions and get their metadata
         let txs_metadata = self.add_sharechain_txs(&share.transactions, block_height, batch)?;

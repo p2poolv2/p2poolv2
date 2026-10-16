@@ -84,6 +84,19 @@ impl Store {
         }
     }
 
+    /// The prune target for the current candidate tip: bodies below it are
+    /// deleted and never stored again.
+    ///
+    /// Returns 0 when there is no candidate tip yet. Store read errors are
+    /// propagated.
+    pub fn prune_target(&self) -> Result<u32, StoreError> {
+        match self.get_top_candidate_height() {
+            Ok(candidate_tip_height) => Ok(prune_target_for_tip(candidate_tip_height)),
+            Err(StoreError::NotFound(_)) => Ok(0),
+            Err(error) => Err(error),
+        }
+    }
+
     /// Lowest height from which block bodies may still need pruning, below
     /// `target`.
     ///
@@ -797,5 +810,105 @@ mod tests {
             store.get_share(&blocks[6].block_hash()),
             Some(blocks[6].clone())
         );
+    }
+
+    #[test]
+    fn test_store_prune_target_without_candidate_tip_is_zero() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        assert_eq!(store.prune_target().unwrap(), 0);
+    }
+
+    /// A body below the prune target would be deleted again, so the store
+    /// refuses it. This also closes the race between the receiver's check and
+    /// a prune committing.
+    #[test]
+    fn test_add_share_block_below_prune_target_is_refused() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let genesis = TestShareBlockBuilder::new().build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+        let candidate_tip_height = (PRUNE_DEPTH + PRUNE_INTERVAL) as u32 + 2;
+        let mut tip_metadata = BlockMetadata {
+            expected_height: Some(candidate_tip_height),
+            chain_work: genesis.header.get_work(),
+            status: Status::HeaderValid,
+            chain: ChainMembership::None,
+        };
+        let mut batch = Store::get_write_batch();
+        store
+            .append_to_candidates(
+                &BlockHash::from_byte_array([0x77; 32]),
+                candidate_tip_height,
+                &mut tip_metadata,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+        let block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .time(1_700_000_001)
+            .build();
+        let mut batch = Store::get_write_batch();
+
+        let result = store.add_share_block(&block, &mut batch);
+
+        assert!(matches!(
+            result,
+            Err(StoreError::BelowPruneHeight(blockhash)) if blockhash == block.block_hash()
+        ));
+    }
+
+    #[test]
+    fn test_add_share_block_at_prune_target_is_stored() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let genesis = TestShareBlockBuilder::new().build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+        let candidate_tip_height = (PRUNE_DEPTH + PRUNE_INTERVAL) as u32 + 2;
+        let mut tip_metadata = BlockMetadata {
+            expected_height: Some(candidate_tip_height),
+            chain_work: genesis.header.get_work(),
+            status: Status::HeaderValid,
+            chain: ChainMembership::None,
+        };
+        let parent = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .time(1_700_000_001)
+            .build();
+        let parent_metadata = BlockMetadata {
+            expected_height: Some(1),
+            chain_work: genesis.header.get_work(),
+            status: Status::HeaderValid,
+            chain: ChainMembership::None,
+        };
+        let mut batch = Store::get_write_batch();
+        store
+            .append_to_candidates(
+                &BlockHash::from_byte_array([0x77; 32]),
+                candidate_tip_height,
+                &mut tip_metadata,
+                &mut batch,
+            )
+            .unwrap();
+        store
+            .update_block_metadata(&parent.block_hash(), &parent_metadata, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+        let block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(parent.block_hash().to_string())
+            .time(1_700_000_002)
+            .build();
+        let mut batch = Store::get_write_batch();
+
+        store.add_share_block(&block, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert!(store.share_block_exists(&block.block_hash()));
     }
 }
