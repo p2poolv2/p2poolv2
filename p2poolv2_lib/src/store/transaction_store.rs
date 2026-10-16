@@ -17,6 +17,27 @@ use tracing::debug;
 /// Serialized outpoint size: 32B for Txid hash, 4B for index
 const OUTPOINT_SIZE: usize = 36;
 
+/// Key suffix of a block's sharechain txids in the `BlockTxids` CF.
+pub(crate) const BLOCK_TXIDS_SUFFIX: &[u8] = b"_txids";
+
+/// Key suffix of a block's bitcoin txids in the `BitcoinTxids` CF. Nothing
+/// writes this CF yet.
+pub(crate) const BITCOIN_TXIDS_SUFFIX: &[u8] = b"_bitcoin_txids";
+
+/// Key of `blockhash` in a txids CF: the consensus-serialized blockhash
+/// followed by `suffix`.
+pub(crate) fn txids_key(blockhash: &BlockHash, suffix: &[u8]) -> Vec<u8> {
+    let mut key = consensus::serialize(blockhash);
+    key.extend_from_slice(suffix);
+    key
+}
+
+/// Key of input or output `index` of `txid` in the `Inputs`, `Outputs` and
+/// `SpendsIndex` CFs.
+pub(crate) fn outpoint_key(txid: &Txid, index: u32) -> String {
+    format!("{txid}:{index}")
+}
+
 /// A TxOut stored in the Outputs CF together with a flag indicating
 /// whether it belongs to a coinbase transaction and the height of the
 /// oldest coinbase ancestor in the output's spending chain.
@@ -269,7 +290,7 @@ impl Store {
         let outputs_cf = self.db.cf_handle(&ColumnFamily::Outputs).unwrap();
         let keys: Vec<String> = outpoints
             .iter()
-            .map(|outpoint| format!("{}:{}", outpoint.txid, outpoint.vout))
+            .map(|outpoint| outpoint_key(&outpoint.txid, outpoint.vout))
             .collect();
         let cf_keys: Vec<(_, &[u8])> = keys
             .iter()
@@ -320,7 +341,7 @@ impl Store {
         let spends_index_cf = self.db.cf_handle(&ColumnFamily::SpendsIndex).unwrap();
         let keys: Vec<String> = outpoints
             .iter()
-            .map(|outpoint| format!("{}:{}", outpoint.txid, outpoint.vout))
+            .map(|outpoint| outpoint_key(&outpoint.txid, outpoint.vout))
             .collect();
         let cf_keys: Vec<(_, &[u8])> = keys
             .iter()
@@ -423,7 +444,7 @@ impl Store {
     /// key format `{txid}:{vout}`.
     pub(crate) fn get_output(&self, txid: &Txid, vout: u32) -> Result<bitcoin::TxOut, StoreError> {
         let outputs_cf = self.db.cf_handle(&ColumnFamily::Outputs).unwrap();
-        let output_key = format!("{txid}:{vout}");
+        let output_key = outpoint_key(txid, vout);
         match self.db.get_cf::<&[u8]>(&outputs_cf, output_key.as_ref())? {
             Some(data) => {
                 let stored: StoredTxOut = encode::deserialize(&data).map_err(|_| {
@@ -472,7 +493,7 @@ impl Store {
             txs_metadata.push(metadata);
 
             for (i, input) in tx.input.iter().enumerate() {
-                let input_key = format!("{txid}:{i}");
+                let input_key = outpoint_key(&txid, i as u32);
                 let stored = StoredTxIn {
                     tx_in: input.clone(),
                 };
@@ -488,7 +509,7 @@ impl Store {
             };
 
             for (i, output) in tx.output.iter().enumerate() {
-                let output_key = format!("{txid}:{i}");
+                let output_key = outpoint_key(&txid, i as u32);
                 batch_heights.insert(output_key.clone(), coinbase_root_height);
                 let stored = StoredTxOut {
                     tx_out: output.clone(),
@@ -515,10 +536,8 @@ impl Store {
     ) -> Result<u32, StoreError> {
         let mut min_height = u32::MAX;
         for input in &tx.0.input {
-            let outpoint_key = format!(
-                "{}:{}",
-                input.previous_output.txid, input.previous_output.vout
-            );
+            let outpoint_key =
+                outpoint_key(&input.previous_output.txid, input.previous_output.vout);
 
             let height = if let Some(cached_height) = batch_heights.get(&outpoint_key) {
                 *cached_height
@@ -582,7 +601,7 @@ impl Store {
         spending_index: u32,
         batch: &mut WriteBatch,
     ) -> Result<(), StoreError> {
-        let key = format!("{prevout_txid}:{prevout_index}");
+        let key = outpoint_key(prevout_txid, prevout_index);
         let spends_index_cf = self.db.cf_handle(&ColumnFamily::SpendsIndex).unwrap();
         let mut serialized = Vec::with_capacity(OUTPOINT_SIZE);
         spending_txid.consensus_encode(&mut serialized)?;
@@ -603,7 +622,7 @@ impl Store {
         prevout_index: u32,
         batch: &mut WriteBatch,
     ) {
-        let key = format!("{prevout_txid}:{prevout_index}");
+        let key = outpoint_key(prevout_txid, prevout_index);
         let spends_index_cf = self.db.cf_handle(&ColumnFamily::SpendsIndex).unwrap();
         batch.delete_cf::<&[u8]>(&spends_index_cf, key.as_ref());
     }
@@ -660,7 +679,7 @@ impl Store {
     /// Caller should check if the spending outpoint is in a confirmed
     /// block or not, if they need to.
     pub(crate) fn is_spent(&self, txid: &Txid, vout: u32) -> Result<Option<OutPoint>, StoreError> {
-        let key = format!("{txid}:{vout}");
+        let key = outpoint_key(txid, vout);
         let spends_index_cf = self.db.cf_handle(&ColumnFamily::SpendsIndex).unwrap();
 
         match self.db.get_cf::<&[u8]>(&spends_index_cf, key.as_ref())? {
@@ -698,7 +717,7 @@ impl Store {
         Ok(tx_metadata)
     }
 
-    /// Add the given blockhash to the txids→blocks index for all txids.
+    /// Add the given blockhash to the txids -> blocks index for all txids.
     ///
     /// This index maps each txid to one or more blockhashes, allowing
     /// callers to look up which blocks contain a given transaction.
@@ -802,8 +821,7 @@ impl Store {
         bytes_suffix: &[u8],
         column_family: ColumnFamily,
     ) -> Result<(), StoreError> {
-        let mut blockhash_bytes = consensus::serialize(blockhash);
-        blockhash_bytes.extend_from_slice(bytes_suffix);
+        let blockhash_bytes = txids_key(blockhash, bytes_suffix);
 
         let mut serialized_txids = Vec::new();
         txids.consensus_encode(&mut serialized_txids)?;
@@ -815,8 +833,7 @@ impl Store {
     /// Get all transaction IDs for a given block hash from the
     /// BlockTxids column family.
     pub fn get_txids_for_blockhash(&self, blockhash: &BlockHash) -> Txids {
-        let mut blockhash_bytes = consensus::serialize(blockhash);
-        blockhash_bytes.extend_from_slice(b"_txids");
+        let blockhash_bytes = txids_key(blockhash, BLOCK_TXIDS_SUFFIX);
 
         let block_txids_cf = self.db.cf_handle(&ColumnFamily::BlockTxids).unwrap();
         match self
@@ -872,7 +889,7 @@ impl Store {
         let mut outputs = Vec::new();
 
         for i in 0..tx_metadata.input_count {
-            let input_key = format!("{txid}:{i}");
+            let input_key = outpoint_key(txid, i);
             let input = self
                 .db
                 .get_cf::<&[u8]>(&inputs_cf, input_key.as_ref())
@@ -888,7 +905,7 @@ impl Store {
             inputs.push(input);
         }
         for i in 0..tx_metadata.output_count {
-            let output_key = format!("{txid}:{i}");
+            let output_key = outpoint_key(txid, i);
             let output = self
                 .db
                 .get_cf::<&[u8]>(&outputs_cf, output_key.as_ref())
@@ -958,7 +975,7 @@ impl Store {
         for (index, metadata) in metadatas.iter().enumerate() {
             let txid = &txids[index];
             for input_index in 0..metadata.input_count {
-                keys.push(format!("{txid}:{input_index}"));
+                keys.push(outpoint_key(txid, input_index));
             }
             offsets.push(keys.len());
         }
@@ -1004,7 +1021,7 @@ impl Store {
         for (index, metadata) in metadatas.iter().enumerate() {
             let txid = &txids[index];
             for output_index in 0..metadata.output_count {
-                keys.push(format!("{txid}:{output_index}"));
+                keys.push(outpoint_key(txid, output_index));
             }
             offsets.push(keys.len());
         }
@@ -1172,6 +1189,25 @@ mod tests {
     use bitcoin::hashes::Hash;
     use bitcoin::pow::Work;
     use tempfile::tempdir;
+
+    #[test]
+    fn test_outpoint_key_is_txid_hex_colon_index() {
+        let txid = Txid::from_byte_array([0x01; 32]);
+
+        assert_eq!(
+            outpoint_key(&txid, 7),
+            "0101010101010101010101010101010101010101010101010101010101010101:7"
+        );
+    }
+
+    #[test]
+    fn test_txids_key_is_serialized_blockhash_then_suffix() {
+        let blockhash = BlockHash::from_byte_array([0x02; 32]);
+        let mut expected = vec![0x02; 32];
+        expected.extend_from_slice(b"_txids");
+
+        assert_eq!(txids_key(&blockhash, BLOCK_TXIDS_SUFFIX), expected);
+    }
 
     #[test]
     fn test_transaction_store_should_succeed() {
@@ -3270,7 +3306,7 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         // Verify the spending tx's output inherited coinbase_root_height = 200
-        let output_key = format!("{spending_txid}:0");
+        let output_key = outpoint_key(&spending_txid, 0);
         let outputs_cf = store.db.cf_handle(&ColumnFamily::Outputs).unwrap();
         let bytes = store
             .db

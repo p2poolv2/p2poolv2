@@ -8,11 +8,13 @@
 //! height calculation, chain work tracking, and reorg handling. Read operations
 //! are synchronous and direct, while writes are serialized through the store writer.
 
+use crate::accounting::payout::sharechain_pplns::pplns_window::PRUNE_INTERVAL;
 use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::store::block_tx_metadata::{BlockMetadata, Status};
 use crate::store::dag_store::{BlockValidSearch, ShareDag, UncleInfo};
 use crate::store::found_block::FoundBlock;
+use crate::store::prune_blocks::PruneStats;
 use crate::store::transaction_store::PrevoutCheck;
 use crate::store::writer::{StoreError, StoreHandle};
 use bitcoin::{BlockHash, TxMerkleNode, Work};
@@ -816,6 +818,39 @@ impl ChainStoreHandle {
         self.store_handle.mark_block_valid(blockhash).await
     }
 
+    /// Lowest height from which block bodies may still need pruning, below
+    /// `target`. See `Store::find_prune_start`.
+    pub fn find_prune_start(&self, target: u32) -> Result<u32, StoreError> {
+        self.store_handle.store().find_prune_start(target)
+    }
+
+    /// Delete the block bodies at heights `[from, target)`.
+    ///
+    /// Sends one writer command per `PRUNE_INTERVAL` heights, so other
+    /// writes interleave between chunks. The caller must only prune below
+    /// the confirmed tip, since the candidate index entries in the range are
+    /// deleted too.
+    pub async fn prune_block_bodies(
+        &self,
+        from: u32,
+        target: u32,
+    ) -> Result<PruneStats, StoreError> {
+        let mut stats = PruneStats::default();
+        let mut chunk_start = from;
+        while chunk_start < target {
+            let chunk_end = chunk_start
+                .saturating_add(PRUNE_INTERVAL as u32)
+                .min(target);
+            let chunk_stats = self
+                .store_handle
+                .prune_block_bodies_chunk(chunk_start, chunk_end)
+                .await?;
+            stats.add(chunk_stats);
+            chunk_start = chunk_end;
+        }
+        Ok(stats)
+    }
+
     /// Store the coinbase merkle branches of a batch of synced headers, so
     /// headers held without their bodies can be served on with their proofs.
     pub async fn add_header_template_merkle_branches(
@@ -957,6 +992,8 @@ mockall::mock! {
         pub async fn organise_block(&self) -> Result<Option<u32>, StoreError>;
         pub async fn mark_invalid(&self, blockhash: BlockHash) -> Result<(), StoreError>;
         pub async fn mark_block_valid(&self, blockhash: BlockHash) -> Result<(), StoreError>;
+        pub fn find_prune_start(&self, target: u32) -> Result<u32, StoreError>;
+        pub async fn prune_block_bodies(&self, from: u32, target: u32) -> Result<PruneStats, StoreError>;
         pub async fn add_header_template_merkle_branches(&self, entries: Vec<(BlockHash, Vec<TxMerkleNode>)>) -> Result<(), StoreError>;
         pub fn get_template_merkle_branches(&self, blockhash: &BlockHash) -> Result<Vec<TxMerkleNode>, StoreError>;
         pub async fn promote_block(&self, header: ShareHeader) -> Result<Option<u32>, StoreError>;
