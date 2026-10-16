@@ -9,7 +9,6 @@
 
 use bitcoin::BlockHash;
 use bitcoin::hashes::Hash;
-use p2poolv2_lib::accounting::payout::sharechain_pplns::pplns_window::PRUNE_DEPTH;
 use p2poolv2_lib::shares::validation::MAX_UNCLES;
 use p2poolv2_lib::store::Store;
 use p2poolv2_lib::store::block_tx_metadata::ChainMembership;
@@ -84,7 +83,13 @@ fn main() {
 
     println!("Top confirmed height: {top_height}");
 
-    let prune_boundary = top_height.saturating_sub(PRUNE_DEPTH as u32);
+    let prune_boundary = match store.prune_height() {
+        Ok(height) => height,
+        Err(error) => {
+            eprintln!("Failed to read prune height: {error}");
+            process::exit(1);
+        }
+    };
     println!("Prune boundary: {prune_boundary} (blocks at or above this must have full data)");
 
     let mut summary = VerificationSummary::new();

@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use super::{Chain, Height, Store, TopResult};
-use crate::accounting::payout::sharechain_pplns::pplns_window::PRUNE_DEPTH;
 use crate::node::request_response_handler::block_fetcher::FETCH_BATCH_SIZE;
+use crate::store::prune_blocks::prune_height_for_tip;
 use crate::store::writer::StoreError;
 use tracing::debug;
 
@@ -31,7 +31,7 @@ impl Store {
             Err(StoreError::NotFound(_)) => return Ok(None),
             Err(error) => return Err(error),
         };
-        let prune_height = candidate_tip_height.saturating_sub(PRUNE_DEPTH as u32);
+        let prune_height = prune_height_for_tip(candidate_tip_height);
 
         let candidates =
             self.find_promotable_candidates(&top_confirmed, candidate_tip_height, prune_height)?;

@@ -19,7 +19,7 @@ use tracing::debug;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use super::{Chain, Height, TopResult, height_to_key_with_suffix};
-use crate::accounting::payout::sharechain_pplns::pplns_window::PRUNE_DEPTH;
+use crate::store::prune_blocks::prune_height_for_tip;
 
 const CANDIDATE_SUFFIX: &str = ":c";
 const TOP_CANDIDATE_KEY: &str = "meta:top_candidate_height";
@@ -355,7 +355,7 @@ impl Store {
             Err(StoreError::NotFound(_)) => return Ok(min_fork_and_confirmed_height),
             Err(error) => return Err(error),
         };
-        let prune_floor = candidate_height.saturating_sub(PRUNE_DEPTH as u32);
+        let prune_floor = prune_height_for_tip(candidate_height);
 
         Ok(std::cmp::max(min_fork_and_confirmed_height, prune_floor))
     }
@@ -867,6 +867,7 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::accounting::payout::sharechain_pplns::pplns_window::PRUNE_DEPTH;
     use crate::store::organise::TopResult;
     use crate::test_utils::TestShareBlockBuilder;
     use bitcoin::Work;
