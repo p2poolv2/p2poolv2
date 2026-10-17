@@ -27,6 +27,7 @@ test('the BCHN-accepted regtest withdrawal verifies against its actual genesis o
   assert.notEqual(typeof transaction, 'string');
   assert.equal(binToHex(transaction.inputs[0].outpointTransactionHash), fixture.genesis_txid);
   assert.equal(transaction.inputs[0].outpointIndex, 0);
+  assert.equal(transaction.inputs[0].sequenceNumber, fixture.relative_age);
   assert.equal(binToHex(transaction.inputs[1].outpointTransactionHash), fixture.genesis_txid);
   assert.equal(transaction.inputs[1].outpointIndex, 1);
   assert.equal(createVirtualMachineBch2026(true).verify({ transaction, sourceOutputs: genesis.outputs }), true);
@@ -35,7 +36,7 @@ test('the BCHN-accepted regtest withdrawal verifies against its actual genesis o
 test('the same real withdrawal also verifies the two-work Full-Template proof', () => {
   const genesis = decodeTransactionBch(fromHex(fixture.genesis_hex));
   const transaction = decodeTransactionBch(fromHex(fixture.withdrawal_hex));
-  transaction.inputs[0].unlockingBytecode = encodeUnlock(71, fixture.full_proof);
+  transaction.inputs[0].unlockingBytecode = encodeUnlock(transaction.inputs[0].sequenceNumber, fixture.full_proof);
   assert.equal(createVirtualMachineBch2026(true).verify({ transaction, sourceOutputs: genesis.outputs }), true);
 });
 

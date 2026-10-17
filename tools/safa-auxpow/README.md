@@ -112,19 +112,23 @@ batons; a mutable NFT category alone does not establish unique thread state.
 
 ## Regtest evidence and reproduction
 
-On 2026-10-16 two BCHN 29.2.0 nodes accepted P2Pool JD blocks 280 and 281
-committing this variant's real work. The Full-Template proof covered two
-work items; Coinbase-Only selected just SAFA. Both passed the Rust verifier
-and the covenant VM. A mutable baton requiring 71 blocks then spent successfully
-using the private proof, returning 419,999,000 tokens and paying 1,000 tokens.
+On 2026-10-17 two isolated BCHN 29.2.0 nodes accepted P2Pool JD blocks 173
+and 174 through the actual listener and authenticated Noise connections.
+The Full-Template proof covered two work items; Coinbase-Only selected just
+SAFA. Both passed the Rust verifier and the covenant VM.
 
-The withdrawal is `6603a8f72a8d6dec0649039fcc2d84a3fd5d852f1b12f9c514b1911dcad213e4`,
-in block `16f3f77f338747dedaa170eddaf023ad22c16f74e163450efd7086d87fcaa2bc`
-at height 282. Its scriptSig is 1,266 bytes; the Full-Template proof uses
-1,298 bytes. The transaction paid 5,000 satoshis in fees with a sponsor input.
-BCHN's mempool check rejected a changed Merkle sibling. Public transaction
-and proof bytes in `test_data/regtest-withdrawal.json` are replayed by the
-offline VM tests, including the BCHN-signed sponsor input.
+The baton requires 74 blocks. At tip 174, BCHN rejected the signed withdrawal
+with `non-BIP68-final`. The identical transaction passed at tip 175 and both
+nodes accepted it in block 176, continuing 419,999,000 tokens and paying 1,000.
+Its txid is `d1d879194e1ca5df8a2dad35ebdf6436841b903a29ad6a3e484beb47d05c79be`,
+in block `4aa8b6848906eba9df5d8293e08e00a047812f43b1003c569a3fdafbeda46d2e`.
+Its scriptSig is 1,266 bytes; the two-level Full-Template proof uses 1,330.
+The transaction paid 5,000 satoshis in fees with a sponsor input reserved
+against selection by the JD wallet payments. BCHN rejected a changed Merkle
+sibling. Public transaction/proof bytes and maturity results in
+`test_data/regtest-withdrawal.json` are replayed by the offline VM tests,
+including the BCHN-signed sponsor input. The VM checks scripts and signatures;
+the BCHN run establishes actual chain maturity.
 
 Use two disposable, connected regtest nodes and the funded `jd-regtest`
 wallet from [the JD test setup](../../docs/bch-job-declaration.md#two-node-bchn-regtest-check).
@@ -149,6 +153,6 @@ The harness prepares a baton requiring 74 blocks and mines 71 blocks. Run
 exactly the two JD blocks next. The spend command verifies `non-BIP68-final`
 one block before maturity, mines that block, and requires the identical signed
 transaction to pass. It preserves both results, state, genesis, candidate
-withdrawal and final evidence in the new directory. Stop only the disposable nodes you started. This is
-local regtest validation. Chipnet issuance, independent review of the new
+withdrawal and final evidence in the new directory. Stop only the disposable
+nodes you started. This is local regtest validation. Chipnet issuance, independent review of the new
 covenant and compatibility with a final SAFA specification remain open.

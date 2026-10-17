@@ -174,3 +174,16 @@ Repeated with BCHN 29.2.0 on 2026-10-15 (one test passed, 0.158 seconds):
 Each block included 219 satoshis in transaction fees. The Coinbase-Only
 transaction was signed with the disposable wallet but withheld from both
 mempools until its complete block was broadcast.
+
+Repeated on 2026-10-17 using the authenticated network test and real SAFA work:
+
+| Mode | Height | Block hash | Coinbase value (sat) |
+|---|---|---|---|
+| Full-Template | 173 | `44ccdc671714314018c0840339f46f057ac0cab71cff32e5330a2d6955f30975` | 2500000219 |
+| Coinbase-Only | 174 | `523418daf87a30df4f57d5d67cdd41d3cb17e8deeb24008cea80b46bfe392a7f` | 2500000219 |
+
+The test passed in 6.459 seconds. These proofs then authorized a real token
+withdrawal. BCHN rejected that identical signed transaction one block before
+its 74-block relative age matured, then accepted it after one more block.
+The withdrawal, public vectors and reproduction commands are in
+[the SAFA evidence record](../tools/safa-auxpow/README.md#regtest-evidence-and-reproduction).

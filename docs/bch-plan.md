@@ -5,7 +5,7 @@ with the maintainer of [Pickaxe](https://github.com/CyberAshven/pickaxe-miner).
 Audience: contributors and AI agents starting the BCH port. Read
 [AGENTS.md](../AGENTS.md) and `docs/architecture/` before changing code.
 
-## Current requirement checks (2026-10-16)
+## Current requirement checks (2026-10-17)
 
 | Requirement | Status and evidence |
 |---|---|
@@ -17,10 +17,10 @@ Audience: contributors and AI agents starting the BCH port. Read
 | Pool-issued SV1/SV2 jobs and worker cleanup | Implemented; recorded CPU mining plus channel and socket tests. Independent ASIC firmware remains unverified. |
 | CashAddr text in the API | Implemented; P2PKH/P2SH vectors and a chipnet share lookup test. |
 | Declared BCH coinbase peer validation | Implemented; bounded header extension, prefix/aux proof tampering, payout diversion, storage and compressed-header tests. |
-| Mineable Job Declaration in both modes | Encrypted loopback regression covers both modes with mocked BCHN. Separately, two real BCHN regtest nodes accepted Full-Template and private Coinbase-Only blocks, with verifiable emitted coinbase proofs. Independent client interoperability remains pending. |
+| Mineable Job Declaration in both modes | Both the mocked regression and the two-node BCHN regtest use authenticated Noise connections through the actual listener. Both modes mine blocks and emit verifiable proofs. Independent client interoperability remains pending. |
 | Miner-selected auxiliary commitments | Bounded shared trees and full coinbase/header proofs are implemented. An experimental SAFA variant verifies the proof inside the BCH VM and paid tokens in a real two-node regtest. Final SAFA policy, independent covenant review and chipnet issuance remain open. See [bch-auxpow.md](bch-auxpow.md). |
 | PPLNS tuning and independent ASIC/JD interoperability | Pending; retain the existing settings until a justified tuning decision. |
-| Remote CI and chipnet block | No GitHub Actions runs on this fork; no chipnet block found. Local checks and recorded propagation do not replace these. |
+| Remote CI and chipnet block | No GitHub Actions runs: the web interface still requires activation of workflows on this fork, despite Actions permissions reporting enabled. No chipnet block found. Local checks and recorded propagation do not replace these. |
 
 ## Implementation checkpoint (2026-10-13)
 
@@ -326,6 +326,25 @@ with live-node interoperability remain unverified. See
 Local Windows validation passed: 1,719 default workspace tests (two skipped),
 1,727 all-features tests (one skipped), all-target Clippy in both configurations
 with warnings denied, formatting and `git diff --check`.
+
+## Live encrypted Job Declaration and SAFA maturity (2026-10-17)
+
+The two-node BCHN test now allocates and declares work, installs jobs and
+submits shares through authenticated Noise sockets using the real listener.
+The final isolated run accepted Full-Template block 173 and private
+Coinbase-Only block 174, each paying exactly 2,500,000,219 satoshis.
+Both emitted proofs verify. The real SAFA withdrawal was rejected with
+`non-BIP68-final` at tip 174, accepted unchanged at tip 175, then mined in
+block 176. The sponsor input is locked against wallet selection while JD
+payments are prepared. Both proofs and the signed withdrawal are replayed
+from the public fixture. See [the evidence record](../tools/safa-auxpow/README.md#regtest-evidence-and-reproduction).
+
+Local validation passed: 1,719 default workspace tests (two skipped), 1,727
+all-features tests (one skipped), Clippy in both configurations with warnings
+denied, formatting and whitespace checks, and 40 covenant tests. Independent
+client/ASIC checks, covenant review, SAFA policy, chipnet issuance/block and
+remote CI remain open. The GitHub Actions web page still blocks workflows
+behind the fork activation notice; the API's enabled flag did not activate them.
 
 ## Startup selection (2026-10-13)
 
