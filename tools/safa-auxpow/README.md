@@ -81,6 +81,28 @@ This variant uses the linked executable template's `scalar * 10000000`
 virtual reserve; the forum narrative's `1000000` multiplier differs. That
 economic parameter needs agreement before any real SAFA issuance.
 
+The permissionless market path also accepts a zero-change self-cycle: it
+preserves the vault's satoshis, tokens, locking bytecode and baton exactly,
+while a sponsor input pays the fee. No AuxPoW or relative age is required
+for that market spend. A standard BCH 2026 VM regression accepts this shape
+with a 1,000-satoshi sponsor fee and verifies that it replaces the outpoint.
+The unchanged state still accepts the same mining proof when its claimed
+age is supported by the input sequence; this does not make that replacement
+output mature on the chain.
+
+Once such a transaction confirms, the replacement UTXO's relative age
+starts again. A mining transaction prepared against the spent outpoint
+loses that input; using its age-71 proof against the replacement requires
+waiting for that output to mature. Mining with a smaller claimed age needs
+work for its newly adjusted target; age zero halves the previous target
+before the existing clamp and compact rounding.
+Repeated public self-cycles can therefore delay mining or push miners
+toward harder work without taking vault funds. This is a liveness and
+economic property of the retained market rules. Its policy remains open.
+The regression checks VM rules and transaction structure, not source-output
+creation heights or a confirmed chain attack. No live self-cycle was
+broadcast as part of this check.
+
 The complete scriptSig, including redeem script, must fit 10,000 bytes.
 Both maximum-depth branches (30 auxiliary, 25 coinbase) pass the standard VM.
 Large pool coinbases may exceed the remaining budget and are refused by the

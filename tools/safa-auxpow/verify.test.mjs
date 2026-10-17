@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import {
   binToHex, createVirtualMachineBch2026, decodeAuthenticationInstructions,
-  decodeTransactionBch, encodeDataPush, flattenBinArray,
+  decodeTransactionBch, encodeDataPush, encodeTransactionBch, flattenBinArray,
   hash256, hexToBin, numberToBinUint32LE,
 } from '@bitauth/libauth';
 import {
@@ -49,6 +49,42 @@ test('an unchanged baton keeps the SAFA market path available without a mining p
   const spend = createSafaSpend();
   spend.transaction.outputs = [structuredClone(spend.sourceOutputs[0])];
   assert.equal(verifySafaMarket(spend), true);
+});
+
+test('a proof-free unchanged market self-cycle replaces the outpoint but preserves the claimed mining age', () => {
+  const spend = createSafaSpend();
+  const proof = createSafaProof(spend);
+  const vault = structuredClone(spend.sourceOutputs[0]);
+  const spentOutpoint = Uint8Array.from(spend.transaction.inputs[0].outpointTransactionHash);
+  spend.transaction.inputs[0].sequenceNumber = 0xffffffff;
+  spend.sourceOutputs.push({ valueSatoshis: 2000n, lockingBytecode: Uint8Array.of(0x51) });
+  spend.transaction.inputs.push({
+    outpointTransactionHash: new Uint8Array(32).fill(0x55), outpointIndex: 1,
+    sequenceNumber: 0xffffffff, unlockingBytecode: new Uint8Array(),
+  });
+  spend.transaction.outputs = [vault, {
+    valueSatoshis: 1000n, lockingBytecode: Uint8Array.of(0x51),
+  }];
+  assert.equal(verifySafaMarket(spend), true);
+  assert.deepEqual(spend.transaction.inputs[0].unlockingBytecode, encodeDataPush(redeemScript));
+  assert.deepEqual(spend.transaction.outputs[0], spend.sourceOutputs[0]);
+  assert.equal(
+    spend.sourceOutputs[0].valueSatoshis + spend.sourceOutputs[1].valueSatoshis
+      - spend.transaction.outputs[0].valueSatoshis - spend.transaction.outputs[1].valueSatoshis,
+    1000n,
+  );
+  const replacementOutpoint = hash256(encodeTransactionBch(spend.transaction)).reverse();
+  assert.notDeepEqual(replacementOutpoint, spentOutpoint);
+
+  const continued = createSafaSpend();
+  continued.sourceOutputs[0] = structuredClone(vault);
+  continued.transaction.inputs[0].outpointTransactionHash = replacementOutpoint;
+  assert.equal(continued.transaction.inputs[0].outpointIndex, 0);
+  assert.equal(continued.transaction.inputs[0].sequenceNumber, 71);
+  assert.equal(verifySafaSpend(continued, proof), true);
+  // The VM checks CSV against the sequence; BCHN must check the new output's actual age.
+  continued.transaction.inputs[0].sequenceNumber = 0;
+  assert.notEqual(verifySafaSpend(continued, proof), true);
 });
 
 test('a real market exchange preserves the virtual constant product', () => {
