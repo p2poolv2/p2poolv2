@@ -93,9 +93,9 @@ builds retain their existing block-submission suppression.
 cargo nextest run -p p2poolv2_lib -E 'test(encrypted_bch_job_declaration_modes_install_mine_and_emit)'
 ```
 
-BCHN responses are mocked in this test. It verifies the encrypted network
-exchange, separately from the real BCHN test below; it does not establish
-independent client, ASIC or combined encrypted-network/live-node compatibility.
+BCHN responses are mocked in this test. The test below combines encrypted
+network exchange with real BCHN nodes. Neither test establishes independent
+client or ASIC compatibility.
 
 Validated locally on Windows on 2026-10-16: the focused exchange passed,
 followed by 1,719 default workspace tests (two skipped) and 1,727 all-features
@@ -104,13 +104,18 @@ features and warnings denied. Formatting and `git diff --check` passed.
 
 ## Two-node BCHN regtest check
 
-The ignored `bchn_declared_jobs_reach_both_real_nodes` test uses two disposable,
-connected BCHN nodes. It verifies Full-Template proposal validation and pool
-submission, then a private transaction absent from both mempools, Coinbase-Only
+The ignored `bchn_declared_jobs_reach_both_real_nodes_over_noise` test uses two
+disposable, connected BCHN nodes and the actual SV2 TCP listener. A client
+using SRI's initiator pins the test authority key on three authenticated Noise
+connections: Mining, Full-Template JD and Coinbase-Only JD. It allocates tokens,
+declares and reveals Full-Template transactions, installs both jobs and submits
+their shares over these sockets. It verifies Full-Template proposal validation
+and pool submission, then a private transaction absent from both mempools, Coinbase-Only
 header submission and client block broadcast. Both nodes must accept each
 block, both emitted coinbase proofs must match, and BCHN must reject an extra
-satoshi of coinbase value. Mining handlers run directly inside the test;
-this does not exercise an independent client or the encrypted network exchange.
+satoshi of coinbase value. This repository's client uses the published SRI
+transport and messages; independent declarator or ASIC firmware interoperability
+still requires separate validation.
 
 Use fresh data directories, outside the repository. The first node needs this
 `bitcoin.conf`:
@@ -148,7 +153,7 @@ $testAddress = & "$bchnBin/bitcoin-cli.exe" "-datadir=$clientData" -rpcwallet=jd
 & "$bchnBin/bitcoin-cli.exe" "-datadir=$clientData" generatetoaddress 101 $testAddress
 $env:BCHN_JD_CLIENT_RPC = 'http://127.0.0.1:19453'
 $env:BCHN_JD_POOL_RPC = 'http://127.0.0.1:19455'
-cargo nextest run -p p2poolv2_lib --run-ignored ignored-only -E 'test(bchn_declared_jobs_reach_both_real_nodes)' --nocapture
+cargo nextest run -p p2poolv2_lib --run-ignored ignored-only -E 'test(bchn_declared_jobs_reach_both_real_nodes_over_noise)' --nocapture
 # Stop only these two disposable nodes when finished.
 & "$bchnBin/bitcoin-cli.exe" "-datadir=$clientData" stop
 & "$bchnBin/bitcoin-cli.exe" "-datadir=$poolData" stop

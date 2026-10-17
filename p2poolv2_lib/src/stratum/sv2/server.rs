@@ -4,7 +4,8 @@
 
 //! Local Stratum V2 listener.
 //!
-//! Each accepted connection speaks unencrypted SV2 frames. Job Declaration
+//! Connections use authenticated Noise when an authority is configured.
+//! Job Declaration
 //! and Mining are separate connections that share one [`super::JobRegistry`].
 //! A Mining connection may also open standard and extended channels, which
 //! get a job for every template the SV1 server sees (see `super::mining`).
@@ -287,7 +288,7 @@ async fn next_template(
 mod tests {
     use super::*;
     use crate::accounting::stats::metrics;
-    use crate::config::{Chain, DEFAULT_VERSION_MASK, PoolMode, StratumConfig};
+    use crate::config::{Chain, DEFAULT_VERSION_MASK, PoolMode};
     use crate::shares::merge_mining::MergeMiningCommitment;
     use crate::shares::share_block::ShareHeader;
     use crate::shares::transactions::coinbase::compute_non_coinbase_root;
@@ -296,7 +297,7 @@ mod tests {
     use crate::stratum::work::tracker::start_tracker_actor;
     use crate::test_utils::{
         TestSv2Client, bch_template_transaction, test_bch_custom_job, test_bch_prepared,
-        test_bch_solve_custom_job, test_bch_stratum_context, test_sv2_setup,
+        test_bch_solve_custom_job, test_bch_stratum_context, test_sv2_authority, test_sv2_setup,
     };
     use crate::test_utils::{make_test_share_address, setup_test_chain_store_handle};
     use binary_sv2::U256;
@@ -368,13 +369,7 @@ mod tests {
         cache.set_prepared(Arc::clone(&prepared));
         let (_template_sender, template_rx) = watch::channel(Some(Arc::clone(&prepared)));
         let (ctx, mut emissions, _dirs) = test_bch_stratum_context(&rpc.uri()).await;
-        let mut config = StratumConfig::new_for_test_default();
-        config.sv2_port = Some(3336);
-        config.sv2_authority_public_key =
-            Some("9bDuixKmZqAJnrmP746n8zU1wyAQRrus7th9dxnkPg6RzQvCnan".to_string());
-        config.sv2_authority_secret_key =
-            Some("zmBEmPhqo3A92FkiLVvyCz6htc3e53ph3ZbD4ASqGaLjwnFLi".to_string());
-        let authority = config.parse().unwrap().sv2_authority().unwrap();
+        let authority = test_sv2_authority();
         let listener = bind("127.0.0.1", 0).await.unwrap();
         let address = listener.local_addr().unwrap();
         let connection_limit = Arc::new(Semaphore::new(3));
@@ -817,13 +812,7 @@ mod tests {
 
     #[tokio::test]
     async fn noise_listener_answers_setup_connection_to_a_client_pinning_its_key() {
-        let mut config = StratumConfig::new_for_test_default();
-        config.sv2_port = Some(3336);
-        config.sv2_authority_public_key =
-            Some("9bDuixKmZqAJnrmP746n8zU1wyAQRrus7th9dxnkPg6RzQvCnan".to_string());
-        config.sv2_authority_secret_key =
-            Some("zmBEmPhqo3A92FkiLVvyCz6htc3e53ph3ZbD4ASqGaLjwnFLi".to_string());
-        let authority = config.parse().unwrap().sv2_authority().unwrap();
+        let authority = test_sv2_authority();
         let listener = bind("localhost", 0).await.unwrap();
         let address = listener.local_addr().unwrap();
         let (shutdown_sender, shutdown_receiver) = watch::channel(());
@@ -839,12 +828,9 @@ mod tests {
 
         let mut client = TestSv2Client::connect(address, authority.public_key).await;
         client
-            .send(
-                encode_message(
-                    test_sv2_setup(Protocol::MiningProtocol, 0),
-                    MESSAGE_TYPE_SETUP_CONNECTION,
-                )
-                .unwrap(),
+            .send_message(
+                MESSAGE_TYPE_SETUP_CONNECTION,
+                test_sv2_setup(Protocol::MiningProtocol, 0),
             )
             .await;
         client.receive(MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS).await;
@@ -855,13 +841,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_client_pinning_another_authority_key_rejects_the_handshake() {
-        let mut config = StratumConfig::new_for_test_default();
-        config.sv2_port = Some(3336);
-        config.sv2_authority_public_key =
-            Some("9bDuixKmZqAJnrmP746n8zU1wyAQRrus7th9dxnkPg6RzQvCnan".to_string());
-        config.sv2_authority_secret_key =
-            Some("zmBEmPhqo3A92FkiLVvyCz6htc3e53ph3ZbD4ASqGaLjwnFLi".to_string());
-        let authority = config.parse().unwrap().sv2_authority().unwrap();
+        let authority = test_sv2_authority();
         let listener = bind("localhost", 0).await.unwrap();
         let address = listener.local_addr().unwrap();
         let (shutdown_sender, shutdown_receiver) = watch::channel(());

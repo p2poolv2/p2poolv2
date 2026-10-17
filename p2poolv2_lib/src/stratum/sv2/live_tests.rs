@@ -4,22 +4,37 @@
 
 //! Explicit opt-in checks against two disposable BCHN regtest nodes.
 
-use super::mining::MiningChannels;
+use super::{PoolTransactionCache, Sv2Mining, bind, serve};
 use crate::shares::auxpow::{AuxPowProof, AuxiliaryTree, AuxiliaryWork};
+use crate::shares::merge_mining::MergeMiningCommitment;
 use crate::shares::share_block::ShareHeader;
 use crate::shares::transactions::coinbase::compute_non_coinbase_root;
 use crate::stratum::work::block_template::BlockTemplate;
 use crate::test_utils::{
-    test_bch_custom_coinbase, test_bch_custom_job_with_aux, test_bch_prepared_for_template,
-    test_bch_solve_custom_job, test_bch_stratum_context,
+    TestSv2Client, test_bch_custom_coinbase, test_bch_custom_job_with_aux,
+    test_bch_prepared_for_template, test_bch_solve_custom_job, test_bch_stratum_context,
+    test_sv2_authority, test_sv2_setup,
 };
-use binary_sv2::{B032, Deserialize, U256};
+use binary_sv2::{B016M, B032, B064K, B0255, Deserialize, Seq064K, U256};
 use bitcoin::consensus::{deserialize, serialize};
 use bitcoin::hashes::{Hash, sha256d};
 use bitcoin::{Address, Amount, Block, BlockHash, Network, PubkeyHash, Transaction};
 use bitcoindrpc::BitcoindRpcClient;
+use common_messages_sv2::{
+    MESSAGE_TYPE_SETUP_CONNECTION, MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS, Protocol,
+};
+use job_declaration_sv2::{
+    AllocateMiningJobToken, AllocateMiningJobTokenSuccess, DeclareMiningJob,
+    DeclareMiningJobSuccess, MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN,
+    MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN_SUCCESS, MESSAGE_TYPE_DECLARE_MINING_JOB,
+    MESSAGE_TYPE_DECLARE_MINING_JOB_SUCCESS, MESSAGE_TYPE_PROVIDE_MISSING_TRANSACTIONS,
+    MESSAGE_TYPE_PROVIDE_MISSING_TRANSACTIONS_SUCCESS, ProvideMissingTransactions,
+    ProvideMissingTransactionsSuccess,
+};
 use mining_sv2::{
-    MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL, MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_SUCCESS,
+    MESSAGE_TYPE_MINING_SET_NEW_PREV_HASH, MESSAGE_TYPE_NEW_EXTENDED_MINING_JOB,
+    MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL, MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL_SUCCESS,
+    MESSAGE_TYPE_SET_CUSTOM_MINING_JOB, MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_SUCCESS,
     MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED, MESSAGE_TYPE_SUBMIT_SHARES_SUCCESS,
     OpenExtendedMiningChannel, OpenExtendedMiningChannelSuccess, SetCustomMiningJob,
     SetCustomMiningJobSuccess, SubmitSharesExtended,
@@ -32,11 +47,12 @@ use std::fs;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::{Semaphore, watch};
 use tokio::time::{sleep, timeout};
 
 #[tokio::test]
 #[ignore = "requires two disposable BCHN nodes and a funded jd-regtest wallet; see docs/bch-job-declaration.md"]
-async fn bchn_declared_jobs_reach_both_real_nodes() {
+async fn bchn_declared_jobs_reach_both_real_nodes_over_noise() {
     let client_url = env::var("BCHN_JD_CLIENT_RPC").expect("set BCHN_JD_CLIENT_RPC");
     let pool_url = env::var("BCHN_JD_POOL_RPC").expect("set BCHN_JD_POOL_RPC");
     let client_socket: SocketAddr = client_url.strip_prefix("http://").unwrap().parse().unwrap();
@@ -90,29 +106,85 @@ async fn bchn_declared_jobs_reach_both_real_nodes() {
     let prepared = test_bch_prepared_for_template(template);
     let (mut ctx, mut emissions, _dirs) = test_bch_stratum_context(&pool_url).await;
     ctx.bitcoindrpc_client = pool.clone();
-    let mut channels = MiningChannels::new(ctx, DEFAULT_VERSION_MASK);
-    let mut open = binary_sv2::to_bytes(OpenExtendedMiningChannel {
-        request_id: 1,
-        user_identity: identity.as_str().try_into().unwrap(),
-        nominal_hash_rate: 1.0,
-        max_target: U256::new(&[0xff; 32]).unwrap(),
-        min_extranonce_size: 8,
-    })
-    .unwrap();
-    let opened = channels
-        .handle(
-            MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL,
-            &mut open,
-            Some(Arc::clone(&prepared)),
+    let cache = PoolTransactionCache::new();
+    cache.set_prepared(Arc::clone(&prepared));
+    cache.set(transactions.clone());
+    let (template_sender, template_rx) = watch::channel(Some(Arc::clone(&prepared)));
+    let authority = test_sv2_authority();
+    let listener = bind("127.0.0.1", 0).await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (shutdown_sender, shutdown_receiver) = watch::channel(());
+    let server = tokio::spawn(serve(
+        listener,
+        Arc::new(Semaphore::new(8)),
+        cache.clone(),
+        Some(MergeMiningCommitment::reserved()),
+        Some(Sv2Mining {
+            ctx,
+            version_mask: DEFAULT_VERSION_MASK,
+            template_rx,
+        }),
+        Some(authority),
+        shutdown_receiver,
+    ));
+    let mut mining = TestSv2Client::connect(address, authority.public_key).await;
+    mining
+        .send_message(
+            MESSAGE_TYPE_SETUP_CONNECTION,
+            test_sv2_setup(Protocol::MiningProtocol, 2),
         )
-        .await
-        .unwrap();
-    let mut open_payload = opened[0][6..].to_vec();
+        .await;
+    mining.receive(MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS).await;
+    mining
+        .send_message(
+            MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL,
+            OpenExtendedMiningChannel {
+                request_id: 1,
+                user_identity: identity.as_str().try_into().unwrap(),
+                nominal_hash_rate: 1.0,
+                max_target: U256::new(&[0xff; 32]).unwrap(),
+                min_extranonce_size: 8,
+            },
+        )
+        .await;
+    let mut open_payload = mining
+        .receive(MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL_SUCCESS)
+        .await;
     let opened = OpenExtendedMiningChannelSuccess::from_bytes(&mut open_payload).unwrap();
     let extranonce_prefix = opened.extranonce_prefix.as_bytes().to_vec();
-    let token = prepared
-        .mining_job_token([1; 32], prepared.template().curtime)
-        .unwrap();
+    let channel_id = opened.channel_id;
+    assert_eq!(channel_id, 1);
+    mining.receive(MESSAGE_TYPE_NEW_EXTENDED_MINING_JOB).await;
+    mining.receive(MESSAGE_TYPE_MINING_SET_NEW_PREV_HASH).await;
+    let mut full_jdc = TestSv2Client::connect(address, authority.public_key).await;
+    full_jdc
+        .send_message(
+            MESSAGE_TYPE_SETUP_CONNECTION,
+            test_sv2_setup(Protocol::JobDeclarationProtocol, 1),
+        )
+        .await;
+    full_jdc
+        .receive(MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS)
+        .await;
+    full_jdc
+        .send_message(
+            MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN,
+            AllocateMiningJobToken {
+                request_id: 2,
+                user_identifier: "miner".try_into().unwrap(),
+            },
+        )
+        .await;
+    let mut allocated_payload = full_jdc
+        .receive(MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN_SUCCESS)
+        .await;
+    let allocated = AllocateMiningJobTokenSuccess::from_bytes(&mut allocated_payload).unwrap();
+    let token = allocated.mining_job_token.as_bytes().to_vec();
+    let transaction_bytes = transactions.iter().map(serialize).collect::<Vec<_>>();
+    let wtxids = transactions
+        .iter()
+        .map(|transaction| transaction.compute_wtxid().to_byte_array())
+        .collect::<Vec<_>>();
     let first_work = AuxiliaryWork {
         chain_id: 1,
         hash: sha256d::Hash::hash(b"token-A"),
@@ -135,39 +207,89 @@ async fn bchn_declared_jobs_reach_both_real_nodes() {
     let auxiliary_tree = AuxiliaryTree::build(&[first_work, second_work], 0).unwrap();
     let (mut request_bytes, declared) = test_bch_custom_job_with_aux(
         Arc::clone(&prepared),
-        token,
+        token.clone(),
         transactions,
         true,
         full_value,
         auxiliary_tree.commitment,
     );
-    let request = SetCustomMiningJob::from_bytes(&mut request_bytes).unwrap();
-    let installed = channels
-        .install_custom_job(&request, declared, Some(prepared))
-        .await
-        .unwrap();
+    let declaration = declared.declaration.unwrap();
+    full_jdc
+        .send_message(
+            MESSAGE_TYPE_DECLARE_MINING_JOB,
+            DeclareMiningJob {
+                request_id: 3,
+                mining_job_token: B0255::new(&token).unwrap(),
+                version: declaration.version,
+                coinbase_tx_prefix: B064K::new(&declaration.prefix).unwrap(),
+                coinbase_tx_suffix: B064K::new(&declaration.suffix).unwrap(),
+                wtxid_list: Seq064K::new(
+                    wtxids
+                        .iter()
+                        .map(|wtxid| U256::new(wtxid).unwrap())
+                        .collect(),
+                )
+                .unwrap(),
+                excess_data: B064K::new(&[]).unwrap(),
+            },
+        )
+        .await;
+    let mut missing_payload = full_jdc
+        .receive(MESSAGE_TYPE_PROVIDE_MISSING_TRANSACTIONS)
+        .await;
+    let missing = ProvideMissingTransactions::from_bytes(&mut missing_payload).unwrap();
+    assert_eq!(missing.request_id, 3);
     assert_eq!(
-        installed[0][2], MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_SUCCESS,
-        "{installed:?}"
+        missing.unknown_tx_position_list.into_inner(),
+        (0..transaction_bytes.len())
+            .map(|index| u16::try_from(index).unwrap())
+            .collect::<Vec<_>>()
     );
-    let mut installed_payload = installed[0][6..].to_vec();
+    full_jdc
+        .send_message(
+            MESSAGE_TYPE_PROVIDE_MISSING_TRANSACTIONS_SUCCESS,
+            ProvideMissingTransactionsSuccess {
+                request_id: 3,
+                transaction_list: Seq064K::new(
+                    transaction_bytes
+                        .iter()
+                        .map(|bytes| B016M::new(bytes).unwrap())
+                        .collect(),
+                )
+                .unwrap(),
+            },
+        )
+        .await;
+    let mut accepted_payload = full_jdc
+        .receive(MESSAGE_TYPE_DECLARE_MINING_JOB_SUCCESS)
+        .await;
+    let accepted = DeclareMiningJobSuccess::from_bytes(&mut accepted_payload).unwrap();
+    let new_token = accepted.new_mining_job_token.as_bytes().to_vec();
+    let mut request = SetCustomMiningJob::from_bytes(&mut request_bytes).unwrap();
+    request.token = B0255::new(&new_token).unwrap();
+    mining
+        .send_message(MESSAGE_TYPE_SET_CUSTOM_MINING_JOB, request.clone())
+        .await;
+    let mut installed_payload = mining
+        .receive(MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_SUCCESS)
+        .await;
     let installed = SetCustomMiningJobSuccess::from_bytes(&mut installed_payload).unwrap();
     let full_header = test_bch_solve_custom_job(&request, &extranonce_prefix);
-    let mut submit = binary_sv2::to_bytes(SubmitSharesExtended {
-        channel_id: 1,
-        sequence_number: 1,
-        job_id: installed.job_id,
-        nonce: full_header.nonce,
-        ntime: full_header.time,
-        version: request.version,
-        extranonce: B032::new(&[0; 8]).unwrap(),
-    })
-    .unwrap();
-    let submitted = channels
-        .handle(MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED, &mut submit, None)
-        .await
-        .unwrap();
-    assert_eq!(submitted[0][2], MESSAGE_TYPE_SUBMIT_SHARES_SUCCESS);
+    mining
+        .send_message(
+            MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED,
+            SubmitSharesExtended {
+                channel_id,
+                sequence_number: 1,
+                job_id: installed.job_id,
+                nonce: full_header.nonce,
+                ntime: full_header.time,
+                version: request.version,
+                extranonce: B032::new(&[0; 8]).unwrap(),
+            },
+        )
+        .await;
+    mining.receive(MESSAGE_TYPE_SUBMIT_SHARES_SUCCESS).await;
     let pool_tip: BlockHash = pool.request("getbestblockhash", vec![]).await.unwrap();
     assert_eq!(pool_tip, full_header.block_hash());
     timeout(Duration::from_secs(10), async {
@@ -251,15 +373,41 @@ async fn bchn_declared_jobs_reach_both_real_nodes() {
     let private_height = template.height;
     let private_value = template.coinbasevalue + private_fee;
     let prepared = test_bch_prepared_for_template(template);
-    let token = prepared
-        .mining_job_token([2; 32], prepared.template().curtime)
-        .unwrap();
+    cache.set(Vec::new());
+    cache.set_prepared(Arc::clone(&prepared));
+    template_sender.send(Some(Arc::clone(&prepared))).unwrap();
+    mining.receive(MESSAGE_TYPE_NEW_EXTENDED_MINING_JOB).await;
+    mining.receive(MESSAGE_TYPE_MINING_SET_NEW_PREV_HASH).await;
+    let mut private_jdc = TestSv2Client::connect(address, authority.public_key).await;
+    private_jdc
+        .send_message(
+            MESSAGE_TYPE_SETUP_CONNECTION,
+            test_sv2_setup(Protocol::JobDeclarationProtocol, 0),
+        )
+        .await;
+    private_jdc
+        .receive(MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS)
+        .await;
+    private_jdc
+        .send_message(
+            MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN,
+            AllocateMiningJobToken {
+                request_id: 4,
+                user_identifier: "miner".try_into().unwrap(),
+            },
+        )
+        .await;
+    let mut allocated_payload = private_jdc
+        .receive(MESSAGE_TYPE_ALLOCATE_MINING_JOB_TOKEN_SUCCESS)
+        .await;
+    let allocated = AllocateMiningJobTokenSuccess::from_bytes(&mut allocated_payload).unwrap();
+    let token = allocated.mining_job_token.as_bytes().to_vec();
     let private_tree = AuxiliaryTree::build(&[second_work], 7).unwrap();
     assert_ne!(
         private_tree.commitment.merkle_root,
         auxiliary_tree.commitment.merkle_root
     );
-    let (mut request_bytes, declared) = test_bch_custom_job_with_aux(
+    let (mut request_bytes, _) = test_bch_custom_job_with_aux(
         Arc::clone(&prepared),
         token,
         vec![private_transaction.clone()],
@@ -280,31 +428,28 @@ async fn bchn_declared_jobs_reach_both_real_nodes() {
         .validate_block_proposal(&private_block)
         .await
         .unwrap();
-    let installed = channels
-        .install_custom_job(&request, declared, Some(prepared))
-        .await
-        .unwrap();
-    assert_eq!(
-        installed[0][2], MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_SUCCESS,
-        "{installed:?}"
-    );
-    let mut installed_payload = installed[0][6..].to_vec();
+    mining
+        .send_message(MESSAGE_TYPE_SET_CUSTOM_MINING_JOB, request.clone())
+        .await;
+    let mut installed_payload = mining
+        .receive(MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_SUCCESS)
+        .await;
     let installed = SetCustomMiningJobSuccess::from_bytes(&mut installed_payload).unwrap();
-    let mut submit = binary_sv2::to_bytes(SubmitSharesExtended {
-        channel_id: 1,
-        sequence_number: 2,
-        job_id: installed.job_id,
-        nonce: private_header.nonce,
-        ntime: private_header.time,
-        version: request.version,
-        extranonce: B032::new(&[0; 8]).unwrap(),
-    })
-    .unwrap();
-    let submitted = channels
-        .handle(MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED, &mut submit, None)
-        .await
-        .unwrap();
-    assert_eq!(submitted[0][2], MESSAGE_TYPE_SUBMIT_SHARES_SUCCESS);
+    mining
+        .send_message(
+            MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED,
+            SubmitSharesExtended {
+                channel_id,
+                sequence_number: 2,
+                job_id: installed.job_id,
+                nonce: private_header.nonce,
+                ntime: private_header.time,
+                version: request.version,
+                extranonce: B032::new(&[0; 8]).unwrap(),
+            },
+        )
+        .await;
+    mining.receive(MESSAGE_TYPE_SUBMIT_SHARES_SUCCESS).await;
     let emission = emissions.try_recv().unwrap();
     assert!(emission.blocktemplate.transactions.is_empty());
     assert_eq!(emission.header, private_header);
@@ -374,4 +519,6 @@ async fn bchn_declared_jobs_reach_both_real_nodes() {
         "{}",
         json!({"mode": "coinbase-only", "height": private_height, "hash": private_header.block_hash().to_string(), "coinbase_value": private_value, "private_fee": private_fee, "transaction": private_txid, "auxiliary_chains": 1, "auxpow_proof": private_auxpow})
     );
+    shutdown_sender.send(()).unwrap();
+    server.await.unwrap();
 }

@@ -90,18 +90,26 @@ if (command === 'prepare') {
   const signed = await rpc(clientUrl, 'signrawtransactionwithwallet', [binToHex(encodeTransactionBch(genesis))], true);
   assert.equal(signed.complete, true);
   const genesisTxid = await rpc(clientUrl, 'sendrawtransaction', [signed.hex]);
+  // Keep later JD payments from selecting the withdrawal's fee input.
+  assert.equal(await rpc(clientUrl, 'lockunspent', [false, [{ txid: genesisTxid, vout: 1 }]], true), true);
   const blocks = await rpc(clientUrl, 'generatetoaddress', [71, fundingAddress]);
   await bothKnowBlock(blocks.at(-1));
-  const next = nextBaton(previous, recipient, 71, clientChain.mediantime, 2);
+  // Leave one immature candidate height after the two JD blocks.
+  const age = 74;
+  const next = nextBaton(previous, recipient, age, clientChain.mediantime, 2);
   const work = deriveWork(category, previous, next);
   save('state.json', {
     category: fundingTxid, previous_baton: binToHex(previous), next_baton: binToHex(next),
-    recipient: binToHex(recipient), change: binToHex(addressScript(changeAddress)), age: 71,
+    recipient: binToHex(recipient), change: binToHex(addressScript(changeAddress)), age,
     timestamp: clientChain.mediantime, nonce: 2, genesis: genesisTxid,
     funding_address: fundingAddress, redeem_script: binToHex(redeemScript), work,
   });
   save('work.json', work);
-  save('genesis.json', { txid: genesisTxid, hex: signed.hex, mature_height: (await rpc(clientUrl, 'getblockchaininfo')).blocks });
+  save('genesis.json', {
+    txid: genesisTxid, hex: signed.hex, confirmation_height: clientChain.blocks + 1,
+    prepared_height: (await rpc(clientUrl, 'getblockchaininfo')).blocks,
+    mature_height: clientChain.blocks + age,
+  });
   console.log(JSON.stringify({ prepared: true, genesis: genesisTxid, work }));
 } else {
   assert.ok(proofFile, 'supply the proof exported by the JD regtest');
@@ -117,6 +125,7 @@ if (command === 'prepare') {
   const decodedGenesis = decodeTransactionBch(fromHex(genesis.hex));
   assert.notEqual(typeof decodedGenesis, 'string');
   const sourceOutputs = decodedGenesis.outputs;
+  assert.notEqual(await rpc(clientUrl, 'gettxout', [state.genesis, 1]), null, 'withdrawal fee input was spent');
   const transaction = {
     version: 2, locktime: state.timestamp,
     inputs: [
@@ -135,10 +144,20 @@ if (command === 'prepare') {
   const signed = await rpc(clientUrl, 'signrawtransactionwithwallet', [binToHex(encodeTransactionBch(transaction))], true);
   const withdrawal = decodeTransactionBch(fromHex(signed.hex));
   assert.notEqual(typeof withdrawal, 'string');
+  assert.ok(withdrawal.inputs[1].unlockingBytecode.length > 0, JSON.stringify(signed.errors));
   withdrawal.inputs[0].unlockingBytecode = transaction.inputs[0].unlockingBytecode;
   const vmResult = createVirtualMachineBch2026(true).verify({ transaction: withdrawal, sourceOutputs });
   assert.equal(vmResult, true);
   const raw = binToHex(encodeTransactionBch(withdrawal));
+  const immatureHeight = (await rpc(clientUrl, 'getblockchaininfo')).blocks;
+  assert.equal(immatureHeight, genesis.confirmation_height + state.age - 2,
+    'run exactly the two JD blocks after preparation, before the maturity check');
+  const immature = await rpc(clientUrl, 'testmempoolaccept', [[raw]]);
+  assert.equal(immature[0].allowed, false);
+  assert.match(immature[0]['reject-reason'], /^(?:64: )?non-BIP68-final$/);
+  save('withdrawal-immature.json', { height: immatureHeight, hex: raw, result: immature });
+  const maturityBlocks = await rpc(clientUrl, 'generatetoaddress', [1, state.funding_address]);
+  await bothKnowBlock(maturityBlocks[0]);
   const accepted = await rpc(clientUrl, 'testmempoolaccept', [[raw]]);
   assert.equal(accepted[0].allowed, true, JSON.stringify(accepted));
   const bad = structuredClone(withdrawal);
@@ -147,7 +166,7 @@ if (command === 'prepare') {
   bad.inputs[0].unlockingBytecode = encodeUnlock(state.age, changedProof);
   const rejected = await rpc(clientUrl, 'testmempoolaccept', [[binToHex(encodeTransactionBch(bad))]]);
   assert.equal(rejected[0].allowed, false);
-  save('withdrawal-candidate.json', { hex: raw, accepted, rejected, proof_file: proofFile });
+  save('withdrawal-candidate.json', { hex: raw, immature, accepted, rejected, proof_file: proofFile });
   const txid = await rpc(clientUrl, 'sendrawtransaction', [raw]);
   const blocks = await rpc(clientUrl, 'generatetoaddress', [1, state.funding_address]);
   await bothKnowBlock(blocks[0]);
@@ -160,7 +179,7 @@ if (command === 'prepare') {
   save('withdrawal.json', {
     txid, hex: raw, block: blocks[0], height: (await rpc(poolUrl, 'getblockchaininfo')).blocks,
     parent_header: proof.parent_header, unlocking_bytes: withdrawal.inputs[0].unlockingBytecode.length,
-    fee_satoshis: 5000, accepted, rejected, continued, reward,
+    fee_satoshis: 5000, immature, accepted, rejected, continued, reward,
   });
-  console.log(JSON.stringify({ withdrawn: true, txid, block: blocks[0], reward: reward.tokenData, rejected }));
+  console.log(JSON.stringify({ withdrawn: true, txid, block: blocks[0], reward: reward.tokenData, immature, rejected }));
 }

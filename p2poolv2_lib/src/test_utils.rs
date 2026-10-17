@@ -48,6 +48,8 @@ use crate::address::Address as P2PoolAddress;
 #[cfg(test)]
 use crate::config::{Chain, PoolMode};
 #[cfg(test)]
+use crate::config::{StratumConfig, Sv2Authority};
+#[cfg(test)]
 use crate::pool_difficulty::MockPoolDifficulty;
 #[cfg(test)]
 use crate::shares::auxpow::{AuxPowProof, AuxiliaryTree, AuxiliaryWork};
@@ -76,7 +78,7 @@ use crate::stratum::messages::SimpleRequest;
 #[cfg(test)]
 use crate::stratum::server::StratumContext;
 #[cfg(test)]
-use crate::stratum::sv2::{Declaration, DeclaredJob};
+use crate::stratum::sv2::{Declaration, DeclaredJob, encode_message};
 #[cfg(test)]
 use crate::stratum::work::block_template::BlockTemplate;
 #[cfg(test)]
@@ -94,7 +96,7 @@ use crate::stratum::work::prepared_notify::{PreparedNotifyParams, PreparedNotify
 #[cfg(test)]
 use crate::stratum::work::tracker::start_tracker_actor;
 #[cfg(test)]
-use binary_sv2::{B064K, B0255, Deserialize, Seq0255, U256};
+use binary_sv2::{B064K, B0255, Deserialize, GetSize, Seq0255, Serialize, U256};
 #[cfg(test)]
 use bitcoin::TxMerkleNode;
 #[cfg(test)]
@@ -154,6 +156,16 @@ pub(crate) struct TestSv2Client {
 
 #[cfg(test)]
 impl TestSv2Client {
+    /// Encode a typed message with the protocol's channel bit before sending.
+    pub(crate) async fn send_message<T: Serialize + GetSize>(
+        &mut self,
+        message_type: u8,
+        message: T,
+    ) {
+        self.send(encode_message(message, message_type).unwrap())
+            .await;
+    }
+
     /// Connect and authenticate the server against its configured authority.
     pub(crate) async fn connect(address: SocketAddr, authority_public_key: [u8; 32]) -> Self {
         timeout(Duration::from_secs(5), async {
@@ -575,6 +587,18 @@ pub fn test_sv2_setup(protocol: Protocol, flags: u32) -> SetupConnection<'static
         firmware: "test".try_into().unwrap(),
         device_id: "".try_into().unwrap(),
     }
+}
+
+/// Public disposable authority vectors, never an operator's signing key.
+#[cfg(test)]
+pub fn test_sv2_authority() -> Sv2Authority {
+    let mut config = StratumConfig::new_for_test_default();
+    config.sv2_port = Some(3336);
+    config.sv2_authority_public_key =
+        Some("9bDuixKmZqAJnrmP746n8zU1wyAQRrus7th9dxnkPg6RzQvCnan".to_string());
+    config.sv2_authority_secret_key =
+        Some("zmBEmPhqo3A92FkiLVvyCz6htc3e53ph3ZbD4ASqGaLjwnFLi".to_string());
+    config.parse().unwrap().sv2_authority().unwrap()
 }
 
 /// Reconstruct the declared coinbase with a zero-filled downstream extranonce.

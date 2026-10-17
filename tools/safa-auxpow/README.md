@@ -115,7 +115,7 @@ batons; a mutable NFT category alone does not establish unique thread state.
 On 2026-10-16 two BCHN 29.2.0 nodes accepted P2Pool JD blocks 280 and 281
 committing this variant's real work. The Full-Template proof covered two
 work items; Coinbase-Only selected just SAFA. Both passed the Rust verifier
-and the covenant VM. A 71-block-old mutable baton then spent successfully
+and the covenant VM. A mutable baton requiring 71 blocks then spent successfully
 using the private proof, returning 419,999,000 tokens and paying 1,000 tokens.
 
 The withdrawal is `6603a8f72a8d6dec0649039fcc2d84a3fd5d852f1b12f9c514b1911dcad213e4`,
@@ -138,14 +138,17 @@ $env:BCHN_JD_POOL_RPC = 'http://127.0.0.1:19455'
 $safaEvidence = Join-Path $env:TEMP ('safa-auxpow-' + (Get-Date -Format yyyyMMdd-HHmmss))
 node tools/safa-auxpow/live-regtest.mjs prepare $safaEvidence
 $env:BCHN_JD_AUXILIARY_WORK = Join-Path $safaEvidence 'work.json'
-cargo nextest run -p p2poolv2_lib --run-ignored ignored-only -E 'test(bchn_declared_jobs_reach_both_real_nodes)' --nocapture *> "$safaEvidence/jd.log"
+cargo nextest run -p p2poolv2_lib --run-ignored ignored-only -E 'test(bchn_declared_jobs_reach_both_real_nodes_over_noise)' --nocapture *> "$safaEvidence/jd.log"
 $records = Get-Content "$safaEvidence/jd.log" | Where-Object { $_.StartsWith('{"auxiliary_chains"') } | ConvertFrom-Json
 $records[1].auxpow_proof | ConvertTo-Json -Depth 30 | Set-Content "$safaEvidence/proof.json"
 node tools/safa-auxpow/live-regtest.mjs spend $safaEvidence "$safaEvidence/proof.json"
 Remove-Item Env:BCHN_JD_AUXILIARY_WORK
 ```
 
-The harness preserves state, genesis, candidate withdrawal and final evidence
-in the new directory. Stop only the disposable nodes you started. This is
+The harness prepares a baton requiring 74 blocks and mines 71 blocks. Run
+exactly the two JD blocks next. The spend command verifies `non-BIP68-final`
+one block before maturity, mines that block, and requires the identical signed
+transaction to pass. It preserves both results, state, genesis, candidate
+withdrawal and final evidence in the new directory. Stop only the disposable nodes you started. This is
 local regtest validation. Chipnet issuance, independent review of the new
 covenant and compatibility with a final SAFA specification remain open.

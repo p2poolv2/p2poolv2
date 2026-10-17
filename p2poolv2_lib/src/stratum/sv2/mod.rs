@@ -4,9 +4,9 @@
 
 //! Stratum V2 Job Declaration for a local miner.
 //!
-//! The frames and messages are the published Stratum V2 types. A local
-//! connection uses the unencrypted framing the specification allows between
-//! local roles. This node does not generate a Noise static key.
+//! The frames and messages are the published Stratum V2 types. Configuring an
+//! external authority key enables authenticated Noise. Without one, connections
+//! use the unencrypted framing allowed between local roles.
 //!
 //! A Mining connection can also open standard and extended channels: every
 //! template becomes a job per channel, and submitted shares go through the
@@ -32,7 +32,7 @@ pub use mining::EXTRANONCE_SIZE;
 pub use server::bind;
 pub(crate) use server::{Sv2Mining, serve};
 #[cfg(test)]
-pub(crate) use session::{Declaration, DeclaredJob};
+pub(crate) use session::{Declaration, DeclaredJob, encode_message};
 pub use session::{JobDeclarationMode, JobRegistry, PoolTransactionCache, Sv2Connection};
 
 use bitcoin::Transaction;
