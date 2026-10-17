@@ -111,8 +111,10 @@ also support work selection with both Job Declaration modes. A BCH-aware
 declarator must follow the direct PPLNS coinbase contract in
 [bch-job-declaration.md](bch-job-declaration.md). Full-Template work requires
 local BCHN proposal validation; a Coinbase-Only declarator validates and
-broadcasts its own private block. Independent declarator and ASIC testing,
-auxiliary-token proofs and remote CI remain open in
+broadcasts its own private block. Both modes have passed the encrypted
+two-node BCHN regtest, including proof verification and an experimental
+SAFA token withdrawal. Independent declarator/ASIC interoperability, final
+SAFA policy, chipnet issuance and remote CI remain open in
 [bch-plan.md](bch-plan.md).
 
 Payouts appear in the miners' wallets in the coinbase of each block the pool

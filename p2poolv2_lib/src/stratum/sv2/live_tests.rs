@@ -37,7 +37,7 @@ use mining_sv2::{
     MESSAGE_TYPE_SET_CUSTOM_MINING_JOB, MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_SUCCESS,
     MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED, MESSAGE_TYPE_SUBMIT_SHARES_SUCCESS,
     OpenExtendedMiningChannel, OpenExtendedMiningChannelSuccess, SetCustomMiningJob,
-    SetCustomMiningJobSuccess, SubmitSharesExtended,
+    SetCustomMiningJobSuccess, SubmitSharesExtended, SubmitSharesSuccess,
 };
 use p2poolv2_config::DEFAULT_VERSION_MASK;
 use p2poolv2_wallet::bch_share::{BchShareNetwork, encode_payout_address};
@@ -113,10 +113,11 @@ async fn bchn_declared_jobs_reach_both_real_nodes_over_noise() {
     let authority = test_sv2_authority();
     let listener = bind("127.0.0.1", 0).await.unwrap();
     let address = listener.local_addr().unwrap();
+    let connection_limit = Arc::new(Semaphore::new(3));
     let (shutdown_sender, shutdown_receiver) = watch::channel(());
     let server = tokio::spawn(serve(
         listener,
-        Arc::new(Semaphore::new(8)),
+        Arc::clone(&connection_limit),
         cache.clone(),
         Some(MergeMiningCommitment::reserved()),
         Some(Sv2Mining {
@@ -264,7 +265,9 @@ async fn bchn_declared_jobs_reach_both_real_nodes_over_noise() {
         .receive(MESSAGE_TYPE_DECLARE_MINING_JOB_SUCCESS)
         .await;
     let accepted = DeclareMiningJobSuccess::from_bytes(&mut accepted_payload).unwrap();
+    assert_eq!(accepted.request_id, 3);
     let new_token = accepted.new_mining_job_token.as_bytes().to_vec();
+    assert_ne!(new_token, token);
     let mut request = SetCustomMiningJob::from_bytes(&mut request_bytes).unwrap();
     request.token = B0255::new(&new_token).unwrap();
     mining
@@ -274,6 +277,7 @@ async fn bchn_declared_jobs_reach_both_real_nodes_over_noise() {
         .receive(MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_SUCCESS)
         .await;
     let installed = SetCustomMiningJobSuccess::from_bytes(&mut installed_payload).unwrap();
+    assert_eq!(installed.request_id, request.request_id);
     let full_header = test_bch_solve_custom_job(&request, &extranonce_prefix);
     mining
         .send_message(
@@ -289,7 +293,9 @@ async fn bchn_declared_jobs_reach_both_real_nodes_over_noise() {
             },
         )
         .await;
-    mining.receive(MESSAGE_TYPE_SUBMIT_SHARES_SUCCESS).await;
+    let mut submitted_payload = mining.receive(MESSAGE_TYPE_SUBMIT_SHARES_SUCCESS).await;
+    let submitted = SubmitSharesSuccess::from_bytes(&mut submitted_payload).unwrap();
+    assert_eq!(submitted.last_sequence_number, 1);
     let pool_tip: BlockHash = pool.request("getbestblockhash", vec![]).await.unwrap();
     assert_eq!(pool_tip, full_header.block_hash());
     timeout(Duration::from_secs(10), async {
@@ -449,7 +455,9 @@ async fn bchn_declared_jobs_reach_both_real_nodes_over_noise() {
             },
         )
         .await;
-    mining.receive(MESSAGE_TYPE_SUBMIT_SHARES_SUCCESS).await;
+    let mut submitted_payload = mining.receive(MESSAGE_TYPE_SUBMIT_SHARES_SUCCESS).await;
+    let submitted = SubmitSharesSuccess::from_bytes(&mut submitted_payload).unwrap();
+    assert_eq!(submitted.last_sequence_number, 2);
     let emission = emissions.try_recv().unwrap();
     assert!(emission.blocktemplate.transactions.is_empty());
     assert_eq!(emission.header, private_header);
@@ -519,6 +527,20 @@ async fn bchn_declared_jobs_reach_both_real_nodes_over_noise() {
         "{}",
         json!({"mode": "coinbase-only", "height": private_height, "hash": private_header.block_hash().to_string(), "coinbase_value": private_value, "private_fee": private_fee, "transaction": private_txid, "auxiliary_chains": 1, "auxpow_proof": private_auxpow})
     );
+    drop(mining);
+    drop(full_jdc);
+    drop(private_jdc);
     shutdown_sender.send(()).unwrap();
-    server.await.unwrap();
+    timeout(Duration::from_secs(5), server)
+        .await
+        .unwrap()
+        .unwrap();
+    let permits = timeout(
+        Duration::from_secs(5),
+        connection_limit.acquire_many_owned(3),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    drop(permits);
 }

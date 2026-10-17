@@ -343,8 +343,36 @@ Local validation passed: 1,719 default workspace tests (two skipped), 1,727
 all-features tests (one skipped), Clippy in both configurations with warnings
 denied, formatting and whitespace checks, and 40 covenant tests. Independent
 client/ASIC checks, covenant review, SAFA policy, chipnet issuance/block and
-remote CI remain open. The GitHub Actions web page still blocks workflows
-behind the fork activation notice; the API's enabled flag did not activate them.
+remote CI remain open. On this run's date, the GitHub Actions web page still
+blocked workflows behind the fork activation notice. Activation was completed
+on 2026-10-18; fresh PR checks remain to be verified.
+
+## Encrypted BCHN and token withdrawal (2026-10-17)
+
+Both Job Declaration modes now pass through the actual Noise listener and
+authenticated mining/declaration TCP sessions against two disposable BCHN
+29.2.0 nodes. The Full-Template path transfers real transactions and rotates
+its token before installation; the private path keeps raw transactions off
+the pool connection and broadcasts the full block from the client.
+
+Blocks 249 and 250 committed actual experimental SAFA work. Their proofs
+passed Rust validation, and the private proof authorized a 1,000-token
+withdrawal accepted by both nodes at height 252. The full proof also passed
+the BCH 2026 VM against the same actual genesis and withdrawal. BCHN rejected
+an altered sibling. At tip 250 it rejected the same signed withdrawal as
+`non-BIP68-final`; after one more block the identical bytes were accepted.
+Exact hashes and reproduction steps are in
+[the JD evidence](bch-job-declaration.md#encrypted-bchn-and-safa-check-2026-10-17).
+
+The SAFA suite now has 40 passing tests. A new regression documents the
+permissionless market self-cycle that can reset a continuing output's age;
+it does not change the covenant rules. Final economic policy, independent
+client/ASIC interoperability, chipnet evidence and remote CI remain open.
+
+After integrating the concurrent encrypted-listener and maturity updates,
+1,719 default workspace tests passed (two skipped), as did 1,727 all-features
+tests (one skipped). Clippy passed for all targets in both configurations
+with warnings denied; formatting and whitespace checks passed.
 
 ## Startup selection (2026-10-13)
 

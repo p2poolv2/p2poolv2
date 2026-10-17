@@ -187,3 +187,45 @@ withdrawal. BCHN rejected that identical signed transaction one block before
 its 74-block relative age matured, then accepted it after one more block.
 The withdrawal, public vectors and reproduction commands are in
 [the SAFA evidence record](../tools/safa-auxpow/README.md#regtest-evidence-and-reproduction).
+
+## Encrypted BCHN and SAFA check (2026-10-17)
+
+The earlier 205/206 run used direct mining handlers. The current opt-in test
+also completed the full encrypted network exchange against two fresh BCHN
+29.2.0 nodes. Full-Template allocation, transaction delivery, token rotation,
+installation and submission all crossed authenticated TCP connections.
+Coinbase-Only kept its raw transaction on the client and used client broadcast
+after the pool accepted the header and emitted its proof. Both nodes accepted
+these blocks carrying actual experimental SAFA work:
+
+| Mode | Height | Block hash | Coinbase value (sat) |
+|---|---|---|---|
+| Full-Template | 249 | `291220623fcad14e4eda3d6388d12376014700abdb4171049a0ede9064a7ff45` | 2500000219 |
+| Coinbase-Only | 250 | `6ed5e6f5841ab37c8f32c1b821bee134463c51635ebe70b177aab66b179dc820` | 2500000219 |
+
+The private proof authorized withdrawal
+`9cea5236f7032f80635253e3529e3373c1f5aed68367e5173518c48c5eab8287`
+in block `5edef1a9f5669fdb44a34a919fec69a541944b833a7b5ed42550d00a413c7887`
+at height 252. Both nodes validated the continuation with 419,999,000 tokens
+and the 1,000-token recipient reward. Its 1,266-byte scriptSig includes the
+839-byte redeem script; the transaction paid 5,000 satoshis in fees using a
+sponsor input.
+BCHN rejected an altered coinbase Merkle sibling. Both private and Full-Template
+proofs also verified against the actual withdrawal and genesis outputs in
+the standard BCH 2026 VM; the Full-Template scriptSig used 1,298 bytes.
+
+At tip 250, BCHN rejected that same signed transaction with `non-BIP68-final`:
+the baton required 74 blocks. After mining block 251, the identical bytes
+passed the mempool check and the withdrawal confirmed at 252. The harness
+retains both results, separating VM sequence checks from actual chain maturity.
+
+Reproduce the token preparation and withdrawal using
+[the SAFA harness](../tools/safa-auxpow/README.md#regtest-evidence-and-reproduction)
+around this opt-in test. An initial synthetic-work run also passed at heights
+102 and 103. The disposable nodes were stopped after validation, with their
+public proof and transaction evidence retained locally. Independent clients,
+ASIC firmware, chipnet issuance and the final SAFA economic policy remain open.
+
+The combined branch passed 1,719 default workspace tests (two skipped), 1,727
+all-features tests (one skipped), and all-target Clippy with default and all
+features and warnings denied. Formatting and whitespace checks passed.
