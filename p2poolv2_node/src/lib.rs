@@ -207,10 +207,9 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
     }
 
     background_tasks::start_background_tasks(
+        config.stratum.mode,
         store.clone(),
-        Duration::from_secs(
-            config.store.background_task_frequency_hours * background_tasks::SECONDS_PER_HOUR,
-        ),
+        chain_store_handle.clone(),
         Duration::from_secs(config.store.pplns_ttl_days * background_tasks::SECONDS_PER_DAY),
         exit_sender.clone(),
         exit_sender.subscribe(),

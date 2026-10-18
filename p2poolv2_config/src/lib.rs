@@ -382,9 +382,6 @@ impl Default for NetworkConfig {
 #[derive(Debug, Deserialize, Clone)]
 pub struct StoreConfig {
     pub path: String,
-    /// How often to run background cleanup tasks (in hours)
-    #[serde(default = "default_background_task_frequency_hours")]
-    pub background_task_frequency_hours: u64,
     /// Time-to-live for PPLNS shares (in days)
     #[serde(default = "default_pplns_ttl_days")]
     pub pplns_ttl_days: u64,
@@ -392,10 +389,6 @@ pub struct StoreConfig {
 
 fn default_wait_for_chain_sync() -> bool {
     true
-}
-
-fn default_background_task_frequency_hours() -> u64 {
-    1
 }
 
 fn default_pplns_ttl_days() -> u64 {
@@ -598,11 +591,6 @@ impl Config {
         self
     }
 
-    pub fn with_background_task_frequency_hours(mut self, hours: u64) -> Self {
-        self.store.background_task_frequency_hours = hours;
-        self
-    }
-
     pub fn with_pplns_ttl_days(mut self, days: u64) -> Self {
         self.store.pplns_ttl_days = days;
         self
@@ -793,7 +781,6 @@ mod tests {
         assert_eq!(config.api.auth_token, Some("secret_token".to_string()));
 
         // Test values from config.sample.toml
-        assert_eq!(config.store.background_task_frequency_hours, 24);
         assert_eq!(config.store.pplns_ttl_days, 7);
     }
 
@@ -801,11 +788,9 @@ mod tests {
     fn test_config_store_background_settings() {
         let config = Config::load("../config.sample.toml")
             .unwrap()
-            .with_background_task_frequency_hours(2)
-            .with_pplns_ttl_days(7);
+            .with_pplns_ttl_days(9);
 
-        assert_eq!(config.store.background_task_frequency_hours, 2);
-        assert_eq!(config.store.pplns_ttl_days, 7);
+        assert_eq!(config.store.pplns_ttl_days, 9);
     }
 
     /// Characterisation tests for environment-variable overrides.

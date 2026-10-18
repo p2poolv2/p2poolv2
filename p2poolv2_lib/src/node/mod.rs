@@ -732,7 +732,6 @@ mod tests {
             },
             store: StoreConfig {
                 path: "test_chain.db".to_string(),
-                background_task_frequency_hours: 1,
                 pplns_ttl_days: 3,
             },
 
@@ -846,7 +845,6 @@ mod tests {
             },
             store: StoreConfig {
                 path: "test_chain.db".to_string(),
-                background_task_frequency_hours: 1,
                 pplns_ttl_days: 3,
             },
             stratum: StratumConfig::new_for_test_default(),

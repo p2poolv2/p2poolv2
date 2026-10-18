@@ -39,7 +39,6 @@ p2poolv2_dial_timeout_secs: 30
 
 # --- Store config ---
 p2poolv2_store_path: "/var/lib/p2poolv2/{{ p2poolv2_instance }}/store.db"
-p2poolv2_background_task_frequency_hours: 24
 p2poolv2_pplns_ttl_days: 7
 
 # --- Stratum config ---
