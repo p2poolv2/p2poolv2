@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   standard and extended mining channels that share the SV1 job tracker,
   vardiff, block submission and share chain, with optional Noise encryption
   signed by an operator-supplied authority key.
+- Bitcoin Cash share transfers are checked by a Bitcoin Cash interpreter
+  (P2PKH with `SIGHASH_FORKID` ECDSA or Schnorr).
+- `docs/architecture/payout-distribution.md` describes the whole payout
+  scheme, including the maturity window.
 
 ### Fixed
 
@@ -34,16 +38,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `coinbase_outputs` is a counted output list, and the listener accepts host
   names and stops the node when it cannot bind.
 - Bitcoin Cash shares mined from a BCHN template are no longer rejected by
-  every node. BCHN sends an empty `coinbaseaux` flags string; the coinbase
-  builder pushed one zero byte for it while the share header recorded empty
-  flags, so validators rebuilt a different coinbase. The header now records
-  no flags, as it does for a template without the entry.
+  every node because of BCHN's empty `coinbaseaux` flags string.
+- A young Bitcoin Cash mini share chain can be synced over header batches.
 
 ### Changed
 
-- On Bitcoin Cash, peers reject shares whose donation plus fee exceed 10%,
-  whose donation pays another address, or that carry non-coinbase
-  transactions.
+- On Bitcoin Cash, peers reject shares whose donation plus fee exceed 10%, or
+  whose donation pays another address.
+- A found block's coinbase now pays only shares that are mature for it. The
+  PPLNS walk skips the shares less than `COINBASE_MATURITY` (6,048) below the
+  paying share, the same depth spending a share coinbase needs, then pays the
+  next `PPLNS_WINDOW_SHARES`. The first `COINBASE_MATURITY` shares of the chain
+  are always mature for payout, so a young chain pays its shares and the paid
+  set never shrinks; spending them still needs the full depth. This is a
+  consensus change and needs a chain reset.
+- Share chain outputs now expire at `PAYOUT_DEPTH` (`COINBASE_MATURITY +
+  PPLNS_WINDOW_SHARES`, 127,008) instead of `PPLNS_WINDOW_SHARES`, so an output
+  stays spendable for a full window after it matures. This is a consensus
+  change.
+- The full-validation zone, the PPLNS window cache and `PRUNE_DEPTH` grow with
+  the maturity skip: the zone is `PAYOUT_DEPTH`, the cache holds
+  `PAYOUT_DEPTH` plus its 1% buffer, and `PRUNE_DEPTH` is `2 * PAYOUT_DEPTH`
+  (254,016). Nodes retain about 5% more block bodies. No store migration is
+  needed.
 
 ## [v0.15.3] - 2026-09-21
 

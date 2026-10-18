@@ -11,16 +11,14 @@ use crate::shares::bch_coinbase::BchCoinbase;
 use crate::shares::coinbase_proof::{
     CoinbaseProof, MAX_COINBASE_MERKLE_BRANCH_LENGTH, maximum_merkle_branch_length,
 };
-use crate::shares::coinbaseaux_flags::CoinbaseAuxFlags;
-use crate::shares::extranonce::Extranonce;
 use crate::shares::genesis;
 use crate::shares::share_commitment::ShareCommitment;
-use crate::shares::witness_commitment::WitnessCommitment;
 use crate::sim_overrides;
 use bitcoin::consensus::encode::Error::ParseFailed;
 use bitcoin::secp256k1::Secp256k1;
 use bitcoin::{
-    Address, BlockHash, CompactTarget, CompressedPublicKey, Target, TxMerkleNode, Txid, VarInt,
+    Address, BlockHash, CompactTarget, CompressedPublicKey, Target, Transaction, TxMerkleNode,
+    Txid, VarInt,
     block::Header,
     consensus::{Decodable, Encodable},
     hashes::Hash,
@@ -54,6 +52,15 @@ pub fn is_terminal_blockhash(blockhash: &BlockHash) -> bool {
 ///
 /// Excludes bitcoin compact block and share chain transactions.
 /// Includes the bitcoin block hash for the bitcoin compact block instead.
+///
+/// Every field is bound to the proof of work, because `block_hash` covers
+/// every field: a field the proof of work did not fix could be changed to give
+/// one proof of work many share hashes. Each field is the bitcoin header
+/// itself, digested into the share commitment, fixed by the coinbase tail
+/// (`bitcoin_height`, through the locktime), or the `coinbase_proof` whose
+/// coinbase txid the bitcoin merkle root fixes. Data the proof of work fixes
+/// but a header cannot check, such as the extranonce, lives in the bitcoin
+/// coinbase carried by the `ShareBlock`.
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct ShareHeader {
     /// The hash of the prev share block, will be None for genesis block
@@ -76,8 +83,6 @@ pub struct ShareHeader {
     /// distinct block carrying the same proof of work.
     #[serde(with = "p2poolv2_wallet::share_owner::serde_hex")]
     pub miner_address: p2poolv2_wallet::share_owner::ShareOwner,
-    /// Share block transactions merkle root - from blocktemplate
-    pub merkle_root: TxMerkleNode,
     /// Bitcoin header the share is found for
     pub bitcoin_header: Header,
     /// Share chain difficult as compact target
@@ -96,23 +101,9 @@ pub struct ShareHeader {
     /// Fee in basis points
     #[serde(default)]
     pub fee: Option<u16>,
-    /// Total bitcoin coinbase value - from blocktemplate
-    pub coinbase_value: u64,
-    /// coinbaseaux flags as decoded bytes - from blocktemplate, only the "flag" key
-    #[serde(default)]
-    pub coinbaseaux_flags: Option<CoinbaseAuxFlags>,
-    /// BIP141 witness commitment - from blocktemplate
-    #[serde(default)]
-    pub witness_commitment: Option<WitnessCommitment>,
     /// Next bitcoin block height - from blocktemplate
     #[serde(default)]
     pub bitcoin_height: u64,
-    /// Nanosecond timestamp embedded in the coinbase scriptSig
-    #[serde(default)]
-    pub coinbase_nsecs: u64,
-    /// Combined extranonce (enonce1 || enonce2) from the stratum submission
-    #[serde(default)]
-    pub extranonce: Extranonce,
     /// Midstate proof that this header's commitment ends the coinbase of
     /// `bitcoin_header`, checkable with the coinbase merkle branch alone.
     /// See `CoinbaseProof`.
@@ -134,7 +125,7 @@ const ADDRESS_NETWORK_REGTEST: u8 = 2;
 ///
 /// Shorter than the address string (a P2TR script is 34 bytes against 62
 /// characters), and exact: decoding rebuilds the same `Address`.
-fn encode_address<W: bitcoin::io::Write + ?Sized>(
+pub(crate) fn encode_address<W: bitcoin::io::Write + ?Sized>(
     address: &Address,
     writer: &mut W,
 ) -> Result<usize, bitcoin::io::Error> {
@@ -212,16 +203,10 @@ impl ShareHeader {
     /// We do not validate the commitment is actually present in the
     /// bitcoin header. That happens at the receiving node, through
     /// `coinbase_proof`.
-    #[allow(clippy::too_many_arguments)] // wiring constructor: each parameter is a distinct collaborator, a params struct would only move the list
     pub(crate) fn from_commitment_and_header(
         commitment: ShareCommitment,
-        merkle_root: TxMerkleNode,
         bitcoin_header: Header,
-        coinbaseaux_flags: Option<CoinbaseAuxFlags>,
-        witness_commitment: Option<WitnessCommitment>,
         height: u64,
-        coinbase_nsecs: u64,
-        extranonce: Extranonce,
         coinbase_proof: CoinbaseProof,
     ) -> Self {
         Self {
@@ -229,7 +214,6 @@ impl ShareHeader {
             uncles: commitment.uncles,
             miner_bitcoin_address: commitment.miner_bitcoin_address,
             miner_address: commitment.miner_address,
-            merkle_root,
             bitcoin_header,
             bits: commitment.bits,
             time: commitment.time,
@@ -237,12 +221,7 @@ impl ShareHeader {
             donation: commitment.donation,
             fee_address: commitment.fee_address,
             fee: commitment.fee,
-            coinbase_value: commitment.coinbase_value,
-            coinbaseaux_flags,
-            witness_commitment,
             bitcoin_height: height,
-            coinbase_nsecs,
-            extranonce,
             coinbase_proof,
             bch_coinbase: commitment.bch_coinbase,
         }
@@ -288,7 +267,6 @@ impl ShareHeader {
             len += DECLARED_BCH_HEADER_TAG.consensus_encode(w)?;
         }
         len += share_owner::consensus_encode(&self.miner_address, w)?;
-        len += self.merkle_root.consensus_encode(w)?;
         len += self.bitcoin_header.version.consensus_encode(w)?;
         len += self.bitcoin_header.prev_blockhash.consensus_encode(w)?;
         if include_bitcoin_merkle_root {
@@ -303,24 +281,7 @@ impl ShareHeader {
         len += self.donation.unwrap_or(0).consensus_encode(w)?;
         len += encode_optional_address(&self.fee_address, w)?;
         len += self.fee.unwrap_or(0).consensus_encode(w)?;
-        len += self.coinbase_value.consensus_encode(w)?;
-        match &self.coinbaseaux_flags {
-            Some(flags) => {
-                len += true.consensus_encode(w)?;
-                len += flags.consensus_encode(w)?;
-            }
-            None => len += false.consensus_encode(w)?,
-        }
-        match &self.witness_commitment {
-            Some(commitment) => {
-                len += true.consensus_encode(w)?;
-                len += commitment.consensus_encode(w)?;
-            }
-            None => len += false.consensus_encode(w)?,
-        }
         len += self.bitcoin_height.consensus_encode(w)?;
-        len += self.coinbase_nsecs.consensus_encode(w)?;
-        len += self.extranonce.consensus_encode(w)?;
         len += self.coinbase_proof.consensus_encode(w)?;
         if let Some(coinbase) = &self.bch_coinbase {
             len += coinbase.consensus_encode(w)?;
@@ -350,7 +311,6 @@ impl ShareHeader {
         } else {
             share_owner::consensus_decode_from_tag(owner_tag, r)?
         };
-        let merkle_root = TxMerkleNode::consensus_decode(r)?;
         let bitcoin_version = bitcoin::block::Version::consensus_decode(r)?;
         let bitcoin_prev_blockhash = BlockHash::consensus_decode(r)?;
         let bitcoin_merkle_root = if include_bitcoin_merkle_root {
@@ -379,20 +339,7 @@ impl ShareHeader {
         let fee_raw = u16::consensus_decode(r)?;
         let fee = if fee_raw > 0 { Some(fee_raw) } else { None };
 
-        let coinbase_value = u64::consensus_decode(r)?;
-        let coinbaseaux_flags = if bool::consensus_decode(r)? {
-            Some(CoinbaseAuxFlags::consensus_decode(r)?)
-        } else {
-            None
-        };
-        let witness_commitment = if bool::consensus_decode(r)? {
-            Some(WitnessCommitment::consensus_decode(r)?)
-        } else {
-            None
-        };
         let bitcoin_height = u64::consensus_decode(r)?;
-        let coinbase_nsecs = u64::consensus_decode(r)?;
-        let extranonce = Extranonce::consensus_decode(r)?;
         let coinbase_proof = CoinbaseProof::consensus_decode(r)?;
         let bch_coinbase = if declared_bch {
             Some(BchCoinbase::consensus_decode(r)?)
@@ -405,7 +352,6 @@ impl ShareHeader {
             uncles,
             miner_bitcoin_address,
             miner_address,
-            merkle_root,
             bitcoin_header,
             bits,
             time,
@@ -413,12 +359,7 @@ impl ShareHeader {
             donation,
             fee_address,
             fee,
-            coinbase_value,
-            coinbaseaux_flags,
-            witness_commitment,
             bitcoin_height,
-            coinbase_nsecs,
-            extranonce,
             coinbase_proof,
             bch_coinbase,
         })
@@ -460,6 +401,27 @@ pub struct ShareBlock {
     /// merkle_root matches the reconstructed coinbase.
     #[serde(default)]
     pub template_merkle_branches: Vec<TxMerkleNode>,
+    /// The bitcoin coinbase the miner hashed: its scriptSig carries the aux
+    /// flags, extranonce and nanosecond timestamp, and its outputs the payouts,
+    /// the BIP141 witness commitment and the share commitment.
+    ///
+    /// Not part of the block hash. The proof of work fixes it instead: its
+    /// txid must be the one the header's `coinbase_proof` gives, which the
+    /// admission gate checks before the block is stored, so a copy with a
+    /// different coinbase is a bad copy rather than another block.
+    #[serde(default = "empty_bitcoin_coinbase")]
+    pub bitcoin_coinbase: Transaction,
+}
+
+/// The bitcoin coinbase of a block written before `ShareBlock` carried one:
+/// no inputs and no outputs, so it matches no proof and never validates.
+pub(crate) fn empty_bitcoin_coinbase() -> Transaction {
+    Transaction {
+        version: bitcoin::transaction::Version::TWO,
+        lock_time: bitcoin::absolute::LockTime::ZERO,
+        input: Vec::new(),
+        output: Vec::new(),
+    }
 }
 
 impl ShareBlock {
@@ -479,6 +441,21 @@ impl ShareBlock {
     /// Compute and return the block hash for this share block
     pub fn block_hash(&self) -> BlockHash {
         self.header.block_hash()
+    }
+
+    /// Merkle root over the block's transactions, coinbase first.
+    ///
+    /// Computed rather than carried on the header: the header binds the
+    /// transactions through its proof's `share_witness_root` and the share
+    /// coinbase it implies, so a stored root would add nothing the proof of
+    /// work holds to. Returns `None` for a block with no transactions.
+    pub fn merkle_root(&self) -> Option<TxMerkleNode> {
+        bitcoin::merkle_tree::calculate_root(
+            self.transactions
+                .iter()
+                .map(|transaction| transaction.compute_txid()),
+        )
+        .map(TxMerkleNode::from)
     }
 
     /// Build a genesis share block for a given network
@@ -542,16 +519,7 @@ impl ShareBlock {
             bitcoin_block.header.block_hash(),
             &[],
         );
-        let coinbase_value = coinbase
-            .output
-            .iter()
-            .fold(0, |memo, out| memo + out.value.to_sat());
-
         let transactions = vec![ShareTransaction(coinbase)];
-        let merkle_root: TxMerkleNode =
-            bitcoin::merkle_tree::calculate_root(transactions.iter().map(|tx| tx.compute_txid()))
-                .unwrap()
-                .into();
 
         let genesis_time = sim_overrides::genesis_timestamp(genesis_data);
         let genesis_bits = sim_overrides::anchor_target();
@@ -562,28 +530,28 @@ impl ShareBlock {
             miner_bitcoin_address: btcaddress,
             miner_address,
             bitcoin_header: bitcoin_block.header,
-            merkle_root,
             time: genesis_time,
             bits: genesis_bits,
             donation_address: None,
             donation: None,
             fee_address: None,
             fee: None,
-            coinbase_value,
-            coinbaseaux_flags: None,
-            witness_commitment: None,
             bitcoin_height: genesis_data.bitcoin_height,
-            coinbase_nsecs: 0,
-            extranonce: Extranonce::default(),
             // The genesis coinbase predates the share chain and carries no
-            // commitment; `CoinbaseProof::verify` exempts genesis.
+            // commitment. Genesis is built locally and never verified.
             coinbase_proof: CoinbaseProof::default(),
             bch_coinbase: None,
         };
+        let bitcoin_coinbase = bitcoin_block
+            .txdata
+            .first()
+            .cloned()
+            .ok_or("Genesis bitcoin block has no coinbase")?;
         Ok(Self {
             header,
             transactions,
             template_merkle_branches: vec![],
+            bitcoin_coinbase,
         })
     }
 }
@@ -609,6 +577,7 @@ impl Encodable for ShareBlock {
         for node in &self.template_merkle_branches {
             len += node.consensus_encode(w)?;
         }
+        len += self.bitcoin_coinbase.consensus_encode(w)?;
         Ok(len)
     }
 }
@@ -638,10 +607,12 @@ impl Decodable for ShareBlock {
         for _ in 0..path_count {
             template_merkle_branches.push(TxMerkleNode::consensus_decode(r)?);
         }
+        let bitcoin_coinbase = Transaction::consensus_decode(r)?;
         Ok(ShareBlock {
             header,
             transactions,
             template_merkle_branches,
+            bitcoin_coinbase,
         })
     }
 }
@@ -736,15 +707,19 @@ mod tests {
     use crate::accounting::payout::payout_distribution::{
         append_proportional_distribution, include_address_and_cut,
     };
+    use crate::accounting::payout::sharechain_pplns::pplns_window::{
+        COINBASE_MATURITY, PPLNS_WINDOW_SHARES,
+    };
     use crate::shares::share_commitment::ShareCommitment;
-    use crate::shares::transactions::coinbase::compute_non_coinbase_root;
-    use crate::stratum::work::coinbase::build_bitcoin_coinbase_transaction;
+    use crate::shares::transactions::coinbase::compute_witness_root;
+    use crate::stratum::work::coinbase::{
+        build_bitcoin_coinbase_transaction, parse_bitcoin_coinbase_fields,
+    };
     use crate::stratum::work::gbt::compute_merkle_root_from_branches;
     use crate::test_utils::TestShareBlockBuilder;
     use crate::test_utils::make_test_share_program;
     use bitcoin::ScriptBuf;
     use bitcoin::consensus::{deserialize, serialize};
-    use bitcoin::script::PushBytesBuf;
     use bitcoin::transaction::Version;
     use p2poolv2_wallet::share_owner::ShareOwner;
     use std::collections::HashMap;
@@ -857,13 +832,13 @@ mod tests {
         assert_eq!(share_block.transactions.len(), 1);
         assert!(share_block.transactions[0].is_coinbase());
 
-        // Verify merkle root is correctly calculated
+        // The merkle root is computed from the transactions, coinbase first.
         let expected_merkle_root: TxMerkleNode = bitcoin::merkle_tree::calculate_root(
             share_block.transactions.iter().map(|tx| tx.compute_txid()),
         )
         .unwrap()
         .into();
-        assert_eq!(share_block.header.merkle_root, expected_merkle_root);
+        assert_eq!(share_block.merkle_root(), Some(expected_merkle_root));
     }
 
     #[test]
@@ -877,7 +852,7 @@ mod tests {
         let share_address = make_test_share_program(1);
         let commitment = ShareCommitment {
             miner_address: share_address.into(),
-            non_coinbase_root: compute_non_coinbase_root(&[]),
+            share_witness_root: compute_witness_root(&[]),
             prev_share_blockhash: BlockHash::from_str(
                 "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb4",
             )
@@ -890,30 +865,20 @@ mod tests {
             donation: None,
             fee_address: None,
             fee: None,
-            coinbase_value: 100_000_000,
             bch_coinbase: None,
         };
 
         let cloned = commitment.clone();
-        // The merkle root is passed in now and not taken from the commitment.
-        // It covers a coinbase the commitment deliberately does not.
-        let merkle_root = TxMerkleNode::from_byte_array([0x33; 32]);
         let header = ShareHeader::from_commitment_and_header(
             commitment,
-            merkle_root,
             bitcoin_header,
-            None,
-            None,
             1,
-            0,
-            Extranonce::default(),
             CoinbaseProof::default(),
         );
 
         assert_eq!(header.prev_share_blockhash, cloned.prev_share_blockhash);
         assert_eq!(header.uncles, cloned.uncles);
         assert_eq!(header.miner_bitcoin_address, cloned.miner_bitcoin_address);
-        assert_eq!(header.merkle_root, merkle_root);
         assert_eq!(header.miner_address, cloned.miner_address);
         assert_eq!(header.bitcoin_header, bitcoin_header);
         assert_eq!(header.bits, cloned.bits);
@@ -1021,40 +986,45 @@ mod tests {
         let blocks: Vec<ShareBlock> =
             serde_json::from_str(&json_string).expect("Failed to parse share_blocks fixture");
 
-        let pool_signature = b"P2Poolv2";
-
         let network = bitcoin::Network::Signet;
         let difficulty_scale: u128 = 10;
 
-        // Build PPLNS distribution matching the production PplnsWindow logic.
-        // The threshold uses the bitcoin header difficulty (from the template),
-        // while each share contributes its share chain difficulty (from header.bits).
+        // Build PPLNS distribution matching the production PplnsWindow logic:
+        // skip the shares below the block that are not yet mature for it, then
+        // pay the next PPLNS_WINDOW_SHARES shares, each weighted by its share
+        // chain difficulty (from header.bits). The fixture chain is shorter than
+        // COINBASE_MATURITY, so its shares are all always mature and every
+        // prior share is paid.
         for (index, block) in blocks.iter().enumerate().skip(1) {
             let header = &block.header;
-            let bitcoin_difficulty = header.bitcoin_header.difficulty(network);
-            let scaled_threshold = bitcoin_difficulty.saturating_mul(difficulty_scale);
 
+            // The block at fixture index `index` is at share chain height `index`.
+            let immature_share_count =
+                (COINBASE_MATURITY - 1).min(index.saturating_sub(COINBASE_MATURITY));
             let mut address_difficulty_map: HashMap<bitcoin::Address, u128> =
                 HashMap::with_capacity(4);
-            let mut accumulated_difficulty: u128 = 0;
-            for prior_index in (0..index).rev() {
+            for prior_index in (0..index)
+                .rev()
+                .skip(immature_share_count)
+                .take(PPLNS_WINDOW_SHARES)
+            {
                 let prior_header = &blocks[prior_index].header;
                 let share_difficulty = prior_header.get_difficulty(network);
-                let scaled_contribution = share_difficulty.saturating_mul(difficulty_scale);
                 *address_difficulty_map
                     .entry(prior_header.miner_bitcoin_address.clone())
-                    .or_insert(0) += scaled_contribution;
-                accumulated_difficulty = accumulated_difficulty.saturating_add(scaled_contribution);
-                if accumulated_difficulty >= scaled_threshold {
-                    break;
-                }
+                    .or_insert(0) += share_difficulty.saturating_mul(difficulty_scale);
             }
 
             // Build outputs the same way the validator does
             let mut outputs = Vec::with_capacity(address_difficulty_map.len() + 2);
             let remaining_after_donation = include_address_and_cut(
                 &mut outputs,
-                bitcoin::Amount::from_sat(header.coinbase_value),
+                block
+                    .bitcoin_coinbase
+                    .output
+                    .iter()
+                    .map(|output| output.value)
+                    .sum(),
                 &header.donation_address,
                 header.donation,
             );
@@ -1075,21 +1045,19 @@ mod tests {
 
             let commitment_hash = ShareCommitment::from_share_block(block).hash();
 
-            let flags = match &header.coinbaseaux_flags {
-                Some(aux_flags) => aux_flags.to_push_bytes_buf(),
-                None => PushBytesBuf::from(&[0u8]),
-            };
+            let fields = parse_bitcoin_coinbase_fields(&block.bitcoin_coinbase)
+                .unwrap_or_else(|error| panic!("Block {index}: malformed coinbase: {error}"));
 
             let reconstructed_coinbase = build_bitcoin_coinbase_transaction(
                 Version::TWO,
                 &outputs,
                 header.bitcoin_height as i64,
-                flags,
-                header.witness_commitment.as_ref(),
-                pool_signature,
+                fields.aux_flags,
+                fields.witness_commitment.as_ref(),
+                &fields.pool_signature,
                 Some(commitment_hash),
-                header.coinbase_nsecs,
-                Some(header.extranonce.as_bytes()),
+                fields.nsecs,
+                Some(&fields.extranonce),
             )
             .unwrap_or_else(|error| panic!("Block {index}: failed to build coinbase: {error}"));
 

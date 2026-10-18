@@ -15,7 +15,7 @@ use crate::shares::share_block::encode_optional_address;
 use crate::shares::share_commitment::{
     ShareCommitment, build_commitment_prefix, build_commitment_suffix, commitment_digest,
 };
-use crate::shares::transactions::coinbase::compute_non_coinbase_root;
+use crate::shares::transactions::coinbase::compute_witness_root;
 use crate::shares::witness_commitment::WitnessCommitment;
 use crate::stratum::util::{reverse_four_byte_chunks, to_be_hex};
 use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
@@ -463,7 +463,7 @@ impl PreparedNotifyParamsBuilder {
             self.donation,
             &self.fee_address,
             self.fee,
-            compute_non_coinbase_root(&[]),
+            compute_witness_root(&[]),
         );
 
         Ok(PreparedNotifyParams {
@@ -567,14 +567,13 @@ pub(crate) fn insert_miner_job(
             uncles: prepared.uncles.clone(),
             miner_bitcoin_address: bitcoin_address.clone(),
             miner_address: share_address,
-            non_coinbase_root: compute_non_coinbase_root(&[]),
+            share_witness_root: compute_witness_root(&[]),
             bits: prepared.bits,
             time: fresh_time,
             donation_address: prepared.donation_address.clone(),
             donation: prepared.donation,
             fee_address: prepared.fee_address.clone(),
             fee: prepared.fee,
-            coinbase_value: prepared.template.coinbasevalue,
             bch_coinbase: None,
         }),
         _ => None,
@@ -679,7 +678,6 @@ mod tests {
             &token,
             payout.clone(),
             ShareOwner::CashP2pkh([0x22; 20]),
-            999,
         )
         .unwrap();
         assert_eq!(
@@ -689,7 +687,6 @@ mod tests {
         assert_eq!(commitment.uncles, prepared.uncles);
         assert_eq!(commitment.time, 1234);
         assert_eq!(commitment.bits, prepared.bits);
-        assert_eq!(commitment.coinbase_value, 999);
         assert_eq!(commitment.donation_address, Some(payout.clone()));
         assert_eq!(commitment.fee_address, Some(payout.clone()));
         assert_eq!(commitment.donation, Some(150));
@@ -700,8 +697,7 @@ mod tests {
             ShareCommitment::from_mining_job_token(
                 &trailing,
                 payout.clone(),
-                ShareOwner::CashP2pkh([0x22; 20]),
-                999
+                ShareOwner::CashP2pkh([0x22; 20])
             )
             .is_err()
         );
@@ -711,8 +707,7 @@ mod tests {
             ShareCommitment::from_mining_job_token(
                 &excess_uncles,
                 payout,
-                ShareOwner::CashP2pkh([0x22; 20]),
-                999
+                ShareOwner::CashP2pkh([0x22; 20])
             )
             .is_err()
         );
@@ -845,7 +840,6 @@ mod tests {
         let address = test_address();
         let bits = CompactTarget::from_consensus(0x1d00ffff);
         let tracker_handle = start_tracker_actor();
-        let coinbase_value = template.coinbasevalue;
 
         let prepared = test_notify_params_builder(template, false)
             .build()
@@ -876,14 +870,13 @@ mod tests {
             uncles: Vec::new(),
             miner_bitcoin_address: address,
             miner_address: make_test_share_program(1).into(),
-            non_coinbase_root: compute_non_coinbase_root(&[]),
+            share_witness_root: compute_witness_root(&[]),
             bits,
             time: commitment.time,
             donation_address: None,
             donation: None,
             fee_address: None,
             fee: None,
-            coinbase_value,
         };
 
         assert_eq!(commitment.hash(), direct_commitment.hash());
@@ -947,7 +940,7 @@ mod tests {
 
         let bitcoin_address = test_address();
         let share_address = make_test_share_program(1);
-        let non_coinbase_root = compute_non_coinbase_root(&[]);
+        let share_witness_root = compute_witness_root(&[]);
         let time = 1_700_000_000;
 
         let from_notify = get_commitment_hex(
@@ -964,14 +957,13 @@ mod tests {
             uncles: prepared.uncles.clone(),
             miner_bitcoin_address: bitcoin_address,
             miner_address: share_address.into(),
-            non_coinbase_root,
+            share_witness_root,
             bits: prepared.bits,
             time,
             donation_address: prepared.donation_address.clone(),
             donation: prepared.donation,
             fee_address: prepared.fee_address.clone(),
             fee: prepared.fee,
-            coinbase_value: prepared.template.coinbasevalue,
         };
         let from_struct = hex::encode(commitment.hash().as_byte_array());
 

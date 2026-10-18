@@ -16,6 +16,7 @@ on:
           - restart-fast
           - restart-delayed
           - partition
+          - late-miner
       node_count:
         description: 'Number of sim nodes'
         required: false
@@ -47,12 +48,16 @@ jobs:
           set -euo pipefail
           # convergence_wait is the settle time AFTER the scenario heals;
           # restart-delayed needs the longest timeout because its node stays
-          # down 330s to cross the 300s tip-age threshold.
+          # down 330s to cross the 300s tip-age threshold. late-miner runs
+          # time-compressed with a 50-share maturity so the payout maturity
+          # skip is reached in minutes; the other scenarios keep production
+          # maturity, which their runs never reach.
           all='[
-            {"scenario":"clean",           "convergence_wait":"300","timeout":25},
-            {"scenario":"restart-fast",    "convergence_wait":"180","timeout":25},
-            {"scenario":"restart-delayed", "convergence_wait":"180","timeout":40},
-            {"scenario":"partition",       "convergence_wait":"180","timeout":30}
+            {"scenario":"clean",           "convergence_wait":"300","timeout":25,"ideal_block_time":"5","shares_per_block":"1000","maturity_shares":"6048","late_miner":""},
+            {"scenario":"restart-fast",    "convergence_wait":"180","timeout":25,"ideal_block_time":"5","shares_per_block":"1000","maturity_shares":"6048","late_miner":""},
+            {"scenario":"restart-delayed", "convergence_wait":"180","timeout":40,"ideal_block_time":"5","shares_per_block":"1000","maturity_shares":"6048","late_miner":""},
+            {"scenario":"partition",       "convergence_wait":"180","timeout":30,"ideal_block_time":"5","shares_per_block":"1000","maturity_shares":"6048","late_miner":""},
+            {"scenario":"late-miner",      "convergence_wait":"60", "timeout":30,"ideal_block_time":"1","shares_per_block":"20",  "maturity_shares":"50",  "late_miner":"1"}
           ]'
           if [ "$SELECTED" = "every" ]; then
             matrix=$(echo "$all" | jq -c .)
@@ -96,8 +101,10 @@ jobs:
           SCENARIO: ${{ matrix.scenario }}
           NODE_COUNT: ${{ github.event.inputs.node_count || '10' }}
           CONVERGENCE_WAIT_SECONDS: ${{ github.event.inputs.duration_seconds || matrix.convergence_wait }}
-          IDEAL_BLOCK_TIME: '5'
-          SHARES_PER_BLOCK: '1000'
+          IDEAL_BLOCK_TIME: ${{ matrix.ideal_block_time }}
+          SHARES_PER_BLOCK: ${{ matrix.shares_per_block }}
+          MATURITY_SHARES: ${{ matrix.maturity_shares }}
+          LATE_MINER: ${{ matrix.late_miner }}
           # UNCLE_RATE_THRESHOLD stays at its 25% default. Killing nodes creates
           # forks, so this is the knob to raise if a failure scenario turns out
           # to be flaky -- raise it here rather than weakening the check itself.

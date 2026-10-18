@@ -91,8 +91,6 @@ pub struct ValidationWorker {
     organise_tx: OrganiseSender,
     swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
     semaphore: Arc<Semaphore>,
-    difficulty_multiplier: u128,
-    pool_signature: Vec<u8>,
     pool_difficulty: PoolDifficulty,
     chain: Chain,
     /// Easiest share target the validator accepts. Defaults to the main ceiling.
@@ -106,8 +104,6 @@ impl ValidationWorker {
         chain_store_handle: ChainStoreHandle,
         organise_tx: OrganiseSender,
         swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
-        difficulty_multiplier: u128,
-        pool_signature: Vec<u8>,
         pool_difficulty: PoolDifficulty,
     ) -> Self {
         Self {
@@ -116,8 +112,6 @@ impl ValidationWorker {
             organise_tx,
             swarm_tx,
             semaphore: Arc::new(Semaphore::new(available_cpus())),
-            difficulty_multiplier,
-            pool_signature,
             pool_difficulty,
             chain: Chain::Bitcoin,
             target_ceiling: CompactTarget::from_consensus(
@@ -146,13 +140,9 @@ impl ValidationWorker {
         info!("Validation worker started");
 
         let share_validator: Arc<dyn ShareValidator + Send + Sync> = Arc::new(
-            DefaultShareValidator::new(
-                self.pool_difficulty,
-                self.difficulty_multiplier,
-                self.pool_signature.clone(),
-            )
-            .for_chain(self.chain)
-            .with_target_ceiling(self.target_ceiling),
+            DefaultShareValidator::new(self.pool_difficulty)
+                .for_chain(self.chain)
+                .with_target_ceiling(self.target_ceiling),
         );
 
         while let Some(event) = self.validation_rx.recv().await {
@@ -373,8 +363,6 @@ mod tests {
             mock_chain_handle,
             organise_tx,
             swarm_tx,
-            1,
-            b"P2Poolv2".to_vec(),
             PoolDifficulty::default(),
         );
 
@@ -432,8 +420,6 @@ mod tests {
             mock_chain_handle,
             organise_tx,
             swarm_tx,
-            1,
-            b"P2Poolv2".to_vec(),
             PoolDifficulty::default(),
         );
 
@@ -487,8 +473,6 @@ mod tests {
             mock_chain_handle,
             organise_tx,
             swarm_tx,
-            1,
-            b"P2Poolv2".to_vec(),
             PoolDifficulty::default(),
         );
 
@@ -551,8 +535,6 @@ mod tests {
             mock_chain_handle,
             organise_tx,
             swarm_tx,
-            1,
-            b"P2Poolv2".to_vec(),
             PoolDifficulty::default(),
         );
 
@@ -596,8 +578,6 @@ mod tests {
             mock_chain_handle,
             organise_tx,
             swarm_tx,
-            1,
-            b"P2Poolv2".to_vec(),
             PoolDifficulty::default(),
         );
 
@@ -743,8 +723,6 @@ mod tests {
             mock_chain_handle,
             organise_tx,
             swarm_tx,
-            1,
-            b"P2Poolv2".to_vec(),
             PoolDifficulty::default(),
         );
 
@@ -820,8 +798,6 @@ mod tests {
             mock_chain_handle,
             organise_tx,
             swarm_tx,
-            1,
-            b"P2Poolv2".to_vec(),
             PoolDifficulty::default(),
         );
 

@@ -77,7 +77,7 @@ pub(crate) fn validate_custom_job(
     };
     descriptor.validate(u64::from(original.height))?;
     let mut commitment =
-        ShareCommitment::from_mining_job_token(request.token.as_bytes(), payout, owner, value)
+        ShareCommitment::from_mining_job_token(request.token.as_bytes(), payout, owner)
             .map_err(|error| error.to_string())?;
     commitment.bch_coinbase = Some(descriptor.clone());
     let distribution = declared

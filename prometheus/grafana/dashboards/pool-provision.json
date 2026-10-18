@@ -147,9 +147,16 @@
         {
           "editorMode": "builder",
           "expr": "rate(sharechain_work_total[5m])",
-          "legendFormat": "Pool Hashrate",
+          "legendFormat": "Pool Hashrate (5m)",
           "range": true,
           "refId": "A"
+        },
+        {
+          "editorMode": "builder",
+          "expr": "rate(sharechain_work_total[1h])",
+          "legendFormat": "Pool Hashrate (1h)",
+          "range": true,
+          "refId": "B"
         }
       ],
       "title": "Pool Hashrate",
@@ -349,7 +356,7 @@
         "type": "prometheus",
         "uid": "${datasource}"
       },
-      "description": "Blocks found since this node started\nEvery time you restart the node, this will go back down to 0. It only tracks blocks found since you last started your node.",
+      "description": "Bitcoin blocks found by the pool. Only bitcoin blocks this node can decipher from the share chain are shown: blocks carried by confirmed shares and their uncles, recorded as the node runs and rebuilt when a node syncs. Blocks found before the current share chain started are not shown. Use the block hash link to check whether a block is still on the bitcoin main chain.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -362,10 +369,6 @@
               {
                 "color": "green",
                 "value": 0
-              },
-              {
-                "color": "red",
-                "value": 80
               }
             ]
           }
@@ -403,15 +406,144 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "editorMode": "builder",
-          "expr": "bitcoin_blocks_found_total",
+          "editorMode": "code",
+          "expr": "max(bitcoin_blocks_found_total)",
+          "instant": false,
           "legendFormat": "__auto",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "Blocks found since restart",
+      "title": "Blocks found",
       "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Only bitcoin blocks this node can decipher from the share chain are shown: blocks carried by confirmed shares and their uncles, recorded as the node runs and rebuilt when a node syncs. Blocks found before the current share chain started are not shown. Use the block hash link to check whether a block is still on the bitcoin main chain.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Found at"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsIso"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Block hash"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": true,
+                    "title": "Open in block explorer",
+                    "url": "${__data.fields.explorer}/block/${__value.raw}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "explorer"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "network"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 23
+      },
+      "id": 5,
+      "options": {
+        "footer": {
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "Found at"
+          }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "label_replace(label_replace(max by (blockhash, height, miner, network) (bitcoin_block_found_time_seconds) * 1000, \"explorer\", \"https://mempool.space\", \"network\", \"main\"), \"explorer\", \"https://mempool.space/$1\", \"network\", \"(testnet4|signet)\")",
+          "format": "table",
+          "instant": true,
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Found blocks",
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "indexByName": {
+              "Value": 0,
+              "height": 1,
+              "blockhash": 2,
+              "miner": 3
+            },
+            "renameByName": {
+              "Value": "Found at",
+              "blockhash": "Block hash",
+              "height": "Height",
+              "miner": "Miner"
+            }
+          }
+        }
+      ],
+      "type": "table"
     }
   ],
   "preload": false,

@@ -17,7 +17,6 @@ use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::address::Address as P2PoolAddress;
 use crate::address::share_owner::ShareOwner;
 use crate::shares::coinbase_proof::CoinbaseProof;
-use crate::shares::extranonce::Extranonce;
 use crate::stratum::emission::Emission;
 use crate::stratum::work::difficulty::validate::build_coinbase_from_components;
 use crate::stratum::work::gbt::compute_merkle_root_from_branches;
@@ -125,9 +124,6 @@ pub fn build_sim_emission(params: SimShareParams<'_>) -> Result<BuiltShare, SimS
         nonce: params.nonce,
     };
 
-    let extranonce = Extranonce::from_enonce_hex(params.enonce1_hex, params.enonce2_hex)
-        .map_err(|e| SimShareError(format!("bad extranonce: {e}")))?;
-
     let pplns = SimplePplnsShare::new(
         params.user_id,
         params.difficulty,
@@ -142,7 +138,7 @@ pub fn build_sim_emission(params: SimShareParams<'_>) -> Result<BuiltShare, SimS
     let coinbase_proof = job
         .share_commitment
         .as_ref()
-        .map(|commitment| CoinbaseProof::from_coinbase(&coinbase, commitment.non_coinbase_root))
+        .map(|commitment| CoinbaseProof::from_coinbase(&coinbase, commitment.share_witness_root))
         .transpose()
         .map_err(|e| SimShareError(format!("build coinbase proof: {e}")))?;
 
@@ -151,9 +147,8 @@ pub fn build_sim_emission(params: SimShareParams<'_>) -> Result<BuiltShare, SimS
         header,
         blocktemplate: job.blocktemplate.clone(),
         share_commitment: job.share_commitment.clone(),
-        coinbase_nsecs: job.coinbase_nsecs,
         template_merkle_branches: job.template_merkle_branches.clone(),
-        extranonce,
+        bitcoin_coinbase: coinbase.clone(),
         coinbase_proof,
     };
 
@@ -167,11 +162,12 @@ mod tests {
     use crate::shares::handle_stratum_share::handle_stratum_share;
     use crate::shares::share_commitment::ShareCommitment;
     use crate::stratum::work::block_template::BlockTemplate;
-    use crate::stratum::work::coinbase::build_bitcoin_coinbase_transaction;
+    use crate::stratum::work::coinbase::{
+        build_bitcoin_coinbase_transaction, parse_bitcoin_coinbase_fields,
+    };
     use crate::stratum::work::prepared_notify::PreparedNotifyParamsBuilder;
     use crate::stratum::work::tracker::start_tracker_actor;
     use crate::test_utils::make_test_share_address;
-    use bitcoin::script::PushBytesBuf;
     use bitcoin::transaction::Version;
     use bitcoin::{Amount, CompactTarget, CompressedPublicKey, Network};
 
@@ -250,22 +246,22 @@ mod tests {
 
         // Reconstruct the bitcoin coinbase exactly as validate_bitcoin_payout does.
         let commitment_hash = ShareCommitment::from_share_block(&share_block).hash();
-        let flags = match &share_block.header.coinbaseaux_flags {
-            Some(aux) => aux.to_push_bytes_buf(),
-            None => PushBytesBuf::from(&[0u8]),
-        };
+        let fields =
+            parse_bitcoin_coinbase_fields(&share_block.bitcoin_coinbase).expect("parse coinbase");
         let reconstructed = build_bitcoin_coinbase_transaction(
             Version::TWO,
             &output_distribution,
             share_block.header.bitcoin_height as i64,
-            flags,
-            share_block.header.witness_commitment.as_ref(),
-            POOL_SIGNATURE,
+            fields.aux_flags,
+            fields.witness_commitment.as_ref(),
+            &fields.pool_signature,
             Some(commitment_hash),
-            share_block.header.coinbase_nsecs,
-            Some(share_block.header.extranonce.as_bytes()),
+            fields.nsecs,
+            Some(&fields.extranonce),
         )
         .expect("reconstruct coinbase");
+        assert_eq!(fields.pool_signature, POOL_SIGNATURE);
+        assert_eq!(reconstructed, share_block.bitcoin_coinbase);
 
         let recomputed_root = compute_merkle_root_from_branches(
             reconstructed.compute_txid(),
@@ -304,9 +300,11 @@ mod tests {
 
         let commitment = emission.share_commitment.expect("commitment present");
         assert_eq!(commitment.miner_bitcoin_address, address);
+        let fields =
+            parse_bitcoin_coinbase_fields(&emission.bitcoin_coinbase).expect("parse coinbase");
         assert_eq!(
-            emission.extranonce.as_bytes(),
-            &[
+            fields.extranonce,
+            [
                 0xaa, 0xbb, 0xcc, 0xdd, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88
             ]
         );

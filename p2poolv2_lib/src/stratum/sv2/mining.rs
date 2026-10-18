@@ -756,8 +756,6 @@ impl MiningChannels {
                 block_hash,
                 coinbase: &coinbase,
                 share: share.clone(),
-                enonce1_hex: &channel.session.enonce1_hex,
-                enonce2_hex: &enonce2_hex,
             },
         )
         .await

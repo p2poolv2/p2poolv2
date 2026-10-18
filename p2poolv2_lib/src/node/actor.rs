@@ -368,14 +368,6 @@ impl NodeActor {
                 .header
                 .bits,
         );
-        let difficulty_multiplier = config.stratum.difficulty_multiplier as u128;
-        let pool_signature = config
-            .stratum
-            .pool_signature
-            .as_deref()
-            .unwrap_or("")
-            .as_bytes()
-            .to_vec();
 
         let pool_difficulty = PoolDifficulty::build(&chain_store_handle)
             .map_err(|error| -> Box<dyn Error> { Box::new(error) })?;
@@ -385,13 +377,9 @@ impl NodeActor {
         // and pool_difficulty is used again below.
         #[allow(clippy::clone_on_copy)]
         let share_validator: Arc<dyn ShareValidator + Send + Sync> = Arc::new(
-            DefaultShareValidator::new(
-                pool_difficulty.clone(),
-                difficulty_multiplier,
-                pool_signature.clone(),
-            )
-            .for_chain(chain)
-            .with_target_ceiling(target_ceiling),
+            DefaultShareValidator::new(pool_difficulty.clone())
+                .for_chain(chain)
+                .with_target_ceiling(target_ceiling),
         );
 
         let node = Node::new(
@@ -435,8 +423,6 @@ impl NodeActor {
             chain_store_handle.clone(),
             organise_tx.clone(),
             node.swarm_tx.clone(),
-            difficulty_multiplier,
-            pool_signature,
             pool_difficulty,
         )
         .for_chain(chain)

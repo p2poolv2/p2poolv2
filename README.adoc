@@ -244,7 +244,7 @@ MSRV 1.88 with 2024 edition is required to build p2poolv2.
 
 ==== Tests
 
-To run CI tests locally run `just test`.
+To run CI tests locally run `just test`. To run tests, lint, and format checks use `just preflight`.
 
 === Docker Support
 

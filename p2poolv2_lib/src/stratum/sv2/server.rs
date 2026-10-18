@@ -291,7 +291,6 @@ mod tests {
     use crate::config::{Chain, DEFAULT_VERSION_MASK, PoolMode};
     use crate::shares::merge_mining::MergeMiningCommitment;
     use crate::shares::share_block::ShareHeader;
-    use crate::shares::transactions::coinbase::compute_non_coinbase_root;
     use crate::stratum::sv2::PoolTransactionCache;
     use crate::stratum::sv2::session::encode_message;
     use crate::stratum::work::tracker::start_tracker_actor;
@@ -553,13 +552,8 @@ mod tests {
         );
         let share = ShareHeader::from_commitment_and_header(
             emission.share_commitment.unwrap(),
-            compute_non_coinbase_root(&[]),
             emission.header,
-            None,
-            None,
             u64::from(emission.blocktemplate.height),
-            0,
-            emission.extranonce,
             emission.coinbase_proof.unwrap(),
         );
         assert_eq!(
@@ -642,13 +636,8 @@ mod tests {
         );
         let share = ShareHeader::from_commitment_and_header(
             emission.share_commitment.unwrap(),
-            compute_non_coinbase_root(&[]),
             emission.header,
-            None,
-            None,
             u64::from(emission.blocktemplate.height),
-            0,
-            emission.extranonce,
             emission.coinbase_proof.unwrap(),
         );
         assert_eq!(

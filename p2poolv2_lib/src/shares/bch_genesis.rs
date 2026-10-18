@@ -11,16 +11,13 @@
 
 use crate::config::{BchShareChain, BitcoinCashNetwork, Chain, StratumConfig};
 use crate::shares::coinbase_proof::CoinbaseProof;
-use crate::shares::extranonce::Extranonce;
 use crate::shares::genesis;
 use crate::shares::share_block::{ShareBlock, ShareHeader, ShareTransaction};
 use crate::shares::transactions::coinbase::build_sharechain_coinbase_transaction;
 use crate::sim_overrides;
 use bitcoin::constants::genesis_block;
 use bitcoin::hashes::Hash;
-use bitcoin::{
-    Address, Block, CompactTarget, CompressedPublicKey, Network, PubkeyHash, TxMerkleNode,
-};
+use bitcoin::{Address, Block, CompactTarget, CompressedPublicKey, Network, PubkeyHash};
 use p2poolv2_wallet::bch_share::BchShareNetwork;
 use p2poolv2_wallet::share_owner::ShareOwner;
 use std::error::Error;
@@ -72,41 +69,35 @@ pub fn build(
     let miner_address = ShareOwner::CashP2pkh(pubkey_hash.to_byte_array());
     let coinbase =
         build_sharechain_coinbase_transaction(&miner_address, anchor.header.block_hash(), &[]);
-    let coinbase_value = coinbase
-        .output
-        .iter()
-        .fold(0, |memo, output| memo + output.value.to_sat());
     let transactions = vec![ShareTransaction(coinbase)];
-    let merkle_root: TxMerkleNode =
-        bitcoin::merkle_tree::calculate_root(transactions.iter().map(|tx| tx.compute_txid()))
-            .unwrap()
-            .into();
     let header = ShareHeader {
         prev_share_blockhash: bitcoin::BlockHash::all_zeros(),
         uncles: vec![],
         miner_bitcoin_address,
         miner_address,
         bitcoin_header: anchor.header,
-        merkle_root,
         time: sim_overrides::genesis_timestamp(&genesis_data),
         bits: anchor_bits(share_chain),
         donation_address: None,
         donation: None,
         fee_address: None,
         fee: None,
-        coinbase_value,
-        coinbaseaux_flags: None,
-        witness_commitment: None,
         bitcoin_height: 0,
-        coinbase_nsecs: 0,
-        extranonce: Extranonce::default(),
+        // The anchor block's coinbase predates the share chain and carries no
+        // commitment. Genesis is built locally and never verified.
         coinbase_proof: CoinbaseProof::default(),
         bch_coinbase: None,
     };
+    let bitcoin_coinbase = anchor
+        .txdata
+        .first()
+        .cloned()
+        .ok_or("Bitcoin Cash anchor block has no coinbase")?;
     Ok(ShareBlock {
         header,
         transactions,
         template_merkle_branches: vec![],
+        bitcoin_coinbase,
     })
 }
 
@@ -208,8 +199,8 @@ mod tests {
             ShareOwner::CashP2pkh(_)
         ));
         assert!(main.header.miner_bitcoin_address.script_pubkey().is_p2pkh());
-        assert!(main.header.witness_commitment.is_none());
         assert_eq!(main.transactions[0].output.len(), 1);
+        assert!(main.transactions[0].input[0].witness.is_empty());
         assert_ne!(main.block_hash(), mini.block_hash());
         assert_eq!(mini.header.bits.to_consensus(), MINI_ANCHOR_TARGET);
         assert_eq!(main.header.bits.to_consensus(), MAIN_ANCHOR_TARGET);

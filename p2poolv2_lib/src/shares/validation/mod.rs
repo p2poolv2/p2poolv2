@@ -12,9 +12,7 @@ use crate::accounting::payout::payout_distribution::build_pplns_outputs;
 use crate::accounting::payout::sharechain_pplns::PplnsWindow;
 #[cfg(not(test))]
 use crate::accounting::payout::sharechain_pplns::PplnsWindow;
-use crate::accounting::payout::sharechain_pplns::pplns_window::{
-    MAX_PPLNS_WINDOW_SHARES, WindowError,
-};
+use crate::accounting::payout::sharechain_pplns::pplns_window::{PAYOUT_DEPTH, WindowError};
 use crate::config::{
     BITCOIN_CASH_DONATION_PUBKEY_HASH, Chain, MAX_BASIS_POINTS, MAX_BITCOIN_CASH_POOL_CUT,
 };
@@ -35,11 +33,9 @@ use crate::shares::share_block::{
     is_terminal_blockhash,
 };
 use crate::shares::share_commitment::ShareCommitment;
-use crate::shares::transactions::coinbase::build_sharechain_coinbase_transaction;
 use crate::shares::transactions::coinbase::{
-    compute_commitment_hash, compute_non_coinbase_root, compute_witness_root,
+    build_sharechain_coinbase_for_witness_root, compute_witness_root,
 };
-use crate::shares::witness_commitment::WITNESS_COMMITMENT_LENGTH;
 use crate::sim_overrides;
 use crate::store::block_tx_metadata::{BlockMetadata, Status};
 use crate::store::dag_store::MAX_UNCLES_DEPTH;
@@ -47,14 +43,15 @@ use crate::store::transaction_store::PrevoutCheck;
 use crate::store::writer::StoreError;
 #[cfg(test)]
 use crate::stratum::work::coinbase::build_bitcoin_coinbase_transaction;
-use crate::stratum::work::coinbase::{build_coinbase, build_declared_coinbase};
+use crate::stratum::work::coinbase::{
+    build_coinbase, build_declared_coinbase, parse_bitcoin_coinbase_fields,
+};
 use crate::stratum::work::gbt::compute_merkle_root_from_branches;
 use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
 use bitcoin::hashes::Hash as HashTrait;
-use bitcoin::script::PushBytesBuf;
 use bitcoin::{
-    Address, Amount, BlockHash, CompactTarget, PubkeyHash, ScriptBuf, Target, TxMerkleNode,
-    transaction::Version,
+    Address, Amount, BlockHash, CompactTarget, PubkeyHash, ScriptBuf, Target, Transaction,
+    TxMerkleNode, transaction::Version,
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -176,23 +173,46 @@ pub const MAX_UNCLES: usize = 3;
 pub const MAX_FUTURE_TIME_SECS: u64 = 120;
 /// Number of ancestor share headers used to compute median time past.
 pub const MTP_WINDOW: usize = 11;
-/// Maximum block size not counting bitcoin blocks limited to 200kB
+/// Maximum size of a share block's body, limited to 200kB: its share
+/// transactions plus the bitcoin coinbase it carries. The header and the
+/// coinbase merkle branch are bounded by their decoders.
 pub const BLOCK_TXS_SIZE_LIMIT: u32 = 200 * 1024;
 /// Maximum number of transactions allowed in a share block
 pub const TXS_COUNT_LIMIT: u32 = 100;
-/// Coinbase outputs cannot be spent until the containing block is this
-/// many blocks deep. 70% of blocks-per-day at 10s block time (0.70 * 86400 / 10).
-pub const COINBASE_MATURITY: usize = 6048;
 /// Maximum total sigop cost allowed in a share block (matches Bitcoin consensus).
 pub const MAX_BLOCK_SIGOPS_COST: usize = 80_000;
+
+/// Total value the bitcoin coinbase pays out, in satoshis.
+///
+/// This is the value payout validation divides among the PPLNS window. The
+/// coinbase is fixed by the proof of work.
+///
+/// A total above `Amount::MAX_MONEY`, or one that overflows, is
+/// a malformed coinbase.
+fn bitcoin_coinbase_value(coinbase: &Transaction) -> Result<u64, ValidationError> {
+    coinbase
+        .output
+        .iter()
+        .try_fold(Amount::ZERO, |total, output| {
+            total.checked_add(output.value)
+        })
+        .filter(|total| *total <= Amount::MAX_MONEY)
+        .map(Amount::to_sat)
+        .ok_or_else(|| {
+            ValidationError::consensus("Bitcoin coinbase output total exceeds the money supply")
+        })
+}
 
 /// Check whether a block is in the PPLNS zone (needing full
 /// validation) or the prune zone (PoW-only validation).
 ///
-/// PPLNS zone: block_height > tip_height - PPLNS_DEPTH
+/// The PPLNS zone spans `PAYOUT_DEPTH`, the maturity depth plus the PPLNS
+/// window, so every share a coinbase near the tip can pay is fully validated.
+///
+/// PPLNS zone: block_height > tip_height - PAYOUT_DEPTH
 /// Prune zone: everything else below that height
-pub fn is_in_pplns_zone(block_height: u32, tip_height: u32) -> bool {
-    block_height > tip_height.saturating_sub(MAX_PPLNS_WINDOW_SHARES as u32)
+pub fn is_within_payout_depth(block_height: u32, tip_height: u32) -> bool {
+    block_height > tip_height.saturating_sub(PAYOUT_DEPTH as u32)
 }
 
 /// Look up a block's height and the candidate tip height from the store,
@@ -223,7 +243,7 @@ pub fn check_pplns_zone(
         .get_candidate_tip_height()
         .map_err(|error| format!("Failed to get candidate tip height: {error}"))?
         .unwrap_or(0);
-    Ok(is_in_pplns_zone(block_height, candidate_tip))
+    Ok(is_within_payout_depth(block_height, candidate_tip))
 }
 
 /// Trait for share validation operations.
@@ -267,11 +287,10 @@ pub trait ShareValidator {
     ) -> Result<(), ValidationError>;
 
     /// Validate a share block that is below the PPLNS depth (in the
-    /// prune zone). Only checks the coinbase proof and its non-coinbase
-    /// root, PoW, uncles, block size, and transaction count. Skips
-    /// coinbase, merkle root, witness commitment, transaction structure,
-    /// and script validation since these blocks will not participate in
-    /// PPLNS accounting.
+    /// prune zone). Only checks the coinbase proof, that the body matches
+    /// the header, PoW, uncles, block size, and transaction count. Skips
+    /// the bitcoin payout, transaction structure, and script validation
+    /// since these blocks will not participate in PPLNS accounting.
     fn validate_below_pplns_depth(
         &self,
         share: &ShareBlock,
@@ -304,8 +323,9 @@ pub trait ShareValidator {
 
     /// Validate the block's inputs against the rules fixed by the block
     /// itself: no outpoint spent twice within the block, every outpoint
-    /// present in the `Outputs` column family, every coinbase root within the
-    /// payout window, and every coinbase output mature at this block's height.
+    /// present in the `Outputs` column family, every coinbase root within
+    /// `PAYOUT_DEPTH` of this block, and every coinbase output mature at this
+    /// block's height.
     ///
     /// Rules whose answer depends on which branch is confirmed are not checked
     /// here. See the implementation for why.
@@ -355,24 +375,35 @@ pub trait ShareValidator {
         branch: &[TxMerkleNode],
     ) -> Result<(), ValidationError>;
 
-    /// Validate that the header's merkle root matches the transactions carried
-    /// with the block.
+    /// Validate that the block's body is the one its header binds.
+    ///
+    /// The header binds the share transactions through its proof's
+    /// `share_witness_root`, which the proof of work commits to: the
+    /// non-coinbase transactions must each appear once and have that witness
+    /// root, and the share coinbase must be the one the header implies
+    /// (`build_sharechain_coinbase_for_witness_root`). The bitcoin coinbase
+    /// must have the txid the header's proof gives and no witness, which the
+    /// txid does not cover.
     ///
     /// Part of the ddos prevention gate alongside
     /// `validate_header_minimum_difficulty` and `validate_block_size`: a block's
     /// identity is its header hash, so without this a peer can attach arbitrary
     /// transactions -- up to `BLOCK_TXS_SIZE_LIMIT` of them -- to a block whose
     /// hash says nothing about them, and have the result buffered and stored.
-    /// It reads only the block's own transactions, so it can run before the
-    /// block is buffered or stored.
-    fn validate_merkle_root(&self, share: &ShareBlock) -> Result<(), ValidationError>;
+    /// It reads only the block itself, so it runs before the block is buffered
+    /// or stored. A failure there means a bad copy of the block, not a bad
+    /// block: the copy is dropped and the hash stays fetchable.
+    fn validate_body_matches_header(&self, share: &ShareBlock) -> Result<(), ValidationError>;
 
-    /// Validate that the total size of the share's transactions is within
-    /// `BLOCK_TXS_SIZE_LIMIT`.
+    /// Validate that the total size of the share's transactions and its
+    /// bitcoin coinbase is within `BLOCK_TXS_SIZE_LIMIT`.
+    ///
+    /// The bitcoin coinbase counts because it is carried and buffered with
+    /// the block, and a miner can make it as large as a message allows.
     ///
     /// Part of the ddos prevention gate alongside `validate_header_minimum_difficulty`:
-    /// it reads only the block's own transactions, so it can run before the
-    /// block is buffered or stored. Without it the only size bound on an
+    /// it reads only the block itself, so it can run before the block is
+    /// buffered or stored. Without it the only size bound on an
     /// incoming block is the transport's `MAX_P2P_MESSAGE_SIZE`, letting one
     /// minimum-difficulty share pin far more memory than it costs to produce.
     fn validate_block_size(&self, share: &ShareBlock) -> Result<(), ValidationError>;
@@ -390,10 +421,6 @@ pub trait ShareValidator {
 /// avoiding repeated builds on each validation call.
 pub struct DefaultShareValidator {
     pool_difficulty: PoolDifficulty,
-    /// Multiplier applied to bitcoin difficulty when walking the PPLNS window.
-    difficulty_multiplier: u128,
-    /// Pool signature included in the coinbase transaction.
-    pool_signature: Vec<u8>,
     /// Time provider used to enforce the future-time bound on share timestamps.
     time_provider: Arc<dyn TimeProvider + Send + Sync>,
     /// Which chain's share owner this validator accepts.
@@ -409,34 +436,24 @@ pub struct DefaultShareValidator {
 }
 
 impl DefaultShareValidator {
-    /// Create a new DefaultShareValidator with the given pool difficulty,
-    /// difficulty multiplier for PPLNS window walks, and pool signature
-    /// for coinbase reconstruction. Uses `SystemTimeProvider` for timestamp
-    /// validation.
-    pub fn new(
-        pool_difficulty: PoolDifficulty,
-        difficulty_multiplier: u128,
-        pool_signature: Vec<u8>,
-    ) -> Self {
-        Self::with_time_provider(
-            pool_difficulty,
-            difficulty_multiplier,
-            pool_signature,
-            Arc::new(SystemTimeProvider),
-        )
+    /// Create a new DefaultShareValidator with the given pool difficulty. Uses
+    /// `SystemTimeProvider` for timestamp validation.
+    ///
+    /// No node-local value decides payout validity: the pool signature is
+    /// read from each block's own coinbase, and the PPLNS window is the fixed
+    /// `PPLNS_WINDOW_SHARES` shares below the immature ones (see
+    /// `COINBASE_MATURITY`).
+    pub fn new(pool_difficulty: PoolDifficulty) -> Self {
+        Self::with_time_provider(pool_difficulty, Arc::new(SystemTimeProvider))
     }
 
     /// Create a new DefaultShareValidator with an explicit time provider.
     pub fn with_time_provider(
         pool_difficulty: PoolDifficulty,
-        difficulty_multiplier: u128,
-        pool_signature: Vec<u8>,
         time_provider: Arc<dyn TimeProvider + Send + Sync>,
     ) -> Self {
         Self {
             pool_difficulty,
-            difficulty_multiplier,
-            pool_signature,
             time_provider,
             chain: Chain::Bitcoin,
             target_ceiling: CompactTarget::from_consensus(MAX_POOL_TARGET),
@@ -473,8 +490,8 @@ impl DefaultShareValidator {
     /// bodies are never fetched. The two boundaries are a full window apart and
     /// the gap covers the exemption with room to spare: an uncle sits at most
     /// `MAX_UNCLES_DEPTH` below its nephew, so a nephew whose uncle is below
-    /// `prune_height` (`tip - 2 * MAX_PPLNS_WINDOW_SHARES`) is itself far below
-    /// the zone boundary (`tip - MAX_PPLNS_WINDOW_SHARES`) and never reaches
+    /// `prune_height` (`tip - 2 * PAYOUT_DEPTH`) is itself far below
+    /// the zone boundary (`tip - PAYOUT_DEPTH`) and never reaches
     /// this check. Ungated, such a block is admitted, stored, and then fails
     /// validation forever on a body nothing will ever fetch.
     fn validate_uncle_bodies_present(
@@ -884,24 +901,6 @@ impl DefaultShareValidator {
         Ok(())
     }
 
-    /// Validate that the `non_coinbase_root` the header's `CoinbaseProof`
-    /// carries is the root of the block's non-coinbase transactions.
-    ///
-    /// Header sync takes the root on trust from the proof; this is where the
-    /// body holds it to account, so a header and its body cannot disagree on
-    /// which transactions the commitment covers.
-    fn validate_coinbase_proof_root(&self, share: &ShareBlock) -> Result<(), ValidationError> {
-        let computed_root =
-            compute_non_coinbase_root(share.transactions.get(1..).unwrap_or_default());
-        if share.header.coinbase_proof.non_coinbase_root != computed_root {
-            return Err(ValidationError::consensus(format!(
-                "Coinbase proof non-coinbase root {} does not match transactions root {computed_root}",
-                share.header.coinbase_proof.non_coinbase_root
-            )));
-        }
-        Ok(())
-    }
-
     /// Validate the miner address for this validator's chain.
     ///
     /// Bitcoin accepts a taproot witness program. Bitcoin Cash accepts a
@@ -958,99 +957,6 @@ impl DefaultShareValidator {
         Ok(())
     }
 
-    /// Validate the share coinbase creates an output with 1 share
-    /// unit to the miner address in the header and second a witness commitment output
-    fn validate_share_coinbase(&self, share: &ShareBlock) -> Result<(), ValidationError> {
-        let coinbase = share
-            .transactions
-            .first()
-            .ok_or_else(|| ValidationError::consensus("Share block has no transactions"))?;
-
-        //* Rebuild the coinbase this share must carry and compare, rather than
-        //* checking its fields one at a time. That proves it is the canonical
-        //* coinbase, not merely a well shaped one, which is what the share unit
-        //* accounting needs: its txid has to be a function of the share alone.
-        //*
-        //* This is only sound because both reconstruction inputs are bound
-        //* elsewhere. `miner_address` is digested into the share commitment, and
-        //* the weak block hash is the proof of work itself. Remove either
-        //* binding and a peer can rebuild a coinbase of their choosing.
-        let expected = build_sharechain_coinbase_transaction(
-            &share.header.miner_address,
-            share.header.bitcoin_header.block_hash(),
-            share.transactions.get(1..).unwrap_or_default(),
-        );
-
-        if coinbase.0 != expected {
-            return Err(ValidationError::consensus(
-                "Share coinbase is not the coinbase this share's owner and weak block imply",
-            ));
-        }
-
-        Ok(())
-    }
-
-    /// Validate the BIP141 witness commitment in the share coinbase.
-    ///
-    /// The share coinbase must carry a 32-byte witness reserved value on
-    /// its input witness stack and a witness commitment output whose
-    /// 32-byte hash matches `SHA256d(witness_root || reserved_value)`,
-    /// where `witness_root` is the merkle root of share transaction
-    /// wtxids with the coinbase slot replaced by all-zeros (BIP141).
-    fn validate_share_witness_commitment(&self, share: &ShareBlock) -> Result<(), ValidationError> {
-        let coinbase = share
-            .transactions
-            .first()
-            .ok_or_else(|| ValidationError::consensus("Share block has no transactions"))?;
-
-        if self.chain == Chain::BitcoinCash {
-            if coinbase.input[0].witness.is_empty() && coinbase.output.len() == 1 {
-                return Ok(());
-            }
-            return Err(ValidationError::consensus(
-                "Bitcoin Cash share coinbase must not carry a witness commitment".to_string(),
-            ));
-        }
-
-        let witness_stack: Vec<&[u8]> = coinbase.input[0].witness.iter().collect();
-        if witness_stack.len() != 1 || witness_stack[0].len() != 32 {
-            return Err(ValidationError::consensus(
-                "Share coinbase input witness must be a single 32-byte reserved value",
-            ));
-        }
-        let witness_reserved_value = witness_stack[0];
-
-        // share coinbase has two outputs - a single miner output and
-        // then a witnesscommitment output
-        let commitment_output = &coinbase.output[1];
-        if commitment_output.value != Amount::ZERO {
-            return Err(ValidationError::consensus(format!(
-                "Share coinbase witness commitment output must have zero value, got {}",
-                commitment_output.value
-            )));
-        }
-        let commitment_script = commitment_output.script_pubkey.as_bytes();
-        if commitment_script.len() != WITNESS_COMMITMENT_LENGTH
-            || commitment_script[..6] != [0x6a, 0x24, 0xaa, 0x21, 0xa9, 0xed]
-        {
-            return Err(ValidationError::consensus(
-                "Share coinbase witness commitment output has invalid BIP141 header",
-            ));
-        }
-
-        let other_share_transactions = &share.transactions[1..];
-        let witness_root = compute_witness_root(other_share_transactions);
-        let expected_commitment = compute_commitment_hash(&witness_root, witness_reserved_value);
-
-        if commitment_script[6..] != expected_commitment.as_byte_array()[..] {
-            return Err(ValidationError::consensus(
-                "Share coinbase witness commitment does not match recomputed witness root",
-            ));
-        }
-
-        Ok(())
-    }
-
     /// Validate the bitcoin coinbase by reconstructing it from the share header
     /// fields and verifying the merkle root matches the bitcoin header.
     fn validate_bitcoin_coinbase(
@@ -1065,8 +971,9 @@ impl DefaultShareValidator {
 
     /// Validate the bitcoin coinbase against the PPLNS window distribution.
     ///
-    /// Computes the expected distribution from the PPLNS window using
-    /// bitcoin header difficulty * difficulty_multiplier, reconstructs
+    /// Computes the expected distribution from the PPLNS window -- the
+    /// `PPLNS_WINDOW_SHARES` shares below the share's parent that are mature
+    /// for this share (see `COINBASE_MATURITY`) -- reconstructs
     /// the expected coinbase transaction, and verifies that the merkle
     /// root computed from the reconstructed coinbase and the template
     /// merkle branches matches the bitcoin header's merkle root.
@@ -1085,20 +992,8 @@ impl DefaultShareValidator {
             .write()
             .expect("PPLNS window lock poisoned on write");
 
-        let bitcoin_difficulty = share.header.bitcoin_header.difficulty(window.network());
-        let share_pool_difficulty = share.header.get_difficulty(window.network());
-        let total_difficulty = sim_overrides::pplns_total_difficulty(
-            bitcoin_difficulty,
-            self.difficulty_multiplier,
-            share_pool_difficulty,
-        );
-
         let address_difficulty_map = window
-            .get_distribution_from_start_hash(
-                total_difficulty,
-                share.header.prev_share_blockhash,
-                chain_store_handle,
-            )
+            .get_distribution_from_start_hash(share.header.prev_share_blockhash, chain_store_handle)
             .map_err(|error| match error {
                 // The anchor is below the confirmed entries this node's window
                 // retains, and the window's oldest entry only moves forward
@@ -1114,50 +1009,78 @@ impl DefaultShareValidator {
                 )),
             })?;
 
-        let coinbase_value = share.header.coinbase_value;
+        // The total paid out is the bitcoin coinbase's own output total. The
+        // admission gate has matched the coinbase to the proof of work, so this
+        // is what the miner committed to; the rebuild below checks the payouts
+        // divide it as the PPLNS window says.
+        let coinbase_value = bitcoin_coinbase_value(&share.bitcoin_coinbase)?;
 
         let expected_outputs =
             Self::build_expected_outputs(&share.header, &address_difficulty_map, coinbase_value)?;
         let expected_commitment_hash = ShareCommitment::from_share_block(share).hash();
 
-        let flags = match &share.header.coinbaseaux_flags {
-            Some(aux_flags) => aux_flags.to_push_bytes_buf(),
-            None => PushBytesBuf::from(&[0u8]),
-        };
-        let pool_signature = &self.pool_signature;
-        let merge_mining = if self.chain == Chain::BitcoinCash {
-            Some(crate::shares::merge_mining::MergeMiningCommitment::reserved())
-        } else {
-            None
-        };
+        // The aux flags, extranonce, nanosecond timestamp, pool signature and
+        // witness commitment are read back from the coinbase itself. The
+        // admission gate has already matched its txid to the proof of work,
+        // so these are the values the miner hashed; rebuilding with them and
+        // comparing the whole coinbase leaves only the payouts, the height
+        // and the commitment to disagree. The pool signature in particular is
+        // a tag, not consensus: nodes configured with different signatures
+        // must still agree on validity.
+        //
+        // Bitcoin Cash adds the reserved AuxPoW output after the payouts. A
+        // declared Bitcoin Cash coinbase has the declarator's scriptSig
+        // prefix followed by the 12-byte extranonce, so its extranonce is
+        // what follows the prefix in the coinbase the miner hashed.
         let reconstructed_coinbase = if let Some(declared) = &share.header.bch_coinbase {
             if self.chain != Chain::BitcoinCash {
                 return Err(ValidationError::consensus(
                     "Declared BCH coinbase on Bitcoin chain",
                 ));
             }
+            let script_sig = share
+                .bitcoin_coinbase
+                .input
+                .first()
+                .map(|input| input.script_sig.as_bytes())
+                .unwrap_or_default();
+            let extranonce = script_sig.get(declared.prefix.len()..).ok_or_else(|| {
+                ValidationError::consensus("Declared BCH coinbase is shorter than its prefix")
+            })?;
             build_declared_coinbase(
                 &expected_outputs,
                 share.header.bitcoin_height,
                 expected_commitment_hash,
-                share.header.extranonce.as_bytes(),
+                extranonce,
                 declared,
             )
         } else {
+            let fields =
+                parse_bitcoin_coinbase_fields(&share.bitcoin_coinbase).map_err(|error| {
+                    ValidationError::consensus(format!("Malformed bitcoin coinbase: {error}"))
+                })?;
+            let merge_mining = (self.chain == Chain::BitcoinCash)
+                .then(crate::shares::merge_mining::MergeMiningCommitment::reserved);
             build_coinbase(
                 Version::TWO,
                 &expected_outputs,
                 share.header.bitcoin_height as i64,
-                flags,
-                share.header.witness_commitment.as_ref(),
-                pool_signature,
+                fields.aux_flags,
+                fields.witness_commitment.as_ref(),
+                &fields.pool_signature,
                 Some(expected_commitment_hash),
-                share.header.coinbase_nsecs,
-                Some(share.header.extranonce.as_bytes()),
+                fields.nsecs,
+                Some(&fields.extranonce),
                 merge_mining,
             )
         }
         .map_err(|error| ValidationError::consensus(format!("Error building coinbase {error}")))?;
+
+        if reconstructed_coinbase != share.bitcoin_coinbase {
+            return Err(ValidationError::consensus(
+                "Bitcoin coinbase is not the coinbase the PPLNS window and share fields imply",
+            ));
+        }
 
         let reconstructed_coinbase_txid = reconstructed_coinbase.compute_txid();
         let recomputed_root = compute_merkle_root_from_branches(
@@ -1210,29 +1133,89 @@ impl ShareValidator for DefaultShareValidator {
             .map_err(|error| ValidationError::consensus(format!("Invalid coinbase proof: {error}")))
     }
 
-    fn validate_merkle_root(&self, share: &ShareBlock) -> Result<(), ValidationError> {
-        let computed_root: TxMerkleNode = bitcoin::merkle_tree::calculate_root(
-            share.transactions.iter().map(|tx| tx.compute_txid()),
-        )
-        .ok_or_else(|| {
-            ValidationError::consensus("Cannot compute merkle root from empty transactions")
-        })?
-        .into();
+    fn validate_body_matches_header(&self, share: &ShareBlock) -> Result<(), ValidationError> {
+        let share_witness_root = share.header.coinbase_proof.share_witness_root;
+        let (coinbase, other_share_transactions) = share
+            .transactions
+            .split_first()
+            .ok_or_else(|| ValidationError::consensus("Share block has no transactions"))?;
 
-        if share.header.merkle_root != computed_root {
+        // A merkle tree pairs the last node of an odd level with itself, so
+        // repeating trailing transactions keeps the root (CVE-2012-2459). Any
+        // repeat makes the copy a bad copy here, before the root is compared.
+        let mut seen_wtxids = HashSet::with_capacity(other_share_transactions.len());
+        if let Some(repeated) = other_share_transactions
+            .iter()
+            .map(|transaction| transaction.compute_wtxid())
+            .find(|wtxid| !seen_wtxids.insert(*wtxid))
+        {
             return Err(ValidationError::consensus(format!(
-                "Merkle root mismatch: header has {} but transactions compute to {}",
-                share.header.merkle_root, computed_root
+                "Share transaction {repeated} appears more than once"
             )));
+        }
+
+        let computed_root = compute_witness_root(other_share_transactions);
+        if computed_root != share_witness_root {
+            return Err(ValidationError::consensus(format!(
+                "Share transactions witness root {computed_root} does not match the header's {share_witness_root}"
+            )));
+        }
+
+        // Rebuild the coinbase this share must carry and compare, rather than
+        // checking its fields one at a time. That proves it is the canonical
+        // coinbase, not merely a well shaped one, which is what the share unit
+        // accounting needs: its txid has to be a function of the share alone.
+        // Every input is bound to the proof of work: `miner_address` and the
+        // witness root through the share commitment, and the weak block hash
+        // is the proof of work itself.
+        let expected = build_sharechain_coinbase_for_witness_root(
+            &share.header.miner_address,
+            share.header.bitcoin_header.block_hash(),
+            share_witness_root,
+        );
+        if coinbase.0 != expected {
+            return Err(ValidationError::consensus(
+                "Share coinbase is not the coinbase this share's header implies",
+            ));
+        }
+
+        // The bitcoin coinbase is not in the block hash. Its txid has to be the
+        // one the header's proof gives, which the proof of work commits to
+        let proof_txid = share
+            .header
+            .coinbase_proof
+            .coinbase_txid_for(&share.header)
+            .map_err(|error| {
+                ValidationError::consensus(format!("Invalid coinbase proof: {error}"))
+            })?;
+        let coinbase_txid = share.bitcoin_coinbase.compute_txid();
+        if coinbase_txid != proof_txid {
+            return Err(ValidationError::consensus(format!(
+                "Bitcoin coinbase txid {coinbase_txid} is not the {proof_txid} its header's proof gives"
+            )));
+        }
+        // A txid leaves out the witness, so the txid alone does not fix it.
+        // Validate the coinbase has no witness, else an attacker can send
+        // conflicting block txs with a coinbase that will make the block Invalid.
+        if share
+            .bitcoin_coinbase
+            .input
+            .iter()
+            .any(|input| !input.witness.is_empty())
+        {
+            return Err(ValidationError::consensus(
+                "Bitcoin coinbase carries a witness; it is carried as hashed, without one",
+            ));
         }
         Ok(())
     }
 
     fn validate_block_size(&self, share: &ShareBlock) -> Result<(), ValidationError> {
-        let total_size: usize = share.transactions.iter().map(|tx| tx.total_size()).sum();
+        let transactions_size: usize = share.transactions.iter().map(|tx| tx.total_size()).sum();
+        let total_size = transactions_size + share.bitcoin_coinbase.total_size();
         if total_size > BLOCK_TXS_SIZE_LIMIT as usize {
             return Err(ValidationError::consensus(format!(
-                "Block transactions size {total_size} exceeds limit of {BLOCK_TXS_SIZE_LIMIT}"
+                "Block transactions and bitcoin coinbase size {total_size} exceeds limit of {BLOCK_TXS_SIZE_LIMIT}"
             )));
         }
         Ok(())
@@ -1347,14 +1330,11 @@ impl ShareValidator for DefaultShareValidator {
             return Ok(());
         }
         self.validate_coinbase_proof(&share.header, &share.template_merkle_branches)?;
-        self.validate_coinbase_proof_root(share)?;
+        self.validate_body_matches_header(share)?;
         self.validate_with_pool_difficulty(&share.header, chain_store_handle)?;
         self.validate_uncles(share, chain_store_handle)?;
         self.validate_uncle_bodies_present(share, chain_store_handle)?;
         self.validate_block_size(share)?;
-        self.validate_share_coinbase(share)?;
-        self.validate_merkle_root(share)?;
-        self.validate_share_witness_commitment(share)?;
         self.validate_transaction_count(share)?;
         self.validate_transactions(share)?;
         self.validate_scripts_values_and_sigops(share, chain_store_handle)?;
@@ -1370,7 +1350,7 @@ impl ShareValidator for DefaultShareValidator {
             return Ok(());
         }
         self.validate_coinbase_proof(&share.header, &share.template_merkle_branches)?;
-        self.validate_coinbase_proof_root(share)?;
+        self.validate_body_matches_header(share)?;
         self.validate_with_pool_difficulty(&share.header, chain_store_handle)?;
         self.validate_uncles(share, chain_store_handle)?;
         self.validate_block_size(share)?;
@@ -1477,7 +1457,9 @@ impl ShareValidator for DefaultShareValidator {
     ///
     /// 1. No outpoint is spent by more than one input in this block.
     /// 2. Every outpoint exists in the `Outputs` column family.
-    /// 3. Every outpoint's coinbase root is within the payout window.
+    /// 3. Every outpoint's coinbase root is within `PAYOUT_DEPTH` of this
+    ///    block, so an output stays spendable for a full PPLNS window after
+    ///    it matures.
     /// 4. A coinbase output is mature relative to this block's own height.
     ///
     /// Each answer is fixed by the block and by data stamped on the outputs
@@ -1521,13 +1503,13 @@ impl ShareValidator for DefaultShareValidator {
                 ))
             })?
             + 1;
-        let min_coinbase_root_height = block_height.saturating_sub(MAX_PPLNS_WINDOW_SHARES as u32);
+        let min_coinbase_root_height = block_height.saturating_sub(PAYOUT_DEPTH as u32);
         match chain_store_handle
             .check_prevouts(
                 &all_outpoints,
                 block_height,
                 min_coinbase_root_height,
-                COINBASE_MATURITY,
+                sim_overrides::coinbase_maturity(),
             )
             .map_err(|error| {
                 ValidationError::store_access(format!("Prevout check failed: {error}"))
@@ -1608,7 +1590,7 @@ mockall::mock! {
             branch: &[TxMerkleNode],
         ) -> Result<(), ValidationError>;
 
-        fn validate_merkle_root(&self, share: &ShareBlock) -> Result<(), ValidationError>;
+        fn validate_body_matches_header(&self, share: &ShareBlock) -> Result<(), ValidationError>;
 
         fn validate_block_size(&self, share: &ShareBlock) -> Result<(), ValidationError>;
 
@@ -1619,8 +1601,10 @@ mockall::mock! {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::accounting::payout::sharechain_pplns::pplns_window::{
+        COINBASE_MATURITY, PPLNS_WINDOW_SHARES,
+    };
     use crate::shares::bch_coinbase::BchCoinbase;
-    use crate::shares::extranonce::Extranonce;
     use crate::shares::merge_mining::MergeMiningCommitment;
     use crate::shares::share_block::ShareTransaction;
     use crate::shares::share_commitment::ShareCommitment;
@@ -1628,6 +1612,7 @@ mod tests {
     use crate::store::block_tx_metadata::{BlockMetadata, ChainMembership};
     use crate::store::transaction_store::PrevoutRejection;
     use crate::store::writer::StoreError;
+    use crate::stratum::session::{EXTRANONCE1_SIZE, EXTRANONCE2_SIZE};
     use crate::stratum::work::block_template::{BlockTemplate, parse_flags};
     use crate::stratum::work::gbt::build_merkle_branches_for_template;
     use crate::test_utils::{
@@ -1641,7 +1626,7 @@ mod tests {
     use bitcoin::pow::Work;
     use bitcoin::script::{Builder, PushBytesBuf};
     use bitcoin::transaction::Version;
-    use bitcoin::{BlockHash, Network, ScriptBuf, TxOut, hashes::Hash};
+    use bitcoin::{BlockHash, Network, ScriptBuf, TxOut, WitnessMerkleNode, hashes::Hash};
     use mockall::predicate::*;
     use p2poolv2_wallet::share_owner::ShareOwner;
     use std::collections::HashMap;
@@ -1649,11 +1634,11 @@ mod tests {
     use std::time::SystemTime;
 
     fn validator() -> DefaultShareValidator {
-        DefaultShareValidator::new(PoolDifficulty::default(), 1, b"P2Poolv2".to_vec())
+        DefaultShareValidator::new(PoolDifficulty::default())
     }
 
     fn validator_with(pool_difficulty: PoolDifficulty) -> DefaultShareValidator {
-        DefaultShareValidator::new(pool_difficulty, 1, b"P2Poolv2".to_vec())
+        DefaultShareValidator::new(pool_difficulty)
     }
 
     #[test]
@@ -1669,22 +1654,13 @@ mod tests {
 
     #[test]
     fn bitcoin_cash_accepts_a_p2pkh_owner_and_rejects_taproot() {
-        let mut share = TestShareBlockBuilder::new().build();
         let cash = p2poolv2_wallet::share_owner::ShareOwner::CashP2pkh([0x22; 20]);
-        share.header.miner_address = cash;
-        share.transactions[0] = ShareTransaction(build_sharechain_coinbase_transaction(
-            &cash,
-            share.header.bitcoin_header.block_hash(),
-            &[],
-        ));
+        let share = TestShareBlockBuilder::new().share_owner(cash).build();
         let bch_validator = validator().for_chain(Chain::BitcoinCash);
         assert!(bch_validator.validate_miner_address(&share.header).is_ok());
-        assert!(bch_validator.validate_share_coinbase(&share).is_ok());
-        assert!(
-            bch_validator
-                .validate_share_witness_commitment(&share)
-                .is_ok()
-        );
+        assert!(bch_validator.validate_body_matches_header(&share).is_ok());
+        assert!(share.transactions[0].input[0].witness.is_empty());
+        assert_eq!(share.transactions[0].output.len(), 1);
 
         let taproot = TestShareBlockBuilder::new().build();
         let error = bch_validator
@@ -2501,8 +2477,7 @@ mod tests {
             .with(eq(bitcoin::BlockHash::all_zeros()))
             .returning(|_| Some(genesis_for_tests()));
 
-        let validator =
-            DefaultShareValidator::new(PoolDifficulty::default(), 1, b"P2Poolv2".to_vec());
+        let validator = DefaultShareValidator::new(PoolDifficulty::default());
         let result = validator.validate_share_block(&share_block, &chain_store_handle);
 
         assert!(result.is_ok(), "Expected Ok, got: {:?}", result.err());
@@ -2565,7 +2540,7 @@ mod tests {
     }
 
     /// Below the PPLNS depth the body is still checked against the
-    /// `non_coinbase_root` its proof commits to: a block whose header proof
+    /// `share_witness_root` its proof commits to: a block whose header proof
     /// verifies but whose body carries other transactions is rejected.
     #[test]
     fn test_validate_below_pplns_depth_rejects_body_not_matching_proof_root() {
@@ -2588,9 +2563,7 @@ mod tests {
             .unwrap_err();
         assert_eq!(error.kind(), FailureKind::Consensus);
         assert!(
-            error
-                .to_string()
-                .contains("does not match transactions root"),
+            error.to_string().contains("witness root"),
             "unexpected error: {error}"
         );
     }
@@ -2639,24 +2612,25 @@ mod tests {
         assert!(error.to_string().contains("Invalid coinbase proof"));
     }
 
-    /// The `non_coinbase_root` a header's proof carries must be the root of
+    /// The `share_witness_root` a header's proof carries must be the root of
     /// the block's own non-coinbase transactions.
     #[test]
-    fn test_validate_coinbase_proof_root_rejects_root_not_matching_transactions() {
+    fn test_validate_body_matches_header_rejects_root_not_matching_transactions() {
         let mut share_block = TestShareBlockBuilder::new()
             .prev_share_blockhash(
                 "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5".to_string(),
             )
             .build();
         let validator = validator();
-        assert!(validator.validate_coinbase_proof_root(&share_block).is_ok());
+        assert!(validator.validate_body_matches_header(&share_block).is_ok());
 
-        share_block.header.coinbase_proof.non_coinbase_root =
-            TxMerkleNode::from_byte_array([0x11; 32]);
+        share_block.header.coinbase_proof.share_witness_root =
+            WitnessMerkleNode::from_byte_array([0x11; 32]);
         let error = validator
-            .validate_coinbase_proof_root(&share_block)
+            .validate_body_matches_header(&share_block)
             .unwrap_err();
         assert_eq!(error.kind(), FailureKind::Consensus);
+        assert!(error.to_string().contains("witness root"));
     }
 
     #[test]
@@ -2799,13 +2773,37 @@ mod tests {
         assert!(error.to_string().contains("exceeds limit of"));
     }
 
+    /// The bitcoin coinbase travels and is buffered with the block, so it
+    /// counts toward the size limit. A miner can make it as large as a
+    /// message allows; uncounted, a block of small share transactions could
+    /// still pin close to `MAX_P2P_MESSAGE_SIZE` in every buffered slot.
+    #[test]
+    fn test_validate_block_size_fails_when_bitcoin_coinbase_exceeds_limit() {
+        let mut share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+        share.bitcoin_coinbase.output[0].script_pubkey =
+            ScriptBuf::from_bytes(vec![0u8; BLOCK_TXS_SIZE_LIMIT as usize]);
+
+        let error = validator().validate_block_size(&share).unwrap_err();
+        assert!(
+            error.to_string().contains("exceeds limit of"),
+            "unexpected error: {error}"
+        );
+    }
+
     #[test]
     fn test_validate_block_size_succeeds_at_exactly_limit() {
         let share = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
-        let coinbase_size: usize = share.transactions.iter().map(|tx| tx.total_size()).sum();
-        let remaining = BLOCK_TXS_SIZE_LIMIT as usize - coinbase_size;
+        let base_size: usize = share
+            .transactions
+            .iter()
+            .map(|tx| tx.total_size())
+            .sum::<usize>()
+            + share.bitcoin_coinbase.total_size();
+        let remaining = BLOCK_TXS_SIZE_LIMIT as usize - base_size;
 
         // Use a two-pass approach: build a candidate transaction, measure its
         // total size, then adjust the script size to hit the exact target.
@@ -2819,7 +2817,12 @@ mod tests {
             .add_transaction(fill_tx)
             .build();
 
-        let total_size: usize = share.transactions.iter().map(|tx| tx.total_size()).sum();
+        let total_size: usize = share
+            .transactions
+            .iter()
+            .map(|tx| tx.total_size())
+            .sum::<usize>()
+            + share.bitcoin_coinbase.total_size();
         assert_eq!(total_size, BLOCK_TXS_SIZE_LIMIT as usize);
 
         let result = validator().validate_block_size(&share);
@@ -2827,39 +2830,147 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_merkle_root_succeeds_for_valid_share() {
+    fn test_validate_body_matches_header_succeeds_for_valid_share() {
         let share = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
 
-        let result = validator().validate_merkle_root(&share);
+        let result = validator().validate_body_matches_header(&share);
         assert!(result.is_ok());
     }
 
     #[test]
-    fn test_validate_merkle_root_fails_for_tampered_header() {
-        let mut share = TestShareBlockBuilder::new()
+    fn test_validate_body_matches_header_succeeds_with_share_transactions() {
+        let share = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .add_transaction(build_large_transaction(100))
             .build();
 
-        share.header.merkle_root = TxMerkleNode::all_zeros();
-
-        let error = validator().validate_merkle_root(&share).unwrap_err();
-        assert!(error.to_string().contains("Merkle root mismatch"));
+        let result = validator().validate_body_matches_header(&share);
+        assert!(result.is_ok(), "unexpected error: {:?}", result.err());
     }
 
     #[test]
-    fn test_validate_merkle_root_fails_when_transaction_removed() {
+    fn test_validate_body_matches_header_fails_when_transaction_removed() {
         let mut share = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .add_transaction(build_large_transaction(100))
             .build();
 
-        // Remove the last transaction so the computed merkle root diverges from header
+        // Remove the last transaction so the witness root diverges from the header's
         share.transactions.pop();
 
-        let error = validator().validate_merkle_root(&share).unwrap_err();
-        assert!(error.to_string().contains("Merkle root mismatch"));
+        let error = validator()
+            .validate_body_matches_header(&share)
+            .unwrap_err();
+        assert!(error.to_string().contains("witness root"));
+    }
+
+    /// A transaction's witness is bound by the header: a copy of the block
+    /// with an altered witness, the same txids, does not match.
+    #[test]
+    fn test_validate_body_matches_header_fails_when_witness_altered() {
+        let mut share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .add_transaction(test_coinbase_transaction(1))
+            .build();
+        let txid_before = share.transactions[1].compute_txid();
+
+        share.transactions[1].0.input[0].witness.push([0x42u8; 4]);
+
+        assert_eq!(share.transactions[1].compute_txid(), txid_before);
+        let error = validator()
+            .validate_body_matches_header(&share)
+            .unwrap_err();
+        assert!(error.to_string().contains("witness root"));
+    }
+
+    /// The bitcoin coinbase is not in the block hash, so a copy of the block
+    /// could carry another one -- here a different scriptSig. Its txid is
+    /// then not the one the header's proof gives, and the copy is rejected.
+    #[test]
+    fn test_validate_body_matches_header_fails_when_bitcoin_coinbase_differs() {
+        let mut share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+        let script_sig = share.bitcoin_coinbase.input[0].script_sig.to_bytes();
+        let mut altered = script_sig.clone();
+        let last = altered.len() - 1;
+        altered[last] ^= 0x01;
+        share.bitcoin_coinbase.input[0].script_sig = ScriptBuf::from_bytes(altered);
+
+        let error = validator()
+            .validate_body_matches_header(&share)
+            .unwrap_err();
+        assert_eq!(error.kind(), FailureKind::Consensus);
+        assert!(
+            error.to_string().contains("Bitcoin coinbase txid"),
+            "unexpected error: {error}"
+        );
+    }
+
+    /// A txid leaves out the witness, so the txid check alone would accept a
+    /// copy of the block whose bitcoin coinbase gained a witness. Payout
+    /// validation compares the whole coinbase and would then mark the real
+    /// block's hash Invalid; the copy has to be rejected before it is stored.
+    #[test]
+    fn test_validate_body_matches_header_fails_when_bitcoin_coinbase_has_witness() {
+        let mut share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+        let txid_before = share.bitcoin_coinbase.compute_txid();
+
+        share.bitcoin_coinbase.input[0].witness.push([0u8; 32]);
+
+        assert_eq!(share.bitcoin_coinbase.compute_txid(), txid_before);
+        let error = validator()
+            .validate_body_matches_header(&share)
+            .unwrap_err();
+        assert_eq!(error.kind(), FailureKind::Consensus);
+        assert!(
+            error.to_string().contains("witness"),
+            "unexpected error: {error}"
+        );
+    }
+
+    /// A merkle tree pairs the last node of an odd level with itself, so
+    /// repeating the last transaction leaves the witness root unchanged
+    /// (CVE-2012-2459). Such a copy must be rejected at the gate: stored, it
+    /// would fail transaction validation and mark the real block Invalid.
+    #[test]
+    fn test_validate_body_matches_header_fails_when_last_transaction_repeated() {
+        let mut share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .add_transaction(test_coinbase_transaction(1))
+            .add_transaction(test_coinbase_transaction(2))
+            .build();
+        let root_before = compute_witness_root(&share.transactions[1..]);
+
+        let last = share.transactions.last().unwrap().clone();
+        share.transactions.push(last);
+
+        assert_eq!(compute_witness_root(&share.transactions[1..]), root_before);
+        let error = validator()
+            .validate_body_matches_header(&share)
+            .unwrap_err();
+        assert_eq!(error.kind(), FailureKind::Consensus);
+        assert!(
+            error.to_string().contains("more than once"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn test_validate_body_matches_header_fails_without_transactions() {
+        let mut share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+        share.transactions.clear();
+
+        let error = validator()
+            .validate_body_matches_header(&share)
+            .unwrap_err();
+        assert!(error.to_string().contains("no transactions"));
     }
 
     #[test]
@@ -3800,6 +3911,58 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_prevouts_expires_coinbase_roots_below_payout_depth() {
+        // An output stays spendable for a full PPLNS window after it matures,
+        // so the oldest allowed coinbase root is the spending height less
+        // `PAYOUT_DEPTH`. The `withf` guard makes the mock match only that
+        // exact minimum; any other value leaves the call unmatched and panics.
+        let parent_height = 200_000u32;
+        let spending_height = parent_height + 1;
+        let mut chain_store_handle = ChainStoreHandle::default();
+        chain_store_handle
+            .expect_get_block_metadata()
+            .returning(move |_| Ok(metadata_at_height(parent_height)));
+        chain_store_handle
+            .expect_check_prevouts()
+            .withf(
+                move |_outpoints,
+                      _spending_height,
+                      min_coinbase_root_height,
+                      _coinbase_maturity| {
+                    *min_coinbase_root_height == spending_height - PAYOUT_DEPTH as u32
+                },
+            )
+            .returning(
+                |_outpoints, _spending_height, _min_coinbase_root_height, _coinbase_maturity| {
+                    Ok(PrevoutCheck::Accepted)
+                },
+            );
+
+        let spending_tx = bitcoin::Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint::new(bitcoin::Txid::all_zeros(), 0),
+                script_sig: ScriptBuf::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::new(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(10_000),
+                script_pubkey: ScriptBuf::new(),
+            }],
+        };
+
+        let share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .add_transaction(spending_tx)
+            .build();
+
+        let result = validator().validate_prevouts(&share, &chain_store_handle);
+        assert!(result.is_ok(), "got: {result:?}");
+    }
+
+    #[test]
     fn test_build_expected_outputs_empty_distribution_returns_error() {
         let header = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
@@ -3915,7 +4078,6 @@ mod tests {
         let mut share_block = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
-        share_block.header.coinbase_value = 312_500_000;
         share_block.header.bitcoin_height = 840_000;
 
         let commitment_hash = ShareCommitment::from_share_block(&share_block).hash();
@@ -3939,22 +4101,20 @@ mod tests {
             b"P2Poolv2",
             Some(commitment_hash),
             TEST_COINBASE_NSECS,
-            Some(Extranonce::default().as_bytes()),
+            Some(&[0u8; EXTRANONCE1_SIZE + EXTRANONCE2_SIZE]),
         )
         .unwrap();
 
         share_block.header.bitcoin_header.merkle_root = coinbase_tx.compute_txid().into();
+        share_block.bitcoin_coinbase = coinbase_tx;
 
         // Mock PplnsWindow returning matching 60/40 distribution
         let mut mock_window = PplnsWindow::default();
-        mock_window
-            .expect_network()
-            .return_const(bitcoin::Network::Signet);
         let addr_a_clone = address_a.clone();
         let addr_b_clone = address_b.clone();
         mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(move |_, _, _| {
+            .returning(move |_, _| {
                 let mut distribution = HashMap::with_capacity(2);
                 distribution.insert(addr_a_clone.clone(), 600u128);
                 distribution.insert(addr_b_clone.clone(), 400u128);
@@ -3962,8 +4122,7 @@ mod tests {
             });
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
-        let validator =
-            DefaultShareValidator::new(PoolDifficulty::default(), 1, b"P2Poolv2".to_vec());
+        let validator = DefaultShareValidator::new(PoolDifficulty::default());
         let result = validator.validate_bitcoin_payout(
             &share_block,
             &ChainStoreHandle::default(),
@@ -3989,7 +4148,6 @@ mod tests {
         let mut share_block = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
-        share_block.header.coinbase_value = 312_500_000;
         share_block.header.bitcoin_height = 840_000;
 
         let commitment_hash = ShareCommitment::from_share_block(&share_block).hash();
@@ -4013,22 +4171,20 @@ mod tests {
             b"P2Poolv2",
             Some(commitment_hash),
             TEST_COINBASE_NSECS,
-            Some(Extranonce::default().as_bytes()),
+            Some(&[0u8; EXTRANONCE1_SIZE + EXTRANONCE2_SIZE]),
         )
         .unwrap();
 
         share_block.header.bitcoin_header.merkle_root = coinbase_tx.compute_txid().into();
+        share_block.bitcoin_coinbase = coinbase_tx;
 
         // Mock PplnsWindow returning 60/40 distribution
         let mut mock_window = PplnsWindow::default();
-        mock_window
-            .expect_network()
-            .return_const(bitcoin::Network::Signet);
         let addr_a_clone = address_a.clone();
         let addr_b_clone = address_b.clone();
         mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(move |_, _, _| {
+            .returning(move |_, _| {
                 let mut distribution = HashMap::with_capacity(2);
                 distribution.insert(addr_a_clone.clone(), 600u128);
                 distribution.insert(addr_b_clone.clone(), 400u128);
@@ -4036,16 +4192,17 @@ mod tests {
             });
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
-        // The reconstructed coinbase will have different outputs (60/40),
-        // producing a different merkle root than the 50/50 coinbase
-        let validator =
-            DefaultShareValidator::new(PoolDifficulty::default(), 1, b"P2Poolv2".to_vec());
+        // The reconstructed coinbase will have different outputs (60/40)
+        // from the 50/50 coinbase the block carries
+        let validator = DefaultShareValidator::new(PoolDifficulty::default());
         let error = validator
             .validate_bitcoin_payout(&share_block, &ChainStoreHandle::default(), pplns_window)
             .unwrap_err();
         assert!(
-            error.to_string().contains("merkle root"),
-            "Expected merkle root mismatch error, got: {error}"
+            error
+                .to_string()
+                .contains("PPLNS window and share fields imply"),
+            "Expected coinbase mismatch error, got: {error}"
         );
     }
 
@@ -4054,17 +4211,13 @@ mod tests {
         let mut share_block = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
-        share_block.header.coinbase_value = 312_500_000;
         share_block.header.bitcoin_height = 840_000;
 
         // Mock PplnsWindow returning empty distribution
         let mut mock_window = PplnsWindow::default();
         mock_window
-            .expect_network()
-            .return_const(bitcoin::Network::Signet);
-        mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(|_, _, _| Ok(HashMap::new()));
+            .returning(|_, _| Ok(HashMap::new()));
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
         let error = validator()
@@ -4094,24 +4247,21 @@ mod tests {
             &[],
             None,
             TEST_COINBASE_NSECS,
-            Some(Extranonce::default().as_bytes()),
+            Some(&[0u8; EXTRANONCE1_SIZE + EXTRANONCE2_SIZE]),
         )
         .unwrap();
 
         let mut share_block = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
-        share_block.header.coinbase_value = 312_500_000;
         share_block.header.bitcoin_height = 840_000;
         share_block.header.bitcoin_header.merkle_root = coinbase_tx.compute_txid().into();
+        share_block.bitcoin_coinbase = coinbase_tx;
 
         let mut mock_window = PplnsWindow::default();
         mock_window
-            .expect_network()
-            .return_const(bitcoin::Network::Signet);
-        mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(|_, _, _| {
+            .returning(|_, _| {
                 Err(WindowError::ReadFailure(
                     "prev_share_blockhash not found in PPLNS window".into(),
                 ))
@@ -4141,21 +4291,17 @@ mod tests {
         let mut share_block = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
-        share_block.header.coinbase_value = 312_500_000;
         share_block.header.bitcoin_height = 840_000;
 
         let anchor = share_block.header.prev_share_blockhash;
         let mut mock_window = PplnsWindow::default();
         mock_window
-            .expect_network()
-            .return_const(bitcoin::Network::Signet);
-        mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(move |_, _, _| {
+            .returning(move |_, _| {
                 Err(WindowError::InsufficientEntries {
                     anchor,
                     oldest_cached_height: 5_000,
-                    max_window_shares: MAX_PPLNS_WINDOW_SHARES,
+                    max_window_shares: PPLNS_WINDOW_SHARES,
                 })
             });
 
@@ -4173,22 +4319,159 @@ mod tests {
         );
     }
 
+    /// The value payout validation divides is the coinbase's own output
+    /// total, zero-valued commitment and padding outputs included.
     #[test]
-    fn test_validate_bitcoin_payout_with_wrong_coinbase_value_fails() {
+    fn test_bitcoin_coinbase_value_sums_outputs() {
+        let share_block = TestShareBlockBuilder::new().build();
+        let expected: u64 = share_block
+            .bitcoin_coinbase
+            .output
+            .iter()
+            .map(|output| output.value.to_sat())
+            .sum();
+
+        assert_eq!(
+            bitcoin_coinbase_value(&share_block.bitcoin_coinbase).unwrap(),
+            expected
+        );
+        assert_eq!(expected, 5_000_000_000);
+    }
+
+    #[test]
+    fn test_bitcoin_coinbase_value_rejects_total_above_money_supply() {
+        let mut coinbase = TestShareBlockBuilder::new().build().bitcoin_coinbase;
+        coinbase.output[0].value = Amount::MAX_MONEY + Amount::from_sat(1);
+
+        let error = bitcoin_coinbase_value(&coinbase).unwrap_err();
+
+        assert_eq!(error.kind(), FailureKind::Consensus);
+    }
+
+    #[test]
+    fn test_bitcoin_coinbase_value_rejects_overflowing_total() {
+        let mut coinbase = TestShareBlockBuilder::new().build().bitcoin_coinbase;
+        coinbase.output[0].value = Amount::from_sat(u64::MAX);
+        coinbase.output[1].value = Amount::from_sat(u64::MAX);
+
+        let error = bitcoin_coinbase_value(&coinbase).unwrap_err();
+
+        assert_eq!(error.kind(), FailureKind::Consensus);
+    }
+
+    /// The pool signature only tags a coinbase; it is read from the block, not
+    /// from this node's config. A block another pool tagged differently is
+    /// valid here too, or nodes with different configs would split.
+    #[test]
+    fn test_validate_bitcoin_payout_accepts_another_pools_signature() {
+        let address_a = crate::test_utils::parse_address_from_string(
+            "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
+        );
+        let mut share_block = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+        share_block.header.bitcoin_height = 840_000;
+        let commitment_hash = ShareCommitment::from_share_block(&share_block).hash();
+
+        let coinbase_tx = build_bitcoin_coinbase_transaction(
+            Version::TWO,
+            &[OutputPair {
+                address: address_a.clone(),
+                amount: Amount::from_sat(312_500_000),
+            }],
+            share_block.header.bitcoin_height as i64,
+            PushBytesBuf::from(&[0u8]),
+            None,
+            b"OtherPool",
+            Some(commitment_hash),
+            TEST_COINBASE_NSECS,
+            Some(&[0u8; EXTRANONCE1_SIZE + EXTRANONCE2_SIZE]),
+        )
+        .unwrap();
+        share_block.header.bitcoin_header.merkle_root = coinbase_tx.compute_txid().into();
+        share_block.bitcoin_coinbase = coinbase_tx;
+
+        let mut mock_window = PplnsWindow::default();
+        let addr_a_clone = address_a.clone();
+        mock_window
+            .expect_get_distribution_from_start_hash()
+            .returning(move |_, _| Ok(HashMap::from([(addr_a_clone.clone(), 1000u128)])));
+
+        let result = validator().validate_bitcoin_payout(
+            &share_block,
+            &ChainStoreHandle::default(),
+            Arc::new(RwLock::new(mock_window)),
+        );
+        assert!(
+            result.is_ok(),
+            "Expected valid payout, got: {}",
+            result.unwrap_err()
+        );
+    }
+
+    /// A node with no pool signature configured pushes an empty one, and its
+    /// blocks are valid everywhere.
+    #[test]
+    fn test_validate_bitcoin_payout_accepts_empty_signature() {
+        let address_a = crate::test_utils::parse_address_from_string(
+            "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
+        );
+        let mut share_block = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .build();
+        share_block.header.bitcoin_height = 840_000;
+        let commitment_hash = ShareCommitment::from_share_block(&share_block).hash();
+
+        let coinbase_tx = build_bitcoin_coinbase_transaction(
+            Version::TWO,
+            &[OutputPair {
+                address: address_a.clone(),
+                amount: Amount::from_sat(312_500_000),
+            }],
+            share_block.header.bitcoin_height as i64,
+            PushBytesBuf::from(&[0u8]),
+            None,
+            b"",
+            Some(commitment_hash),
+            TEST_COINBASE_NSECS,
+            Some(&[0u8; EXTRANONCE1_SIZE + EXTRANONCE2_SIZE]),
+        )
+        .unwrap();
+        share_block.header.bitcoin_header.merkle_root = coinbase_tx.compute_txid().into();
+        share_block.bitcoin_coinbase = coinbase_tx;
+
+        let mut mock_window = PplnsWindow::default();
+        let addr_a_clone = address_a.clone();
+        mock_window
+            .expect_get_distribution_from_start_hash()
+            .returning(move |_, _| Ok(HashMap::from([(addr_a_clone.clone(), 1000u128)])));
+
+        let result = validator().validate_bitcoin_payout(
+            &share_block,
+            &ChainStoreHandle::default(),
+            Arc::new(RwLock::new(mock_window)),
+        );
+        assert!(
+            result.is_ok(),
+            "Expected valid payout, got: {}",
+            result.unwrap_err()
+        );
+    }
+
+    #[test]
+    fn test_validate_bitcoin_payout_with_one_satoshi_coinbase() {
         let address_a = crate::test_utils::parse_address_from_string(
             "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
         );
 
-        // Build share block with coinbase_value=1 sat
         let mut share_block = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
-        share_block.header.coinbase_value = 1;
         share_block.header.bitcoin_height = 840_000;
 
         let commitment_hash = ShareCommitment::from_share_block(&share_block).hash();
 
-        // Build coinbase with 1 sat matching the header
+        // Build a coinbase paying out 1 sat in total
         let coinbase_tx = build_bitcoin_coinbase_transaction(
             Version::TWO,
             &[OutputPair {
@@ -4201,26 +4484,23 @@ mod tests {
             b"P2Poolv2",
             Some(commitment_hash),
             TEST_COINBASE_NSECS,
-            Some(Extranonce::default().as_bytes()),
+            Some(&[0u8; EXTRANONCE1_SIZE + EXTRANONCE2_SIZE]),
         )
         .unwrap();
 
         share_block.header.bitcoin_header.merkle_root = coinbase_tx.compute_txid().into();
+        share_block.bitcoin_coinbase = coinbase_tx;
 
         let mut mock_window = PplnsWindow::default();
-        mock_window
-            .expect_network()
-            .return_const(bitcoin::Network::Signet);
         let addr_a_clone = address_a.clone();
         mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(move |_, _, _| Ok(HashMap::from([(addr_a_clone.clone(), 100u128)])));
+            .returning(move |_, _| Ok(HashMap::from([(addr_a_clone.clone(), 100u128)])));
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
         // The reconstructed coinbase will also have 1 sat to address_a,
         // so merkle roots should match and validation should pass
-        let validator =
-            DefaultShareValidator::new(PoolDifficulty::default(), 1, b"P2Poolv2".to_vec());
+        let validator = DefaultShareValidator::new(PoolDifficulty::default());
         let result = validator.validate_bitcoin_payout(
             &share_block,
             &ChainStoreHandle::default(),
@@ -4282,7 +4562,6 @@ mod tests {
         share_block.header.donation = Some(donation_bp);
         share_block.header.fee_address = Some(fee_address.clone());
         share_block.header.fee = Some(fee_bp);
-        share_block.header.coinbase_value = total_coinbase_sats;
         share_block.header.bitcoin_height = 840_000;
 
         let commitment_hash = ShareCommitment::from_share_block(&share_block).hash();
@@ -4318,23 +4597,21 @@ mod tests {
             b"P2Poolv2",
             Some(commitment_hash),
             TEST_COINBASE_NSECS,
-            Some(Extranonce::default().as_bytes()),
+            Some(&[0u8; EXTRANONCE1_SIZE + EXTRANONCE2_SIZE]),
         )
         .unwrap();
 
         share_block.header.bitcoin_header.merkle_root = coinbase_tx.compute_txid().into();
+        share_block.bitcoin_coinbase = coinbase_tx;
 
         // Mock PplnsWindow returning 3 miners with difficulties 500, 300, 200
         let mut mock_window = PplnsWindow::default();
-        mock_window
-            .expect_network()
-            .return_const(bitcoin::Network::Signet);
         let miner_a_clone = miner_a.clone();
         let miner_b_clone = miner_b.clone();
         let miner_c_clone = miner_c.clone();
         mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(move |_, _, _| {
+            .returning(move |_, _| {
                 let mut distribution = HashMap::with_capacity(3);
                 distribution.insert(miner_a_clone.clone(), 500u128);
                 distribution.insert(miner_b_clone.clone(), 300u128);
@@ -4343,8 +4620,7 @@ mod tests {
             });
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
-        let validator =
-            DefaultShareValidator::new(PoolDifficulty::default(), 1, b"P2Poolv2".to_vec());
+        let validator = DefaultShareValidator::new(PoolDifficulty::default());
         let result = validator.validate_bitcoin_payout(
             &share_block,
             &ChainStoreHandle::default(),
@@ -4380,10 +4656,14 @@ mod tests {
         let mut share_block = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
-        share_block.header.coinbase_value = template.coinbasevalue;
         share_block.header.bitcoin_height = template.height as u64;
-        share_block.header.coinbaseaux_flags = template.share_coinbaseaux_flags();
-        share_block.header.witness_commitment = template
+        let aux_flags = template
+            .coinbaseaux
+            .get("flags")
+            .and_then(|flags| hex::decode(flags).ok())
+            .map(|bytes| PushBytesBuf::try_from(bytes).unwrap())
+            .unwrap_or_else(|| PushBytesBuf::from(&[0u8]));
+        let witness_commitment = template
             .default_witness_commitment
             .as_deref()
             .and_then(|hex_str| WitnessCommitment::from_hex(hex_str).ok());
@@ -4397,17 +4677,12 @@ mod tests {
                 amount: Amount::from_sat(template.coinbasevalue),
             }],
             template.height as i64,
-            share_block
-                .header
-                .coinbaseaux_flags
-                .as_ref()
-                .map(|flags| flags.to_push_bytes_buf())
-                .unwrap_or_else(|| PushBytesBuf::from(&[0u8])),
-            share_block.header.witness_commitment.as_ref(),
+            aux_flags,
+            witness_commitment.as_ref(),
             b"P2Poolv2",
             Some(commitment_hash),
             TEST_COINBASE_NSECS,
-            Some(Extranonce::default().as_bytes()),
+            Some(&[0u8; EXTRANONCE1_SIZE + EXTRANONCE2_SIZE]),
         )
         .unwrap();
 
@@ -4422,6 +4697,7 @@ mod tests {
                 .unwrap()
                 .into();
         share_block.header.bitcoin_header.merkle_root = full_merkle_root;
+        share_block.bitcoin_coinbase = coinbase_tx;
 
         // Set merkle branches from template transactions
         share_block.template_merkle_branches = build_merkle_branches_for_template(&template)
@@ -4432,17 +4708,13 @@ mod tests {
 
         // Mock PplnsWindow returning 100% to address_a
         let mut mock_window = PplnsWindow::default();
-        mock_window
-            .expect_network()
-            .return_const(bitcoin::Network::Signet);
         let addr_a_clone = address_a.clone();
         mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(move |_, _, _| Ok(HashMap::from([(addr_a_clone.clone(), 1000u128)])));
+            .returning(move |_, _| Ok(HashMap::from([(addr_a_clone.clone(), 1000u128)])));
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
-        let validator =
-            DefaultShareValidator::new(PoolDifficulty::default(), 1, b"P2Poolv2".to_vec());
+        let validator = DefaultShareValidator::new(PoolDifficulty::default());
         let result = validator.validate_bitcoin_payout(
             &share_block,
             &ChainStoreHandle::default(),
@@ -4465,9 +4737,10 @@ mod tests {
     #[test]
     fn a_bchn_template_share_rebuilds_the_coinbase_the_stratum_builder_made() {
         // BCHN sends `"coinbaseaux": {"flags": ""}`. The stratum builder
-        // pushes one zero byte for it; the header must record no flags so
-        // validators rebuild that same push. A live regtest share was
-        // rejected by every node before this.
+        // pushes one zero byte for it. Validators read the flags back from
+        // the coinbase the share block carries, so they rebuild that same
+        // push. A live regtest share was rejected by every node when the
+        // header recorded the flags instead.
         let template: BlockTemplate = serde_json::from_str(include_str!(
             "../../../../bitcoindrpc/test_data/bchn-regtest-template.json"
         ))
@@ -4478,10 +4751,7 @@ mod tests {
         let mut share_block = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
-        share_block.header.coinbase_value = template.coinbasevalue;
         share_block.header.bitcoin_height = template.height as u64;
-        share_block.header.coinbaseaux_flags = template.share_coinbaseaux_flags();
-        share_block.header.witness_commitment = None;
 
         let commitment_hash = ShareCommitment::from_share_block(&share_block).hash();
 
@@ -4498,12 +4768,13 @@ mod tests {
             b"P2Poolv2",
             Some(commitment_hash),
             TEST_COINBASE_NSECS,
-            Some(Extranonce::default().as_bytes()),
+            Some(&[0u8; EXTRANONCE1_SIZE + EXTRANONCE2_SIZE]),
             Some(MergeMiningCommitment::reserved()),
         )
         .unwrap();
         share_block.header.bitcoin_header.merkle_root =
             TxMerkleNode::from_raw_hash(coinbase_tx.compute_txid().to_raw_hash());
+        share_block.bitcoin_coinbase = coinbase_tx;
         share_block.template_merkle_branches = Vec::new();
 
         let mut mock_window = PplnsWindow::default();
@@ -4513,12 +4784,11 @@ mod tests {
         let addr_a_clone = address_a.clone();
         mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(move |_, _, _| Ok(HashMap::from([(addr_a_clone.clone(), 1000u128)])));
+            .returning(move |_, _| Ok(HashMap::from([(addr_a_clone.clone(), 1000u128)])));
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
         let validator =
-            DefaultShareValidator::new(PoolDifficulty::default(), 1, b"P2Poolv2".to_vec())
-                .for_chain(Chain::BitcoinCash);
+            DefaultShareValidator::new(PoolDifficulty::default()).for_chain(Chain::BitcoinCash);
         let result = validator.validate_bitcoin_payout(
             &share_block,
             &ChainStoreHandle::default(),
@@ -4536,9 +4806,6 @@ mod tests {
         let address = make_test_address(1);
         let mut share = TestShareBlockBuilder::new().build();
         share.header.miner_address = ShareOwner::CashP2pkh([0x22; 20]);
-        share.header.coinbaseaux_flags = None;
-        share.header.witness_commitment = None;
-        share.header.coinbase_nsecs = 0;
         share.header.bitcoin_height = 702;
         share.header.bch_coinbase = Some(BchCoinbase {
             prefix: Builder::new()
@@ -4554,24 +4821,25 @@ mod tests {
         let mut coinbase = build_declared_coinbase(
             &[OutputPair {
                 address: address.clone(),
-                amount: Amount::from_sat(share.header.coinbase_value),
+                amount: Amount::from_sat(100_000_000),
             }],
             702,
             ShareCommitment::from_share_block(&share).hash(),
-            share.header.extranonce.as_bytes(),
+            &[0u8; EXTRANONCE1_SIZE + EXTRANONCE2_SIZE],
             share.header.bch_coinbase.as_ref().unwrap(),
         )
         .unwrap();
         share.template_merkle_branches.clear();
         share.header.bitcoin_header.merkle_root =
             TxMerkleNode::from_raw_hash(coinbase.compute_txid().to_raw_hash());
+        share.bitcoin_coinbase = coinbase.clone();
 
         let mut window = PplnsWindow::default();
         window.expect_network().return_const(Network::Regtest);
         window
             .expect_get_distribution_from_start_hash()
             .times(2)
-            .returning(move |_, _, _| Ok(HashMap::from([(address.clone(), 1000u128)])));
+            .returning(move |_, _| Ok(HashMap::from([(address.clone(), 1000u128)])));
         let window = Arc::new(RwLock::new(window));
         let validator = validator().for_chain(Chain::BitcoinCash);
         validator
@@ -4580,6 +4848,7 @@ mod tests {
         coinbase.output[0].script_pubkey = make_test_address(2).script_pubkey();
         share.header.bitcoin_header.merkle_root =
             TxMerkleNode::from_raw_hash(coinbase.compute_txid().to_raw_hash());
+        share.bitcoin_coinbase = coinbase;
         assert!(
             validator
                 .validate_bitcoin_payout(&share, &ChainStoreHandle::default(), window)
@@ -4833,20 +5102,7 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_share_witness_commitment_succeeds_for_valid_block() {
-        let share = TestShareBlockBuilder::new()
-            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
-            .build();
-        let result = validator().validate_share_witness_commitment(&share);
-        assert!(
-            result.is_ok(),
-            "Expected valid witness commitment, got: {:?}",
-            result.err()
-        );
-    }
-
-    #[test]
-    fn test_validate_share_witness_commitment_fails_for_tampered_commitment() {
+    fn test_validate_body_matches_header_rejects_share_coinbase_with_tampered_commitment() {
         let mut share = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
@@ -4860,18 +5116,18 @@ mod tests {
         share.transactions[0].0.output[1].script_pubkey = ScriptBuf::from(script_bytes);
 
         let error = validator()
-            .validate_share_witness_commitment(&share)
+            .validate_body_matches_header(&share)
             .unwrap_err();
         assert!(
             error
                 .to_string()
-                .contains("does not match recomputed witness root"),
-            "Expected commitment mismatch error, got: {error}"
+                .contains("coinbase this share's header implies"),
+            "Expected share coinbase mismatch, got: {error}"
         );
     }
 
     #[test]
-    fn test_validate_share_witness_commitment_fails_for_bad_bip141_header() {
+    fn test_validate_body_matches_header_rejects_share_coinbase_with_bad_bip141_header() {
         let mut share = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
@@ -4885,16 +5141,18 @@ mod tests {
         share.transactions[0].0.output[1].script_pubkey = ScriptBuf::from(script_bytes);
 
         let error = validator()
-            .validate_share_witness_commitment(&share)
+            .validate_body_matches_header(&share)
             .unwrap_err();
         assert!(
-            error.to_string().contains("invalid BIP141 header"),
-            "Expected BIP141 header error, got: {error}"
+            error
+                .to_string()
+                .contains("coinbase this share's header implies"),
+            "Expected share coinbase mismatch, got: {error}"
         );
     }
 
     #[test]
-    fn test_validate_share_witness_commitment_fails_for_bad_reserved_value() {
+    fn test_validate_body_matches_header_rejects_share_coinbase_with_bad_reserved_value() {
         let mut share = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
@@ -4905,16 +5163,18 @@ mod tests {
         share.transactions[0].0.input[0].witness = witness;
 
         let error = validator()
-            .validate_share_witness_commitment(&share)
+            .validate_body_matches_header(&share)
             .unwrap_err();
         assert!(
-            error.to_string().contains("single 32-byte reserved value"),
-            "Expected reserved value error, got: {error}"
+            error
+                .to_string()
+                .contains("coinbase this share's header implies"),
+            "Expected share coinbase mismatch, got: {error}"
         );
     }
 
     #[test]
-    fn test_validate_share_witness_commitment_fails_for_non_zero_commitment_value() {
+    fn test_validate_body_matches_header_rejects_share_coinbase_with_non_zero_commitment_value() {
         let mut share = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
             .build();
@@ -4924,55 +5184,57 @@ mod tests {
         share.transactions[0].0.output[1].value = bitcoin::Amount::from_sat(1);
 
         let error = validator()
-            .validate_share_witness_commitment(&share)
+            .validate_body_matches_header(&share)
             .unwrap_err();
         assert!(
-            error.to_string().contains("must have zero value"),
-            "Expected zero-value error, got: {error}"
+            error
+                .to_string()
+                .contains("coinbase this share's header implies"),
+            "Expected share coinbase mismatch, got: {error}"
         );
     }
 
     #[test]
     fn test_is_in_pplns_zone_at_tip() {
         // Block at tip height is in PPLNS zone
-        assert!(is_in_pplns_zone(300_000, 300_000));
+        assert!(is_within_payout_depth(300_000, 300_000));
     }
 
     #[test]
     fn test_is_in_pplns_zone_within_pplns_depth() {
-        // Block just inside PPLNS window
+        // Block just inside PPLNS zone
         let tip = 300_000u32;
-        let pplns_boundary = tip - MAX_PPLNS_WINDOW_SHARES as u32;
-        assert!(is_in_pplns_zone(pplns_boundary + 1, tip));
+        let pplns_boundary = tip - PAYOUT_DEPTH as u32;
+        assert!(is_within_payout_depth(pplns_boundary + 1, tip));
     }
 
     #[test]
     fn test_is_in_pplns_zone_at_boundary_is_prune_zone() {
         // Block exactly at boundary is NOT in PPLNS zone (prune zone)
         let tip = 300_000u32;
-        let pplns_boundary = tip - MAX_PPLNS_WINDOW_SHARES as u32;
-        assert!(!is_in_pplns_zone(pplns_boundary, tip));
+        let pplns_boundary = tip - PAYOUT_DEPTH as u32;
+        assert!(!is_within_payout_depth(pplns_boundary, tip));
     }
 
     #[test]
     fn test_is_in_pplns_zone_below_boundary_is_prune_zone() {
         let tip = 300_000u32;
-        let pplns_boundary = tip - MAX_PPLNS_WINDOW_SHARES as u32;
-        assert!(!is_in_pplns_zone(pplns_boundary - 1, tip));
+        let pplns_boundary = tip - PAYOUT_DEPTH as u32;
+        assert!(!is_within_payout_depth(pplns_boundary - 1, tip));
     }
 
     #[test]
     fn test_is_in_pplns_zone_short_chain() {
         // Chain shorter than PPLNS depth: all blocks are in PPLNS zone
-        assert!(is_in_pplns_zone(1, 100));
-        assert!(is_in_pplns_zone(50, 100));
+        assert!(is_within_payout_depth(1, 100));
+        assert!(is_within_payout_depth(50, 100));
     }
 
     #[test]
     fn test_is_in_pplns_zone_height_zero() {
         // Height 0 with any tip is NOT in PPLNS zone (0 > anything is false)
-        assert!(!is_in_pplns_zone(0, 0));
-        assert!(!is_in_pplns_zone(0, 300_000));
+        assert!(!is_within_payout_depth(0, 0));
+        assert!(!is_within_payout_depth(0, 300_000));
     }
 
     #[test]

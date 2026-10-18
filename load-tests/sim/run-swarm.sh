@@ -29,8 +29,16 @@
 #   DIST_SEED      seed for the latency spread        (default 42; reproducible)
 #   DISTINCT_ADDR  1 = each node gets its own payout    (default 1; needs a loaded
 #                  address via RPC getnewaddress             wallet on the bitcoind)
-#   POOL_SIGNATURE must be identical across nodes      (default P2Poolv2-dev)
+#   POOL_SIGNATURE_PREFIX  node i signs as PREFIX$i     (default P2Pool-sim-;
+#                  signatures are not consensus, so they differ per node to show
+#                  it; each must stay within the 16-byte config limit)
 #   DIAL_FANOUT    how many earlier peers each dials   (default 3)
+#   MATURITY_SHARES  coinbase maturity depth in shares  (default 6048, the
+#                  production value; lower it so a short run reaches the
+#                  payout maturity skip. Consensus: one value for all nodes)
+#   LATE_MINER     node index launched with its emitter off (default unset).
+#                  It syncs but mines nothing until failures.sh late-miner
+#                  restarts it with the emitter on
 #   PROFILE        cargo profile: release | debug      (default release)
 #
 # NOTE: release is the default on purpose. libp2p-request-response has a
@@ -72,6 +80,8 @@ LATENCY_MS="${LATENCY_MS:-0}"
 # Scale the latency base by the same factor so uncle rate (latency/interval) is
 # preserved; LATENCY_MS is thus given in 10s-interval terms.
 IDEAL_BLOCK_TIME="${IDEAL_BLOCK_TIME:-10}"
+MATURITY_SHARES="${MATURITY_SHARES:-6048}"
+LATE_MINER="${LATE_MINER:-}"
 LATENCY_MS=$(awk -v l="$LATENCY_MS" -v t="$IDEAL_BLOCK_TIME" 'BEGIN{printf "%.0f", l*t/10}')
 LATENCY_DIST="${LATENCY_DIST:-spread}"
 DIST_SEED="${DIST_SEED:-42}"
@@ -84,7 +94,15 @@ ASERT_ANCHOR="${ASERT_ANCHOR:-$(date +%s)}"
 # Total is N*HASHRATE regardless of HASHRATE_DIST (zipf preserves the total).
 NETWORK_HASHRATE="${NETWORK_HASHRATE:-$(awk -v n="$N" -v h="$HASHRATE" 'BEGIN{printf "%.0f", n*h}')}"
 DISTINCT_ADDR="${DISTINCT_ADDR:-1}"
-POOL_SIGNATURE="${POOL_SIGNATURE:-P2Poolv2-dev}"
+POOL_SIGNATURE_PREFIX="${POOL_SIGNATURE_PREFIX:-P2Pool-sim-}"
+# The config rejects a pool signature over 16 bytes; check the longest one
+# (the highest node index) before launching anything.
+MAX_POOL_SIGNATURE_LENGTH=16
+longest_signature="${POOL_SIGNATURE_PREFIX}$((N - 1))"
+if [ "${#longest_signature}" -gt "$MAX_POOL_SIGNATURE_LENGTH" ]; then
+  echo "pool signature '$longest_signature' exceeds $MAX_POOL_SIGNATURE_LENGTH bytes; shorten POOL_SIGNATURE_PREFIX" >&2
+  exit 1
+fi
 
 # Minimal JSON-RPC helper against the shared regtest bitcoind.
 rpc() {
@@ -174,6 +192,8 @@ for i in $(seq 0 $((N - 1))); do
   seed=$((i + 1))
   node_hashrate="${HR_ARR[i]}"
   node_latency="${LAT_ARR[i]}"
+  sim_enabled="true"
+  if [ "$i" = "$LATE_MINER" ]; then sim_enabled="false"; fi
   cfg="$RUN_DIR/node-$i.toml"
   log="$RUN_DIR/node-$i.log"
   store="$RUN_DIR/store-$i.db"
@@ -190,6 +210,9 @@ for i in $(seq 0 $((N - 1))); do
   # harmless here, and per-share coinbases stay distinct because each carries
   # its own weak block hash.
   node_share_addr="${SHARE_ADDRESSES[$((i % ${#SHARE_ADDRESSES[@]}))]}"
+  # Each node tags its own coinbases differently. Validation reads the
+  # signature from each block, so the swarm must still converge.
+  node_pool_signature="${POOL_SIGNATURE_PREFIX}$i"
 
   # Topology: each node dials up to DIAL_FANOUT earlier nodes (chain + chords),
   # which yields a single connected component. Node 0 dials nobody.
@@ -236,8 +259,7 @@ bootstrap_address = "$MINER_ADDRESS"
 zmqpubhashblock = "$ZMQ"
 network = "regtest"
 version_mask = "1fffffe0"
-difficulty_multiplier = 1.0
-pool_signature = "$POOL_SIGNATURE"
+pool_signature = "$node_pool_signature"
 
 [bitcoinrpc]
 url = "$RPC_URL"
@@ -254,7 +276,7 @@ hostname = "127.0.0.1"
 port = $api_port
 
 [sim]
-enabled = true
+enabled = $sim_enabled
 miner_address = "$node_addr"
 share_address = "$node_share_addr"
 hashrate = $node_hashrate
@@ -264,6 +286,7 @@ propagation_delay_ms = $node_latency
 asert_anchor_time = $ASERT_ANCHOR
 network_hashrate = $NETWORK_HASHRATE
 ideal_block_time_secs = $IDEAL_BLOCK_TIME
+coinbase_maturity = $MATURITY_SHARES
 EOF
 
   "$BIN" --config "$cfg" > "$log" 2>&1 &

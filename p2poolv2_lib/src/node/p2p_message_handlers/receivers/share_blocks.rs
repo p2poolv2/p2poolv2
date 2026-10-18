@@ -94,10 +94,15 @@ pub async fn handle_share_block(
     // The block's identity is its header hash, so without this a peer can
     // attach unrelated transactions -- including to a block we asked for by
     // hash -- and have them buffered and stored. Runs after the size check so
-    // the work is bounded, and reads nothing but the block itself.
-    if let Err(validation_error) = share_validator.validate_merkle_root(&share_block) {
-        warn!("Rejecting share block {block_hash} with mismatched merkle root: {validation_error}");
-        return Err(format!("Share block merkle root mismatch: {validation_error}").into());
+    // the work is bounded, and reads nothing but the block itself. A failure
+    // is a bad copy of the block, never stored, so the hash stays fetchable.
+    if let Err(validation_error) = share_validator.validate_body_matches_header(&share_block) {
+        warn!(
+            "Rejecting share block {block_hash} whose body does not match its header: {validation_error}"
+        );
+        return Err(
+            format!("Share block body does not match its header: {validation_error}").into(),
+        );
     }
 
     // Send to BlockReceiver actor for dependency buffering, ASERT
@@ -183,7 +188,7 @@ mod tests {
             .expect_validate_block_size()
             .returning(|_| Ok(()));
         mock_validator
-            .expect_validate_merkle_root()
+            .expect_validate_body_matches_header()
             .returning(|_| Ok(()));
 
         let (validation_tx, _validation_rx) = validation_worker::create_validation_channel();
@@ -384,10 +389,10 @@ mod tests {
     /// A block's identity is its header hash, so without this check a peer can
     /// attach arbitrary transactions -- including in reply to a block we asked
     /// for by hash -- and have them buffered and stored under a hash that says
-    /// nothing about them. The merkle root is the header's commitment to the
-    /// transactions, and checking it needs nothing but the block itself.
+    /// nothing about them. The header binds the transactions through its
+    /// proof's witness root, and checking it needs nothing but the block itself.
     #[tokio::test]
-    async fn test_handle_share_block_merkle_root_mismatch_rejected_before_buffering() {
+    async fn test_handle_share_block_body_not_matching_header_rejected_before_buffering() {
         let mut chain_store_handle = ChainStoreHandle::default();
         let test_data = load_share_headers_test_data();
         let header: ShareHeader =
@@ -410,11 +415,13 @@ mod tests {
         mock_validator
             .expect_validate_block_size()
             .returning(|_| Ok(()));
-        mock_validator.expect_validate_merkle_root().returning(|_| {
-            Err(ValidationError::consensus(
-                "Merkle root mismatch: header has a but transactions compute to b",
-            ))
-        });
+        mock_validator
+            .expect_validate_body_matches_header()
+            .returning(|_| {
+                Err(ValidationError::consensus(
+                    "Share transactions witness root a does not match the header's b",
+                ))
+            });
 
         let (validation_tx, _validation_rx) = validation_worker::create_validation_channel();
         let (block_receiver_handle, mut block_receiver_rx) = create_block_receiver_channel();
@@ -432,8 +439,11 @@ mod tests {
 
         assert!(result.is_err());
         assert!(
-            result.unwrap_err().to_string().contains("merkle root"),
-            "expected a merkle root rejection"
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("does not match its header"),
+            "expected a body mismatch rejection"
         );
         assert!(
             block_receiver_rx.try_recv().is_err(),

@@ -2,8 +2,10 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+use crate::node::p2p_message_handlers::MAX_HEADERS_IN_RESPONSE;
 use crate::shares::coinbase_proof::MAX_COINBASE_MERKLE_BRANCH_LENGTH;
 use crate::shares::share_block::{ShareBlock, ShareHeader, Txids};
+use crate::store::dag_store::MAX_BLOCKS_PER_HEIGHT;
 use bitcoin::consensus::{Decodable, Encodable, encode};
 use bitcoin::hashes::{Hash, sha256d};
 use bitcoin::io::{Read, Write};
@@ -23,6 +25,12 @@ use std::fmt::Display;
 /// transaction limit. `test_full_share_headers_response_fits_max_message_size`
 /// guards the margin.
 pub const MAX_P2P_MESSAGE_SIZE: usize = 1024 * 1024;
+
+/// Most headers, and most distinct branches, a `ShareHeaderBatch` may carry:
+/// a full response plus the one dense height the sender completes past it.
+/// An honest batch never has more branches than headers.
+pub(crate) const MAX_SHARE_HEADER_BATCH_LENGTH: usize =
+    MAX_HEADERS_IN_RESPONSE + MAX_BLOCKS_PER_HEIGHT;
 
 /// Message type discriminants for determining the message type
 /// We use a single byte integer instead of bitcoin's 12 byte string
@@ -274,10 +282,16 @@ impl Decodable for ShareHeaderBatch {
     fn consensus_decode_from_finite_reader<R: Read + ?Sized>(
         r: &mut R,
     ) -> Result<Self, encode::Error> {
-        // The reader is bounded by MAX_P2P_MESSAGE_SIZE, so the counts only
-        // need capping for the initial allocations.
+        // The reader is bounded by MAX_P2P_MESSAGE_SIZE, but an empty branch
+        // costs one byte there and a Vec here, so both counts are capped
+        // before anything is allocated.
         let branch_count = VarInt::consensus_decode(r)?.0 as usize;
-        let mut branches = Vec::with_capacity(core::cmp::min(branch_count, 1024 * 16));
+        if branch_count > MAX_SHARE_HEADER_BATCH_LENGTH {
+            return Err(encode::Error::ParseFailed(
+                "Share header batch has too many branches",
+            ));
+        }
+        let mut branches = Vec::with_capacity(branch_count);
         for _ in 0..branch_count {
             let node_count = VarInt::consensus_decode(r)?.0 as usize;
             if node_count > MAX_COINBASE_MERKLE_BRANCH_LENGTH {
@@ -292,8 +306,13 @@ impl Decodable for ShareHeaderBatch {
             branches.push(branch);
         }
         let header_count = VarInt::consensus_decode(r)?.0 as usize;
-        let mut headers = Vec::with_capacity(core::cmp::min(header_count, 1024 * 16));
-        let mut branch_indexes = Vec::with_capacity(core::cmp::min(header_count, 1024 * 16));
+        if header_count > MAX_SHARE_HEADER_BATCH_LENGTH {
+            return Err(encode::Error::ParseFailed(
+                "Share header batch has too many headers",
+            ));
+        }
+        let mut headers = Vec::with_capacity(header_count);
+        let mut branch_indexes = Vec::with_capacity(header_count);
         for _ in 0..header_count {
             let branch_index = u16::consensus_decode(r)?;
             let branch: &Vec<TxMerkleNode> =
@@ -550,13 +569,9 @@ impl Decodable for GetData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node::p2p_message_handlers::MAX_HEADERS_IN_RESPONSE;
     use crate::shares::bch_coinbase::BchCoinbase;
-    use crate::shares::coinbaseaux_flags::CoinbaseAuxFlags;
     use crate::shares::merge_mining::MergeMiningCommitment;
     use crate::shares::validation::MAX_UNCLES;
-    use crate::shares::witness_commitment::WitnessCommitment;
-    use crate::store::dag_store::MAX_BLOCKS_PER_HEIGHT;
     use crate::test_utils::TestShareBlockBuilder;
     use bitcoin::consensus::encode;
     use bitcoin::script::Builder;
@@ -605,8 +620,7 @@ mod tests {
     /// worst-case headers -- must fit under `MAX_P2P_MESSAGE_SIZE`, or header
     /// sync would be rejected by our own codec. Worst case per header: the
     /// maximum uncles, the longest address script (P2WSH) in every address
-    /// field, the longest coinbaseaux flags, a witness commitment, the bitcoin
-    /// merkle root included, and a distinct coinbase branch of the maximum
+    /// field, the bitcoin merkle root included, and a distinct coinbase branch of the maximum
     /// length -- no two headers sharing a block template. The sender completes
     /// whole heights, so a response can overshoot `MAX_HEADERS_IN_RESPONSE` by
     /// up to one dense height.
@@ -625,13 +639,6 @@ mod tests {
         header.donation = Some(u16::MAX);
         header.fee_address = Some(longest_address);
         header.fee = Some(u16::MAX);
-        header.coinbaseaux_flags = Some(CoinbaseAuxFlags::new(&[0xff; 32]));
-        header.witness_commitment = Some(
-            WitnessCommitment::from_hex(
-                "6a24aa21a9ede2f61c3f71d1defd3fa999dfa36953755c690689799962b48bebd836974e8cf9",
-            )
-            .unwrap(),
-        );
 
         header.miner_address = ShareOwner::CashP2pkh([0x11; 20]);
         header.bch_coinbase = Some(BchCoinbase {
@@ -639,7 +646,7 @@ mod tests {
             merge_mining: MergeMiningCommitment::reserved(),
         });
 
-        let header_count = MAX_HEADERS_IN_RESPONSE + MAX_BLOCKS_PER_HEIGHT;
+        let header_count = MAX_SHARE_HEADER_BATCH_LENGTH;
         let mut entries = Vec::with_capacity(header_count);
         for index in 0..header_count as u32 {
             let mut node = [0u8; 32];
@@ -665,9 +672,6 @@ mod tests {
     fn declared_bch_header_batch_round_trips_a_compressed_25_level_proof() {
         let mut header = TestShareBlockBuilder::new().build().header;
         header.miner_address = ShareOwner::CashP2pkh([0x11; 20]);
-        header.coinbase_nsecs = 0;
-        header.coinbaseaux_flags = None;
-        header.witness_commitment = None;
         header.bch_coinbase = Some(BchCoinbase {
             prefix: Builder::new()
                 .push_int(header.bitcoin_height as i64)
@@ -1035,6 +1039,38 @@ mod tests {
         let result: Result<ShareHeaderBatch, _> = encode::deserialize(&bytes);
 
         assert!(result.is_err());
+    }
+
+    /// A branch table longer than any legitimate response is rejected before
+    /// it is read: empty branches cost one byte each on the wire but a `Vec`
+    /// each in memory, so a bounded message could otherwise allocate tens of
+    /// megabytes.
+    #[test]
+    fn test_share_header_batch_decode_rejects_branch_table_over_limit() {
+        let mut bytes = Vec::new();
+        VarInt::from(MAX_SHARE_HEADER_BATCH_LENGTH + 1)
+            .consensus_encode(&mut bytes)
+            .unwrap();
+        bytes.resize(bytes.len() + MAX_SHARE_HEADER_BATCH_LENGTH + 1, 0);
+        VarInt::from(0usize).consensus_encode(&mut bytes).unwrap();
+
+        let result: Result<ShareHeaderBatch, _> = encode::deserialize(&bytes);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_share_header_batch_decode_accepts_branch_table_at_limit() {
+        let mut bytes = Vec::new();
+        VarInt::from(MAX_SHARE_HEADER_BATCH_LENGTH)
+            .consensus_encode(&mut bytes)
+            .unwrap();
+        bytes.resize(bytes.len() + MAX_SHARE_HEADER_BATCH_LENGTH, 0);
+        VarInt::from(0usize).consensus_encode(&mut bytes).unwrap();
+
+        let result: Result<ShareHeaderBatch, _> = encode::deserialize(&bytes);
+
+        assert!(result.is_ok());
     }
 
     /// A header whose proof derives its bitcoin merkle root travels without

@@ -83,9 +83,6 @@ mod tests {
         share.header.prev_share_blockhash = share.header.bitcoin_header.block_hash();
         share.header.miner_address = ShareOwner::CashP2pkh([0x22; 20]);
         share.header.bitcoin_height = 702;
-        share.header.coinbase_nsecs = 0;
-        share.header.coinbaseaux_flags = None;
-        share.header.witness_commitment = None;
         let declared = BchCoinbase {
             prefix: Builder::new()
                 .push_int(702)
@@ -101,17 +98,18 @@ mod tests {
         let coinbase = build_declared_coinbase(
             &[OutputPair {
                 address: make_test_address(1),
-                amount: Amount::from_sat(share.header.coinbase_value),
+                amount: Amount::from_sat(100_000_000),
             }],
             702,
             ShareCommitment::from_share_block(&share).hash(),
-            share.header.extranonce.as_bytes(),
+            &[0u8; 12],
             &declared,
         )
         .unwrap();
         share.header.coinbase_proof =
-            CoinbaseProof::from_coinbase(&coinbase, share.header.coinbase_proof.non_coinbase_root)
+            CoinbaseProof::from_coinbase(&coinbase, share.header.coinbase_proof.share_witness_root)
                 .unwrap();
+        share.bitcoin_coinbase = coinbase.clone();
         share.template_merkle_branches.clear();
         share.header.bitcoin_header.merkle_root =
             TxMerkleNode::from_raw_hash(coinbase.compute_txid().to_raw_hash());
@@ -146,8 +144,7 @@ mod tests {
         share.header.bch_coinbase.as_mut().unwrap().prefix.push(0);
         assert!(CoinbaseProof::verify(&share.header, &[]).is_err());
         share.header.bch_coinbase.as_mut().unwrap().prefix.pop();
-        share.header.coinbase_nsecs = 1;
-        assert!(CoinbaseProof::verify(&share.header, &[]).is_err());
+        assert!(CoinbaseProof::verify(&share.header, &[]).is_ok());
     }
 
     #[test]

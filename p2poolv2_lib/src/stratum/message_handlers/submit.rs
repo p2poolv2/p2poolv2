@@ -5,7 +5,6 @@
 use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::config::PoolMode;
 use crate::shares::coinbase_proof::CoinbaseProof;
-use crate::shares::extranonce::Extranonce;
 use crate::stratum::{
     difficulty_adjuster::DifficultyAdjusterTrait,
     emission::Emission,
@@ -159,8 +158,6 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
             block_hash,
             coinbase: &validation_result.coinbase,
             share: stratum_share.clone(),
-            enonce1_hex: &session.enonce1_hex,
-            enonce2_hex: extranonce2,
         },
     )
     .await?;
@@ -244,8 +241,6 @@ pub(crate) struct PoolShare<'a> {
     pub block_hash: BlockHash,
     pub coinbase: &'a bitcoin::Transaction,
     pub share: SimplePplnsShare,
-    pub enonce1_hex: &'a str,
-    pub enonce2_hex: &'a str,
 }
 
 /// Emit a share to the share chain when it meets the pool target.
@@ -279,10 +274,6 @@ pub(crate) async fn emit_pool_share(
     if !meets_pool_target {
         return Ok(false);
     }
-    // The extranonce is only needed for the emission, so build it here to
-    // avoid wasted hex parsing when the share does not meet the pool target.
-    let extranonce = Extranonce::from_enonce_hex(pool_share.enonce1_hex, pool_share.enonce2_hex)
-        .map_err(|error| Error::SubmitFailure(format!("Failed to build extranonce: {error}")))?;
     // The full coinbase exists only here, so the proof is built now. Every
     // coinbase this pool builds ends with the commitment, so a failure is a
     // malformed job, not the miner's fault: log it and emit without a proof,
@@ -290,7 +281,7 @@ pub(crate) async fn emit_pool_share(
     // refuses a commitment without a proof) while still accounting it.
     let job_id = pool_share.job_id;
     let coinbase_proof = job.share_commitment.as_ref().and_then(|commitment| {
-        CoinbaseProof::from_coinbase(pool_share.coinbase, commitment.non_coinbase_root)
+        CoinbaseProof::from_coinbase(pool_share.coinbase, commitment.share_witness_root)
             .map_err(|error| {
                 error!(
                     "Failed to build coinbase proof for job {}: {error}",
@@ -306,9 +297,8 @@ pub(crate) async fn emit_pool_share(
             header: pool_share.header,
             blocktemplate: job.blocktemplate.clone(),
             share_commitment: job.share_commitment.clone(),
-            coinbase_nsecs: job.coinbase_nsecs,
             template_merkle_branches: job.template_merkle_branches.clone(),
-            extranonce,
+            bitcoin_coinbase: pool_share.coinbase.clone(),
             coinbase_proof,
         })
         .await

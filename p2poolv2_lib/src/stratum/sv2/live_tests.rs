@@ -8,7 +8,6 @@ use super::{PoolTransactionCache, Sv2Mining, bind, serve};
 use crate::shares::auxpow::{AuxPowProof, AuxiliaryTree, AuxiliaryWork};
 use crate::shares::merge_mining::MergeMiningCommitment;
 use crate::shares::share_block::ShareHeader;
-use crate::shares::transactions::coinbase::compute_non_coinbase_root;
 use crate::stratum::work::block_template::BlockTemplate;
 use crate::test_utils::{
     TestSv2Client, test_bch_custom_coinbase, test_bch_custom_job_with_aux,
@@ -313,13 +312,8 @@ async fn bchn_declared_jobs_reach_both_real_nodes_over_noise() {
     assert_eq!(emission.header, full_header);
     let share = ShareHeader::from_commitment_and_header(
         emission.share_commitment.unwrap(),
-        compute_non_coinbase_root(&[]),
         emission.header,
-        None,
-        None,
         u64::from(full_height),
-        0,
-        emission.extranonce,
         emission.coinbase_proof.unwrap(),
     );
     assert_eq!(
@@ -468,13 +462,8 @@ async fn bchn_declared_jobs_reach_both_real_nodes_over_noise() {
     );
     let share = ShareHeader::from_commitment_and_header(
         emission.share_commitment.unwrap(),
-        compute_non_coinbase_root(&[]),
         emission.header,
-        None,
-        None,
         u64::from(private_height),
-        0,
-        emission.extranonce,
         emission.coinbase_proof.unwrap(),
     );
     assert_eq!(

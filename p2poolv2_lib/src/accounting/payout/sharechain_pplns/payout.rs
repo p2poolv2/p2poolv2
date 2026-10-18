@@ -43,6 +43,25 @@ impl Payout {
         }
     }
 
+    /// Test-only constructor with a short maturity depth and window, so the
+    /// share-count cutoff can be driven without a `PAYOUT_DEPTH`-sized
+    /// fixture.
+    #[cfg(test)]
+    fn new_with_window_sizes(
+        network: bitcoin::Network,
+        maturity_skip: usize,
+        max_window_shares: usize,
+    ) -> Self {
+        Self {
+            pplns_window: Arc::new(RwLock::new(PplnsWindow::new_with_window_sizes(
+                network,
+                maturity_skip,
+                max_window_shares,
+            ))),
+            last_weights: None,
+        }
+    }
+
     /// Return a shared reference to the underlying PplnsWindow.
     ///
     /// Used to pass the same window to the validation worker so it
@@ -59,13 +78,15 @@ impl PayoutDistribution for Payout {
 
     /// Fill payout distribution from the incrementally maintained PPLNS window.
     ///
-    /// A zero total difficulty and an empty window are both errors.
+    /// The window is `PPLNS_WINDOW_SHARES` shares below the ones not yet
+    /// mature for the paying share, so the bitcoin difficulty plays no part.
+    /// An empty window is an error.
     fn fill_distribution_from_shares(
         &mut self,
         distribution: &mut Vec<OutputPair>,
         chain_store_handle: &ChainStoreHandle,
         anchor: BlockHash,
-        total_difficulty: u128,
+        _bitcoin_difficulty: u128,
         _total_amount: bitcoin::Amount,
         remaining_total_amount: Amount,
         _bootstrap_address: Address,
@@ -73,13 +94,6 @@ impl PayoutDistribution for Payout {
         self.last_weights = None;
         if remaining_total_amount == Amount::ZERO {
             return Ok(());
-        }
-
-        if total_difficulty == 0 {
-            return Err(format!(
-                "PPLNS total difficulty is zero, cannot build a payout for anchor {anchor}"
-            )
-            .into());
         }
 
         // expect will stop start_notify task in main
@@ -96,11 +110,8 @@ impl PayoutDistribution for Payout {
             .into());
         }
 
-        let address_difficulty_map = window.get_distribution_from_start_hash(
-            total_difficulty,
-            anchor,
-            chain_store_handle,
-        )?;
+        let address_difficulty_map =
+            window.get_distribution_from_start_hash(anchor, chain_store_handle)?;
 
         append_proportional_distribution(
             &address_difficulty_map,
@@ -132,32 +143,6 @@ mod tests {
 
     fn make_test_config() -> crate::config::StratumConfig<crate::config::Parsed> {
         StratumConfig::new_for_test_default().parse().unwrap()
-    }
-
-    /// A zero total difficulty is an error the notifier turns into a node
-    /// shutdown. It cannot come from the chain: the only route is a
-    /// `difficulty_multiplier` below 1.0, which truncates to zero when cast.
-    #[test]
-    fn test_zero_total_difficulty_is_an_error() {
-        let genesis_hash = BlockHash::all_zeros();
-        let mut payout = Payout::new(bitcoin::Network::Signet);
-        let config = make_test_config();
-
-        // No store expectations: the guard fires before the window is touched.
-        let error = payout
-            .get_output_distribution(
-                &MockChainStoreHandle::default(),
-                genesis_hash,
-                0,
-                Amount::from_sat(100_000_000),
-                &config,
-            )
-            .unwrap_err();
-
-        assert!(
-            error.to_string().contains("total difficulty is zero"),
-            "unexpected error: {error}"
-        );
     }
 
     /// An empty window is an error the notifier turns into a node shutdown, not
@@ -507,8 +492,11 @@ mod tests {
         assert!(total_weight > 0, "Total weight should be positive");
     }
 
+    /// The window is the last `max_window_shares` shares: with a one-share
+    /// window only the newest share is paid. The bitcoin difficulty passed in
+    /// is far below the chain's work and plays no part.
     #[test]
-    fn test_difficulty_cutoff() {
+    fn test_window_of_one_share_pays_only_the_newest() {
         let genesis_hash = BlockHash::all_zeros();
 
         // Create 3 confirmed shares, newest to oldest
@@ -555,12 +543,10 @@ mod tests {
         mock.expect_get_share_headers()
             .returning(|_| Ok(Vec::new()));
 
-        let mut payout = Payout::new(bitcoin::Network::Signet);
+        let mut payout = Payout::new_with_window_sizes(bitcoin::Network::Signet, 0, 1);
         let config = make_test_config();
         let total_amount = Amount::from_sat(100_000_000);
 
-        // Set total_difficulty to just one share's difficulty -- should include
-        // the first (newest) share only
         let result = payout
             .get_output_distribution(
                 &mock,
@@ -577,8 +563,10 @@ mod tests {
         assert_eq!(result[0].amount, total_amount);
     }
 
+    /// With a two-share window, the two newest of three shares are paid,
+    /// however small the bitcoin difficulty.
     #[test]
-    fn test_difficulty_cutoff_two_of_three() {
+    fn test_window_of_two_shares_pays_the_two_newest() {
         let genesis_hash = BlockHash::all_zeros();
 
         // Create 3 confirmed shares with different miners
@@ -625,17 +613,15 @@ mod tests {
         mock.expect_get_share_headers()
             .returning(|_| Ok(Vec::new()));
 
-        let mut payout = Payout::new(bitcoin::Network::Signet);
+        let mut payout = Payout::new_with_window_sizes(bitcoin::Network::Signet, 0, 2);
         let config = make_test_config();
         let total_amount = Amount::from_sat(100_000_000);
 
-        // Set total_difficulty to two shares' worth -- should include
-        // only the two newest shares (header3 and header2)
         let result = payout
             .get_output_distribution(
                 &mock,
                 tip_hash,
-                single_share_difficulty * 2,
+                single_share_difficulty,
                 total_amount,
                 &config,
             )
