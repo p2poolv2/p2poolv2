@@ -9,7 +9,9 @@ use libp2p::futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use libp2p::request_response::{Codec, OutboundFailure};
 use std::io;
 
-use crate::accounting::payout::sharechain_pplns::pplns_window::BCH_PPLNS_WINDOW_BLOCKS;
+use crate::accounting::payout::sharechain_pplns::pplns_window::{
+    BCH_COINBASE_MATURITY, BCH_PPLNS_WINDOW_BLOCKS,
+};
 use crate::config::Chain;
 use crate::node::messages::{MAX_P2P_MESSAGE_SIZE, Message, RawMessage};
 use bitcoin::BlockHash;
@@ -35,16 +37,19 @@ fn genesis_tag(genesis_hash: BlockHash) -> String {
 /// `None` on Bitcoin, whose protocol strings stay upstream's.
 ///
 /// Bitcoin Cash sizes the PPLNS window by the paying block's difficulty
-/// (`BCH_PPLNS_WINDOW_BLOCKS`). A node on the earlier fixed window, or on
-/// another number of blocks, rebuilds a different coinbase for every share,
-/// so the two must not peer: they would only exchange shares the other
-/// rejects. The tag is derived from the constant, so changing the rule
-/// changes the tag without anyone having to remember a version bump, as
-/// re-anchoring genesis does for `genesis_tag`.
+/// (`BCH_PPLNS_WINDOW_BLOCKS`) behind its own maturity
+/// (`BCH_COINBASE_MATURITY`). A node on the earlier fixed window, or with
+/// another number of blocks or another maturity, rebuilds a different
+/// coinbase for every share, so the two must not peer: they would only
+/// exchange shares the other rejects. The tag is derived from the constants,
+/// so changing either rule changes the tag without anyone having to remember
+/// a version bump, as re-anchoring genesis does for `genesis_tag`.
 fn share_chain_rule_tag(chain: Chain) -> Option<String> {
     match chain {
         Chain::Bitcoin => None,
-        Chain::BitcoinCash => Some(format!("pplns-k{BCH_PPLNS_WINDOW_BLOCKS}")),
+        Chain::BitcoinCash => Some(format!(
+            "pplns-k{BCH_PPLNS_WINDOW_BLOCKS}-m{BCH_COINBASE_MATURITY}"
+        )),
     }
 }
 
@@ -312,7 +317,7 @@ mod tests {
 
         assert_eq!(
             protocol_string(bitcoin::Network::Testnet, Chain::BitcoinCash, genesis_hash),
-            format!("/p2pool/test/{expected_tag}/pplns-k3/1.0.0")
+            format!("/p2pool/test/{expected_tag}/pplns-k3-m100/1.0.0")
         );
     }
 
@@ -345,7 +350,7 @@ mod tests {
 
         assert_eq!(
             kad_protocol_string(bitcoin::Network::Testnet, Chain::BitcoinCash, genesis_hash),
-            format!("/p2pool/test/{expected_tag}/pplns-k3/kad/1.0.0")
+            format!("/p2pool/test/{expected_tag}/pplns-k3-m100/kad/1.0.0")
         );
     }
 }

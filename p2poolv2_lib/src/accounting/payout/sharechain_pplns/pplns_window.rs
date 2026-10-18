@@ -94,13 +94,36 @@ pub fn bitcoin_block_difficulty(bits: CompactTarget, network: bitcoin::Network) 
 ///
 /// A share is paid by a found block only at the same depth, except that the
 /// first `COINBASE_MATURITY` shares of the chain are always mature for payout.
+///
+/// Bitcoin's maturity. Bitcoin Cash uses `BCH_COINBASE_MATURITY`; read the
+/// maturity for a chain with `sim_overrides::coinbase_maturity`.
 pub const COINBASE_MATURITY: usize = 6048;
+
+/// Bitcoin Cash coinbase maturity, in shares: 100, as Satoshi set coinbase
+/// maturity in blocks and BCH keeps it, a count rather than a span of time.
+///
+/// Like `COINBASE_MATURITY` it is one rule for both jobs: a share coinbase
+/// output cannot be spent until it is this deep, and a share is paid by a
+/// found block only at this depth (the first 100 shares of the chain are
+/// always mature for payout). A block's payout can then differ between
+/// share-chain forks only if they split more than 100 shares below the paying
+/// share, far deeper than an uncle (`MAX_UNCLES_DEPTH`).
+pub const BCH_COINBASE_MATURITY: usize = 100;
+
+/// The coinbase maturity a chain's consensus uses, before any sim override.
+pub fn coinbase_maturity_for(chain: Chain) -> usize {
+    match chain {
+        Chain::Bitcoin => COINBASE_MATURITY,
+        Chain::BitcoinCash => BCH_COINBASE_MATURITY,
+    }
+}
 
 /// Shares from a paying share down to the oldest share it can pay: the
 /// coinbase maturity depth plus the PPLNS window.
 ///
 /// Sizes the full-validation zone, the expiry of share chain outputs, and,
-/// doubled, `PRUNE_DEPTH`.
+/// doubled, `PRUNE_DEPTH`. Sized by Bitcoin's maturity, the larger one, so it
+/// also covers Bitcoin Cash's.
 pub const PAYOUT_DEPTH: usize = COINBASE_MATURITY + PPLNS_WINDOW_SHARES;
 
 /// Divisor for the retained eviction buffer beyond the window: the cache
@@ -447,9 +470,9 @@ pub struct PplnsWindow {
     /// `PPLNS_WINDOW_SHARES`; overridable in tests so eviction can be
     /// exercised without a full-capacity fixture.
     max_window_shares: usize,
-    /// Depth a share must reach before it is paid. Defaults to
-    /// `sim_overrides::coinbase_maturity()`, which is `COINBASE_MATURITY`
-    /// outside sim builds.
+    /// Depth a share must reach before it is paid:
+    /// `sim_overrides::coinbase_maturity` for the chain `for_chain` selects,
+    /// `COINBASE_MATURITY` until then.
     maturity_skip: usize,
     /// Rule sizing the window below the maturity skip. `FixedShares` until
     /// `for_chain` selects Bitcoin Cash.
@@ -470,16 +493,17 @@ impl PplnsWindow {
             owner_keys: AddressKeys::default(),
             network,
             max_window_shares: PPLNS_WINDOW_SHARES,
-            maturity_skip: sim_overrides::coinbase_maturity(),
+            maturity_skip: sim_overrides::coinbase_maturity(Chain::Bitcoin),
             sizing: WindowSizing::FixedShares,
         }
     }
 
     /// Select the window rule for the chain this share chain pays on.
     ///
-    /// Bitcoin keeps the fixed `PPLNS_WINDOW_SHARES` shares. Bitcoin Cash
-    /// pays `BCH_PPLNS_WINDOW_BLOCKS` expected blocks' worth of work, capped
-    /// at `PPLNS_WINDOW_SHARES` shares. This is consensus: every node on a
+    /// Bitcoin keeps the fixed `PPLNS_WINDOW_SHARES` shares behind
+    /// `COINBASE_MATURITY`. Bitcoin Cash pays `BCH_PPLNS_WINDOW_BLOCKS`
+    /// expected blocks' worth of work, capped at `PPLNS_WINDOW_SHARES` shares,
+    /// behind `BCH_COINBASE_MATURITY`. This is consensus: every node on a
     /// share chain must select the same chain.
     pub fn for_chain(mut self, chain: Chain) -> Self {
         self.sizing = match chain {
@@ -488,6 +512,7 @@ impl PplnsWindow {
                 expected_blocks: BCH_PPLNS_WINDOW_BLOCKS,
             },
         };
+        self.maturity_skip = sim_overrides::coinbase_maturity(chain);
         self
     }
 
@@ -500,10 +525,20 @@ impl PplnsWindow {
         maturity_skip: usize,
         max_window_shares: usize,
     ) -> Self {
-        let mut window = Self::new(network);
-        window.maturity_skip = maturity_skip;
-        window.max_window_shares = max_window_shares;
-        window
+        Self::new(network).with_window_sizes(maturity_skip, max_window_shares)
+    }
+
+    /// Test-only override of the maturity depth and window size, applied
+    /// after `for_chain`, which sets the chain's own maturity.
+    #[cfg(test)]
+    pub(super) fn with_window_sizes(
+        mut self,
+        maturity_skip: usize,
+        max_window_shares: usize,
+    ) -> Self {
+        self.maturity_skip = maturity_skip;
+        self.max_window_shares = max_window_shares;
+        self
     }
 }
 
@@ -3919,8 +3954,9 @@ mod tests {
         store
             .expect_get_confirmed_headers_in_range()
             .returning(move |_, _| Ok(headers.clone()));
-        let mut window =
-            PplnsWindow::new_with_window_sizes(TEST_NETWORK, 0, 4).for_chain(Chain::BitcoinCash);
+        let mut window = PplnsWindow::new(TEST_NETWORK)
+            .for_chain(Chain::BitcoinCash)
+            .with_window_sizes(0, 4);
         window.update(&store).unwrap();
 
         let distribution = window
@@ -3964,8 +4000,9 @@ mod tests {
         store
             .expect_get_confirmed_headers_in_range()
             .returning(move |_, _| Ok(headers.clone()));
-        let mut window =
-            PplnsWindow::new_with_window_sizes(TEST_NETWORK, 0, 5).for_chain(Chain::BitcoinCash);
+        let mut window = PplnsWindow::new(TEST_NETWORK)
+            .for_chain(Chain::BitcoinCash)
+            .with_window_sizes(0, 5);
         window.update(&store).unwrap();
 
         let distribution = window
@@ -3998,8 +4035,9 @@ mod tests {
         store
             .expect_get_confirmed_headers_in_range()
             .returning(move |_, _| Ok(headers.clone()));
-        let mut window =
-            PplnsWindow::new_with_window_sizes(TEST_NETWORK, 0, 4).for_chain(Chain::BitcoinCash);
+        let mut window = PplnsWindow::new(TEST_NETWORK)
+            .for_chain(Chain::BitcoinCash)
+            .with_window_sizes(0, 4);
         window.update(&store).unwrap();
 
         let distribution = window
@@ -4030,8 +4068,9 @@ mod tests {
         store
             .expect_get_confirmed_headers_in_range()
             .returning(move |_, _| Ok(headers.clone()));
-        let mut window =
-            PplnsWindow::new_with_window_sizes(TEST_NETWORK, 0, 4).for_chain(Chain::BitcoinCash);
+        let mut window = PplnsWindow::new(TEST_NETWORK)
+            .for_chain(Chain::BitcoinCash)
+            .with_window_sizes(0, 4);
         window.update(&store).unwrap();
         let chipnet_minimum_difficulty =
             bitcoin_block_difficulty(CompactTarget::from_consensus(0x1d00ffff), Network::Testnet);
@@ -4062,8 +4101,9 @@ mod tests {
         store
             .expect_get_confirmed_headers_in_range()
             .returning(move |_, _| Ok(headers.clone()));
-        let mut window =
-            PplnsWindow::new_with_window_sizes(TEST_NETWORK, 0, 4).for_chain(Chain::BitcoinCash);
+        let mut window = PplnsWindow::new(TEST_NETWORK)
+            .for_chain(Chain::BitcoinCash)
+            .with_window_sizes(0, 4);
         window.update(&store).unwrap();
 
         let distribution = window
@@ -4088,8 +4128,9 @@ mod tests {
         store
             .expect_get_confirmed_headers_in_range()
             .returning(move |_, _| Ok(headers.clone()));
-        let mut window =
-            PplnsWindow::new_with_window_sizes(TEST_NETWORK, 0, 4).for_chain(Chain::BitcoinCash);
+        let mut window = PplnsWindow::new(TEST_NETWORK)
+            .for_chain(Chain::BitcoinCash)
+            .with_window_sizes(0, 4);
         window.update(&store).unwrap();
 
         let distribution = window
@@ -4115,8 +4156,9 @@ mod tests {
         store
             .expect_get_confirmed_headers_in_range()
             .returning(move |_, _| Ok(headers.clone()));
-        let mut window =
-            PplnsWindow::new_with_window_sizes(TEST_NETWORK, 0, 4).for_chain(Chain::Bitcoin);
+        let mut window = PplnsWindow::new(TEST_NETWORK)
+            .for_chain(Chain::Bitcoin)
+            .with_window_sizes(0, 4);
         window.update(&store).unwrap();
 
         let distribution = window
@@ -4146,8 +4188,9 @@ mod tests {
         );
         let share_difficulty = header_b.get_difficulty(TEST_NETWORK);
         let uncle_difficulty = uncle.get_difficulty(TEST_NETWORK);
-        let mut window =
-            PplnsWindow::new_with_window_sizes(TEST_NETWORK, 0, 4).for_chain(Chain::BitcoinCash);
+        let mut window = PplnsWindow::new(TEST_NETWORK)
+            .for_chain(Chain::BitcoinCash)
+            .with_window_sizes(0, 4);
         let uncle_entry = uncle_entry_from_header(&mut window, &uncle);
         let entry_b = entry_from_header_with_uncles(&mut window, &header_b, 1, vec![uncle_entry]);
         let entry_a = entry_from_header(&mut window, &header_a, 0);
@@ -4193,8 +4236,9 @@ mod tests {
         store
             .expect_get_confirmed_headers_in_range()
             .returning(move |_, _| Ok(headers.clone()));
-        let mut window =
-            PplnsWindow::new_with_window_sizes(TEST_NETWORK, 3, 2).for_chain(Chain::BitcoinCash);
+        let mut window = PplnsWindow::new(TEST_NETWORK)
+            .for_chain(Chain::BitcoinCash)
+            .with_window_sizes(3, 2);
         window.update(&store).unwrap();
 
         let error = window
@@ -4230,8 +4274,9 @@ mod tests {
         store
             .expect_get_confirmed_headers_in_range()
             .returning(move |_, _| Ok(headers.clone()));
-        let mut window =
-            PplnsWindow::new_with_window_sizes(TEST_NETWORK, 3, 2).for_chain(Chain::BitcoinCash);
+        let mut window = PplnsWindow::new(TEST_NETWORK)
+            .for_chain(Chain::BitcoinCash)
+            .with_window_sizes(3, 2);
         window.update(&store).unwrap();
 
         let distribution = window
@@ -4261,8 +4306,9 @@ mod tests {
         store
             .expect_get_confirmed_headers_in_range()
             .returning(move |_, _| Ok(headers.clone()));
-        let mut window =
-            PplnsWindow::new_with_window_sizes(TEST_NETWORK, 0, 4).for_chain(Chain::BitcoinCash);
+        let mut window = PplnsWindow::new(TEST_NETWORK)
+            .for_chain(Chain::BitcoinCash)
+            .with_window_sizes(0, 4);
         window.update(&store).unwrap();
 
         let from_store = window
@@ -4293,5 +4339,35 @@ mod tests {
             bitcoin_block_difficulty(CompactTarget::from_consensus(0x207fffff), Network::Regtest);
 
         assert_eq!(difficulty, MIN_SIZING_BLOCK_DIFFICULTY);
+    }
+
+    //* Bitcoin Cash matures a share after 100 shares, as Satoshi's coinbase
+    //* maturity counts 100 blocks: a paying share at height 1,000 skips the 99
+    //* shares above height 900.
+    #[test]
+    fn test_bch_window_matures_shares_after_one_hundred_shares() {
+        let window = PplnsWindow::new(TEST_NETWORK).for_chain(Chain::BitcoinCash);
+
+        assert_eq!(
+            window.immature_share_count(1_000),
+            BCH_COINBASE_MATURITY - 1
+        );
+    }
+
+    //* The first 100 shares of a Bitcoin Cash chain are always mature for
+    //* payout, so a paying share at height 150 skips only the 50 shares from
+    //* height 100 up.
+    #[test]
+    fn test_bch_window_keeps_the_first_hundred_shares_mature() {
+        let window = PplnsWindow::new(TEST_NETWORK).for_chain(Chain::BitcoinCash);
+
+        assert_eq!(window.immature_share_count(150), 50);
+    }
+
+    #[test]
+    fn test_bitcoin_window_keeps_upstream_maturity() {
+        let window = PplnsWindow::new(TEST_NETWORK).for_chain(Chain::Bitcoin);
+
+        assert_eq!(window.immature_share_count(20_000), COINBASE_MATURITY - 1);
     }
 }

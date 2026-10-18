@@ -10,7 +10,9 @@ scope.
 
 ## Rules
 
-`N` = `COINBASE_MATURITY` (6,048), `W` = `PPLNS_WINDOW_SHARES` (120,960),
+`N` = coinbase maturity: `COINBASE_MATURITY` (6,048) on Bitcoin,
+`BCH_COINBASE_MATURITY` (100) on Bitcoin Cash, as Satoshi's 100-block
+coinbase maturity; `W` = `PPLNS_WINDOW_SHARES` (120,960),
 `K` = `BCH_PPLNS_WINDOW_BLOCKS` (3), `p` = paying share height, `D` = the
 difficulty of the paying share's own bitcoin header (`bitcoin_header.bits`,
 through `bitcoin_block_difficulty`).
@@ -136,11 +138,11 @@ pool holding fraction `f` of BCH's hashrate, so pools under about `K / 2016`
   first share, so it needs no activation height.
 - **Peers on another rule cannot connect.** On Bitcoin Cash every protocol
   string (request-response, Identify, Kademlia and the Noise prologue)
-  carries `pplns-k<K>` after the genesis tag, built from
-  `BCH_PPLNS_WINDOW_BLOCKS` by `share_chain_rule_tag`. A node on the old
-  fixed window, or on another `K`, fails the handshake instead of
-  exchanging shares the other rejects, and changing `K` changes the tag by
-  itself. Bitcoin's protocol strings are unchanged.
+  carries `pplns-k<K>-m<N>` (now `pplns-k3-m100`) after the genesis tag,
+  built from `BCH_PPLNS_WINDOW_BLOCKS` and `BCH_COINBASE_MATURITY` by
+  `share_chain_rule_tag`. A node on the old fixed window, or on another `K`
+  or maturity, fails the handshake instead of exchanging shares the other
+  rejects, and changing either constant changes the tag by itself. Bitcoin's protocol strings are unchanged.
 
 ## Depths
 

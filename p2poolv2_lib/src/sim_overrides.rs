@@ -18,7 +18,8 @@ const IDEAL_BLOCK_TIME: u32 = 10;
 /// Production ASERT half-life constant (seconds).
 const HALFLIFE: u32 = 600;
 
-use crate::accounting::payout::sharechain_pplns::pplns_window::COINBASE_MATURITY;
+use crate::accounting::payout::sharechain_pplns::pplns_window::coinbase_maturity_for;
+use crate::config::Chain;
 use crate::shares::genesis::GenesisData;
 use bitcoin::CompactTarget;
 use bitcoin::{BlockHash, Target};
@@ -106,24 +107,28 @@ pub fn init_coinbase_maturity(shares: usize) {
     SIM_COINBASE_MATURITY.set(shares).ok();
 }
 
-/// Effective coinbase maturity depth, in shares.
+/// Effective coinbase maturity depth for `chain`, in shares.
 ///
 /// Governs both when a share coinbase can be spent and when a share can be
 /// paid, so the two stay one rule.
 ///
-/// Production: returns `COINBASE_MATURITY`.
+/// Production: returns `coinbase_maturity_for(chain)`: `COINBASE_MATURITY`
+/// on Bitcoin, `BCH_COINBASE_MATURITY` on Bitcoin Cash.
 /// Sim: returns the value set by `init_coinbase_maturity`, falling back to
-/// `COINBASE_MATURITY` if unset. A small value lets a short sim run reach the
-/// maturity skip, which production values only reach after hours.
+/// the chain's own maturity if unset. A small value lets a short sim run reach
+/// the maturity skip, which production values only reach after hours.
 #[inline(always)]
-pub fn coinbase_maturity() -> usize {
+pub fn coinbase_maturity(chain: Chain) -> usize {
     #[cfg(feature = "sim")]
     {
-        *SIM_COINBASE_MATURITY.get().unwrap_or(&COINBASE_MATURITY)
+        SIM_COINBASE_MATURITY
+            .get()
+            .copied()
+            .unwrap_or_else(|| coinbase_maturity_for(chain))
     }
     #[cfg(not(feature = "sim"))]
     {
-        COINBASE_MATURITY
+        coinbase_maturity_for(chain)
     }
 }
 
@@ -253,6 +258,9 @@ pub fn spawn_delayed_broadcast(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::accounting::payout::sharechain_pplns::pplns_window::{
+        BCH_COINBASE_MATURITY, COINBASE_MATURITY,
+    };
     use bitcoin::hashes::Hash;
 
     #[test]
@@ -267,7 +275,12 @@ mod tests {
 
     #[test]
     fn test_coinbase_maturity_returns_production_default() {
-        assert_eq!(coinbase_maturity(), COINBASE_MATURITY);
+        assert_eq!(coinbase_maturity(Chain::Bitcoin), COINBASE_MATURITY);
+    }
+
+    #[test]
+    fn test_coinbase_maturity_returns_bitcoin_cash_default() {
+        assert_eq!(coinbase_maturity(Chain::BitcoinCash), BCH_COINBASE_MATURITY);
     }
 
     #[test]

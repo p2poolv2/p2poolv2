@@ -1525,7 +1525,7 @@ impl ShareValidator for DefaultShareValidator {
                 &all_outpoints,
                 block_height,
                 min_coinbase_root_height,
-                sim_overrides::coinbase_maturity(),
+                sim_overrides::coinbase_maturity(self.chain),
             )
             .map_err(|error| {
                 ValidationError::store_access(format!("Prevout check failed: {error}"))
@@ -1618,7 +1618,7 @@ mockall::mock! {
 mod tests {
     use super::*;
     use crate::accounting::payout::sharechain_pplns::pplns_window::{
-        COINBASE_MATURITY, PPLNS_WINDOW_SHARES,
+        BCH_COINBASE_MATURITY, COINBASE_MATURITY, PPLNS_WINDOW_SHARES,
     };
     use crate::shares::bch_coinbase::BchCoinbase;
     use crate::shares::merge_mining::MergeMiningCommitment;
@@ -3923,6 +3923,56 @@ mod tests {
             .build();
 
         let result = validator().validate_prevouts(&share, &chain_store_handle);
+        assert!(result.is_ok(), "got: {result:?}");
+    }
+
+    #[test]
+    fn test_validate_prevouts_uses_bitcoin_cash_maturity() {
+        // A Bitcoin Cash validator checks share coinbase spends against
+        // `BCH_COINBASE_MATURITY` (100 shares, as Satoshi's 100 blocks), the
+        // same depth its PPLNS window waits before paying a share. The `withf`
+        // guard makes the mock match only that maturity.
+        let parent_height = 50u32;
+        let mut chain_store_handle = ChainStoreHandle::default();
+        chain_store_handle
+            .expect_get_block_metadata()
+            .returning(move |_| Ok(metadata_at_height(parent_height)));
+        chain_store_handle
+            .expect_check_prevouts()
+            .withf(
+                |_outpoints, _spending_height, _min_root, coinbase_maturity| {
+                    *coinbase_maturity == BCH_COINBASE_MATURITY
+                },
+            )
+            .returning(
+                |_outpoints, _spending_height, _min_coinbase_root_height, _coinbase_maturity| {
+                    Ok(PrevoutCheck::Accepted)
+                },
+            );
+
+        let spending_tx = bitcoin::Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint::new(bitcoin::Txid::all_zeros(), 0),
+                script_sig: ScriptBuf::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::new(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(10_000),
+                script_pubkey: ScriptBuf::new(),
+            }],
+        };
+
+        let share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .add_transaction(spending_tx)
+            .build();
+
+        let result = validator()
+            .for_chain(Chain::BitcoinCash)
+            .validate_prevouts(&share, &chain_store_handle);
         assert!(result.is_ok(), "got: {result:?}");
     }
 
