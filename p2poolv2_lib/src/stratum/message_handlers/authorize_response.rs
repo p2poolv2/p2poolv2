@@ -353,6 +353,7 @@ mod tests {
             share_chain: crate::config::Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
 
         // Execute
@@ -446,6 +447,7 @@ mod tests {
             share_chain: crate::config::Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
 
         // Execute
@@ -580,6 +582,7 @@ mod tests {
             share_chain: crate::config::Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
 
         // Execute
@@ -679,6 +682,7 @@ mod tests {
             share_chain: crate::config::Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
 
         let messages = handle_authorize(request, &mut session, ctx).await.unwrap();
@@ -739,6 +743,7 @@ mod tests {
             share_chain: crate::config::Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
 
         let messages = handle_authorize(request, &mut session, ctx).await.unwrap();
@@ -801,6 +806,7 @@ mod tests {
             share_chain: crate::config::Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
 
         // Execute
@@ -867,6 +873,7 @@ mod tests {
             share_chain: crate::config::Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
 
         let result = handle_authorize(request, &mut session, ctx).await;
@@ -941,6 +948,7 @@ mod p2p_miner_address_tests {
             share_chain: crate::config::Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
 
         handle_authorize(request, &mut session, ctx).await.unwrap();
@@ -990,6 +998,7 @@ mod p2p_miner_address_tests {
             share_chain: crate::config::Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
 
         handle_authorize(request, &mut session, ctx).await.unwrap();
@@ -1037,6 +1046,7 @@ mod p2p_miner_address_tests {
             share_chain: crate::config::Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
 
         handle_authorize(request, &mut session, ctx).await.unwrap();
@@ -1088,6 +1098,7 @@ mod p2p_miner_address_tests {
             share_chain: crate::config::Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
 
         let messages = handle_authorize(request, &mut session, ctx.clone())
@@ -1183,6 +1194,7 @@ mod p2p_miner_address_tests {
             share_chain: crate::config::Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
 
         handle_authorize(request, &mut session, ctx).await.unwrap();
@@ -1240,6 +1252,7 @@ mod p2p_miner_address_tests {
             share_chain: crate::config::Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
 
         let messages = handle_authorize(request, &mut session, ctx).await.unwrap();
@@ -1309,6 +1322,7 @@ mod p2p_miner_address_tests {
             share_chain: crate::config::Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
 
         let first = handle_authorize(

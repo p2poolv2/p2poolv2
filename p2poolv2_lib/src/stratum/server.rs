@@ -63,6 +63,8 @@ pub struct StratumServer {
     emissions_tx: EmissionSender,
     chain_store_handle: ChainStoreHandle,
     sv2: Option<Sv2Listener>,
+    /// Asks the template task for a new template after a found block.
+    template_refresh_tx: Option<mpsc::Sender<()>>,
 }
 
 /// Local Stratum V2 listener served beside SV1 on the same host name.
@@ -106,6 +108,7 @@ pub struct StratumServerBuilder {
     bch_share_network: Option<p2poolv2_wallet::bch_share::BchShareNetwork>,
     cash_share: Option<[u8; 20]>,
     sv2: Option<Sv2Listener>,
+    template_refresh_tx: Option<mpsc::Sender<()>>,
 }
 
 impl StratumServerBuilder {
@@ -223,6 +226,15 @@ impl StratumServerBuilder {
         self
     }
 
+    /// Channel the template task listens on for an immediate refresh, from
+    /// [`merge_template_triggers`](crate::stratum::work::template_trigger::merge_template_triggers).
+    /// The server signals it after submitting a block it found, so miners
+    /// stop working on that block's parent before the next ZMQ event or poll.
+    pub fn template_refresh_tx(mut self, template_refresh_tx: mpsc::Sender<()>) -> Self {
+        self.template_refresh_tx = Some(template_refresh_tx);
+        self
+    }
+
     pub async fn build(self) -> Result<StratumServer, Box<dyn std::error::Error + Send + Sync>> {
         Ok(StratumServer {
             hostname: self.hostname.ok_or("hostname is required")?,
@@ -256,6 +268,7 @@ impl StratumServerBuilder {
                 .chain_store_handle
                 .ok_or("chain store handle is required")?,
             sv2: self.sv2,
+            template_refresh_tx: self.template_refresh_tx,
         })
     }
 }
@@ -446,6 +459,7 @@ impl StratumServer {
             share_chain: self.share_chain,
             bch_share_network: self.bch_share_network,
             cash_share: self.cash_share,
+            template_refresh_tx: self.template_refresh_tx.clone(),
         }
     }
 }
@@ -553,6 +567,11 @@ pub(crate) struct StratumContext {
     pub bch_share_network: Option<p2poolv2_wallet::bch_share::BchShareNetwork>,
     /// Configured Bitcoin Cash share hash. None when each miner sends `p2p=`.
     pub cash_share: Option<[u8; 20]>,
+    /// Asks the template task for a new template right after a found block
+    /// is submitted. None where no template task runs, as in most tests.
+    /// Only read on the block submit path, which the `sim` feature compiles out.
+    #[cfg_attr(feature = "sim", allow(dead_code))]
+    pub template_refresh_tx: Option<mpsc::Sender<()>>,
 }
 
 /// Handles a single connection to the Stratum server.  This function
@@ -925,6 +944,7 @@ mod stratum_server_tests {
             share_chain: crate::config::Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
 
         // Run the handler
@@ -1050,6 +1070,7 @@ mod stratum_server_tests {
             share_chain: crate::config::Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
 
         // Run the handler
@@ -1136,6 +1157,7 @@ mod stratum_server_tests {
             share_chain: crate::config::Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
 
         // Run the handler
@@ -1220,6 +1242,7 @@ mod stratum_server_tests {
             share_chain: crate::config::Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
 
         // Run the handler
@@ -1323,6 +1346,7 @@ mod stratum_server_tests {
             share_chain: crate::config::Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
 
         // Spawn the handler in a separate task
@@ -1446,6 +1470,7 @@ mod stratum_server_tests {
             share_chain: crate::config::Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
 
         // Spawn the handler in a separate task
@@ -1559,6 +1584,7 @@ mod stratum_server_tests {
                 share_chain: crate::config::Chain::Bitcoin,
                 bch_share_network: None,
                 cash_share: None,
+                template_refresh_tx: None,
             };
 
             // wait for subscribe/authorize messages
@@ -1644,6 +1670,7 @@ mod stratum_server_tests {
                 share_chain: crate::config::Chain::Bitcoin,
                 bch_share_network: None,
                 cash_share: None,
+                template_refresh_tx: None,
             };
 
             let subscribe_message =
@@ -1785,6 +1812,7 @@ mod stratum_server_tests {
             share_chain: crate::config::Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
 
         // Pre-load a template before starting handle_connection
@@ -1916,6 +1944,7 @@ mod stratum_server_tests {
             share_chain: crate::config::Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
 
         // Start with no template - will send one after authorization
@@ -2057,6 +2086,7 @@ mod stratum_server_tests {
             share_chain: crate::config::Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
 
         let (template_tx, template_rx) = watch::channel(None);

@@ -567,6 +567,7 @@ pub(crate) async fn test_bch_stratum_context(
         share_chain: Chain::BitcoinCash,
         bch_share_network: Some(BchShareNetwork::Regtest),
         cash_share: Some([0x22; 20]),
+        template_refresh_tx: None,
     };
     (ctx, emissions_rx, [stats_dir, store_dir])
 }

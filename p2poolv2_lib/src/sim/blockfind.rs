@@ -60,7 +60,9 @@ pub async fn submit_sim_block(
     );
 
     match build_full_block(header, coinbase, template) {
-        Ok(block) => submit_block(&block, client).await,
+        Ok(block) => {
+            submit_block(&block, client).await;
+        }
         Err(error) => warn!("sim block-find: invalid template: {error}"),
     }
 }

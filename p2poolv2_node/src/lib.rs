@@ -30,6 +30,7 @@ use p2poolv2_lib::stratum::server::{StratumServerBuilder, Sv2Listener};
 use p2poolv2_lib::stratum::work::gbt::start_gbt;
 use p2poolv2_lib::stratum::work::notify::start_notify;
 use p2poolv2_lib::stratum::work::prepared_notify::PreparedNotifyParams;
+use p2poolv2_lib::stratum::work::template_trigger::merge_template_triggers;
 use p2poolv2_lib::stratum::work::tracker::start_tracker_actor;
 use p2poolv2_lib::stratum::zmq_listener::{ZmqListener, ZmqListenerTrait};
 use signal::{ShutdownReason, setup_signal_handler};
@@ -234,6 +235,9 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
             return Err(ExitCode::FAILURE);
         }
     };
+    // A block this node finds also wakes the template task, through the
+    // refresh sender the stratum servers hold.
+    let (template_refresh_tx, template_trigger_rx) = merge_template_triggers(zmq_trigger_rx);
 
     if stratum_config.chain == Chain::BitcoinCash {
         info!(
@@ -258,7 +262,7 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
             GBT_POLL_INTERVAL,
             stratum_config.network,
             stratum_config.chain,
-            zmq_trigger_rx,
+            template_trigger_rx,
         )
         .await
             && *exit_receiver_gbt.borrow() == ShutdownReason::None
@@ -366,6 +370,7 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
             .bch_share_network(bch_share_network)
             .cash_share(cash_share)
             .sv2(sv2_listener)
+            .template_refresh_tx(template_refresh_tx)
             .build()
             .await
             .unwrap();
