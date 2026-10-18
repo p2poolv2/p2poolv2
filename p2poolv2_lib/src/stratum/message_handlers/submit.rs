@@ -23,7 +23,7 @@ use bitcoin::{BlockHash, block::Header, blockdata::block::Block, hashes::Hash};
 use bitcoindrpc::BitcoindRpcClient;
 use serde_json::json;
 use std::time::SystemTime;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 /// Handle the "mining.submit" message
 /// This function is called when a miner submits a share to the Stratum server.
@@ -224,7 +224,9 @@ pub(crate) async fn submit_found_block(
         // Decode the template transactions only for this rare case.
         let block = build_full_block(header, coinbase, &job.blocktemplate)
             .map_err(|error| Error::SubmitFailure(error.to_string()))?;
-        submit_block(&block, &stratum_context.bitcoindrpc_client).await;
+        if submit_block(&block, &stratum_context.bitcoindrpc_client).await {
+            request_template_refresh(stratum_context);
+        }
     }
     #[cfg(feature = "sim")]
     {
@@ -307,14 +309,39 @@ pub(crate) async fn emit_pool_share(
 }
 
 /// Submit block to bitcoind using the shared RPC client.
-pub async fn submit_block(block: &Block, bitcoindrpc_client: &BitcoindRpcClient) {
+///
+/// Returns whether bitcoind accepted the submission.
+pub async fn submit_block(block: &Block, bitcoindrpc_client: &BitcoindRpcClient) -> bool {
     tracing::info!(
         "Submitting block to bitcoind: {:?}",
         block.header.block_hash()
     );
     match bitcoindrpc_client.submit_block(block).await {
-        Ok(_) => info!("Block submitted successfully"),
-        Err(e) => error!("Failed to submit block: {}", e),
+        // submitblock answers null when it accepts the block, and a reason
+        // such as "duplicate" or "high-hash" when it does not.
+        Ok(result) if result == "null" => {
+            info!("Block submitted successfully");
+            true
+        }
+        Ok(reason) => {
+            warn!("bitcoind did not accept the block: {reason}");
+            false
+        }
+        Err(e) => {
+            error!("Failed to submit block: {}", e);
+            false
+        }
+    }
+}
+
+/// Ask the template task for a new template now, so miners move off the
+/// parent of the block this node just found instead of finding same-height
+/// siblings until the next ZMQ event or poll. A full channel means a refresh
+/// is already pending, which is all this needs.
+#[cfg(not(feature = "sim"))]
+fn request_template_refresh(stratum_context: &StratumContext) {
+    if let Some(template_refresh_tx) = &stratum_context.template_refresh_tx {
+        let _ = template_refresh_tx.try_send(());
     }
 }
 
@@ -419,6 +446,7 @@ mod handle_submit_tests {
             .await
             .unwrap();
         let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let (template_refresh_tx, mut template_refresh_rx) = mpsc::channel(1);
 
         let ctx = StratumContext {
             tracker_handle: tracker_handle.clone(),
@@ -442,6 +470,7 @@ mod handle_submit_tests {
             share_chain: crate::config::Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: Some(template_refresh_tx),
         };
 
         let message = handle_submit(submit, &mut session, ctx).await.unwrap();
@@ -455,6 +484,10 @@ mod handle_submit_tests {
 
         // The response should indicate that the share met required difficulty
         assert_eq!(response.result, Some(json!(true)));
+
+        // The accepted block asks the template task for a new template once.
+        assert_eq!(template_refresh_rx.try_recv(), Ok(()));
+        assert!(template_refresh_rx.try_recv().is_err());
 
         let share = emissions_rx.try_recv().unwrap();
         assert_eq!(share.pplns.btcaddress, Some(session.btcaddress.unwrap()));
@@ -538,6 +571,7 @@ mod handle_submit_tests {
             share_chain: crate::config::Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
 
         let response = handle_submit(submit, &mut session, ctx).await.unwrap();
@@ -634,6 +668,7 @@ mod handle_submit_tests {
             share_chain: crate::config::Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
 
         let response = handle_submit(submit, &mut session, ctx).await.unwrap();
@@ -729,6 +764,7 @@ mod handle_submit_tests {
             share_chain: crate::config::Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
 
         let message = handle_submit(submit, &mut session, ctx).await.unwrap();
@@ -799,6 +835,7 @@ mod handle_submit_tests {
             share_chain: crate::config::Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
 
         let message = handle_submit(submit, &mut session, ctx).await.unwrap();
@@ -878,6 +915,7 @@ mod handle_submit_tests {
             share_chain: crate::config::Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
 
         let message = handle_submit(submit, &mut session, ctx).await.unwrap();
@@ -972,6 +1010,7 @@ mod handle_submit_tests {
             share_chain: crate::config::Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
 
         let message = handle_submit(submit.clone(), &mut session, ctx)
@@ -1012,6 +1051,7 @@ mod handle_submit_tests {
             share_chain: crate::config::Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
 
         let message2 = handle_submit(submit, &mut session, ctx2).await.unwrap();
@@ -1097,6 +1137,7 @@ mod handle_submit_tests {
             share_chain: crate::config::Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
 
         let message = handle_submit(submit, &mut session, ctx).await.unwrap();
@@ -1168,6 +1209,7 @@ mod handle_submit_tests {
             share_chain: crate::config::Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
 
         let messages = handle_submit(submit, &mut session, ctx).await.unwrap();
@@ -1250,6 +1292,7 @@ mod handle_submit_tests {
             share_chain: crate::config::Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
 
         // Verify the inserted job is properly registered
@@ -1350,6 +1393,7 @@ mod handle_submit_tests {
             share_chain: crate::config::Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
 
         let messages = handle_submit(submit, &mut session, ctx).await.unwrap();
@@ -1434,6 +1478,7 @@ mod handle_submit_tests {
             share_chain: crate::config::Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
 
         let messages = handle_submit(submit, &mut session, ctx).await.unwrap();
@@ -1519,6 +1564,7 @@ mod handle_submit_tests {
             share_chain: crate::config::Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
 
         let messages = handle_submit(submit, &mut session, ctx).await.unwrap();
@@ -1582,6 +1628,7 @@ mod handle_submit_tests {
             share_chain: crate::config::Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
 
         let messages = handle_submit(submit, &mut session, ctx).await.unwrap();
@@ -1676,6 +1723,7 @@ mod handle_submit_tests {
             share_chain: crate::config::Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
 
         let messages = handle_submit(submit, &mut session, ctx).await.unwrap();
@@ -1763,6 +1811,7 @@ mod handle_submit_tests {
             share_chain: crate::config::Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
 
         let messages = handle_submit(submit, &mut session, ctx).await.unwrap();
@@ -1779,5 +1828,30 @@ mod handle_submit_tests {
             share.pplns.btcaddress,
             Some("tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d".to_string())
         );
+    }
+
+    async fn submit_block_against(result: serde_json::Value) -> bool {
+        let mock_server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200)
+                    .set_body_json(json!({ "result": result, "error": null, "id": 0 })),
+            )
+            .mount(&mock_server)
+            .await;
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "user", "pass").unwrap();
+        let block = bitcoin::constants::genesis_block(bitcoin::Network::Regtest);
+        submit_block(&block, &client).await
+    }
+
+    #[tokio::test]
+    async fn submit_block_reports_an_accepted_block() {
+        assert!(submit_block_against(serde_json::Value::Null).await);
+    }
+
+    #[tokio::test]
+    async fn submit_block_reports_a_rejection_reason_as_not_accepted() {
+        assert!(!submit_block_against(json!("duplicate")).await);
+        assert!(!submit_block_against(json!("high-hash")).await);
     }
 }

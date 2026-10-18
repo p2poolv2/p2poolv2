@@ -695,6 +695,7 @@ mod tests {
             share_chain: Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
         let listener = bind("127.0.0.1", 0).await.unwrap();
         let address = listener.local_addr().unwrap();

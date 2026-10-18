@@ -1194,6 +1194,7 @@ mod tests {
             share_chain: Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
         let mut channels = MiningChannels::new(ctx, DEFAULT_VERSION_MASK);
 
@@ -1436,6 +1437,7 @@ mod tests {
             share_chain: Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
         let mut channels = MiningChannels::new(ctx, DEFAULT_VERSION_MASK);
 
@@ -1561,6 +1563,7 @@ mod tests {
             share_chain: Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
         let mut channels = MiningChannels::new(ctx, DEFAULT_VERSION_MASK);
         let mut open = payload(
@@ -1647,6 +1650,7 @@ mod tests {
             share_chain: Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
         let mut channels = MiningChannels::new(ctx, DEFAULT_VERSION_MASK);
         let open = encode_message(
@@ -1715,6 +1719,7 @@ mod tests {
             share_chain: Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
         let mut channels = MiningChannels::new(ctx, DEFAULT_VERSION_MASK);
 
@@ -1858,6 +1863,7 @@ mod tests {
             share_chain: Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
         let mut channels = MiningChannels::new(ctx, DEFAULT_VERSION_MASK);
         let share_address = make_test_share_address(2, Network::Signet);
@@ -1919,6 +1925,7 @@ mod tests {
             share_chain: Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
         let mut channels = MiningChannels::new(ctx, DEFAULT_VERSION_MASK);
         let identity = format!(
@@ -1976,6 +1983,7 @@ mod tests {
             share_chain: Chain::BitcoinCash,
             bch_share_network: Some(BchShareNetwork::Regtest),
             cash_share: None,
+            template_refresh_tx: None,
         };
         let mut channels = MiningChannels::new(ctx, DEFAULT_VERSION_MASK);
         let share_address = BchShareAddress::new(BchShareNetwork::Regtest, [0x22; 20]).encode();
@@ -2035,6 +2043,7 @@ mod tests {
             share_chain: Chain::BitcoinCash,
             bch_share_network: Some(BchShareNetwork::Regtest),
             cash_share: None,
+            template_refresh_tx: None,
         };
         let mut channels = MiningChannels::new(ctx, DEFAULT_VERSION_MASK);
         let identity = format!(
@@ -2090,6 +2099,7 @@ mod tests {
             share_chain: Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
         let mut channels = MiningChannels::new(ctx, DEFAULT_VERSION_MASK);
         let mut open = payload(
@@ -2170,6 +2180,7 @@ mod tests {
             share_chain: Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
         let mut channels = MiningChannels::new(ctx, DEFAULT_VERSION_MASK);
         let mut update = payload(
@@ -2223,6 +2234,7 @@ mod tests {
             share_chain: Chain::Bitcoin,
             bch_share_network: None,
             cash_share: None,
+            template_refresh_tx: None,
         };
         let mut channels = MiningChannels::new(ctx, DEFAULT_VERSION_MASK);
         let mut open = payload(
