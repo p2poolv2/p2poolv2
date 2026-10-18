@@ -837,6 +837,11 @@ mod tests {
             .returning(|_, _| {
                 CompactTarget::from_consensus(crate::shares::share_block::MAX_POOL_TARGET)
             });
+        pool_difficulty
+            .expect_target_ceiling()
+            .return_const(CompactTarget::from_consensus(
+                crate::shares::share_block::MAX_POOL_TARGET,
+            ));
         mock_validator
             .expect_pool_difficulty()
             .return_const(pool_difficulty);

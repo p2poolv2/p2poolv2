@@ -17,9 +17,7 @@ use crate::pool_difficulty::PoolDifficulty;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
-use crate::shares::share_block::{
-    MAX_POOL_TARGET, MIN_CUMULATIVE_CHAIN_WORK_MULTIPLIER, ShareHeader,
-};
+use crate::shares::share_block::{MIN_CUMULATIVE_CHAIN_WORK_MULTIPLIER, ShareHeader};
 use crate::shares::validation::ShareValidator;
 use crate::store::block_tx_metadata::BlockMetadata;
 use crate::store::dag_store::MAX_BLOCKS_PER_HEIGHT;
@@ -309,7 +307,11 @@ fn validate_header_chain(
         chain_store_handle,
         lowest_anchor_height,
     )?;
-    validate_cumulative_work(best_anchor_work, cumulative_chain_work)?;
+    validate_cumulative_work(
+        best_anchor_work,
+        cumulative_chain_work,
+        pool_difficulty.target_ceiling(),
+    )?;
 
     debug!(
         "Validated {} headers, cumulative chain work: {cumulative_chain_work}",
@@ -498,12 +500,18 @@ fn find_chain_anchors(
 }
 
 /// Verify cumulative chain work exceeds the minimum threshold.
+///
+/// The threshold is `MIN_CUMULATIVE_CHAIN_WORK_MULTIPLIER` shares at the
+/// chain's easiest target, `target_ceiling`. A Bitcoin Cash mini share is
+/// 256 times easier than a main share, so measuring it against
+/// `MAX_POOL_TARGET` rejected every header batch from a mini chain with
+/// fewer than 256 shares, and a new node could not sync one.
 fn validate_cumulative_work(
     anchor_chain_work: Work,
     batch_chain_work: Work,
+    target_ceiling: CompactTarget,
 ) -> Result<(), HeaderSyncError> {
-    let single_share_work =
-        Target::from_compact(CompactTarget::from_consensus(MAX_POOL_TARGET)).to_work();
+    let single_share_work = Target::from_compact(target_ceiling).to_work();
     let zero_work = Work::from_hex("0x00").unwrap();
     let min_cumulative_work = (0..MIN_CUMULATIVE_CHAIN_WORK_MULTIPLIER)
         .fold(zero_work, |accumulated, _| accumulated + single_share_work);
@@ -615,8 +623,10 @@ mod tests {
     use crate::node::SwarmSend;
     use crate::node::messages::Message;
     use crate::node::request_response_handler::block_fetcher;
+    use crate::shares::bch_genesis::MINI_ANCHOR_TARGET;
     #[mockall_double::double]
     use crate::shares::chain::chain_store_handle::ChainStoreHandle;
+    use crate::shares::share_block::MAX_POOL_TARGET;
     use crate::shares::validation::{MockDefaultShareValidator, ValidationError};
     use crate::store::block_tx_metadata::{BlockMetadata, ChainMembership, Status};
     use crate::test_utils::{TestShareBlockBuilder, share_header_batch_with_empty_branches};
@@ -684,6 +694,9 @@ mod tests {
         pool_difficulty
             .expect_calculate_target_clamped()
             .returning(|_, _| CompactTarget::from_consensus(MAX_POOL_TARGET));
+        pool_difficulty
+            .expect_target_ceiling()
+            .return_const(CompactTarget::from_consensus(MAX_POOL_TARGET));
         mock_validator
             .expect_pool_difficulty()
             .return_const(pool_difficulty);
@@ -1573,6 +1586,40 @@ mod tests {
             expected: 1,
         };
         assert_eq!(error.retry_depth(600), None);
+    }
+
+    /// One mini share of work meets the mini chain's minimum; before, a mini
+    /// chain needed the work of a whole main share (256 mini shares).
+    #[test]
+    fn mini_chain_minimum_work_is_one_mini_share() {
+        let mini_ceiling = CompactTarget::from_consensus(MINI_ANCHOR_TARGET);
+        let one_mini_share = Target::from_compact(mini_ceiling).to_work();
+        let zero_work = Work::from_hex("0x00").unwrap();
+        assert!(validate_cumulative_work(zero_work, one_mini_share, mini_ceiling).is_ok());
+    }
+
+    #[test]
+    fn mini_chain_rejects_a_batch_with_no_work() {
+        let mini_ceiling = CompactTarget::from_consensus(MINI_ANCHOR_TARGET);
+        let zero_work = Work::from_hex("0x00").unwrap();
+        assert!(matches!(
+            validate_cumulative_work(zero_work, zero_work, mini_ceiling),
+            Err(HeaderSyncError::InsufficientWork)
+        ));
+    }
+
+    /// The main chain keeps its threshold: one mini share of work is not a
+    /// main share.
+    #[test]
+    fn main_chain_still_rejects_one_mini_share_of_work() {
+        let main_ceiling = CompactTarget::from_consensus(MAX_POOL_TARGET);
+        let one_mini_share =
+            Target::from_compact(CompactTarget::from_consensus(MINI_ANCHOR_TARGET)).to_work();
+        let zero_work = Work::from_hex("0x00").unwrap();
+        assert!(matches!(
+            validate_cumulative_work(zero_work, one_mini_share, main_ceiling),
+            Err(HeaderSyncError::InsufficientWork)
+        ));
     }
 
     /// Insufficient work has no retry depth.

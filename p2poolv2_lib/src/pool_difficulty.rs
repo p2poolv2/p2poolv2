@@ -300,8 +300,7 @@ impl PoolDifficulty {
     ) -> CompactTarget {
         let asert_target = self.calculate_target(block_parent_time, block_parent_height);
 
-        let max_pool_target_compact =
-            crate::shares::bch_genesis::target_ceiling(self.anchor_target);
+        let max_pool_target_compact = self.target_ceiling();
         let max_pool_target = Target::from_compact(max_pool_target_compact);
 
         let result_target = Target::from_compact(asert_target);
@@ -310,6 +309,12 @@ impl PoolDifficulty {
         } else {
             asert_target
         }
+    }
+
+    /// Easiest share target this chain allows: `MAX_POOL_TARGET` on Bitcoin
+    /// and the Bitcoin Cash main chain, the mini chain's own ceiling on mini.
+    pub fn target_ceiling(&self) -> CompactTarget {
+        crate::shares::bch_genesis::target_ceiling(self.anchor_target)
     }
 
     /// Calculate the target and return it as a consensus u32.
@@ -335,6 +340,7 @@ mockall::mock! {
         pub fn calculate_target(&self, block_parent_time: u32, block_parent_height: u32) -> CompactTarget;
         pub fn calculate_target_clamped(&self, block_parent_time: u32, block_parent_height: u32) -> CompactTarget;
         pub fn calculate_target_consensus(&self, block_parent_time: u32, block_parent_height: u32) -> u32;
+        pub fn target_ceiling(&self) -> CompactTarget;
     }
 
     impl Clone for PoolDifficulty {
