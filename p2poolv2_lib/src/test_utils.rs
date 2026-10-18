@@ -131,25 +131,25 @@ use mining_sv2::{
 #[cfg(test)]
 use noise_sv2::{INITIATOR_EXPECTED_HANDSHAKE_MESSAGE_SIZE, Initiator};
 #[cfg(test)]
-use std::collections::VecDeque;
-#[cfg(test)]
-use template_distribution_sv2::{
-    NewTemplateOwned, RequestTransactionDataSuccessOwned, SetNewPrevHashOwned,
-};
-#[cfg(test)]
-use tokio::net::TcpListener;
-#[cfg(test)]
 use p2poolv2_wallet::bch_share::BchShareNetwork;
 #[cfg(test)]
 use rand::{RngExt, rng};
 #[cfg(test)]
 use std::collections::HashMap;
 #[cfg(test)]
+use std::collections::VecDeque;
+#[cfg(test)]
 use std::net::SocketAddr;
 #[cfg(test)]
 use std::time::Duration;
 #[cfg(test)]
+use template_distribution_sv2::{
+    NewTemplateOwned, RequestTransactionDataSuccessOwned, SetNewPrevHashOwned,
+};
+#[cfg(test)]
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+#[cfg(test)]
+use tokio::net::TcpListener;
 #[cfg(test)]
 use tokio::net::TcpStream;
 #[cfg(test)]
@@ -296,7 +296,11 @@ impl TestSv2Server {
         timeout(Duration::from_secs(5), async {
             let (mut stream, _) = listener.accept().await.unwrap();
             let noise = match authority {
-                Some(authority) => Some(NoiseTransport::accept(&mut stream, authority).await.unwrap()),
+                Some(authority) => Some(
+                    NoiseTransport::accept(&mut stream, authority)
+                        .await
+                        .unwrap(),
+                ),
                 None => None,
             };
             Self {
@@ -338,8 +342,10 @@ impl TestSv2Server {
                 assert_ne!(count, 0, "SV2 test client closed the connection");
                 let messages = match self.noise.as_mut() {
                     Some(noise) => noise.decode(&buffer[..count]).unwrap(),
-                    None => decode_plain_frames(&mut self.decoder, &mut self.inbox, &buffer[..count])
-                        .unwrap(),
+                    None => {
+                        decode_plain_frames(&mut self.decoder, &mut self.inbox, &buffer[..count])
+                            .unwrap()
+                    }
                 };
                 self.received.extend(messages);
             }

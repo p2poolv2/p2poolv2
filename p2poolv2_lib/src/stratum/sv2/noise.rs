@@ -23,7 +23,9 @@ use codec_sv2::{
     Decrypted, Handshake, NoiseDecoder, NoiseEncoder, TransportDecryptState, TransportEncryptState,
 };
 use framing_sv2::framing::SerializedFrame;
-use noise_sv2::{ELLSWIFT_ENCODING_SIZE, INITIATOR_EXPECTED_HANDSHAKE_MESSAGE_SIZE, Initiator, Responder};
+use noise_sv2::{
+    ELLSWIFT_ENCODING_SIZE, INITIATOR_EXPECTED_HANDSHAKE_MESSAGE_SIZE, Initiator, Responder,
+};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::time::timeout;

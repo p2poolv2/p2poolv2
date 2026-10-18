@@ -51,19 +51,19 @@ use bitcoin::{Block, BlockHash, Target, Transaction};
 use bitcoindrpc::{BitcoinRpcConfig, BitcoindRpcClient};
 use codec_sv2::Decoder;
 use common_messages_sv2::{
-    MESSAGE_TYPE_SETUP_CONNECTION, MESSAGE_TYPE_SETUP_CONNECTION_ERROR,
-    MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS, Protocol, SetupConnection, SetupConnectionError,
+    MESSAGE_TYPE_RECONNECT, MESSAGE_TYPE_SETUP_CONNECTION, MESSAGE_TYPE_SETUP_CONNECTION_ERROR,
+    MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS, Protocol, Reconnect, SetupConnection,
+    SetupConnectionError,
 };
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
 use template_distribution_sv2::{
-    CoinbaseOutputConstraints, MESSAGE_TYPE_COINBASE_OUTPUT_CONSTRAINTS,
-    MESSAGE_TYPE_NEW_TEMPLATE, MESSAGE_TYPE_REQUEST_TRANSACTION_DATA,
-    MESSAGE_TYPE_REQUEST_TRANSACTION_DATA_ERROR, MESSAGE_TYPE_REQUEST_TRANSACTION_DATA_SUCCESS,
-    MESSAGE_TYPE_SET_NEW_PREV_HASH, MESSAGE_TYPE_SUBMIT_SOLUTION, NewTemplate,
-    RequestTransactionData, RequestTransactionDataError, RequestTransactionDataSuccess,
-    SetNewPrevHash, SubmitSolution,
+    CoinbaseOutputConstraints, MESSAGE_TYPE_COINBASE_OUTPUT_CONSTRAINTS, MESSAGE_TYPE_NEW_TEMPLATE,
+    MESSAGE_TYPE_REQUEST_TRANSACTION_DATA, MESSAGE_TYPE_REQUEST_TRANSACTION_DATA_ERROR,
+    MESSAGE_TYPE_REQUEST_TRANSACTION_DATA_SUCCESS, MESSAGE_TYPE_SET_NEW_PREV_HASH,
+    MESSAGE_TYPE_SUBMIT_SOLUTION, NewTemplate, RequestTransactionData, RequestTransactionDataError,
+    RequestTransactionDataSuccess, SetNewPrevHash, SubmitSolution,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -235,6 +235,8 @@ enum SessionAction {
     Send(Vec<u8>),
     /// Map this template and hand it to the notifier.
     Ready(ReadyTemplate),
+    /// The provider's `Reconnect`: an empty host or a zero port mean its own.
+    Reconnect { host: String, port: u16 },
 }
 
 /// The Template Distribution state of one provider connection, without I/O.
@@ -275,6 +277,14 @@ impl ProviderSession {
                     .map_err(|error| format!("{error:?}"))?;
                 self.on_transaction_error(&message);
                 Ok(Vec::new())
+            }
+            MESSAGE_TYPE_RECONNECT => {
+                let message =
+                    Reconnect::from_bytes(payload).map_err(|error| format!("{error:?}"))?;
+                Ok(vec![SessionAction::Reconnect {
+                    host: message.new_host.as_utf8_or_hex(),
+                    port: message.new_port,
+                }])
             }
             other => {
                 debug!("Ignoring Template Distribution message type {other:#04x}");
@@ -339,7 +349,10 @@ impl ProviderSession {
         self.take_ready(tip.template_id).into_iter().collect()
     }
 
-    fn on_transactions(&mut self, message: &RequestTransactionDataSuccess<'_>) -> Vec<SessionAction> {
+    fn on_transactions(
+        &mut self,
+        message: &RequestTransactionDataSuccess<'_>,
+    ) -> Vec<SessionAction> {
         let template_id = message.template_id;
         let Some(announced) = self.pending.get_mut(&template_id) else {
             debug!("Transactions for Template Provider template {template_id}, no longer pending");
@@ -385,7 +398,8 @@ impl ProviderSession {
             return None;
         }
         let announced = self.pending.remove(&template_id)?;
-        self.pending.retain(|pending_id, _| *pending_id > template_id);
+        self.pending
+            .retain(|pending_id, _| *pending_id > template_id);
         Some(SessionAction::Ready(ReadyTemplate { announced, tip }))
     }
 }
@@ -468,9 +482,7 @@ fn provided_block_template(
         .map(|transaction| transaction.total_size() as u64)
         .sum::<u64>();
     let size_limit = block_size_floor(network);
-    if transaction_bytes
-        + u64::from(HEADER_AND_COUNT_SIZE)
-        + u64::from(MAX_SUBMITTED_COINBASE)
+    if transaction_bytes + u64::from(HEADER_AND_COUNT_SIZE) + u64::from(MAX_SUBMITTED_COINBASE)
         > u64::from(size_limit)
     {
         return Err(invalid("transactions leave no room for the coinbase"));
@@ -615,6 +627,8 @@ impl Transport {
 enum ConnectionEnd {
     /// The notifier is gone, so the node is stopping.
     NotifierClosed,
+    /// The provider sent `Reconnect`: the next connection goes there.
+    Redirected(TemplateProvider),
     /// Anything else: the client reconnects.
     Failed(String),
 }
@@ -656,29 +670,45 @@ pub async fn start_template_provider(
 }
 
 /// Run provider connections one after another until the notifier is gone.
+///
+/// A `Reconnect` sends the next connection to the address it names, after
+/// [`RECONNECT_DELAY`]; any other end of a connection returns to the
+/// configured provider, which may redirect again.
 async fn keep_connected(
     provider: &TemplateProvider,
     bitcoind: &BitcoindRpcClient,
     notify_tx: &NotifySender,
 ) {
+    let mut target = provider.clone();
     let mut delay = RECONNECT_DELAY;
     let mut running = true;
     while running {
-        let (end, published) = serve_provider(provider, bitcoind, notify_tx).await;
+        let (end, published) = serve_provider(&target, bitcoind, notify_tx).await;
         match end {
             ConnectionEnd::NotifierClosed => {
                 info!("Notifier closed, stopping the Template Provider client");
                 running = false;
+            }
+            ConnectionEnd::Redirected(next) => {
+                info!(
+                    "Template Provider at {} redirected the node to {}",
+                    target.address, next.address
+                );
+                target = next;
+                delay = RECONNECT_DELAY;
+                sleep(RECONNECT_DELAY).await;
             }
             ConnectionEnd::Failed(reason) => {
                 if published {
                     delay = RECONNECT_DELAY;
                 }
                 warn!(
-                    "Template Provider connection to {} ended: {reason}; reconnecting in {}s",
+                    "Template Provider connection to {} ended: {reason}; reconnecting to {} in {}s",
+                    target.address,
                     provider.address,
                     delay.as_secs()
                 );
+                target = provider.clone();
                 sleep(delay).await;
                 delay = (delay * 2).min(MAX_RECONNECT_DELAY);
             }
@@ -700,8 +730,8 @@ async fn serve_provider(
         Ok((transport, stream, early_messages)) => {
             let (mut reader, writer) = stream.into_split();
             let mut connection = ProviderConnection {
+                provider,
                 bitcoind,
-                network: provider.network,
                 notify_tx,
                 transport,
                 writer,
@@ -802,8 +832,8 @@ async fn read_setup_reply(
 
 /// One set-up provider connection.
 struct ProviderConnection<'a> {
+    provider: &'a TemplateProvider,
     bitcoind: &'a BitcoindRpcClient,
-    network: BitcoinCashNetwork,
     notify_tx: &'a NotifySender,
     transport: Transport,
     writer: OwnedWriteHalf,
@@ -858,6 +888,12 @@ impl ProviderConnection<'_> {
                 match action {
                     SessionAction::Send(frame) => self.write_frame(frame).await?,
                     SessionAction::Ready(ready) => self.publish(ready).await?,
+                    SessionAction::Reconnect { host, port } => {
+                        return Err(match self.provider.redirected(&host, port) {
+                            Ok(next) => ConnectionEnd::Redirected(next),
+                            Err(refused) => ConnectionEnd::Failed(refused.message),
+                        });
+                    }
                 }
             }
         }
@@ -894,7 +930,7 @@ impl ProviderConnection<'_> {
         match provided_block_template(
             ready,
             height,
-            self.network,
+            self.provider.network,
             now,
             self.solutions_tx.clone(),
         ) {
@@ -963,11 +999,9 @@ async fn lookup_parent_height(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::stratum::message_handlers::submit::submit_found_block;
-    use crate::stratum::work::tracker::JobDetails;
     use crate::test_utils::{
-        TestSv2Server, test_bch_stratum_context, test_coinbase_transaction, test_sv2_authority,
-        test_tdp_new_template, test_tdp_set_new_prev_hash, test_tdp_transaction_data,
+        TestSv2Server, test_coinbase_transaction, test_sv2_authority, test_tdp_new_template,
+        test_tdp_set_new_prev_hash, test_tdp_transaction_data,
     };
     use binary_sv2::to_bytes;
     use bitcoin::block::{Header, Version};
@@ -975,6 +1009,28 @@ mod tests {
     use bitcoin::{CompactTarget, ScriptBuf, TxMerkleNode, TxOut};
     use common_messages_sv2::SetupConnectionSuccess;
     use std::str::FromStr;
+    // Found blocks are not submitted under the `sim` feature, so the tests
+    // that follow a block to its provider are left out of that build.
+    #[cfg(not(feature = "sim"))]
+    use crate::config::DEFAULT_VERSION_MASK;
+    #[cfg(not(feature = "sim"))]
+    use crate::stratum::message_handlers::submit::submit_found_block;
+    #[cfg(not(feature = "sim"))]
+    use crate::stratum::sv2::mining::MiningChannels;
+    #[cfg(not(feature = "sim"))]
+    use crate::stratum::work::tracker::JobDetails;
+    #[cfg(not(feature = "sim"))]
+    use crate::test_utils::{test_bch_prepared_for_template, test_bch_stratum_context};
+    #[cfg(not(feature = "sim"))]
+    use binary_sv2::{B032, U256};
+    #[cfg(not(feature = "sim"))]
+    use mining_sv2::{
+        MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL, MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED,
+        NewExtendedMiningJob, OpenExtendedMiningChannel, OpenExtendedMiningChannelSuccess,
+        SetNewPrevHash as MiningSetNewPrevHash, SubmitSharesExtended,
+    };
+    #[cfg(not(feature = "sim"))]
+    use p2poolv2_wallet::bch_share::{BchShareNetwork, encode_payout_address};
     use template_distribution_sv2::RequestTransactionDataSuccessOwned;
     use tokio::net::TcpListener;
     use wiremock::matchers::{body_partial_json, method};
@@ -1499,7 +1555,11 @@ mod tests {
             solutions,
         )
         .unwrap_err();
-        assert!(refused.message.contains("height push"), "{}", refused.message);
+        assert!(
+            refused.message.contains("height push"),
+            "{}",
+            refused.message
+        );
     }
 
     #[test]
@@ -1609,7 +1669,11 @@ mod tests {
             solutions,
         )
         .unwrap_err();
-        assert!(refused.message.contains("merkle path"), "{}", refused.message);
+        assert!(
+            refused.message.contains("merkle path"),
+            "{}",
+            refused.message
+        );
     }
 
     #[test]
@@ -1863,8 +1927,7 @@ mod tests {
         let mut constraints_payload = server
             .receive(MESSAGE_TYPE_COINBASE_OUTPUT_CONSTRAINTS)
             .await;
-        let constraints =
-            CoinbaseOutputConstraints::from_bytes(&mut constraints_payload).unwrap();
+        let constraints = CoinbaseOutputConstraints::from_bytes(&mut constraints_payload).unwrap();
         assert_eq!(
             constraints.coinbase_output_max_additional_size,
             COINBASE_OUTPUT_RESERVE
@@ -1881,9 +1944,7 @@ mod tests {
                 test_tdp_set_new_prev_hash(41, &fixture),
             )
             .await;
-        let mut request_payload = server
-            .receive(MESSAGE_TYPE_REQUEST_TRANSACTION_DATA)
-            .await;
+        let mut request_payload = server.receive(MESSAGE_TYPE_REQUEST_TRANSACTION_DATA).await;
         let request = RequestTransactionData::from_bytes(&mut request_payload).unwrap();
         assert_eq!(request.template_id, 41);
         server
@@ -2148,5 +2209,238 @@ mod tests {
         submit_found_block(&ctx, header, test_coinbase_transaction(1), &job)
             .await
             .unwrap();
+    }
+
+    #[cfg(not(feature = "sim"))]
+    #[tokio::test]
+    async fn an_extended_channel_block_on_a_provided_template_returns_as_submit_solution() {
+        let fixture: BlockTemplate = serde_json::from_str(REGTEST_TEMPLATE).unwrap();
+        let rpc = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(body_partial_json(
+                serde_json::json!({"method": "getblockheader"}),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": {"height": fixture.height - 1},
+                "error": null,
+                "id": 0,
+            })))
+            .mount(&rpc)
+            .await;
+        Mock::given(method("POST"))
+            .and(body_partial_json(
+                serde_json::json!({"method": "submitblock"}),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": null,
+                "error": null,
+                "id": 0,
+            })))
+            .expect(0)
+            .mount(&rpc)
+            .await;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let provider = TemplateProvider {
+            address: listener.local_addr().unwrap().to_string(),
+            authority_public_key: None,
+            network: BitcoinCashNetwork::Regtest,
+        };
+        let (notify_tx, mut notify_rx) = mpsc::channel(4);
+        start_template_provider(
+            provider,
+            BitcoinRpcConfig {
+                url: rpc.uri(),
+                username: "user".to_string(),
+                password: "pass".to_string(),
+            },
+            notify_tx,
+        )
+        .await
+        .unwrap();
+        let mut server = TestSv2Server::accept(&listener, None).await;
+        server.receive(MESSAGE_TYPE_SETUP_CONNECTION).await;
+        server
+            .send_message(
+                MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS,
+                SetupConnectionSuccess {
+                    used_version: 2,
+                    flags: 0,
+                },
+            )
+            .await;
+        server
+            .receive(MESSAGE_TYPE_COINBASE_OUTPUT_CONSTRAINTS)
+            .await;
+        server
+            .send_message(
+                MESSAGE_TYPE_NEW_TEMPLATE,
+                test_tdp_new_template(21, true, &fixture),
+            )
+            .await;
+        server
+            .send_message(
+                MESSAGE_TYPE_SET_NEW_PREV_HASH,
+                test_tdp_set_new_prev_hash(21, &fixture),
+            )
+            .await;
+        let Some(NotifyCmd::SendToAll { template }) =
+            timeout(Duration::from_secs(5), notify_rx.recv())
+                .await
+                .unwrap()
+        else {
+            panic!("expected a template for the notifier");
+        };
+        let prepared = test_bch_prepared_for_template(template.as_ref().clone());
+        let (ctx, mut emissions, _dirs) = test_bch_stratum_context(&rpc.uri()).await;
+        let mut channels = MiningChannels::new(ctx, DEFAULT_VERSION_MASK);
+        let payout = bitcoin::Address::p2pkh(
+            bitcoin::PubkeyHash::from_byte_array([0x22; 20]),
+            bitcoin::Network::Regtest,
+        );
+        let identity = encode_payout_address(&payout, BchShareNetwork::Regtest).unwrap();
+        let mut open = to_bytes(OpenExtendedMiningChannel {
+            request_id: 1,
+            user_identity: identity.as_str().try_into().unwrap(),
+            nominal_hash_rate: 1.0,
+            max_target: U256::new(&[0xff; 32]).unwrap(),
+            min_extranonce_size: 8,
+        })
+        .unwrap();
+        let opened = channels
+            .handle(
+                MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL,
+                &mut open,
+                Some(Arc::clone(&prepared)),
+            )
+            .await
+            .unwrap();
+        let mut opened_messages =
+            decode_plain_frames(&mut Decoder::new(), &mut Vec::new(), &opened.concat()).unwrap();
+        let (_, mut success_payload) = opened_messages.remove(0);
+        let success = OpenExtendedMiningChannelSuccess::from_bytes(&mut success_payload).unwrap();
+        let (_, mut job_payload) = opened_messages.remove(0);
+        let job = NewExtendedMiningJob::from_bytes(&mut job_payload).unwrap();
+        let (_, mut prev_hash_payload) = opened_messages.remove(0);
+        let prev_hash = MiningSetNewPrevHash::from_bytes(&mut prev_hash_payload).unwrap();
+        let extranonce = [0x11u8; 8];
+        let mut coinbase_bytes = job.coinbase_tx_prefix.as_bytes().to_vec();
+        coinbase_bytes.extend_from_slice(success.extranonce_prefix.as_bytes());
+        coinbase_bytes.extend_from_slice(&extranonce);
+        coinbase_bytes.extend_from_slice(job.coinbase_tx_suffix.as_bytes());
+        let coinbase: Transaction = deserialize(&coinbase_bytes).unwrap();
+        let unsolved = Header {
+            version: Version::from_consensus(job.version as i32),
+            prev_blockhash: BlockHash::from_byte_array(*prev_hash.prev_hash.as_array()),
+            merkle_root: TxMerkleNode::from_byte_array(coinbase.compute_txid().to_byte_array()),
+            time: prev_hash.min_ntime,
+            bits: CompactTarget::from_consensus(prev_hash.nbits),
+            nonce: 0,
+        };
+        // Regtest bits: about every second nonce meets the network target.
+        let nonce = (0..u32::MAX)
+            .find(|nonce| {
+                let header = Header {
+                    nonce: *nonce,
+                    ..unsolved
+                };
+                Target::from_compact(header.bits).is_met_by(header.block_hash())
+            })
+            .unwrap();
+        let mut submit = to_bytes(SubmitSharesExtended {
+            channel_id: success.channel_id,
+            sequence_number: 1,
+            job_id: job.job_id,
+            nonce,
+            ntime: prev_hash.min_ntime,
+            version: job.version,
+            extranonce: B032::new(&extranonce).unwrap(),
+        })
+        .unwrap();
+        channels
+            .handle(MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED, &mut submit, None)
+            .await
+            .unwrap();
+        let mut solution_payload = server.receive(MESSAGE_TYPE_SUBMIT_SOLUTION).await;
+        let solution = SubmitSolution::from_bytes(&mut solution_payload).unwrap();
+        assert_eq!(solution.template_id, 21);
+        assert_eq!(solution.version, job.version);
+        assert_eq!(solution.header_timestamp, prev_hash.min_ntime);
+        assert_eq!(solution.header_nonce, nonce);
+        assert_eq!(solution.coinbase_tx.as_bytes(), coinbase_bytes.as_slice());
+        assert_eq!(emissions.try_recv().unwrap().header.nonce, nonce);
+    }
+
+    #[test]
+    fn a_reconnect_asks_for_a_connection_to_the_named_provider() {
+        let mut session = ProviderSession::default();
+        let actions = session
+            .on_message(
+                MESSAGE_TYPE_RECONNECT,
+                &mut to_bytes(Reconnect {
+                    new_host: "127.0.0.1".try_into().unwrap(),
+                    new_port: 8443,
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(
+            actions,
+            vec![SessionAction::Reconnect {
+                host: "127.0.0.1".to_string(),
+                port: 8443,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_reconnect_moves_the_client_to_the_provider_it_names() {
+        let rpc = MockServer::start().await;
+        let first = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let second = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let provider = TemplateProvider {
+            address: first.local_addr().unwrap().to_string(),
+            authority_public_key: None,
+            network: BitcoinCashNetwork::Regtest,
+        };
+        let (notify_tx, _notify_rx) = mpsc::channel(4);
+        start_template_provider(
+            provider,
+            BitcoinRpcConfig {
+                url: rpc.uri(),
+                username: "user".to_string(),
+                password: "pass".to_string(),
+            },
+            notify_tx,
+        )
+        .await
+        .unwrap();
+        let mut redirecting = TestSv2Server::accept(&first, None).await;
+        redirecting.receive(MESSAGE_TYPE_SETUP_CONNECTION).await;
+        redirecting
+            .send_message(
+                MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS,
+                SetupConnectionSuccess {
+                    used_version: 2,
+                    flags: 0,
+                },
+            )
+            .await;
+        redirecting
+            .receive(MESSAGE_TYPE_COINBASE_OUTPUT_CONSTRAINTS)
+            .await;
+        redirecting
+            .send_message(
+                MESSAGE_TYPE_RECONNECT,
+                Reconnect {
+                    new_host: "".try_into().unwrap(),
+                    new_port: second.local_addr().unwrap().port(),
+                },
+            )
+            .await;
+        let mut redirected = TestSv2Server::accept(&second, None).await;
+        let mut setup_payload = redirected.receive(MESSAGE_TYPE_SETUP_CONNECTION).await;
+        let setup = SetupConnection::from_bytes(&mut setup_payload).unwrap();
+        assert_eq!(setup.protocol, Protocol::TemplateDistributionProtocol);
+        assert_eq!(setup.endpoint_port, second.local_addr().unwrap().port());
     }
 }

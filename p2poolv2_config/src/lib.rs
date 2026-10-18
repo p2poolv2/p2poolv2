@@ -677,6 +677,45 @@ pub struct TemplateProvider {
     pub network: BitcoinCashNetwork,
 }
 
+impl TemplateProvider {
+    /// The provider a `Reconnect` from this one names: `host` and `port`,
+    /// or this provider's own when `host` is empty or `port` is 0.
+    ///
+    /// The pinned key and the network carry over, so a provider spoken to
+    /// without encryption may only redirect to this computer.
+    pub fn redirected(&self, host: &str, port: u16) -> Result<TemplateProvider, ConfigError> {
+        let (current_host, current_port) = self
+            .address
+            .rsplit_once(':')
+            .and_then(|(host, port)| Some((host, port.parse::<u16>().ok()?)))
+            .ok_or_else(|| ConfigError {
+                message: format!(
+                    "template provider address {} is not HOST:PORT",
+                    self.address
+                ),
+            })?;
+        let host = if host.is_empty() { current_host } else { host };
+        let port = if port == 0 { current_port } else { port };
+        if self.authority_public_key.is_none() && !is_loopback_host(host) {
+            return Err(ConfigError {
+                message: format!(
+                    "an unencrypted Template Provider may not redirect to another computer ({host})"
+                ),
+            });
+        }
+        let address = if host.contains(':') && !host.starts_with('[') {
+            format!("[{host}]:{port}")
+        } else {
+            format!("{host}:{port}")
+        };
+        Ok(TemplateProvider {
+            address,
+            authority_public_key: self.authority_public_key,
+            network: self.network,
+        })
+    }
+}
+
 /// Check the Template Provider settings against `template_source`.
 ///
 /// `rpc` takes no provider settings, so a provider address left in a
@@ -2377,8 +2416,7 @@ mod template_provider_tests {
         let mut config = StratumConfig::<Raw>::new_for_test_default();
         config.chain = Chain::BitcoinCash;
         config.bitcoin_cash_network = Some(BitcoinCashNetwork::Regtest);
-        config.bootstrap_address =
-            "bchreg:qqzldt8u5mafprrw6uljppyqg30uhl97ey890dqm34".to_string();
+        config.bootstrap_address = "bchreg:qqzldt8u5mafprrw6uljppyqg30uhl97ey890dqm34".to_string();
         config
     }
 
@@ -2526,6 +2564,61 @@ mod template_provider_tests {
         config.template_provider_address = Some("127.0.0.1:8442".to_string());
         let error = config.parse().unwrap_err();
         assert!(error.message.contains("bitcoin-cash"), "{}", error.message);
+    }
+
+    #[test]
+    fn a_reconnect_without_host_or_port_keeps_the_provider() {
+        let provider = TemplateProvider {
+            address: "127.0.0.1:8442".to_string(),
+            authority_public_key: None,
+            network: BitcoinCashNetwork::Regtest,
+        };
+        assert_eq!(provider.redirected("", 0).unwrap(), provider);
+    }
+
+    #[test]
+    fn an_unencrypted_provider_may_redirect_to_another_port_on_this_computer() {
+        let provider = TemplateProvider {
+            address: "127.0.0.1:8442".to_string(),
+            authority_public_key: None,
+            network: BitcoinCashNetwork::Regtest,
+        };
+        assert_eq!(
+            provider.redirected("::1", 8443).unwrap().address,
+            "[::1]:8443"
+        );
+    }
+
+    #[test]
+    fn an_unencrypted_provider_may_not_redirect_to_another_computer() {
+        let provider = TemplateProvider {
+            address: "127.0.0.1:8442".to_string(),
+            authority_public_key: None,
+            network: BitcoinCashNetwork::Regtest,
+        };
+        let error = provider.redirected("192.0.2.7", 8442).unwrap_err();
+        assert!(
+            error.message.contains("another computer"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn a_pinned_provider_keeps_its_key_when_it_redirects_to_another_computer() {
+        let provider = TemplateProvider {
+            address: "127.0.0.1:8442".to_string(),
+            authority_public_key: Some([7; 32]),
+            network: BitcoinCashNetwork::Regtest,
+        };
+        assert_eq!(
+            provider.redirected("node.example", 0).unwrap(),
+            TemplateProvider {
+                address: "node.example:8442".to_string(),
+                authority_public_key: Some([7; 32]),
+                network: BitcoinCashNetwork::Regtest,
+            }
+        );
     }
 
     #[test]
