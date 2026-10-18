@@ -3,9 +3,9 @@ name: Security
 # Advisories land against unchanged code, so this cannot be a PR-only check.
 on:
   push:
-    branches: ["main"]
+    branches: ["main", "bch-plan", "alpha"]
   pull_request:
-    branches: ["main"]
+    branches: ["main", "bch-plan", "alpha"]
   schedule:
     - cron: "24 6 * * *" # everyday at 06:24
   workflow_dispatch:
