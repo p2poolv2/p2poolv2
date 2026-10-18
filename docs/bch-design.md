@@ -145,24 +145,27 @@ a full donation (10,000) still skips miner address validation.
   chipnet, or regtest for the CashAddr prefix. New Bitcoin Cash tests use
   the regtest fixture captured from BCHN and the chipnet prefix; they do
   not require a live node.
-- **Share window and difficulty.** PPLNS window length and the 10 second
-  share interval are unchanged. Bitcoin Cash main and mini now have separate
-  genesis shares. Mini is easier by the compact exponent above; it is not a
-  retune of the PPLNS window. The window is sized in work, not in blocks:
-  `bitcoin_difficulty * difficulty_multiplier`, about one block's expected
-  work per unit of multiplier. The only 10 and 600 second constants
-  (`IDEAL_BLOCK_TIME`, `HALFLIFE` in `sim_overrides.rs`) are the share
-  chain's own ASERT, not the Bitcoin Cash block interval.
+- **Share window and difficulty.** The 10 second share interval is
+  unchanged. Bitcoin Cash main and mini now have separate genesis shares.
+  Mini is easier by the compact exponent above; it is not a retune of the
+  PPLNS window. Since the 2026-10-18 upstream sync the window is a share
+  count, not work: a coinbase pays `PPLNS_WINDOW_SHARES` (120,960) shares.
+  They start `COINBASE_MATURITY` (6,048) shares below the share that found
+  the block. Past the chain's first 6,048 shares, a new share is first paid
+  about 17 hours after it is mined. `difficulty_multiplier` is gone. The
+  only 10 and 600 second constants (`IDEAL_BLOCK_TIME`, `HALFLIFE` in
+  `sim_overrides.rs`) are the share chain's own ASERT, not the Bitcoin Cash
+  block interval.
 - **Faster blocks (CHIP-2025-03).** A proposal to move Bitcoin Cash to
   1-minute blocks, gathering statements for the 2027 upgrade (lock-in
   2026-11-15, activation 2027-05-15 per the research forum thread). It is
-  not activated. If it activates, block difficulty falls about tenfold and
-  the PPLNS window shrinks with it to about one block's expected work, which
-  is the intended PPLNS behavior; the 10 second share interval stays below
-  the block interval; templates change about ten times as often, which the
-  ZMQ `hashblock` path already handles. The CHIP's tick-based heights and any
-  change to coinbase maturity are BCHN's to enforce. Re-check its final spec
-  before tuning the window for it.
+  not activated. If it activates, block difficulty falls about tenfold. The
+  share-count window does not follow it, so the window then spans about ten
+  times as many blocks, unless the BCH constants are retuned. The 10 second
+  share interval stays below the block interval. Templates change about ten
+  times as often, which the ZMQ `hashblock` path already handles. The CHIP's
+  tick-based heights and any change to coinbase maturity are BCHN's to
+  enforce. Re-check its final spec before tuning the window for it.
 - **Coinbase size.** An RFC on the research forum (2025-06, not a CHIP)
   suggests limiting the coinbase transaction to about 2 kB, roughly 60
   P2PKH outputs, and was opposed by a BCHN maintainer for the reason that it

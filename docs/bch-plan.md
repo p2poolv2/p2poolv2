@@ -10,7 +10,8 @@ Audience: contributors and AI agents starting the BCH port. Read
 | Requirement | Status and evidence |
 |---|---|
 | BCHN templates and CashAddr payouts | Implemented; RPC/transaction fixtures and address tests. Final job size includes the actual coinbase and CompactSize transaction count. |
-| Donation, operator fee and bootstrap accounting | Implemented; exact-amount tests and recorded BCHN regtest coinbases. Hydrapool accepts prefixed and prefixless CashAddr usernames. |
+| Upstream P2Poolv2 sync | Merged upstream main through `2dabcdd2` (35 commits) on 2026-10-18: header-bound share commitments, the bitcoin coinbase carried beside the header, the BIP141 share witness root, mature-only PPLNS. 1,750 workspace tests, clippy and rustfmt pass. The store format changed, so nodes start from a new store path. |
+| Donation, operator fee and bootstrap accounting | Implemented; exact-amount tests and recorded BCHN regtest coinbases. Hydrapool accepts prefixed and prefixless CashAddr usernames. On 2026-10-18 two CPU miners on the regtest mini chain were paid in 38 pool coinbases. After 100 confirmations all 38 outputs were spent in one confirmed transaction. On the merged build each block split its reward by share difficulty among minerA, minerB and the genesis share, plus the donation. Those seven miner outputs were also matured and spent. |
 | P2PKH share ownership and transfers | Implemented; BCHN-signed ECDSA/FORKID and BCH Schnorr vectors, plus rejection tests. |
 | Main/mini share chains and P2P propagation | Implemented; recorded three-node regtest and two-node chipnet share validation. |
 | Large BCH template proofs | Implemented; 25-level BCH branches round-trip through share blocks, storage and compressed header batches. Bitcoin proof validation keeps its 16-level limit. |
@@ -19,7 +20,7 @@ Audience: contributors and AI agents starting the BCH port. Read
 | Declared BCH coinbase peer validation | Implemented; bounded header extension, prefix/aux proof tampering, payout diversion, storage and compressed-header tests. |
 | Mineable Job Declaration in both modes | Both the mocked regression and the two-node BCHN regtest use authenticated Noise connections through the actual listener. Both modes mine blocks and emit verifiable proofs. Independent client interoperability remains pending. |
 | Miner-selected auxiliary commitments | Bounded shared trees and full coinbase/header proofs are implemented. An experimental SAFA variant verifies the proof inside the BCH VM and paid tokens in a real two-node regtest. Final SAFA policy, independent covenant review and chipnet issuance remain open. See [bch-auxpow.md](bch-auxpow.md). |
-| PPLNS tuning and independent ASIC/JD interoperability | Pending; retain the existing settings until a justified tuning decision. |
+| PPLNS tuning and independent ASIC/JD interoperability | Pending. Since the upstream sync a coinbase pays a fixed `PPLNS_WINDOW_SHARES` (120,960) shares. They start `COINBASE_MATURITY` (6,048) shares below the paying share, about 17 hours at 10-second shares, once the chain is past its first 6,048 shares. That replaces the window sized by block difficulty. Keep upstream's constants until a justified BCH tuning decision. |
 | Remote CI and chipnet block | The fork's Actions activation was completed on 2026-10-18, including the Security workflow. Fresh PR checks remain to be verified. No chipnet block found. Local checks and recorded propagation do not replace these. |
 
 ## Implementation checkpoint (2026-10-13)
@@ -509,8 +510,11 @@ check before code.
   (AGPL-3.0 matches Pickaxe).
 - PPLNS window length, share interval and share difficulty for the main and
   mini share chains. Wait for the outcome of CHIP-2025-03 (1-minute blocks,
-  lock-in 2026-11-15) before tuning; the window already scales with block
-  difficulty.
+  lock-in 2026-11-15) before tuning. Since the 2026-10-18 upstream sync the
+  window is a fixed share count behind a maturity depth
+  (`PPLNS_WINDOW_SHARES`, `COINBASE_MATURITY`), not sized by block
+  difficulty. Tempnet, a test network that runs 1-minute blocks, can test a
+  tuning.
 - Whether 10% is the right consensus cap on donation plus fee.
 - Which scripts beyond P2PKH the share-chain interpreter should accept
   (P2SH, the atomic-swap scripts, `SIGHASH_UTXOS`); P2PKH transfers with
