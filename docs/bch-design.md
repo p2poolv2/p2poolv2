@@ -224,7 +224,7 @@ a full donation (10,000) still skips miner address validation.
     refuses the channel (`share-address-required`).
   - Frames for channel messages carry the channel bit the specification
     requires; `SetCustomMiningJob` replies were sent without it before.
-  - One connection may open 32 channels (`max-channels-reached` after
+  - One connection may open 32 channels (`channel-capacity-exhausted` after
     that), because every template builds a job per channel.
   - Review fixes (2026-10-15): reading the current template for a new
     channel no longer marks it seen, which had let a template that arrived

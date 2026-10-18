@@ -48,13 +48,17 @@ use bitcoin::block::{Header, Version};
 use bitcoin::hashes::Hash;
 use bitcoin::{BlockHash, CompactTarget, Network, Target, TxMerkleNode};
 use mining_sv2::{
-    CloseChannel, MESSAGE_TYPE_CLOSE_CHANNEL, MESSAGE_TYPE_MINING_SET_NEW_PREV_HASH,
-    MESSAGE_TYPE_NEW_EXTENDED_MINING_JOB, MESSAGE_TYPE_NEW_MINING_JOB,
-    MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL, MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL_SUCCESS,
-    MESSAGE_TYPE_OPEN_MINING_CHANNEL_ERROR, MESSAGE_TYPE_OPEN_STANDARD_MINING_CHANNEL,
-    MESSAGE_TYPE_OPEN_STANDARD_MINING_CHANNEL_SUCCESS, MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_ERROR,
-    MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_SUCCESS, MESSAGE_TYPE_SET_TARGET,
-    MESSAGE_TYPE_SUBMIT_SHARES_ERROR, MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED,
+    CloseChannel, ERROR_CODE_OPEN_MINING_CHANNEL_CHANNEL_CAPACITY_EXHAUSTED,
+    ERROR_CODE_OPEN_MINING_CHANNEL_MAX_TARGET_OUT_OF_RANGE,
+    ERROR_CODE_SET_CUSTOM_MINING_JOB_STALE_CHAIN_TIP, ERROR_CODE_SUBMIT_SHARES_BAD_EXTRANONCE_SIZE,
+    ERROR_CODE_SUBMIT_SHARES_INVALID_NON_ROLLABLE_VERSION_BIT,
+    ERROR_CODE_UPDATE_CHANNEL_MAX_TARGET_OUT_OF_RANGE, MESSAGE_TYPE_CLOSE_CHANNEL,
+    MESSAGE_TYPE_MINING_SET_NEW_PREV_HASH, MESSAGE_TYPE_NEW_EXTENDED_MINING_JOB,
+    MESSAGE_TYPE_NEW_MINING_JOB, MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL,
+    MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL_SUCCESS, MESSAGE_TYPE_OPEN_MINING_CHANNEL_ERROR,
+    MESSAGE_TYPE_OPEN_STANDARD_MINING_CHANNEL, MESSAGE_TYPE_OPEN_STANDARD_MINING_CHANNEL_SUCCESS,
+    MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_ERROR, MESSAGE_TYPE_SET_CUSTOM_MINING_JOB_SUCCESS,
+    MESSAGE_TYPE_SET_TARGET, MESSAGE_TYPE_SUBMIT_SHARES_ERROR, MESSAGE_TYPE_SUBMIT_SHARES_EXTENDED,
     MESSAGE_TYPE_SUBMIT_SHARES_STANDARD, MESSAGE_TYPE_SUBMIT_SHARES_SUCCESS,
     MESSAGE_TYPE_UPDATE_CHANNEL, MESSAGE_TYPE_UPDATE_CHANNEL_ERROR, NewExtendedMiningJob,
     NewMiningJob, OpenExtendedMiningChannel, OpenExtendedMiningChannelSuccess,
@@ -121,7 +125,9 @@ struct Channel {
     /// Active jobs retain the target and credit assigned before hashing started.
     jobs: BTreeMap<u32, ChannelJob>,
     next_job_id: u32,
-    last_prev_hash: Option<BlockHash>,
+    /// Parent and nbits of the channel's latest `SetNewPrevHash`. The jobs
+    /// carry no nbits, so new bits on the same parent need a new one too.
+    last_tip: Option<(BlockHash, u32)>,
 }
 
 impl Channel {
@@ -178,7 +184,7 @@ impl MiningChannels {
             return custom_job_error(request, "template-unavailable");
         };
         if current.template().previousblockhash != declared.prepared.template().previousblockhash {
-            return custom_job_error(request, "stale-template");
+            return custom_job_error(request, ERROR_CODE_SET_CUSTOM_MINING_JOB_STALE_CHAIN_TIP);
         }
         let payout = channel
             .session
@@ -215,10 +221,11 @@ impl MiningChannels {
         }
         let prev_hash = BlockHash::from_str(&job.blocktemplate.previousblockhash)
             .map_err(|error| error.to_string())?;
-        if channel.last_prev_hash != Some(prev_hash) {
+        let tip = (prev_hash, request.nbits);
+        if channel.last_tip != Some(tip) {
             channel.jobs.clear();
         }
-        channel.last_prev_hash = Some(prev_hash);
+        channel.last_tip = Some(tip);
         let tracker_job_id = self.ctx.tracker_handle.get_next_job_id();
         self.ctx
             .tracker_handle
@@ -369,7 +376,7 @@ impl MiningChannels {
             return Ok(vec![encode_frame(
                 UpdateChannelError {
                     channel_id,
-                    error_code: string_field("invalid-max-target")?,
+                    error_code: string_field(ERROR_CODE_UPDATE_CHANNEL_MAX_TARGET_OUT_OF_RANGE)?,
                 },
                 MESSAGE_TYPE_UPDATE_CHANNEL_ERROR,
             )?]);
@@ -413,14 +420,20 @@ impl MiningChannels {
         current: Option<Arc<PreparedNotifyParams>>,
     ) -> Result<Vec<Vec<u8>>, String> {
         if self.channels.len() >= MAX_CHANNELS_PER_CONNECTION {
-            return open_error(request_id, "max-channels-reached");
+            return open_error(
+                request_id,
+                ERROR_CODE_OPEN_MINING_CHANNEL_CHANNEL_CAPACITY_EXHAUSTED,
+            );
         }
         if kind == ChannelKind::Extended && min_extranonce_size > EXTRANONCE_SIZE {
             return open_error(request_id, "min-extranonce-size-too-large");
         }
         let device_max_target = device_max_target(max_target);
         if device_max_target == Target::ZERO {
-            return open_error(request_id, "invalid-max-target");
+            return open_error(
+                request_id,
+                ERROR_CODE_OPEN_MINING_CHANNEL_MAX_TARGET_OUT_OF_RANGE,
+            );
         }
         let mut session = Session::<DifficultyAdjuster>::new(
             self.ctx.start_difficulty,
@@ -514,7 +527,7 @@ impl MiningChannels {
                 max_target: device_max_target,
                 jobs: BTreeMap::new(),
                 next_job_id: 1,
-                last_prev_hash: None,
+                last_tip: None,
             },
         );
         if let Err(metrics_error) = self
@@ -597,12 +610,12 @@ impl MiningChannels {
             BlockHash::from_str(&template.previousblockhash).map_err(|error| error.to_string())?;
         let nbits = u32::from_str_radix(&template.bits, 16).map_err(|error| error.to_string())?;
         let version = template.version as u32;
-        let new_prev_hash = channel.last_prev_hash != Some(prev_hash);
+        let new_prev_hash = channel.last_tip != Some((prev_hash, nbits));
         if new_prev_hash {
             channel.jobs.clear();
         }
         let channel_job_id = channel.insert_job(tracker_job_id);
-        channel.last_prev_hash = Some(prev_hash);
+        channel.last_tip = Some((prev_hash, nbits));
         let min_ntime = if new_prev_hash {
             Sv2Option::new(None)
         } else {
@@ -642,7 +655,7 @@ impl MiningChannels {
                         job_id: channel_job_id,
                         min_ntime,
                         version,
-                        version_rolling_allowed: true,
+                        version_rolling_allowed: self.version_mask != 0,
                         merkle_path: Seq0255::new(path).map_err(|error| error.to_string())?,
                         coinbase_tx_prefix: B064K::new(&prefix)
                             .map_err(|error| error.to_string())?,
@@ -680,7 +693,7 @@ impl MiningChannels {
             return submit_error(&submission, "stale-share");
         };
         if submission.enonce2.len() != usize::from(EXTRANONCE_SIZE) {
-            return submit_error(&submission, "invalid-extranonce-size");
+            return submit_error(&submission, ERROR_CODE_SUBMIT_SHARES_BAD_EXTRANONCE_SIZE);
         }
         let now = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
@@ -693,7 +706,10 @@ impl MiningChannels {
         let template_version = job.blocktemplate.version;
         let rolled = submission.version as i32;
         if (rolled ^ template_version) & !self.version_mask != 0 {
-            return submit_error(&submission, "invalid-version");
+            return submit_error(
+                &submission,
+                ERROR_CODE_SUBMIT_SHARES_INVALID_NON_ROLLABLE_VERSION_BIT,
+            );
         }
         let enonce2_hex = hex::encode(&submission.enonce2);
         let coinbase = build_coinbase_from_components(
@@ -946,7 +962,8 @@ mod tests {
     use crate::stratum::work::tracker::start_tracker_actor;
     use crate::test_utils::{make_test_share_address, setup_test_chain_store_handle};
     use crate::test_utils::{
-        test_bch_custom_job, test_bch_prepared, test_bch_solve_custom_job, test_bch_stratum_context,
+        test_bch_custom_job, test_bch_prepared, test_bch_prepared_for_template,
+        test_bch_solve_custom_job, test_bch_stratum_context,
     };
     use bitcoin::consensus::deserialize;
     use bitcoin::hashes::sha256d;
@@ -985,7 +1002,10 @@ mod tests {
             .unwrap();
         let mut rejected_payload = payload(&rejected[0]);
         let error = OpenMiningChannelError::from_bytes(&mut rejected_payload).unwrap();
-        assert_eq!(error.error_code.as_utf8_or_hex(), "invalid-max-target");
+        assert_eq!(
+            error.error_code.as_utf8_or_hex(),
+            ERROR_CODE_OPEN_MINING_CHANNEL_MAX_TARGET_OUT_OF_RANGE
+        );
         assert!(channels.channels.is_empty());
     }
 
@@ -1118,6 +1138,84 @@ mod tests {
         let error = SetCustomMiningJobError::from_bytes(&mut error_payload).unwrap();
         assert_eq!(error.error_code.as_utf8_or_hex(), "invalid-template");
         assert!(channels.channels[&1].jobs.is_empty());
+    }
+
+    #[tokio::test]
+    async fn new_bits_on_the_same_parent_send_a_new_prev_hash() {
+        let (ctx, _emissions, _dirs) = test_bch_stratum_context("http://127.0.0.1:1").await;
+        let mut channels = MiningChannels::new(ctx, DEFAULT_VERSION_MASK);
+        let payout = Address::p2pkh(
+            bitcoin::PubkeyHash::from_byte_array([0x22; 20]),
+            Network::Regtest,
+        );
+        let identity = encode_payout_address(&payout, BchShareNetwork::Regtest).unwrap();
+        let mut open = binary_sv2::to_bytes(OpenExtendedMiningChannel {
+            request_id: 1,
+            user_identity: identity.as_str().try_into().unwrap(),
+            nominal_hash_rate: 1.0,
+            max_target: U256::new(&[0xff; 32]).unwrap(),
+            min_extranonce_size: 8,
+        })
+        .unwrap();
+        channels
+            .handle(
+                MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL,
+                &mut open,
+                Some(test_bch_prepared()),
+            )
+            .await
+            .unwrap();
+        // Chipnet switches to the minimum difficulty 20 minutes after the
+        // parent: same parent, other bits.
+        let mut easier: BlockTemplate = serde_json::from_str(include_str!(
+            "../../../../bitcoindrpc/test_data/bchn-regtest-template.json"
+        ))
+        .unwrap();
+        easier.bits = "1e0ffff0".to_string();
+        let frames = channels.on_template(&test_bch_prepared_for_template(easier));
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frame_type(&frames[0]), MESSAGE_TYPE_NEW_EXTENDED_MINING_JOB);
+        let mut job_payload = payload(&frames[0]);
+        let job = NewExtendedMiningJob::from_bytes(&mut job_payload).unwrap();
+        assert!(job.min_ntime.into_inner().is_none());
+        assert_eq!(
+            frame_type(&frames[1]),
+            MESSAGE_TYPE_MINING_SET_NEW_PREV_HASH
+        );
+        let mut prev_hash_payload = payload(&frames[1]);
+        let prev_hash = SetNewPrevHash::from_bytes(&mut prev_hash_payload).unwrap();
+        assert_eq!(prev_hash.nbits, 0x1e0f_fff0);
+    }
+
+    #[tokio::test]
+    async fn a_zero_version_mask_does_not_allow_version_rolling() {
+        let (ctx, _emissions, _dirs) = test_bch_stratum_context("http://127.0.0.1:1").await;
+        let mut channels = MiningChannels::new(ctx, 0);
+        let payout = Address::p2pkh(
+            bitcoin::PubkeyHash::from_byte_array([0x22; 20]),
+            Network::Regtest,
+        );
+        let identity = encode_payout_address(&payout, BchShareNetwork::Regtest).unwrap();
+        let mut open = binary_sv2::to_bytes(OpenExtendedMiningChannel {
+            request_id: 1,
+            user_identity: identity.as_str().try_into().unwrap(),
+            nominal_hash_rate: 1.0,
+            max_target: U256::new(&[0xff; 32]).unwrap(),
+            min_extranonce_size: 8,
+        })
+        .unwrap();
+        let opened = channels
+            .handle(
+                MESSAGE_TYPE_OPEN_EXTENDED_MINING_CHANNEL,
+                &mut open,
+                Some(test_bch_prepared()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(frame_type(&opened[1]), MESSAGE_TYPE_NEW_EXTENDED_MINING_JOB);
+        let mut job_payload = payload(&opened[1]);
+        let job = NewExtendedMiningJob::from_bytes(&mut job_payload).unwrap();
+        assert!(!job.version_rolling_allowed);
     }
 
     fn frame_type(frame: &[u8]) -> u8 {
@@ -1375,7 +1473,10 @@ mod tests {
             .unwrap();
         let mut rolled_payload = payload(&rolled_response[0]);
         let rolled_error = SubmitSharesError::from_bytes(&mut rolled_payload).unwrap();
-        assert_eq!(rolled_error.error_code.as_utf8_or_hex(), "invalid-version");
+        assert_eq!(
+            rolled_error.error_code.as_utf8_or_hex(),
+            ERROR_CODE_SUBMIT_SHARES_INVALID_NON_ROLLABLE_VERSION_BIT
+        );
 
         // Same tip: the next template is an active job with no new prev hash.
         let refreshed = channels.on_template(&prepared);
@@ -1690,7 +1791,10 @@ mod tests {
             .unwrap();
         let mut refused_payload = payload(&refused[0]);
         let refusal = OpenMiningChannelError::from_bytes(&mut refused_payload).unwrap();
-        assert_eq!(refusal.error_code.as_utf8_or_hex(), "max-channels-reached");
+        assert_eq!(
+            refusal.error_code.as_utf8_or_hex(),
+            ERROR_CODE_OPEN_MINING_CHANNEL_CHANNEL_CAPACITY_EXHAUSTED
+        );
     }
 
     #[tokio::test]
@@ -2147,7 +2251,10 @@ mod tests {
         let rejected = channels.update(1, &[0; 32]).unwrap();
         let mut rejected_payload = payload(&rejected[0]);
         let error = UpdateChannelError::from_bytes(&mut rejected_payload).unwrap();
-        assert_eq!(error.error_code.as_utf8_or_hex(), "invalid-max-target");
+        assert_eq!(
+            error.error_code.as_utf8_or_hex(),
+            ERROR_CODE_OPEN_MINING_CHANNEL_MAX_TARGET_OUT_OF_RANGE
+        );
         assert_eq!(
             channels.channels[&1].max_target.to_le_bytes(),
             lower_maximum
