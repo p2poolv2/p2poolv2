@@ -3213,6 +3213,7 @@ dependencies = [
  "sha2",
  "temp-env",
  "tempfile",
+ "template_distribution_sv2",
  "test-log",
  "thiserror 2.0.21",
  "tokio",
@@ -4584,10 +4585,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "template_distribution_sv2"
+version = "7.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "859d37310c5802cfafdc1423c1e8fb0fec287a95ee19ac648424f3c811e98152"
+dependencies = [
+ "binary_sv2",
 ]
 
 [[package]]

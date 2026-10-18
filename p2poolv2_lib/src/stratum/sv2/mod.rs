@@ -19,6 +19,10 @@
 //! BCH extended channels negotiate work selection and install declared jobs only
 //! after validating the token, header, coinbase and exact share-chain payouts.
 //! Full templates also require a successful local BCHN proposal check.
+//!
+//! The node can also be a Template Distribution client: with
+//! `template_source = "sv2"` its templates come from a Stratum V2 Template
+//! Provider and its blocks go back there (see `template_distribution`).
 
 mod custom_job;
 #[cfg(all(test, not(feature = "sim")))]
@@ -27,13 +31,17 @@ mod mining;
 mod noise;
 mod server;
 mod session;
+mod template_distribution;
 
 pub use mining::EXTRANONCE_SIZE;
 pub use server::bind;
 pub(crate) use server::{Sv2Mining, serve};
 #[cfg(test)]
-pub(crate) use session::{Declaration, DeclaredJob, encode_message};
+pub(crate) use noise::NoiseTransport;
+#[cfg(test)]
+pub(crate) use session::{Declaration, DeclaredJob, decode_plain_frames, encode_message};
 pub use session::{JobDeclarationMode, JobRegistry, PoolTransactionCache, Sv2Connection};
+pub use template_distribution::{ProvidedTemplate, start_template_provider};
 
 use bitcoin::Transaction;
 use bitcoin::hashes::Hash;

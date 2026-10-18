@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+use crate::stratum::sv2::ProvidedTemplate;
 use crate::stratum::work::error::WorkError;
 use bitcoin::block::Header;
 use bitcoin::consensus::encode::VarInt;
@@ -59,6 +60,11 @@ pub struct BlockTemplate<T = TemplateTransaction> {
         skip_serializing_if = "Option::is_none"
     )]
     pub default_witness_commitment: Option<String>,
+    /// Set when a Stratum V2 Template Provider sent this template: a block
+    /// found on it goes back to that provider with `SubmitSolution`. Never
+    /// part of a node's JSON template.
+    #[serde(skip)]
+    pub provided: Option<ProvidedTemplate>,
 }
 
 impl TryFrom<&TemplateTransaction> for Transaction {

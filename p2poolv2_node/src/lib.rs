@@ -17,7 +17,9 @@ use p2poolv2_api::start_api_server;
 use p2poolv2_lib::accounting::payout::{build_payout_for_mode, payout_pplns_window};
 use p2poolv2_lib::accounting::stats::metrics;
 use p2poolv2_lib::address::bch_share::BchShareNetwork;
-use p2poolv2_lib::config::{BitcoinCashNetwork, Chain, Config, bitcoin_cash_donation_cashaddr};
+use p2poolv2_lib::config::{
+    BitcoinCashNetwork, Chain, Config, TemplateProvider, bitcoin_cash_donation_cashaddr,
+};
 use p2poolv2_lib::node::actor::NodeHandle;
 use p2poolv2_lib::pool_difficulty::PoolDifficulty;
 use p2poolv2_lib::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -27,6 +29,7 @@ use p2poolv2_lib::store::writer::{StoreHandle, StoreWriter, write_channel};
 use p2poolv2_lib::stratum::client_connections::start_connections_handler;
 use p2poolv2_lib::stratum::emission::Emission;
 use p2poolv2_lib::stratum::server::{StratumServerBuilder, Sv2Listener};
+use p2poolv2_lib::stratum::sv2::start_template_provider;
 use p2poolv2_lib::stratum::work::gbt::start_gbt;
 use p2poolv2_lib::stratum::work::notify::start_notify;
 use p2poolv2_lib::stratum::work::prepared_notify::PreparedNotifyParams;
@@ -52,6 +55,17 @@ const FULL_DONATION_BIPS: u16 = 10_000;
 
 /// Notify channel capacity for pending notifications from new clients.
 const NOTIFY_CHANNEL_CAPACITY: usize = 1000;
+
+/// Where the node's block templates come from.
+enum TemplateFeed {
+    /// `getblocktemplate`, polled and triggered by ZMQ block notifications
+    /// and by blocks this node finds.
+    Rpc {
+        template_trigger_rx: mpsc::Receiver<()>,
+    },
+    /// A Stratum V2 Template Provider (`template_source = "sv2"`).
+    Provider(TemplateProvider),
+}
 
 /// Handles exposed by [`build_node`] for wiring external producers (e.g. sim emitter).
 pub struct NodeHandles {
@@ -228,16 +242,29 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
 
     let notify_tx_for_gbt = notify_tx.clone();
     let bitcoinrpc_config_cloned = bitcoinrpc_config.clone();
-    let zmq_trigger_rx = match ZmqListener.start(&stratum_config.zmqpubhashblock) {
-        Ok(rx) => rx,
-        Err(e) => {
-            error!("Failed to set up ZMQ publisher: {e}");
-            return Err(ExitCode::FAILURE);
-        }
+    // ZMQ block notifications only trigger getblocktemplate; a Template
+    // Provider pushes its own templates, also after a block this node finds.
+    let (template_feed, template_refresh_tx) = match stratum_config.template_provider() {
+        Some(provider) => (TemplateFeed::Provider(provider.clone()), None),
+        None => match ZmqListener.start(&stratum_config.zmqpubhashblock) {
+            Ok(zmq_trigger_rx) => {
+                // A block this node finds also wakes the template task,
+                // through the refresh sender the stratum servers hold.
+                let (template_refresh_tx, template_trigger_rx) =
+                    merge_template_triggers(zmq_trigger_rx);
+                (
+                    TemplateFeed::Rpc {
+                        template_trigger_rx,
+                    },
+                    Some(template_refresh_tx),
+                )
+            }
+            Err(e) => {
+                error!("Failed to set up ZMQ publisher: {e}");
+                return Err(ExitCode::FAILURE);
+            }
+        },
     };
-    // A block this node finds also wakes the template task, through the
-    // refresh sender the stratum servers hold.
-    let (template_refresh_tx, template_trigger_rx) = merge_template_triggers(zmq_trigger_rx);
 
     if stratum_config.chain == Chain::BitcoinCash {
         info!(
@@ -256,15 +283,25 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
     let exit_sender_gbt = exit_sender.clone();
     let exit_receiver_gbt = exit_sender.subscribe();
     tokio::spawn(async move {
-        if let Err(e) = start_gbt(
-            bitcoinrpc_config_cloned,
-            notify_tx_for_gbt,
-            GBT_POLL_INTERVAL,
-            stratum_config.network,
-            stratum_config.chain,
-            template_trigger_rx,
-        )
-        .await
+        let started = match template_feed {
+            TemplateFeed::Rpc {
+                template_trigger_rx,
+            } => {
+                start_gbt(
+                    bitcoinrpc_config_cloned,
+                    notify_tx_for_gbt,
+                    GBT_POLL_INTERVAL,
+                    stratum_config.network,
+                    stratum_config.chain,
+                    template_trigger_rx,
+                )
+                .await
+            }
+            TemplateFeed::Provider(provider) => {
+                start_template_provider(provider, bitcoinrpc_config_cloned, notify_tx_for_gbt).await
+            }
+        };
+        if let Err(e) = started
             && *exit_receiver_gbt.borrow() == ShutdownReason::None
         {
             tracing::error!("Failed to fetch block template. Shutting down. \n {e}");
@@ -346,7 +383,7 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
     });
 
     tokio::spawn(async move {
-        let mut stratum_server = StratumServerBuilder::default()
+        let stratum_server_builder = StratumServerBuilder::default()
             .shutdown_rx(stratum_shutdown_rx)
             .connections_handle(connections_handle.clone())
             .emissions_tx(emissions_tx)
@@ -369,11 +406,16 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
             .share_chain(share_chain)
             .bch_share_network(bch_share_network)
             .cash_share(cash_share)
-            .sv2(sv2_listener)
-            .template_refresh_tx(template_refresh_tx)
-            .build()
-            .await
-            .unwrap();
+            .sv2(sv2_listener);
+        let mut stratum_server = match template_refresh_tx {
+            Some(template_refresh_tx) => {
+                stratum_server_builder.template_refresh_tx(template_refresh_tx)
+            }
+            None => stratum_server_builder,
+        }
+        .build()
+        .await
+        .unwrap();
         info!("Starting Stratum server...");
         let result = stratum_server
             .start(

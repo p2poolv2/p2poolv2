@@ -82,6 +82,8 @@ use crate::stratum::session::{EXTRANONCE1_SIZE, EXTRANONCE2_SIZE};
 #[cfg(test)]
 use crate::stratum::sv2::{Declaration, DeclaredJob, encode_message};
 #[cfg(test)]
+use crate::stratum::sv2::{NoiseTransport, decode_plain_frames};
+#[cfg(test)]
 use crate::stratum::work::block_template::BlockTemplate;
 #[cfg(test)]
 use crate::stratum::work::block_template::TemplateTransaction;
@@ -114,7 +116,8 @@ use bitcoin::secp256k1::Secp256k1;
 use bitcoindrpc::BitcoindRpcClient;
 #[cfg(test)]
 use codec_sv2::{
-    Decrypted, Handshake, NoiseDecoder, NoiseEncoder, TransportDecryptState, TransportEncryptState,
+    Decoder, Decrypted, Handshake, NoiseDecoder, NoiseEncoder, TransportDecryptState,
+    TransportEncryptState,
 };
 #[cfg(test)]
 use common_messages_sv2::{Protocol, SetupConnection};
@@ -127,6 +130,14 @@ use mining_sv2::{
 };
 #[cfg(test)]
 use noise_sv2::{INITIATOR_EXPECTED_HANDSHAKE_MESSAGE_SIZE, Initiator};
+#[cfg(test)]
+use std::collections::VecDeque;
+#[cfg(test)]
+use template_distribution_sv2::{
+    NewTemplateOwned, RequestTransactionDataSuccessOwned, SetNewPrevHashOwned,
+};
+#[cfg(test)]
+use tokio::net::TcpListener;
 #[cfg(test)]
 use p2poolv2_wallet::bch_share::BchShareNetwork;
 #[cfg(test)]
@@ -263,6 +274,149 @@ impl TestSv2Client {
         })
         .await
         .expect("SV2 response timed out")
+    }
+}
+
+/// Server side of one Stratum V2 test connection, unencrypted or over Noise:
+/// a stand-in Template Provider, for example.
+#[cfg(test)]
+pub(crate) struct TestSv2Server {
+    stream: TcpStream,
+    noise: Option<NoiseTransport>,
+    decoder: Decoder,
+    inbox: Vec<u8>,
+    received: VecDeque<(u8, Vec<u8>)>,
+}
+
+#[cfg(test)]
+impl TestSv2Server {
+    /// Accept the next connection on `listener`. With `authority`, answer
+    /// its Noise handshake signed by that key first.
+    pub(crate) async fn accept(listener: &TcpListener, authority: Option<&Sv2Authority>) -> Self {
+        timeout(Duration::from_secs(5), async {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let noise = match authority {
+                Some(authority) => Some(NoiseTransport::accept(&mut stream, authority).await.unwrap()),
+                None => None,
+            };
+            Self {
+                stream,
+                noise,
+                decoder: Decoder::new(),
+                inbox: Vec::new(),
+                received: VecDeque::new(),
+            }
+        })
+        .await
+        .expect("SV2 test client did not connect")
+    }
+
+    /// Send one typed message.
+    pub(crate) async fn send_message<T: Serialize + GetSize>(
+        &mut self,
+        message_type: u8,
+        message: T,
+    ) {
+        let frame = encode_message(message, message_type).unwrap();
+        let wire = match self.noise.as_mut() {
+            Some(noise) => noise.encrypt(frame).unwrap(),
+            None => frame,
+        };
+        timeout(Duration::from_secs(5), self.stream.write_all(&wire))
+            .await
+            .expect("SV2 test write timed out")
+            .unwrap();
+    }
+
+    /// The payload of the client's next message, which must be of
+    /// `expected_type`.
+    pub(crate) async fn receive(&mut self, expected_type: u8) -> Vec<u8> {
+        timeout(Duration::from_secs(5), async {
+            let mut buffer = vec![0u8; 64 * 1024];
+            while self.received.is_empty() {
+                let count = self.stream.read(&mut buffer).await.unwrap();
+                assert_ne!(count, 0, "SV2 test client closed the connection");
+                let messages = match self.noise.as_mut() {
+                    Some(noise) => noise.decode(&buffer[..count]).unwrap(),
+                    None => decode_plain_frames(&mut self.decoder, &mut self.inbox, &buffer[..count])
+                        .unwrap(),
+                };
+                self.received.extend(messages);
+            }
+            let (message_type, payload) = self.received.pop_front().unwrap();
+            assert_eq!(message_type, expected_type, "unexpected SV2 message type");
+            payload
+        })
+        .await
+        .expect("SV2 test message timed out")
+    }
+}
+
+/// The `NewTemplate` a Bitcoin Cash Template Provider sends for a BCHN
+/// `template`: the specification's height push as the coinbase prefix, no
+/// required coinbase outputs, and its transactions' merkle path.
+#[cfg(test)]
+pub(crate) fn test_tdp_new_template(
+    template_id: u64,
+    future: bool,
+    template: &BlockTemplate,
+) -> NewTemplateOwned {
+    let prefix = Builder::new()
+        .push_int(i64::from(template.height))
+        .into_script()
+        .into_bytes();
+    let merkle_path = build_merkle_branches_for_template(template)
+        .unwrap()
+        .into_iter()
+        .map(|branch| branch.to_byte_array().into())
+        .collect::<Vec<_>>();
+    NewTemplateOwned {
+        template_id,
+        future_template: future,
+        version: template.version as u32,
+        coinbase_tx_version: 2,
+        coinbase_prefix: prefix.try_into().unwrap(),
+        coinbase_tx_input_sequence: u32::MAX,
+        coinbase_tx_value_remaining: template.coinbasevalue,
+        coinbase_tx_outputs_count: 0,
+        coinbase_tx_outputs: Vec::new().try_into().unwrap(),
+        coinbase_tx_locktime: 0,
+        merkle_path: merkle_path.try_into().unwrap(),
+    }
+}
+
+/// The `SetNewPrevHash` that activates `template_id` for a BCHN `template`.
+#[cfg(test)]
+pub(crate) fn test_tdp_set_new_prev_hash(
+    template_id: u64,
+    template: &BlockTemplate,
+) -> SetNewPrevHashOwned {
+    let prev_hash = BlockHash::from_str(&template.previousblockhash).unwrap();
+    let bits = CompactTarget::from_unprefixed_hex(&template.bits).unwrap();
+    SetNewPrevHashOwned {
+        template_id,
+        prev_hash: prev_hash.to_byte_array().into(),
+        header_timestamp: template.curtime,
+        n_bits: bits.to_consensus(),
+        target: bitcoin::Target::from_compact(bits).to_le_bytes().into(),
+    }
+}
+
+/// `RequestTransactionData.Success` with a BCHN `template`'s transactions.
+#[cfg(test)]
+pub(crate) fn test_tdp_transaction_data(
+    template_id: u64,
+    template: &BlockTemplate,
+) -> RequestTransactionDataSuccessOwned {
+    let transactions = template
+        .transactions
+        .iter()
+        .map(|transaction| hex::decode(&transaction.data).unwrap().try_into().unwrap())
+        .collect::<Vec<_>>();
+    RequestTransactionDataSuccessOwned {
+        template_id,
+        excess_data: Vec::new().try_into().unwrap(),
+        transaction_list: transactions.try_into().unwrap(),
     }
 }
 

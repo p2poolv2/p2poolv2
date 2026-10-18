@@ -206,6 +206,10 @@ pub(crate) async fn handle_submit<'a, D: DifficultyAdjusterTrait>(
 /// spurious blocks and (via the confirmation -> re-notify loop) distort the
 /// measured uncle rate. Real block-finds in the load test go only through the
 /// statistical block-find path. See docs/simulation/load-test-plan.md.
+///
+/// A block on a template from a Stratum V2 Template Provider goes back to
+/// that provider; when the provider's connection cannot take it, it goes to
+/// the node over RPC like every other block.
 pub(crate) async fn submit_found_block(
     stratum_context: &StratumContext,
     header: Header,
@@ -224,7 +228,13 @@ pub(crate) async fn submit_found_block(
         // Decode the template transactions only for this rare case.
         let block = build_full_block(header, coinbase, &job.blocktemplate)
             .map_err(|error| Error::SubmitFailure(error.to_string()))?;
-        if submit_block(&block, &stratum_context.bitcoindrpc_client).await {
+        let unsent = match &job.blocktemplate.provided {
+            Some(provided) => provided.submit(block).err(),
+            None => Some(block),
+        };
+        if let Some(block) = unsent
+            && submit_block(&block, &stratum_context.bitcoindrpc_client).await
+        {
             request_template_refresh(stratum_context);
         }
     }

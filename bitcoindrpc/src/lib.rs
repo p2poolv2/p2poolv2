@@ -103,6 +103,12 @@ pub struct GetBlockchainInfo {
     pub initial_block_download: bool,
 }
 
+/// The one field of a verbose `getblockheader` result that is read.
+#[derive(Debug, Deserialize)]
+struct BlockHeaderHeight {
+    height: u64,
+}
+
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct BitcoindRpcClient {
@@ -211,6 +217,20 @@ impl BitcoindRpcClient {
 
     pub async fn getblockchaininfo(&self) -> Result<GetBlockchainInfo, BitcoindRpcError> {
         self.request("getblockchaininfo", vec![]).await
+    }
+
+    /// Height of the block with `block_hash`, from `getblockheader`.
+    ///
+    /// An error means the node does not know the block, so a template
+    /// building on it is not on this node's chain.
+    pub async fn get_block_height(&self, block_hash: &str) -> Result<u64, BitcoindRpcError> {
+        let header: BlockHeaderHeight = self
+            .request(
+                "getblockheader",
+                vec![serde_json::json!(block_hash), serde_json::json!(true)],
+            )
+            .await?;
+        Ok(header.height)
     }
 
     /// Fetch a Bitcoin template, negotiating SegWit and Signet when required.
@@ -489,6 +509,52 @@ mod tests {
                 initial_block_download: true,
             }
         );
+    }
+
+    #[tokio::test]
+    async fn block_height_comes_from_the_verbose_block_header() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(body_json(serde_json::json!({
+                "method": "getblockheader",
+                "params": ["00000000000000000000000000000000000000000000000000000000000000aa", true],
+                "id": 0,
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": {"hash": "aa", "height": 1234, "confirmations": 1},
+                "error": null,
+                "id": 0,
+            })))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
+        let height = client
+            .get_block_height("00000000000000000000000000000000000000000000000000000000000000aa")
+            .await
+            .unwrap();
+        assert_eq!(height, 1234);
+    }
+
+    #[tokio::test]
+    async fn an_unknown_block_header_is_an_error() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": null,
+                "error": {"code": -5, "message": "Block not found"},
+                "id": 0,
+            })))
+            .mount(&mock_server)
+            .await;
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
+        let result = client
+            .get_block_height("00000000000000000000000000000000000000000000000000000000000000aa")
+            .await;
+        assert!(matches!(
+            result,
+            Err(BitcoindRpcError::RpcError { code: -5, .. })
+        ));
     }
 
     #[tokio::test]

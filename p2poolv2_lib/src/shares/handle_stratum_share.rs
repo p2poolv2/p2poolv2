@@ -130,6 +130,7 @@ mod tests {
             bits: "207fffff".to_string(),
             height: 1,
             default_witness_commitment: None,
+            provided: None,
         }
     }
 

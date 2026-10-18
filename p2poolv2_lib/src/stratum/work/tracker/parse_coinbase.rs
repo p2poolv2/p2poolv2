@@ -82,6 +82,7 @@ mod tests {
             sigoplimit: 0,
             sizelimit: 0,
             weightlimit: 0,
+            provided: None,
         }
     }
 

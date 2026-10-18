@@ -270,17 +270,7 @@ impl Sv2Connection {
 
     /// Decode `incoming` into complete messages: type and payload.
     pub fn decode(&mut self, incoming: &[u8]) -> Result<Vec<(u8, Vec<u8>)>, String> {
-        self.inbox.extend_from_slice(incoming);
-        let mut messages = Vec::new();
-        let mut reading = true;
-        while reading && self.inbox.len() >= self.decoder.writable_len() {
-            let room = self.decoder.writable_len();
-            self.decoder.writable().copy_from_slice(&self.inbox[..room]);
-            self.inbox.drain(..room);
-            messages.extend(self.read_frames()?);
-            reading = self.decoder.writable_len() > 0;
-        }
-        Ok(messages)
+        decode_plain_frames(&mut self.decoder, &mut self.inbox, incoming)
     }
 
     /// Whether this connection set up the Mining Protocol.
@@ -297,25 +287,6 @@ impl Sv2Connection {
             .lock()
             .expect("job registry lock")
             .take_job(token)
-    }
-
-    fn read_frames(&mut self) -> Result<Vec<(u8, Vec<u8>)>, String> {
-        let mut messages = Vec::new();
-        let mut reading = true;
-        while reading {
-            match self
-                .decoder
-                .next_frame()
-                .map_err(|error| error.to_string())?
-            {
-                Decoded::Incomplete(_) => reading = false,
-                Decoded::Frame(mut frame) => {
-                    let message_type = frame.header().msg_type();
-                    messages.push((message_type, frame.payload().to_vec()));
-                }
-            }
-        }
-        Ok(messages)
     }
 
     /// Handle one setup, Job Declaration, or custom-job message.
@@ -680,6 +651,42 @@ impl Sv2Connection {
     {
         Ok(vec![encode_frame(message, message_type)?])
     }
+}
+
+/// Decode unencrypted `incoming` bytes into complete messages: type and
+/// payload. `inbox` keeps the bytes of a frame that is not complete yet, for
+/// the next call with the same `decoder`.
+pub(crate) fn decode_plain_frames(
+    decoder: &mut Decoder,
+    inbox: &mut Vec<u8>,
+    incoming: &[u8],
+) -> Result<Vec<(u8, Vec<u8>)>, String> {
+    inbox.extend_from_slice(incoming);
+    let mut messages = Vec::new();
+    let mut reading = true;
+    while reading && inbox.len() >= decoder.writable_len() {
+        let room = decoder.writable_len();
+        decoder.writable().copy_from_slice(&inbox[..room]);
+        inbox.drain(..room);
+        messages.extend(read_plain_frames(decoder)?);
+        reading = decoder.writable_len() > 0;
+    }
+    Ok(messages)
+}
+
+fn read_plain_frames(decoder: &mut Decoder) -> Result<Vec<(u8, Vec<u8>)>, String> {
+    let mut messages = Vec::new();
+    let mut reading = true;
+    while reading {
+        match decoder.next_frame().map_err(|error| error.to_string())? {
+            Decoded::Incomplete(_) => reading = false,
+            Decoded::Frame(mut frame) => {
+                let message_type = frame.header().msg_type();
+                messages.push((message_type, frame.payload().to_vec()));
+            }
+        }
+    }
+    Ok(messages)
 }
 
 /// Whether the specification sets the channel bit on frames of this type.

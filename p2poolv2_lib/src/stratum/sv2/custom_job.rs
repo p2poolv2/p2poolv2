@@ -127,6 +127,9 @@ pub(crate) fn validate_custom_job(
     template.coinbasevalue = value;
     template.coinbaseaux.clear();
     template.default_witness_commitment = None;
+    // A declared block has the declarator's transactions, not a provider
+    // template's, so it never goes back to a Template Provider.
+    template.provided = None;
     template.transactions = declared
         .transactions
         .as_ref()

@@ -340,6 +340,22 @@ pub struct StratumConfig<State = Raw> {
     /// Defaults to [`DEFAULT_SV2_CERT_VALIDITY_SECS`].
     #[serde(default)]
     pub sv2_cert_validity_secs: Option<u64>,
+    /// Where block templates come from. `rpc`, the default and what every
+    /// existing configuration uses, asks the node in `[bitcoinrpc]`. `sv2`
+    /// takes them from a Stratum V2 Template Provider at
+    /// `template_provider_address` and sends found blocks back to it.
+    #[serde(default)]
+    pub template_source: TemplateSource,
+    /// `HOST:PORT` of the Stratum V2 Template Provider. Needs
+    /// `template_source = "sv2"`.
+    #[serde(default)]
+    pub template_provider_address: Option<String>,
+    /// The Template Provider's authority public key, in the text form of
+    /// `sv2_authority_public_key`. With it the connection runs the Noise NX
+    /// handshake and accepts only a certificate this key signed. Required
+    /// unless the provider listens on this computer (a loopback address).
+    #[serde(default)]
+    pub template_provider_authority_public_key: Option<String>,
     /// The version mask to use for version-rolling
     #[serde(deserialize_with = "deserialize_version_mask")]
     pub version_mask: i32,
@@ -372,6 +388,9 @@ pub struct StratumConfig<State = Raw> {
     /// Decoded Stratum V2 authority keys, when both are configured.
     #[serde(skip)]
     pub sv2_authority: Option<Sv2Authority>,
+    /// The checked Template Provider, set when `template_source` is `sv2`.
+    #[serde(skip)]
+    pub template_provider: Option<TemplateProvider>,
 
     #[serde(skip)]
     #[serde(default)]
@@ -539,6 +558,13 @@ impl StratumConfig<Raw> {
             self.sv2_authority_secret_key.as_deref(),
             self.sv2_cert_validity_secs,
         )?;
+        let template_provider = parse_template_provider(
+            self.chain,
+            self.bitcoin_cash_network,
+            self.template_source,
+            self.template_provider_address.as_deref(),
+            self.template_provider_authority_public_key.as_deref(),
+        )?;
 
         Ok(StratumConfig {
             hostname: self.hostname,
@@ -562,6 +588,9 @@ impl StratumConfig<Raw> {
             sv2_authority_public_key: self.sv2_authority_public_key,
             sv2_authority_secret_key: self.sv2_authority_secret_key,
             sv2_cert_validity_secs: self.sv2_cert_validity_secs,
+            template_source: self.template_source,
+            template_provider_address: self.template_provider_address,
+            template_provider_authority_public_key: self.template_provider_authority_public_key,
             version_mask: self.version_mask,
             ignore_difficulty: self.ignore_difficulty,
             pool_signature: self.pool_signature,
@@ -574,6 +603,7 @@ impl StratumConfig<Raw> {
             miner_address_parsed,
             bch_miner_address,
             sv2_authority,
+            template_provider,
             _state: PhantomData,
         })
     }
@@ -613,6 +643,127 @@ impl StratumConfig<Parsed> {
     /// Stratum V2 authority keys, when the operator configured them.
     pub fn sv2_authority(&self) -> Option<Sv2Authority> {
         self.sv2_authority
+    }
+
+    /// The Stratum V2 Template Provider templates come from, when
+    /// `template_source` is `sv2`. `None` means templates come over RPC.
+    pub fn template_provider(&self) -> Option<&TemplateProvider> {
+        self.template_provider.as_ref()
+    }
+}
+
+/// Where the node gets its block templates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum TemplateSource {
+    /// `getblocktemplate` from the node in `[bitcoinrpc]`.
+    #[default]
+    Rpc,
+    /// A Stratum V2 Template Provider, over the Template Distribution
+    /// Protocol.
+    Sv2,
+}
+
+/// A checked Stratum V2 Template Provider.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TemplateProvider {
+    /// `HOST:PORT` to connect to.
+    pub address: String,
+    /// The provider's 32-byte x-only authority key, pinned for the Noise
+    /// handshake. `None` only for a provider on a loopback address, which
+    /// is then spoken to without encryption.
+    pub authority_public_key: Option<[u8; 32]>,
+    /// The Bitcoin Cash network its templates must be for.
+    pub network: BitcoinCashNetwork,
+}
+
+/// Check the Template Provider settings against `template_source`.
+///
+/// `rpc` takes no provider settings, so a provider address left in a
+/// configuration cannot be silently ignored. `sv2` needs an address, works
+/// only on Bitcoin Cash (a Bitcoin provider's required segwit commitment
+/// output is not mapped), and needs the provider's key unless it is on this
+/// computer: the specification allows unencrypted frames only between local
+/// roles, and an unauthenticated provider could keep every found block.
+fn parse_template_provider(
+    chain: Chain,
+    bitcoin_cash_network: Option<BitcoinCashNetwork>,
+    source: TemplateSource,
+    address: Option<&str>,
+    authority_public_key: Option<&str>,
+) -> Result<Option<TemplateProvider>, ConfigError> {
+    if source == TemplateSource::Rpc {
+        if address.is_some() || authority_public_key.is_some() {
+            return Err(ConfigError {
+                message: "template_provider_address and template_provider_authority_public_key need template_source = \"sv2\"".to_string(),
+            });
+        }
+        return Ok(None);
+    }
+    let network = match (chain, bitcoin_cash_network) {
+        (Chain::BitcoinCash, Some(network)) => network,
+        _ => {
+            return Err(ConfigError {
+                message:
+                    "template_source = \"sv2\" is supported only with chain = \"bitcoin-cash\""
+                        .to_string(),
+            });
+        }
+    };
+    let address = address.ok_or_else(|| ConfigError {
+        message: "template_source = \"sv2\" needs template_provider_address".to_string(),
+    })?;
+    let host = address
+        .rsplit_once(':')
+        .filter(|(host, port)| !host.is_empty() && port.parse::<u16>().is_ok())
+        .map(|(host, _)| host)
+        .ok_or_else(|| ConfigError {
+            message: format!("template_provider_address must be HOST:PORT, got {address}"),
+        })?;
+    let authority_public_key = authority_public_key
+        .map(|text| decode_sv2_public_key(text, "template_provider_authority_public_key"))
+        .transpose()?;
+    if authority_public_key.is_none() && !is_loopback_host(host) {
+        return Err(ConfigError {
+            message: format!(
+                "template_provider_authority_public_key is required for a Template Provider on another computer ({address})"
+            ),
+        });
+    }
+    Ok(Some(TemplateProvider {
+        address: address.to_string(),
+        authority_public_key,
+        network,
+    }))
+}
+
+/// Whether `host` names this computer: `localhost` or a loopback IP,
+/// bracketed or not.
+fn is_loopback_host(host: &str) -> bool {
+    host == "localhost"
+        || host
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback())
+}
+
+/// Decode a Stratum V2 public key in the reference implementation's text
+/// form: Base58Check of version `[1, 0]` and the 32-byte x-only key.
+/// `field` names the setting in the error.
+fn decode_sv2_public_key(text: &str, field: &str) -> Result<[u8; 32], ConfigError> {
+    let bytes = base58::decode_check(text).map_err(|error| ConfigError {
+        message: format!("Invalid {field}: {error}"),
+    })?;
+    match bytes.split_first_chunk::<2>() {
+        Some((version, key)) if *version == SV2_PUBLIC_KEY_VERSION => {
+            key.try_into().map_err(|_| ConfigError {
+                message: format!("Invalid {field}: expected version 1 and a 32-byte key"),
+            })
+        }
+        _ => Err(ConfigError {
+            message: format!("Invalid {field}: expected version 1 and a 32-byte key"),
+        }),
     }
 }
 
@@ -673,15 +824,7 @@ fn parse_sv2_authority(
             message: "sv2_authority keys need sv2_port".to_string(),
         });
     }
-    let public_bytes = base58::decode_check(public_text).map_err(|error| ConfigError {
-        message: format!("Invalid sv2_authority_public_key: {error}"),
-    })?;
-    if public_bytes.len() != 34 || public_bytes[..2] != SV2_PUBLIC_KEY_VERSION {
-        return Err(ConfigError {
-            message: "Invalid sv2_authority_public_key: expected version 1 and a 32-byte key"
-                .to_string(),
-        });
-    }
+    let public_key = decode_sv2_public_key(public_text, "sv2_authority_public_key")?;
     let secret_bytes = base58::decode_check(secret_text).map_err(|_| ConfigError {
         message: "Invalid sv2_authority_secret_key: not Base58Check".to_string(),
     })?;
@@ -692,7 +835,7 @@ fn parse_sv2_authority(
         .x_only_public_key()
         .0
         .serialize();
-    if derived[..] != public_bytes[2..] {
+    if derived != public_key {
         return Err(ConfigError {
             message: "sv2_authority_public_key is not the key sv2_authority_secret_key derives"
                 .to_string(),
@@ -817,6 +960,9 @@ impl StratumConfig<Raw> {
             sv2_authority_public_key: None,
             sv2_authority_secret_key: None,
             sv2_cert_validity_secs: None,
+            template_source: TemplateSource::Rpc,
+            template_provider_address: None,
+            template_provider_authority_public_key: None,
             version_mask: DEFAULT_VERSION_MASK,
             ignore_difficulty: None,
             pool_signature: None,
@@ -829,6 +975,7 @@ impl StratumConfig<Raw> {
             miner_address_parsed: None,
             bch_miner_address: None,
             sv2_authority: None,
+            template_provider: None,
             _state: PhantomData,
         }
     }
@@ -2214,6 +2361,183 @@ mod sv2_authority_tests {
         config.sv2_authority_secret_key = Some(base58::encode_check(&[1u8; 32]));
         let error = config.parse().unwrap_err();
         assert!(error.message.contains("derives"), "{}", error.message);
+    }
+}
+
+#[cfg(test)]
+mod template_provider_tests {
+    use super::*;
+    use temp_env::with_vars;
+
+    /// The Stratum V2 reference implementation's key-utils vectors.
+    const SECRET_KEY: &str = "zmBEmPhqo3A92FkiLVvyCz6htc3e53ph3ZbD4ASqGaLjwnFLi";
+    const PUBLIC_KEY: &str = "9bDuixKmZqAJnrmP746n8zU1wyAQRrus7th9dxnkPg6RzQvCnan";
+
+    fn bitcoin_cash_config() -> StratumConfig<Raw> {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.chain = Chain::BitcoinCash;
+        config.bitcoin_cash_network = Some(BitcoinCashNetwork::Regtest);
+        config.bootstrap_address =
+            "bchreg:qqzldt8u5mafprrw6uljppyqg30uhl97ey890dqm34".to_string();
+        config
+    }
+
+    #[test]
+    fn absent_template_source_takes_templates_over_rpc() {
+        let parsed = bitcoin_cash_config().parse().unwrap();
+        assert_eq!(parsed.template_source, TemplateSource::Rpc);
+        assert!(parsed.template_provider().is_none());
+    }
+
+    #[test]
+    fn the_sample_configuration_takes_templates_over_rpc() {
+        let config = Config::load("../config.sample.toml").unwrap();
+        assert_eq!(config.stratum.template_source, TemplateSource::Rpc);
+        assert_eq!(config.stratum.template_provider_address, None);
+    }
+
+    #[test]
+    fn template_source_sv2_deserializes_with_its_provider_address() {
+        with_vars(
+            [
+                ("P2POOL_STRATUM__TEMPLATE_SOURCE", Some("sv2")),
+                (
+                    "P2POOL_STRATUM__TEMPLATE_PROVIDER_ADDRESS",
+                    Some("127.0.0.1:8442"),
+                ),
+            ],
+            || {
+                let config = Config::load("../config.sample.toml").unwrap();
+                assert_eq!(config.stratum.template_source, TemplateSource::Sv2);
+                assert_eq!(
+                    config.stratum.template_provider_address.as_deref(),
+                    Some("127.0.0.1:8442")
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn a_loopback_provider_without_a_key_is_spoken_to_unencrypted() {
+        let mut config = bitcoin_cash_config();
+        config.template_source = TemplateSource::Sv2;
+        config.template_provider_address = Some("127.0.0.1:8442".to_string());
+        let parsed = config.parse().unwrap();
+        assert_eq!(
+            parsed.template_provider(),
+            Some(&TemplateProvider {
+                address: "127.0.0.1:8442".to_string(),
+                authority_public_key: None,
+                network: BitcoinCashNetwork::Regtest,
+            })
+        );
+    }
+
+    #[test]
+    fn localhost_counts_as_a_loopback_provider() {
+        let mut config = bitcoin_cash_config();
+        config.template_source = TemplateSource::Sv2;
+        config.template_provider_address = Some("localhost:8442".to_string());
+        assert!(config.parse().unwrap().template_provider().is_some());
+    }
+
+    #[test]
+    fn a_bracketed_ipv6_loopback_provider_needs_no_key() {
+        let mut config = bitcoin_cash_config();
+        config.template_source = TemplateSource::Sv2;
+        config.template_provider_address = Some("[::1]:8442".to_string());
+        assert!(config.parse().unwrap().template_provider().is_some());
+    }
+
+    #[test]
+    fn a_remote_provider_with_its_key_pins_that_key() {
+        let mut config = bitcoin_cash_config();
+        config.template_source = TemplateSource::Sv2;
+        config.template_provider_address = Some("node.example:8442".to_string());
+        config.template_provider_authority_public_key = Some(PUBLIC_KEY.to_string());
+        let parsed = config.parse().unwrap();
+        let secret = SecretKey::from_slice(&base58::decode_check(SECRET_KEY).unwrap()).unwrap();
+        let expected = Keypair::from_secret_key(&Secp256k1::signing_only(), &secret)
+            .x_only_public_key()
+            .0
+            .serialize();
+        assert_eq!(
+            parsed.template_provider().unwrap().authority_public_key,
+            Some(expected)
+        );
+    }
+
+    #[test]
+    fn a_remote_provider_without_a_key_is_rejected() {
+        let mut config = bitcoin_cash_config();
+        config.template_source = TemplateSource::Sv2;
+        config.template_provider_address = Some("192.0.2.7:8442".to_string());
+        let error = config.parse().unwrap_err();
+        assert!(
+            error.message.contains("another computer"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn a_corrupted_provider_key_is_rejected() {
+        let mut config = bitcoin_cash_config();
+        config.template_source = TemplateSource::Sv2;
+        config.template_provider_address = Some("127.0.0.1:8442".to_string());
+        // The reference implementation's bad-checksum vector.
+        config.template_provider_authority_public_key =
+            Some("9bDuixKmZqAJnrmP746n8zU1wyAQRrus7th9dxnkPg6RzQvCnam".to_string());
+        let error = config.parse().unwrap_err();
+        assert!(
+            error
+                .message
+                .contains("template_provider_authority_public_key"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn sv2_templates_without_a_provider_address_are_rejected() {
+        let mut config = bitcoin_cash_config();
+        config.template_source = TemplateSource::Sv2;
+        let error = config.parse().unwrap_err();
+        assert!(
+            error.message.contains("needs template_provider_address"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn a_provider_address_without_a_port_is_rejected() {
+        let mut config = bitcoin_cash_config();
+        config.template_source = TemplateSource::Sv2;
+        config.template_provider_address = Some("127.0.0.1".to_string());
+        let error = config.parse().unwrap_err();
+        assert!(error.message.contains("HOST:PORT"), "{}", error.message);
+    }
+
+    #[test]
+    fn sv2_templates_on_bitcoin_are_rejected() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.template_source = TemplateSource::Sv2;
+        config.template_provider_address = Some("127.0.0.1:8442".to_string());
+        let error = config.parse().unwrap_err();
+        assert!(error.message.contains("bitcoin-cash"), "{}", error.message);
+    }
+
+    #[test]
+    fn a_provider_address_with_rpc_templates_is_rejected() {
+        let mut config = bitcoin_cash_config();
+        config.template_provider_address = Some("127.0.0.1:8442".to_string());
+        let error = config.parse().unwrap_err();
+        assert!(
+            error.message.contains("need template_source"),
+            "{}",
+            error.message
+        );
     }
 }
 
