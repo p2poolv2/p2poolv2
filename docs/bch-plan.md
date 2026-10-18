@@ -527,10 +527,13 @@ move most BCH hashrate to the share chain.
     - **Activation.** A flag day: every chipnet and regtest node upgrades in
       one release and starts from a new store path, as for the upstream sync,
       so no share on the new chain was made under the old rule. Nodes left
-      behind reject the new shares and fork off; miners keep every BCH payout
-      already made. Mainnet starts with the rule from its first share. If an
-      existing chain must carry over instead, the rule needs an activation
-      share height, which this prototype does not add.
+      behind cannot even connect: Bitcoin Cash protocol strings, and with
+      them the Noise prologue, carry the rule as `pplns-k3` after the genesis
+      tag, so old and new nodes fail the handshake instead of trading shares
+      the other rejects, and a different `K` gets a different tag. Miners
+      keep every BCH payout already made. Mainnet starts with the rule from
+      its first share. If an existing chain must carry over instead, the rule
+      needs an activation share height, which this prototype does not add.
     - **Simulation** (`pplns_compare` in `p2poolv2_sim`, the real
       `PplnsWindow`, five seeds per pool size, a 10% and a 0.1% miner and a
       5% miner who mines for 20 days; no uncles). Work-to-pay delay is the

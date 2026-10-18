@@ -131,10 +131,16 @@ pool holding fraction `f` of BCH's hashrate, so pools under about `K / 2016`
   BCH chains are alpha and run by their operators, so the change ships as a
   flag day: every node upgrades in one release and starts from a new store
   path, as the upstream sync did, so no share on the new chain was made
-  under the old rule. Nodes left on the old rule reject the new shares and
-  keep their own chain; miners lose only their share-chain position, because
+  under the old rule. Miners lose only their share-chain position, because
   payouts are coinbase outputs on BCH. Mainnet starts with the rule from its
   first share, so it needs no activation height.
+- **Peers on another rule cannot connect.** On Bitcoin Cash every protocol
+  string (request-response, Identify, Kademlia and the Noise prologue)
+  carries `pplns-k<K>` after the genesis tag, built from
+  `BCH_PPLNS_WINDOW_BLOCKS` by `share_chain_rule_tag`. A node on the old
+  fixed window, or on another `K`, fails the handshake instead of
+  exchanging shares the other rejects, and changing `K` changes the tag by
+  itself. Bitcoin's protocol strings are unchanged.
 
 ## Depths
 
@@ -161,6 +167,7 @@ See `pruning.md` for the two-window retention model.
 | Maturity skip | `PplnsWindow::immature_share_count` |
 | Window rule | `PplnsWindow::for_chain`, `resolve_window` (`work_target`), `BCH_PPLNS_WINDOW_BLOCKS`, `MIN_SIZING_BLOCK_DIFFICULTY` |
 | Bits to `D` | `bitcoin_block_difficulty` |
+| Peer isolation by rule | `share_chain_rule_tag`, `protocol_string` (`node/behaviour/request_response.rs`) |
 | Window walk and weights | `walk_window_entries` (with `ConfirmedEntry::work` for the BCH bound), `for_each_credit` (the only place the weights are applied) |
 | Entry point | `PplnsWindow::get_distribution_from_start_hash` |
 | Every miner's credits (API `/miner`, one walk per anchor) | `PplnsWindow::get_window_credits_from_start_hash`, same walk and weights; on BCH the API sizes it from the anchor share's own header |
