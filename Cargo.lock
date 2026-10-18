@@ -3262,6 +3262,7 @@ dependencies = [
  "p2poolv2_config",
  "p2poolv2_lib",
  "p2poolv2_node",
+ "rand 0.10.3",
  "serde",
  "tokio",
  "tracing",
