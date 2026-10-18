@@ -97,6 +97,18 @@ zmqpubhashblock = "tcp://bitcoind:28332"
 # sv2_authority_secret_key = "..."
 # Seconds each Noise certificate stays valid. Default 3600.
 # sv2_cert_validity_secs = 3600
+# Where block templates come from. Default "rpc": getblocktemplate from the
+# node in [bitcoinrpc]. "sv2" takes them from a Stratum V2 Template Provider
+# (Template Distribution Protocol), on chain = "bitcoin-cash" only, and sends
+# found blocks back to it; [bitcoinrpc] is still required, to check each
+# template's parent, validate shares and take blocks the provider cannot.
+# template_source = "rpc"
+# HOST:PORT of the Template Provider, with template_source = "sv2".
+# template_provider_address = "127.0.0.1:8442"
+# The provider's authority public key (same text form as above). Pinning it
+# runs the Noise handshake; it is required unless the provider is on this
+# computer (a loopback address).
+# template_provider_authority_public_key = "9b..."
 # The share-chain network can be "main", "testnet4" or "signet"
 # On Bitcoin Cash it is ignored and derived from bitcoin_cash_network.
 network = "signet"

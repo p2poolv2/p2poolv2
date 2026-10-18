@@ -20,6 +20,7 @@ Audience: contributors and AI agents starting the BCH port. Read
 | By-address query for share chain explorers | Implemented as `GET /miner?address=` (see `p2poolv2_api/README.md`): one miner's window shares and uncles, weight, share of the window and fraction of the next PPLNS payout, read from the payout code's own `PplnsWindow`. Takes a CashAddr payout with or without prefix or a `p2pool:`/`tp2pool:`/`rp2pool:` share address; chipnet and signet API tests. Not yet tried against a live node. |
 | Declared BCH coinbase peer validation | Implemented; bounded header extension, prefix/aux proof tampering, payout diversion, storage and compressed-header tests. |
 | Mineable Job Declaration in both modes | Both the mocked regression and the two-node BCHN regtest use authenticated Noise connections through the actual listener. Both modes mine blocks and emit verifiable proofs. Independent client interoperability remains pending. |
+| Templates from an SV2 Template Provider | Implemented 2026-10-18 (`template_source = "sv2"`, Bitcoin Cash only); see [Template Distribution client](#template-distribution-client-2026-10-18). On BCHN regtest the node mined four blocks from bchn-sv2-bridge, one with five mempool transactions, and each reached BCHN through `SubmitSolution`. Noise against a real provider, Pickaxe's provider and Knuth remain untested. |
 | Miner-selected auxiliary commitments | Bounded shared trees and full coinbase/header proofs are implemented. An experimental SAFA variant verifies the proof inside the BCH VM and paid tokens in a real two-node regtest. Final SAFA policy, independent covenant review and chipnet issuance remain open. See [bch-auxpow.md](bch-auxpow.md). |
 | PPLNS tuning and independent ASIC/JD interoperability | Pending. Since the upstream sync a coinbase pays a fixed `PPLNS_WINDOW_SHARES` (120,960) shares. They start `COINBASE_MATURITY` (6,048) shares below the paying share, about 17 hours at 10-second shares, once the chain is past its first 6,048 shares. That replaces the window sized by block difficulty. Decision 11 keeps upstream's constants for now and may revisit them. |
 | Remote CI and chipnet block | Rust tests, linting, Security and BCH Covenant Tests pass on GitHub; Code Coverage fails only at the Codecov upload until the fork has a `CODECOV_TOKEN`. First chipnet block on 2026-10-18: height 328451, `00000000000cb752459c2b08e1955e5f33252b0207b1c7b5b2f069d5254b9025`, found by an Avalon ASIC on Stratum V1 through the two-node chipnet pool, with templates from a remote BCHN 29.1.0 (Start9, over Tailscale). Its coinbase paid 25.00462191 BCH: 1.5% (0.37506932) to the donation address, the PPLNS window to two miners (17.05914219 and 7.50989553), 0.06051487 to the genesis share's NUMS key, then the merge-mining, padding and share-commitment outputs. Two more blocks found within five seconds at the same height lost, because nothing refreshed the template right after a found block. PR #3 fixed that on 2026-10-18: an accepted block now triggers an immediate template fetch, and the pool hears BCHN's ZMQ over Tailscale. After the fix the pool found blocks 328455 and 328456 at real difficulty, each submitted once with no sibling, paying the donation and the window. |
@@ -375,6 +376,134 @@ After integrating the concurrent encrypted-listener and maturity updates,
 1,719 default workspace tests passed (two skipped), as did 1,727 all-features
 tests (one skipped). Clippy passed for all targets in both configurations
 with warnings denied; formatting and whitespace checks passed.
+
+## Template Distribution client (2026-10-18)
+
+Decision 6 allows templates from any node; until now the node took them only
+from BCHN's `getblocktemplate`. With `template_source = "sv2"` and
+`template_provider_address` it is a Stratum V2 Template Distribution client
+(`p2poolv2_lib/src/stratum/sv2/template_distribution.rs`, on the reference
+`template_distribution_sv2` 7.0.0 crate). Pickaxe, bchn-sv2-bridge, Knuth's
+provider or a second node can then supply templates. Bitcoin and
+`template_source = "rpc"` configurations are unchanged.
+
+- **Connection.** `SetupConnection` for Template Distribution version 2,
+  then `CoinbaseOutputConstraints`. With
+  `template_provider_authority_public_key` the node runs the Noise NX
+  handshake as initiator and accepts only a certificate that key signed. The
+  key is required unless the provider is on a loopback address, because an
+  unauthenticated provider could keep every found block. A dropped
+  connection is retried after 1 s, doubling to 30 s; miners keep the last
+  template meanwhile, as they do when `getblocktemplate` fails. A provider's
+  `Reconnect` is followed; the pinned key still applies, and an unencrypted
+  provider may redirect only to this computer.
+- **Constraints.** The node reserves 65,382 coinbase output bytes and 1,923
+  sigops: the outputs of the largest coinbase `SubmitSolution` (a B0_64K) can
+  carry. That counts 150 bytes for the rest of a coinbase with a 100-byte
+  script, plus a 3-byte output count. The PPLNS payouts grow with the miners
+  in the window, so one fixed bound replaces a size a later template could
+  outgrow.
+- **Mapping.** `NewTemplate`, `SetNewPrevHash` and the transactions from
+  `RequestTransactionData` become the `BlockTemplate` the notifier already
+  takes, so SV1 and SV2 jobs, share emission and PPLNS payouts do not change.
+  Future templates wait for their `SetNewPrevHash`, templates for an old
+  parent are dropped, and a template is published once its parent and
+  transactions are both known. Each one passes `validate_bch` (CTOR, no
+  witness data, target against bits, IDs, size). It is also checked against:
+  - the provider's merkle path, which must match its transactions;
+  - required coinbase outputs, which are refused (a Bitcoin provider's segwit
+    commitment cannot go into the share chain's coinbase);
+  - the coinbase prefix, which must be the minimal BIP34 height push. The
+    height is the parent's height from `[bitcoinrpc]` plus one, so a provider
+    on another chain gets no work mined.
+
+  The prefix is accepted as the specification writes it (the push, as
+  Pickaxe sends it) or as the pushed bytes alone. bchn-sv2-bridge sends the
+  latter and checks submissions against the push, so this pool's coinbase
+  passes both forms. The coinbase version, sequence and lock time stay the
+  share chain's (2, `0xfffffffe`, height - 1), because peers check them.
+  BCHN accepts any, so the provider's own values are only logged. Template
+  Distribution carries no block size limit, so templates are checked against
+  the network's default excessive block size, which BCHN 29.2.0 reports as
+  `sizelimit`: 32 MB on mainnet and regtest, 2 MB on chipnet.
+- **Blocks.** A block found on a provided template goes back to its
+  connection as `SubmitSolution`. Declared jobs never do, since they carry
+  the declarator's transactions. The protocol has no reply, so a block the
+  provider cannot take goes to the node over RPC instead: its connection is
+  gone or queued full, the coinbase is over 64 KiB, or the write fails.
+  PR #3's immediate template fetch after a found block applies to
+  `getblocktemplate` only. Template Distribution has no message to ask for a
+  template, so with a provider the next template comes when the provider
+  sees the block; bchn-sv2-bridge polls its node's tip every 2 s.
+- **Tests.** 36 tests with the reference crates: the session state machine,
+  the mapping against the BCHN regtest and chipnet fixtures, frame contents,
+  plain and Noise connections to a stand-in provider over TCP, a provider
+  signed by another authority, a refused setup, `Reconnect`, and found-block
+  routing. One of them runs an SV2 extended channel on a provided template
+  until its block returns as `SubmitSolution`. Configuration has 17 tests.
+- **Live regtest check.** Two BCHN 29.2.0 regtest nodes ran with
+  [bchn-sv2-bridge](https://github.com/danhaus93-ops/bchn-sv2-bridge)
+  `b87fa60` as the provider and this node built with `template_source =
+  "sv2"` (unencrypted, loopback). An SV1 CPU miner on the pool found blocks
+  111 to 114. Each went to the bridge as `SubmitSolution`; the bridge logged
+  `BLOCK ACCEPTED` and BCHN's tip followed, and the node sent no
+  `submitblock`. Block 114 carried five mempool transactions fetched with
+  `RequestTransactionData`. Its coinbase paid the 1.5% donation and the
+  PPLNS payout with the fees, with sequence `0xfffffffe` and lock time 113.
+  BCHN answers `getblocktemplate` only with a peer, so the bridge needs a
+  connected node even on regtest.
+- **Not yet checked.** Noise against a real provider: the bridge is
+  plaintext only, and Pickaxe's `--tp-listen` serves mainnet and chipnet,
+  not regtest. Also unchecked: Knuth's provider and a chipnet block through a
+  provider. A provider whose node is a block ahead of `[bitcoinrpc]` waits up
+  to 5 s for the parent's height.
+
+With this and the audit below, rebased on PR #2 (by-address `/miner`) and
+PR #3 (template refresh after a found block), 1,845 default workspace tests
+passed (two skipped). Clippy passed for all targets in both configurations
+with warnings denied, and formatting passed. Before those rebases, 1,812
+all-features tests passed (one skipped), run with six test threads: with
+more, two chain-store tests aborted on this machine when RocksDB could not
+map its cache.
+
+## Mining Protocol audit for multi-device clients (2026-10-18)
+
+The pool already served standard and extended channels, per-channel jobs,
+`SetTarget`, `UpdateChannel`, `CloseChannel` and `SetCustomMiningJob` with Job
+Declaration. An extended channel leaves 8 extranonce bytes for a proxy to
+split among its devices, and a connection may open 32 channels. Pickaxe's SV1
+adapter opens one upstream connection per device, with the device's channel
+and a donation channel. It already follows group-addressed jobs,
+`SetGroupChannel`, `SetExtranoncePrefix` and `Reconnect` when a pool sends
+them. Changed in this audit:
+
+- Error codes follow the specification's constants: `channel-capacity-exhausted`,
+  `max-target-out-of-range` (open and update), `bad-extranonce-size`,
+  `invalid-non-rollable-version-bit` and `stale-chain-tip`. They replace
+  `max-channels-reached`, `invalid-max-target`, `invalid-extranonce-size`,
+  `invalid-version` and `stale-template`. Pool-specific codes such as
+  `share-address-required` stay.
+- New nbits on the same parent now send a future job and a `SetNewPrevHash`.
+  SV2 jobs carry nbits only there. Before this, chipnet's minimum-difficulty
+  bits after 20 minutes never reached SV2 channels, and their blocks would
+  have been refused for wrong bits.
+- `version_rolling_allowed` is false when `version_mask` is 0.
+
+Left out, because a multi-device client works without them:
+
+- Group channels and `SetGroupChannel`. The specification lets a pool send
+  every job per channel, and every client above accepts that. Groups would
+  only save bandwidth for many channels with one payout identity on one
+  connection, because each P2Pool job commits to the miner's payout and
+  share owner.
+- `SetExtranoncePrefix`: the pool never needs to change a channel's prefix.
+- Sending `Reconnect` or `ChannelEndpointChanged` to miners: nothing in the
+  node redirects miners, and clients reconnect when the node restarts.
+- Negotiating the `REQUIRES_VERSION_ROLLING` and `REQUIRES_FIXED_VERSION`
+  flags when `version_mask` is 0. The default mask allows rolling.
+- More than 32 channels on one connection.
+- `clean_jobs` on SV1 for new bits on the same parent. SV1 notifies carry
+  nbits, so miners take the new bits with the next notify.
 
 ## Startup selection (2026-10-13)
 

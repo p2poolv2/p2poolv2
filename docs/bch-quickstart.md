@@ -92,6 +92,25 @@ sv2_cert_validity_secs = 3600
 
 Miners then pin the public key.
 
+### Templates from a Stratum V2 Template Provider
+
+By default the node asks BCHN for templates over RPC. To take them from a
+Stratum V2 Template Provider instead, such as
+[bchn-sv2-bridge](https://github.com/danhaus93-ops/bchn-sv2-bridge), Pickaxe's
+template server or another node's Template Distribution service:
+
+```toml
+template_source = "sv2"
+template_provider_address = "127.0.0.1:8442"
+# Required unless the provider is on this computer:
+# template_provider_authority_public_key = "9b..."
+```
+
+Found blocks go back to the provider with `SubmitSolution`, or to the node
+over RPC when the provider connection cannot take them. Keep `[bitcoinrpc]`:
+the node checks each template's parent there, validates shares against it,
+and falls back to it for blocks.
+
 ## 4. Point miners at the node
 
 Stratum V1:
