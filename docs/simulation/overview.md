@@ -178,6 +178,7 @@ failure mode that caused it.
 | `restart-delayed` | a node fails and comes back after `FAILURE_SLOW_DOWN` (default 330s). That crosses the 300s `MAX_TIP_AGE_SECS` threshold, so the node rejoins *not* current: inv gossip is ignored and it must bulk-sync via `getheaders` and block fetch |
 | `partition` | `DIAL_FANOUT` consecutive nodes fail at once, cutting the dial chain, then all come back |
 | `late-miner` | payout maturity: node `LATE_MINER` starts with its emitter off and starts mining once the chain is two maturity depths deep; `maturity_check.py` checks against the regtest coinbases that it is paid only once its shares are mature. Needs `LATE_MINER`; not part of `all` (RUNBOOK Test G) |
+| `pruned-join` | block body pruning: once the swarm is past the sim prune target and every node has pruned, one node's store is wiped and it rejoins as a fresh node. It must catch up, agree with node 0 on confirmed hashes below and above its prune height, never get a not-found reply (it never asks for a body its peers deleted), and never fail to store a block. Runs time-compressed; not part of `all` (RUNBOOK Test H) |
 | `all` | the three failure scenarios in sequence (local use) |
 
 Tunables: `FAILURE_SEED` (target selection; targets are printed so a failing

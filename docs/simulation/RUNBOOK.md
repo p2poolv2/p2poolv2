@@ -386,6 +386,35 @@ tests pin it.
 
 ---
 
+## 9a. Test H — a fresh node joins pruned peers
+
+Checks that a node syncing from genesis gets everything it needs from peers
+that have pruned block bodies. The sim build prunes below 220 shares under
+the tip (prune depth 200 plus interval 20), every 30s, so the run is
+time-compressed to get there in minutes:
+
+```sh
+IDEAL_BLOCK_TIME=1 SHARES_PER_BLOCK=20 NODE_COUNT=5 \
+  ./load-tests/sim/nightly.sh pruned-join
+```
+
+The scenario waits for the swarm tip to pass the prune depth plus three
+intervals and for every node to log `Pruned block bodies at heights ...`.
+It then kills one node, deletes its store, moves its log to
+`prejoin-node-<i>.log`, and restarts it. The fresh node must:
+
+- catch up to the swarm tip;
+- report the same confirmed hash as node 0 at a height it holds header-only
+  (below its own prune height) and at one near the tip;
+- get no `NotFound` reply to a body request, so it never asked for a body
+  its peers deleted;
+- log no `Failed to store and organise block`.
+
+The summary prints `pruned-join verdict: PASS` or `FAIL (<reasons>)`, and
+`verify_chain` then checks every store, the fresh one included.
+
+---
+
 ## 10. Where things live
 
 | Thing              | Path                                                      |
@@ -398,6 +427,7 @@ tests pin it.
 | PIDs               | `/tmp/p2pool-sim/pids.txt` (line `i+1` is node `i`)        |
 | Failure summary    | `/tmp/p2pool-sim/failure-results.txt`                     |
 | Maturity report    | `/tmp/p2pool-sim/maturity-check.txt` (late-miner only)    |
+| Pre-wipe log       | `/tmp/p2pool-sim/prejoin-node-<i>.log` (pruned-join only) |
 | Node APIs          | `http://127.0.0.1:760<i>` (node i)                        |
 | regtest bitcoind   | datadir `/tmp/p2pool-regtest`, RPC `:19443`, ZMQ `:28332` |
 
