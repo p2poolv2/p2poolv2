@@ -46,6 +46,9 @@ required-features = ["debug-tools"]
 
 [features]
 debug-tools = []
+# Sim build: short background task interval to match the sim prune depth.
+# Enabled by p2poolv2_sim's sim feature; never in a release build.
+sim = ["p2poolv2_lib/sim"]
 
 [dev-dependencies]
 p2poolv2_lib = { workspace = true, features = ["test-utils", "hydrapool-pplns-accounting"] }

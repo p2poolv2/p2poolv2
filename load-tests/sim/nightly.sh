@@ -17,8 +17,7 @@
 # Env overrides (nightly-specific):
 #   SCENARIO                   failure scenario to inject    (default clean)
 #                              clean | restart-fast | restart-delayed |
-#                              partition | all | late-miner (needs LATE_MINER
-#                              and a small MATURITY_SHARES)
+#                              partition | all | late-miner (needs LATE_MINER)
 #   NODE_COUNT                 number of sim nodes           (default 20)
 #   CONVERGENCE_WAIT_SECONDS   seconds to settle after the
 #                              scenario, before the checks   (default 60)
@@ -51,14 +50,14 @@ Scenarios (see load-tests/sim/failures.sh --help for the details):
   partition         several nodes fail at once, cutting the dial chain
   all               the three failure scenarios in sequence
   late-miner        payout maturity: a node mining late is paid only once its
-                    shares are mature (needs LATE_MINER, small MATURITY_SHARES)
+                    shares are mature (needs LATE_MINER)
 
 Examples:
   ./load-tests/sim/nightly.sh                              # 20 nodes, 60s, no failures
   ./load-tests/sim/nightly.sh restart-delayed              # long-downtime catch-up
   NODE_COUNT=5 CONVERGENCE_WAIT_SECONDS=30 ./load-tests/sim/nightly.sh
   IDEAL_BLOCK_TIME=1 SHARES_PER_BLOCK=100 ./load-tests/sim/nightly.sh  # time-compressed, frequent blocks
-  IDEAL_BLOCK_TIME=1 SHARES_PER_BLOCK=20 MATURITY_SHARES=50 LATE_MINER=1 \
+  IDEAL_BLOCK_TIME=1 SHARES_PER_BLOCK=20 LATE_MINER=1 \
     ./load-tests/sim/nightly.sh late-miner                 # payout maturity
 
 Env vars (nightly-specific):
@@ -74,7 +73,6 @@ Env vars (nightly-specific):
 Env vars (passed through to run-swarm.sh):
   RUN_DIR                    work dir for configs/logs     (default /tmp/p2pool-sim)
   SHARES_PER_BLOCK           shares per block-find         (default 10000)
-  MATURITY_SHARES            coinbase maturity in shares   (default 6048)
   IDEAL_BLOCK_TIME           share interval in seconds     (default 10; lower = time-compressed)
   LATENCY_MS                 per-node outbound delay ms    (default 0)
   DIAL_FANOUT                peers each node dials         (default 3)
@@ -111,8 +109,7 @@ ZMQ="${ZMQ:-tcp://127.0.0.1:28332}"
 RUN_DIR="${RUN_DIR:-/tmp/p2pool-sim}"
 SHARES_PER_BLOCK="${SHARES_PER_BLOCK:-10000}"
 DIAL_FANOUT="${DIAL_FANOUT:-3}"
-MATURITY_SHARES="${MATURITY_SHARES:-6048}"
-export RUN_DIR RPC_URL RPC_USER RPC_PASS ZMQ SHARES_PER_BLOCK DIAL_FANOUT MATURITY_SHARES
+export RUN_DIR RPC_URL RPC_USER RPC_PASS ZMQ SHARES_PER_BLOCK DIAL_FANOUT
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"

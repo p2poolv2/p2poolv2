@@ -340,13 +340,14 @@ The whole thing runs end to end, with the usual pass/fail verdict, via:
 
 ## 9. Test G — payout maturity (late miner)
 
-Checks that a block-find pays a miner only once its shares are mature. A short
-run needs a small maturity, so the swarm is launched with `MATURITY_SHARES`
-(written to every node's `[sim] coinbase_maturity`; consensus, so one value for
-all) and `LATE_MINER`, the node that starts with its emitter off:
+Checks that a block-find pays a miner only once its shares are mature. The
+sim build's coinbase maturity is 20 shares (a compile-time constant, logged by
+each node at startup as `Sim depths: coinbase maturity 20 shares, ...`), so a
+short run reaches it. The swarm is launched with `LATE_MINER`, the node that
+starts with its emitter off:
 
 ```sh
-IDEAL_BLOCK_TIME=1 SHARES_PER_BLOCK=20 MATURITY_SHARES=50 LATE_MINER=1 \
+IDEAL_BLOCK_TIME=1 SHARES_PER_BLOCK=20 LATE_MINER=1 \
   ./load-tests/sim/run-swarm.sh 10
 LATE_MINER=1 ./load-tests/sim/failures.sh late-miner
 ```
@@ -354,11 +355,11 @@ LATE_MINER=1 ./load-tests/sim/failures.sh late-miner
 Or end to end, with bitcoind setup and the nightly checks:
 
 ```sh
-IDEAL_BLOCK_TIME=1 SHARES_PER_BLOCK=20 MATURITY_SHARES=50 LATE_MINER=1 \
+IDEAL_BLOCK_TIME=1 SHARES_PER_BLOCK=20 LATE_MINER=1 \
   NODE_COUNT=10 ./load-tests/sim/nightly.sh late-miner
 ```
 
-The scenario waits for the tip to reach `2 * MATURITY_SHARES`, so the payout
+The scenario waits for the tip to reach twice the maturity, so the payout
 skip is at full size, restarts node 1 with its emitter on, and then runs
 `load-tests/sim/maturity_check.py` until it gives a verdict. The checker reads
 only the logs, the node 0 API and bitcoind. It maps each `sim block-find` line
@@ -366,15 +367,15 @@ only the logs, the node 0 API and bitcoind. It maps each `sim block-find` line
 coinbase:
 
 ```
-late miner: node 1 (bcrt1q...), coinbase maturity 50
-first late share: confirmed 131, confirmed or uncle 131
+late miner: node 1 (bcrt1q...), coinbase maturity 20
+first late share: confirmed 51, confirmed or uncle 51
 bitcoin block        paying_h  p-first  mature  late_paid
-3f1c0b9e2a7d4c11..        150       19      no         no
-9a02d7e4b1c35f80..        183       52     yes        yes
-maturity check: PASS (late miner first paid at paying height 183)
+3f1c0b9e2a7d4c11..         62       11      no         no
+9a02d7e4b1c35f80..         74       23     yes        yes
+maturity check: PASS (late miner first paid at paying height 74)
 ```
 
-It fails if the late miner is paid while `p - first < MATURITY_SHARES`, or is
+It fails if the late miner is paid while `p - first` is below the maturity, or is
 not paid by the first block-find past it. The full report is in
 `$RUN_DIR/maturity-check.txt`. Exit codes: 0 pass, 1 fail, 2 no qualifying
 block-find yet, 3 setup error (e.g. the late node shares its payout address
@@ -428,9 +429,7 @@ curl -s :7600/chain_info | jq            # tip/candidate heights (prefer logs fo
 | `SHARES_PER_BLOCK`                              | 10000           | shares per block-find (lower = more blocks)                                                                        |
 | `LATENCY_MS`                         | 0               | per-node outbound announce delay (raise for uncles)                                                                |
 | `IDEAL_BLOCK_TIME`                   | 10              | share interval (s); lower = time-compressed, more blocks/min for faster data (auto-scales `LATENCY_MS`); floor ~1s |
-| `WINDOW_SHARES`                      | = `SHARES_PER_BLOCK`       | PPLNS payout window in shares (how many miners appear in a coinbase)                                               |
 | `HASHRATE`                           | 1.0e12          | modeled per-node hashrate (higher = faster shares)                                                                 |
-| `MATURITY_SHARES`                    | 6048            | coinbase maturity in shares, for payout and spending; lower it so a short run reaches the payout maturity skip (Test G) |
 | `LATE_MINER`                         | unset           | node index launched with its emitter off, for `failures.sh late-miner` (Test G)                                    |
 | `DISTINCT_ADDR`                      | 1               | each node gets its own payout address via the wallet                                                               |
 | `DIAL_FANOUT`                        | 3               | how many earlier peers each node dials                                                                             |

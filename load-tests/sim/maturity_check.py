@@ -52,6 +52,23 @@ class SetupError(Exception):
     """The run cannot be checked: missing config, unreachable service, etc."""
 
 
+def read_sim_maturity(run_dir, node_index):
+    """The coinbase maturity of the sim build, from the "Sim depths" line a
+    node logs at startup. It is a compile-time constant, so every node has the
+    same value."""
+    path = os.path.join(run_dir, f"node-{node_index}.log")
+    pattern = re.compile(r"Sim depths: coinbase maturity (\d+) shares")
+    try:
+        with open(path, errors="replace") as log_file:
+            for line in log_file:
+                match = pattern.search(line)
+                if match:
+                    return int(match.group(1))
+    except OSError as error:
+        raise SetupError(f"cannot read {path}: {error}") from error
+    raise SetupError(f"{path} has no 'Sim depths' line")
+
+
 def read_node_config(run_dir, node_index):
     path = os.path.join(run_dir, f"node-{node_index}.toml")
     try:
@@ -212,9 +229,7 @@ def run():
 
     late_config = read_node_config(run_dir, late_index)
     late_address = late_config["sim"]["miner_address"]
-    maturity = late_config["sim"].get("coinbase_maturity")
-    if maturity is None:
-        raise SetupError(f"node-{late_index}.toml has no [sim] coinbase_maturity")
+    maturity = read_sim_maturity(run_dir, late_index)
     require_distinct_address(run_dir, late_address)
 
     first_confirmed, first_any = late_miner_first_heights(api_port, late_address)

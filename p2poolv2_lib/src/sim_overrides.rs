@@ -18,7 +18,6 @@ const IDEAL_BLOCK_TIME: u32 = 10;
 /// Production ASERT half-life constant (seconds).
 const HALFLIFE: u32 = 600;
 
-use crate::accounting::payout::sharechain_pplns::pplns_window::COINBASE_MATURITY;
 use crate::shares::genesis::GenesisData;
 use bitcoin::CompactTarget;
 use bitcoin::{BlockHash, Target};
@@ -49,9 +48,6 @@ static SIM_NETWORK_HASHRATE: std::sync::OnceLock<u64> = std::sync::OnceLock::new
 
 #[cfg(feature = "sim")]
 static SIM_PROPAGATION_DELAY_MS: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
-
-#[cfg(feature = "sim")]
-static SIM_COINBASE_MATURITY: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
 
 /// Set the sim ideal block time. Called once at startup by the sim binary.
 /// Does not exist in production builds.
@@ -92,38 +88,6 @@ pub fn half_life() -> u32 {
     #[cfg(not(feature = "sim"))]
     {
         HALFLIFE
-    }
-}
-
-// ---------------------------------------------------------------------------
-// coinbase maturity
-// ---------------------------------------------------------------------------
-
-/// Set the sim coinbase maturity depth. Called once at startup by the sim
-/// binary. Does not exist in production builds.
-#[cfg(feature = "sim")]
-pub fn init_coinbase_maturity(shares: usize) {
-    SIM_COINBASE_MATURITY.set(shares).ok();
-}
-
-/// Effective coinbase maturity depth, in shares.
-///
-/// Governs both when a share coinbase can be spent and when a share can be
-/// paid, so the two stay one rule.
-///
-/// Production: returns `COINBASE_MATURITY`.
-/// Sim: returns the value set by `init_coinbase_maturity`, falling back to
-/// `COINBASE_MATURITY` if unset. A small value lets a short sim run reach the
-/// maturity skip, which production values only reach after hours.
-#[inline(always)]
-pub fn coinbase_maturity() -> usize {
-    #[cfg(feature = "sim")]
-    {
-        *SIM_COINBASE_MATURITY.get().unwrap_or(&COINBASE_MATURITY)
-    }
-    #[cfg(not(feature = "sim"))]
-    {
-        COINBASE_MATURITY
     }
 }
 
@@ -263,11 +227,6 @@ mod tests {
     #[test]
     fn test_half_life_returns_production_default() {
         assert_eq!(half_life(), 600);
-    }
-
-    #[test]
-    fn test_coinbase_maturity_returns_production_default() {
-        assert_eq!(coinbase_maturity(), COINBASE_MATURITY);
     }
 
     #[test]

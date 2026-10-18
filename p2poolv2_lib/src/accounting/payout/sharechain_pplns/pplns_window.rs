@@ -16,7 +16,6 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ConfirmedHeaderResult;
 use crate::shares::share_block::ShareHeader;
-use crate::sim_overrides;
 use bitcoin::Address;
 use bitcoin::BlockHash;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -34,14 +33,26 @@ use tracing::debug;
 /// The cache, its eviction buffer, `PRUNE_DEPTH`, the PPLNS zone and the
 /// prevout depth are all sized by it, together with `COINBASE_MATURITY`
 /// through `PAYOUT_DEPTH`.
+///
+/// The sim build uses 80 shares instead, with the other sim depths below, so
+/// a fast sim chain reaches the prune depth and prunes often.
+#[cfg(not(feature = "sim"))]
 pub const PPLNS_WINDOW_SHARES: usize = 120960;
+#[cfg(feature = "sim")]
+pub const PPLNS_WINDOW_SHARES: usize = 80;
 
 /// Coinbase outputs cannot be spent until the containing block is this
 /// many blocks deep. 70% of blocks-per-day at 10s block time (0.70 * 86400 / 10).
 ///
 /// A share is paid by a found block only at the same depth, except that the
 /// first `COINBASE_MATURITY` shares of the chain are always mature for payout.
+///
+/// The sim build uses 20 shares, so a short run reaches the payout maturity
+/// skip.
+#[cfg(not(feature = "sim"))]
 pub const COINBASE_MATURITY: usize = 6048;
+#[cfg(feature = "sim")]
+pub const COINBASE_MATURITY: usize = 20;
 
 /// Shares from a paying share down to the oldest share it can pay: the
 /// coinbase maturity depth plus the PPLNS window.
@@ -71,16 +82,29 @@ pub const PAYOUT_DEPTH: usize = COINBASE_MATURITY + PPLNS_WINDOW_SHARES;
 /// resource choice, not a consensus rule: nodes with different values disagree
 /// only about which deep forks they are willing to follow, and a dropped share
 /// leaves no verdict behind.
+///
+/// The sim build uses 4, a 20 entry buffer over its 80 share window: 1% of
+/// that window would be one entry, and shares built one parent behind the tip
+/// under propagation delay would be dropped.
+#[cfg(not(feature = "sim"))]
 const PPLNS_WINDOW_BUFFER_DIVISOR: usize = 100;
+#[cfg(feature = "sim")]
+const PPLNS_WINDOW_BUFFER_DIVISOR: usize = 4;
 
 /// Number of blocks from the chain tip that must be retained by each node.
 /// Equals 2x `PAYOUT_DEPTH`: one payout depth for full tx validation and one
 /// for PoW-only validation that provides output availability.
 pub const PRUNE_DEPTH: usize = 2 * PAYOUT_DEPTH;
 
-/// Pruning runs every PRUNE_INTERVAL blocks (approximately 1 hour at
-/// 10s/block: 60 * 6 = 360).
+/// The gap between the prune height and the prune target, and the size of
+/// one prune chunk: 360 shares, about 1 hour at 10s/block (60 * 6 = 360).
+///
+/// The sim build uses 20 shares, giving a sim prune target 220 shares below
+/// the tip.
+#[cfg(not(feature = "sim"))]
 pub const PRUNE_INTERVAL: usize = 360;
+#[cfg(feature = "sim")]
+pub const PRUNE_INTERVAL: usize = 20;
 
 /// Scale factor applied to all difficulty contributions.
 /// Allows integer representation of 90%/10% uncle/nephew weighting.
@@ -217,8 +241,7 @@ pub struct PplnsWindow {
     /// exercised without a full-capacity fixture.
     max_window_shares: usize,
     /// Depth a share must reach before it is paid. Defaults to
-    /// `sim_overrides::coinbase_maturity()`, which is `COINBASE_MATURITY`
-    /// outside sim builds.
+    /// `COINBASE_MATURITY`.
     maturity_skip: usize,
 }
 
@@ -232,7 +255,7 @@ impl PplnsWindow {
             address_keys: AddressKeys::default(),
             network,
             max_window_shares: PPLNS_WINDOW_SHARES,
-            maturity_skip: sim_overrides::coinbase_maturity(),
+            maturity_skip: COINBASE_MATURITY,
         }
     }
 

@@ -14,7 +14,9 @@ use crate::accounting::payout::payout_distribution::{
 use crate::accounting::payout::sharechain_pplns::PplnsWindow;
 #[cfg(not(test))]
 use crate::accounting::payout::sharechain_pplns::PplnsWindow;
-use crate::accounting::payout::sharechain_pplns::pplns_window::{PAYOUT_DEPTH, WindowError};
+use crate::accounting::payout::sharechain_pplns::pplns_window::{
+    COINBASE_MATURITY, PAYOUT_DEPTH, WindowError,
+};
 #[cfg(test)]
 #[mockall_double::double]
 use crate::pool_difficulty::PoolDifficulty;
@@ -1393,7 +1395,7 @@ impl ShareValidator for DefaultShareValidator {
                 &all_outpoints,
                 block_height,
                 min_coinbase_root_height,
-                sim_overrides::coinbase_maturity(),
+                COINBASE_MATURITY,
             )
             .map_err(|error| {
                 ValidationError::store_access(format!("Prevout check failed: {error}"))
@@ -1485,9 +1487,7 @@ mockall::mock! {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::accounting::payout::sharechain_pplns::pplns_window::{
-        COINBASE_MATURITY, PPLNS_WINDOW_SHARES,
-    };
+    use crate::accounting::payout::sharechain_pplns::pplns_window::PPLNS_WINDOW_SHARES;
     use crate::shares::share_block::ShareTransaction;
     use crate::shares::share_commitment::ShareCommitment;
     use crate::shares::witness_commitment::WitnessCommitment;

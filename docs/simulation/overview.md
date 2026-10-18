@@ -58,16 +58,29 @@ or no-ops in production builds (zero overhead). Key overrides:
   be overridden for time-compressed runs.
 - **Genesis anchoring**: `sim_overrides::genesis_timestamp()` and
   `anchor_target()` anchor ASERT at launch time and steady-state difficulty.
-- **PPLNS window**: no override. The window is `PPLNS_WINDOW_SHARES` shares on
-  every network, so the sim pays the same multi-miner window as mainnet.
-- **Coinbase maturity**: `sim_overrides::coinbase_maturity()` returns
-  `COINBASE_MATURITY` (6,048) in production and `[sim] coinbase_maturity` in
-  sim (`MATURITY_SHARES` in the harness). It governs both payout maturity and
-  spend maturity. This is a deliberate exception to keeping production values:
-  the payout maturity skip only starts at height 6,048 and reaches full size at
-  12,095, which is hours of run time even time-compressed, so without the
-  override no sim run would exercise it. It is consensus, so every node gets the
-  same value.
+- **Short depths**: the sim build compiles shorter consensus depths under
+  `cfg(feature = "sim")` in `pplns_window.rs`, so the fast sim chain exercises
+  payout maturity, output expiry, the full-validation boundary and block body
+  pruning in every scenario:
+
+  | Constant | Production | Sim |
+  |---|---|---|
+  | `COINBASE_MATURITY` | 6,048 | 20 |
+  | `PPLNS_WINDOW_SHARES` | 120,960 | 80 |
+  | `PAYOUT_DEPTH` | 127,008 | 100 |
+  | `PRUNE_DEPTH` | 254,016 | 200 |
+  | `PRUNE_INTERVAL` | 360 | 20 |
+  | window eviction buffer | 1,210 | 20 |
+  | `BACKGROUND_TASK_INTERVAL` (node) | 6 h | 30 s |
+
+  They are constants, not config, so every node built from one binary agrees
+  on them. The eviction buffer is raised to a quarter of the window (1% of 80
+  would be one entry, and shares built behind the tip under propagation delay
+  would be dropped). The reorg depth limit sits at the prune target, 220
+  shares below the tip, which keeps it well above the forks the failure
+  scenarios create (a 90s partition is 18 shares at 5s blocks). The cost is
+  that sim no longer runs a production-size PPLNS window; `cargo bench --bench
+  pplns_window` covers its compute cost.
 - **Propagation delay**: `sim_overrides::spawn_delayed_broadcast()` models
   network latency with per-broadcast jitter.
 - **Auto-submit**: disabled under sim (regtest headers meet bitcoin target ~50%
@@ -138,7 +151,7 @@ load-tests/sim/stop-swarm.sh       # stop all (incl. orphans matching this RUN_D
 Configs/stores/logs land in `RUN_DIR` (default `/tmp/p2pool-sim`). Tunables via
 env: `RUN_DIR`, `BASE_P2P`/`BASE_STRATUM`/`BASE_API`, `RPC_*`, `ZMQ`,
 `MINER_ADDRESS`, `HASHRATE` + `HASHRATE_DIST`(equal|zipf) + `ZIPF_ALPHA`,
-`SHARES_PER_BLOCK`, `WINDOW_SHARES`, `LATENCY_MS` + `LATENCY_DIST`(equal|spread),
+`SHARES_PER_BLOCK`, `LATENCY_MS` + `LATENCY_DIST`(equal|spread),
 `ASERT_ANCHOR` (shared anchor, default launch time), `NETWORK_HASHRATE` (shared,
 default `N*HASHRATE`; anchors genesis at the steady-state difficulty so there's
 no ASERT warmup), `IDEAL_BLOCK_TIME` (default 10s; lower = time-compressed run —
@@ -164,7 +177,7 @@ failure mode that caused it.
 | `restart-fast` | a node fails and comes back immediately |
 | `restart-delayed` | a node fails and comes back after `FAILURE_SLOW_DOWN` (default 330s). That crosses the 300s `MAX_TIP_AGE_SECS` threshold, so the node rejoins *not* current: inv gossip is ignored and it must bulk-sync via `getheaders` and block fetch |
 | `partition` | `DIAL_FANOUT` consecutive nodes fail at once, cutting the dial chain, then all come back |
-| `late-miner` | payout maturity: node `LATE_MINER` starts with its emitter off and starts mining once the chain is two maturity depths deep; `maturity_check.py` checks against the regtest coinbases that it is paid only once its shares are mature. Needs a small `MATURITY_SHARES`; not part of `all` (RUNBOOK Test G) |
+| `late-miner` | payout maturity: node `LATE_MINER` starts with its emitter off and starts mining once the chain is two maturity depths deep; `maturity_check.py` checks against the regtest coinbases that it is paid only once its shares are mature. Needs `LATE_MINER`; not part of `all` (RUNBOOK Test G) |
 | `all` | the three failure scenarios in sequence (local use) |
 
 Tunables: `FAILURE_SEED` (target selection; targets are printed so a failing
