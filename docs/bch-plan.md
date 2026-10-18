@@ -21,7 +21,7 @@ Audience: contributors and AI agents starting the BCH port. Read
 | Declared BCH coinbase peer validation | Implemented; bounded header extension, prefix/aux proof tampering, payout diversion, storage and compressed-header tests. |
 | Mineable Job Declaration in both modes | Both the mocked regression and the two-node BCHN regtest use authenticated Noise connections through the actual listener. Both modes mine blocks and emit verifiable proofs. Independent client interoperability remains pending. |
 | Miner-selected auxiliary commitments | Bounded shared trees and full coinbase/header proofs are implemented. An experimental SAFA variant verifies the proof inside the BCH VM and paid tokens in a real two-node regtest. Final SAFA policy, independent covenant review and chipnet issuance remain open. See [bch-auxpow.md](bch-auxpow.md). |
-| PPLNS tuning and independent ASIC/JD interoperability | Pending. Since the upstream sync a coinbase pays a fixed `PPLNS_WINDOW_SHARES` (120,960) shares. They start `COINBASE_MATURITY` (6,048) shares below the paying share, about 17 hours at 10-second shares, once the chain is past its first 6,048 shares. That replaces the window sized by block difficulty. Decision 11 keeps upstream's constants for now and may revisit them. |
+| PPLNS tuning and independent ASIC/JD interoperability | Pending. Since the upstream sync a coinbase pays a fixed `PPLNS_WINDOW_SHARES` (120,960) shares. They start `COINBASE_MATURITY` (6,048) shares below the paying share, about 17 hours at 10-second shares, once the chain is past its first 6,048 shares. That replaces the window sized by block difficulty. Decision 11 keeps upstream's constants for now. A window sized by the paying header's BCH difficulty (`BCH_PPLNS_WINDOW_BLOCKS` = 3 blocks' worth of work, as P2Pool v1 on BCH, capped at 120,960 shares) is prototyped as a consensus change awaiting the maintainer's decision; see decision 11. |
 | Remote CI and chipnet block | Rust tests, linting, Security and BCH Covenant Tests pass on GitHub; Code Coverage fails only at the Codecov upload until the fork has a `CODECOV_TOKEN`. First chipnet block on 2026-10-18: height 328451, `00000000000cb752459c2b08e1955e5f33252b0207b1c7b5b2f069d5254b9025`, found by an Avalon ASIC on Stratum V1 through the two-node chipnet pool, with templates from a remote BCHN 29.1.0 (Start9, over Tailscale). Its coinbase paid 25.00462191 BCH: 1.5% (0.37506932) to the donation address, the PPLNS window to two miners (17.05914219 and 7.50989553), 0.06051487 to the genesis share's NUMS key, then the merge-mining, padding and share-commitment outputs. Two more blocks found within five seconds at the same height lost, because nothing refreshed the template right after a found block. PR #3 fixed that on 2026-10-18: an accepted block now triggers an immediate template fetch, and the pool hears BCHN's ZMQ over Tailscale. After the fix the pool found blocks 328455 and 328456 at real difficulty, each submitted once with no sibling, paying the donation and the window. |
 
 ## Implementation checkpoint (2026-10-13)
@@ -484,19 +484,119 @@ move most BCH hashrate to the share chain.
     share interval for BCH later, for example after CHIP-2025-03 or a tempnet
     test.
 
-    Leading option for that revisit: size the window by BCH's own block
-    difficulty, which BCHN sets every block with ASERT, instead of a fixed
-    share count. The window would hold `K` expected BCH blocks' worth of
-    work, capped at 120,960 shares, so it spans about `K` of this pool's
-    blocks at any pool size and shrinks by itself if blocks get faster.
-    - The difficulty comes from the BCH header in the paying share, never
-      from a node's own BCHN or config. That keeps every node's payouts
-      identical, the reason upstream dropped its earlier window sized by
-      local difficulty and `difficulty_multiplier`.
-    - `K` is a share-chain rule.
-    - Chipnet and testnet difficulty-1 blocks are ignored when sizing.
-    - It is a consensus change, so it needs simulator and chipnet tests and
-      a coordinated upgrade.
+    Proposed revisit (prototyped 2026-10-18 on branch
+    `claude/bch-difficulty-pplns-window`, a consensus change awaiting the
+    maintainer's decision): size the window by BCH's own block difficulty,
+    which BCHN sets every block with ASERT, instead of a fixed share count,
+    as P2Pool v1 on BCH did. Bitcoin keeps upstream's fixed window. Rule and
+    reasoning are in `docs/architecture/payout-distribution.md`, "Bitcoin
+    Cash window".
+    - **Rule.** Below the unchanged maturity skip, a coinbase pays the shares
+      up to and including the first one that brings the window's work (share
+      plus uncle difficulty) to `K` times the difficulty of the paying
+      share's own BCH header, at most 120,960 shares. The window spans about
+      `K` of this pool's blocks at any pool size: about 600 shares (100
+      minutes) at 30% of BCH's hashrate, 18,000 (50 hours) at 1%, and the
+      full 120,960 below about 0.15%, where the rule pays exactly upstream's
+      window. It shrinks by itself if blocks get faster (CHIP-2025-03).
+    - **Difficulty source.** The paying share's header bits, never a node's
+      own BCHN, template or config. BCH only accepts a block with the correct
+      ASERT bits, so every coinbase that reaches the chain was sized by the
+      real difficulty, and every node reads the same bits, so payouts stay
+      identical: the reason upstream dropped its earlier window sized by
+      local difficulty and `difficulty_multiplier`. The notifier, the
+      validator and the API's `/miner` view share one code path
+      (`resolve_window`, `walk_window_entries`, `for_each_credit`,
+      `bitcoin_block_difficulty`).
+    - **`K` = 3** (`BCH_PPLNS_WINDOW_BLOCKS`), a share-chain rule. It is P2Pool
+      v1's `SPREAD` on BCH
+      ([jtoomim/p2pool](https://github.com/jtoomim/p2pool),
+      `p2pool/networks/bitcoincash.py`, and `generate_transaction` in
+      `p2pool/data.py`: desired weight
+      `65535 * SPREAD * target_to_average_attempts(block_target)` from the
+      share's own header, capped at `REAL_CHAIN_LENGTH` = 4,320 shares). A
+      share is paid by a Poisson number of blocks with mean `K`: with 3 it
+      misses every block 5% of the time and its payout varies by 58%,
+      against 13.5% and 71% with 2. The idea is reimplemented, not copied
+      (decision 10).
+    - **Minimum difficulty.** A paying header at the network's proof-of-work
+      limit (difficulty 1: chipnet's and testnet's 20-minute blocks, every
+      regtest block) pays the capped 120,960 shares instead of shrinking the
+      window to one share. Falling back to an older share's header was
+      rejected, because only a found block's bits are checked by BCH.
+    - **Activation.** A flag day: every chipnet and regtest node upgrades in
+      one release and starts from a new store path, as for the upstream sync,
+      so no share on the new chain was made under the old rule. Nodes left
+      behind reject the new shares and fork off; miners keep every BCH payout
+      already made. Mainnet starts with the rule from its first share. If an
+      existing chain must carry over instead, the rule needs an activation
+      share height, which this prototype does not add.
+    - **Simulation** (`pplns_compare` in `p2poolv2_sim`, the real
+      `PplnsWindow`, five seeds per pool size, a 10% and a 0.1% miner and a
+      5% miner who mines for 20 days; no uncles). Work-to-pay delay is the
+      maturity skip plus half the window.
+
+      | Pool share of BCH | Window, K = 3 | Work-to-pay delay, fixed to K = 3 | Paid after stopping, fixed to K = 3 | 0.1% miner daily income CV, fixed to K = 3 |
+      |---|---|---|---|---|
+      | 0.05% | 120,960 shares (cap) | 185 h, identical payouts | up to 352 h, identical | unchanged |
+      | 1% | 18,000 shares, 50 h | 185 h to 42 h | 344 h to 46 h | 0.84 to 0.89 |
+      | 10% | 1,800 shares, 5 h | 185 h to 19 h | 352 h to 20 h | 0.27 to 0.43 |
+      | 30% | 600 shares, 1.7 h | 185 h to 18 h | 352 h to 18 h | 0.17 to 0.41 |
+
+      Every miner's long-run income stays fair (0.95 to 1.04 of its hashrate
+      share) and the 10% miner's daily variation does not change. The trade
+      is that payouts follow recent work and stop within about a day of a
+      miner leaving instead of two weeks, while a small miner in a large pool
+      sees more day-to-day variation, which the mini chain is for. `K` = 2
+      instead of 3 shortens the delay at 1% from 42 to 34 hours and raises
+      the 0.1% miner's daily variation from 0.43 to 0.47 at 10% of BCH and
+      from 0.41 to 0.44 at 30%, close to the spread across seeds (about
+      0.03), so either value is defensible; 3 is kept for being the value
+      P2Pool v1 ran on BCH.
+    - **Other P2Pool v1 ideas: recommendations, not implemented.**
+      - *Shorter payout maturity: recommended, as a separate consensus
+        change.* Upstream skips 6,048 shares (16.8 hours) so that no payout
+        depends on a share-chain reorg (commit 465eb9bf): a block's payout
+        can differ between forks only if they split more than the skip below
+        the paying share. Uncles, the forks seen in normal running, are at
+        most `MAX_UNCLES_DEPTH` (3) shares deep, and a deliberate
+        private fork must outrun the whole pool for the entire skip while
+        its shares earn nothing from public blocks. v1 ran with no skip at
+        all. With `--maturity 360` (one hour) the simulation cuts the
+        work-to-pay delay at `K` = 3 from 42 to 26 hours at 1% of BCH, from
+        19 to 3.5 hours at 10% and from 18 to 1.8 hours at 30%, and a
+        joining miner's first payout at 10% from 17 to 1.9 hours, with
+        unchanged variance. At 1% the wait for the pool's next block, 17
+        hours on average, still dominates the first payout. Keep the
+        share-output spend maturity (`check_prevouts`) at its own depth,
+        since it protects traded share outputs; BCH payouts still need 100
+        BCH blocks before they can be spent either way. A shorter payout
+        skip also shrinks `PAYOUT_DEPTH`, the window cache and pruning, and
+        needs the sim `late-miner` scenario rerun.
+      - *Block-finder bonus (v1 paid 0.5% to the finder): not now.* In the
+        simulation it leaves every miner's income fair and its variation
+        unchanged within the spread across seeds, and it brings a large
+        pool's first payout forward, because a finder is paid at once (at
+        10% of BCH 17.2 to 15.8 hours, at 30% 17.6 to 12.4 hours, none
+        once the skip is short). Against block withholding it adds 0.5% of
+        a block to what a withholder already loses, its window share: about
+        six times the loss for a 0.1% miner, little for a large one. It
+        costs a new consensus output in the producer, the validator and
+        declared jobs, and a rule for how it sits beside the 10% donation
+        and fee cap. Worth it only if withholding shows up; the two chipnet
+        blocks lost at one height need faster template refresh, which a
+        bonus would not give.
+      - *Share period: keep 10 seconds.* v1 used 60 seconds on BCH, where
+        every orphaned share was lost; this fork pays uncles 9/10 of their
+        difficulty and relays compact headers. Ten-second shares give six
+        times as many shares per unit of work, so small miners' share
+        counts vary less and the BCH window holds enough shares even for a
+        large pool: about 600 at 30% of BCH, which would be 100 at 60
+        seconds. Under CHIP-2025-03's 1-minute blocks that window falls to
+        about 60 shares at 10 seconds and 10 at 60. The costs of 10 seconds
+        are six times the shares to store and relay and a higher uncle
+        rate; measure the uncle rate on chipnet and in the swarm sim's
+        latency runs before reconsidering.
 
 ## BCH porting checklist
 
@@ -537,7 +637,9 @@ check before code.
   lock-in 2026-11-15) before tuning. Since the 2026-10-18 upstream sync the
   window is a fixed share count behind a maturity depth
   (`PPLNS_WINDOW_SHARES`, `COINBASE_MATURITY`), not sized by block
-  difficulty. Tempnet, a test network that runs 1-minute blocks, can test a
+  difficulty; a window sized by the paying header's difficulty, a shorter
+  payout skip, a finder bonus and the share period are weighed under
+  decision 11. Tempnet, a test network that runs 1-minute blocks, can test a
   tuning.
 - Whether 10% is the right consensus cap on donation plus fee.
 - Which scripts beyond P2PKH the share-chain interpreter should accept
