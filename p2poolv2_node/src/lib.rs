@@ -14,7 +14,7 @@ pub mod preflight;
 pub mod signal;
 
 use p2poolv2_api::start_api_server;
-use p2poolv2_lib::accounting::payout::build_payout_for_mode;
+use p2poolv2_lib::accounting::payout::{build_payout_for_mode, payout_pplns_window};
 use p2poolv2_lib::accounting::stats::metrics;
 use p2poolv2_lib::address::bch_share::BchShareNetwork;
 use p2poolv2_lib::config::{BitcoinCashNetwork, Chain, Config, bitcoin_cash_donation_cashaddr};
@@ -283,6 +283,7 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
         cloned_stratum_config.network,
         stratum_config.bitcoin_cash_network,
     );
+    let api_pplns_window = payout_pplns_window(stratum_config.mode, &shared_pplns_window);
     let exit_sender_notify = exit_sender.clone();
     let exit_receiver_notify = exit_sender.subscribe();
     let notify_transactions = pool_transactions.clone();
@@ -420,6 +421,7 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
         stratum_config.network,
         bch_share_network,
         stratum_config.pool_signature,
+        api_pplns_window,
     )
     .await
     {

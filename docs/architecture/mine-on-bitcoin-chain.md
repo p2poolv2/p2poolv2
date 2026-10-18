@@ -372,12 +372,12 @@ If nothing in its window is eligible, the job builder stops the node (see
 
 - Counting back from the anchor, the paying share's parent, the walk
   first skips the shares not yet mature for the paying share, then takes
-  `PPLNS_WINDOW_SHARES` (120,960) shares (`accumulate_window_difficulty`).
+  `PPLNS_WINDOW_SHARES` (120,960) shares (`walk_window_entries`).
   The first `COINBASE_MATURITY` shares of the chain are always mature.
   `payout-distribution.md` has the full rule. Each share is weighted by
   its difficulty and uses one slot.
 - Uncles use no slots. An uncle's miner gets 9/10 of the uncle's
-  difficulty, and the nephew's miner a 1/10 bonus (`add_entry_difficulty`).
+  difficulty, and the nephew's miner a 1/10 bonus (`for_each_credit`).
 - The cache holds the maturity skip and the window plus a 1% buffer of
   the window (`cache_capacity`, about 128,000 entries). An anchor too deep
   for the buffer gives `InsufficientEntries`, and the share is dropped as

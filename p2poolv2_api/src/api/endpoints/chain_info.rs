@@ -94,6 +94,7 @@ mod tests {
             monitoring_event_sender: create_monitoring_event_channel().0,
             auth_user: None,
             auth_token: None,
+            pplns_window: None,
         });
         (state, temp_dir)
     }

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use crate::api::endpoints;
+use crate::api::endpoints::miner::MinerWindowSource;
 use crate::api::error::ApiError;
 use crate::api::{auth::auth_middleware, websocket::websocket_handler};
 use axum::{
@@ -14,6 +15,7 @@ use axum::{
     routing::{delete, get, post},
 };
 use chrono::DateTime;
+use p2poolv2_lib::accounting::payout::sharechain_pplns::PplnsWindow;
 use p2poolv2_lib::address::bch_share::BchShareNetwork;
 use p2poolv2_lib::monitoring_events::MonitoringEventSender;
 use p2poolv2_lib::node::actor::NodeHandle;
@@ -26,6 +28,7 @@ use p2poolv2_lib::{
 };
 use serde::Deserialize;
 use std::path::PathBuf;
+use std::sync::RwLock;
 use std::time::Duration;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::oneshot;
@@ -43,6 +46,11 @@ pub(crate) struct AppState {
     pub(crate) monitoring_event_sender: MonitoringEventSender,
     pub(crate) auth_user: Option<String>,
     pub(crate) auth_token: Option<String>,
+    /// The node's share chain PPLNS window, shared with the payout and
+    /// validation code, with the snapshot `/miner` answers from. `None` when
+    /// the node does not pay from it (Hydrapool mode), which turns `/miner`
+    /// off.
+    pub(crate) pplns_window: Option<Arc<MinerWindowSource>>,
 }
 
 /// Stores application config values that don't change across requests
@@ -106,6 +114,7 @@ fn build_router(app_state: Arc<AppState>, app_config: AppConfig) -> Router {
         .route("/candidates", get(endpoints::candidates::candidates))
         .route("/share", get(endpoints::share::share))
         .route("/dag", get(endpoints::dag::dag))
+        .route("/miner", get(endpoints::miner::miner))
         .route("/transaction", get(endpoints::transaction::transaction))
         .route(
             "/share_headers",
@@ -146,6 +155,9 @@ fn build_router(app_state: Arc<AppState>, app_config: AppConfig) -> Router {
 }
 
 /// Start the API server and return a shutdown channel and the actual bound port.
+///
+/// `pplns_window` is the node's share chain PPLNS window, or `None` when the
+/// node does not pay from it; `/miner` reads it.
 #[allow(clippy::too_many_arguments)] // wiring constructor: each parameter is a distinct collaborator, a params struct would only move the list
 pub async fn start_api_server(
     config: ApiConfig,
@@ -157,6 +169,7 @@ pub async fn start_api_server(
     network: bitcoin::Network,
     cash_network: Option<BchShareNetwork>,
     pool_signature: Option<String>,
+    pplns_window: Option<Arc<RwLock<PplnsWindow>>>,
 ) -> Result<(oneshot::Sender<()>, u16), std::io::Error> {
     let app_config = AppConfig {
         pool_signature_length: pool_signature.unwrap_or_default().len(),
@@ -174,6 +187,7 @@ pub async fn start_api_server(
         monitoring_event_sender,
         auth_user: config.auth_user.clone(),
         auth_token: config.auth_token.clone(),
+        pplns_window: pplns_window.map(|window| Arc::new(MinerWindowSource::new(window))),
     });
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
@@ -515,6 +529,7 @@ mod tests {
             monitoring_event_sender: create_monitoring_event_channel().0,
             auth_user: None,
             auth_token: None,
+            pplns_window: None,
         });
         (state, temp_dir)
     }
@@ -749,6 +764,7 @@ mod tests {
             monitoring_event_sender: create_monitoring_event_channel().0,
             auth_user: None,
             auth_token: None,
+            pplns_window: None,
         });
 
         let response_body = metrics(State(state)).await;
@@ -858,6 +874,7 @@ mod tests {
             monitoring_event_sender: create_monitoring_event_channel().0,
             auth_user: Some(username.to_string()),
             auth_token: Some(token),
+            pplns_window: None,
         });
         (state, temp_dir, base64_credentials)
     }
@@ -910,6 +927,41 @@ mod tests {
 
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), http::StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_miner_route_without_auth_header_returns_401() {
+        use tower::ServiceExt;
+
+        let (state, _temp_dir, _base64_credentials) = build_auth_test_state().await;
+        let app = build_router(state.clone(), state.app_config.clone());
+
+        let request = http::Request::builder()
+            .uri("/miner?address=tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d")
+            .body(http_body_util::Empty::<bytes::Bytes>::new())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), http::StatusCode::UNAUTHORIZED);
+    }
+
+    /// A malformed address is a 400 from the handler, which tells a routed
+    /// request apart from the 404 an unknown path gets.
+    #[tokio::test]
+    async fn test_miner_route_with_auth_reaches_the_handler() {
+        use tower::ServiceExt;
+
+        let (state, _temp_dir, base64_credentials) = build_auth_test_state().await;
+        let app = build_router(state.clone(), state.app_config.clone());
+
+        let request = http::Request::builder()
+            .uri("/miner?address=not-an-address")
+            .header("Authorization", format!("Basic {base64_credentials}"))
+            .body(http_body_util::Empty::<bytes::Bytes>::new())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), http::StatusCode::BAD_REQUEST);
     }
 
     /// Start a real HTTP server on a random port and return (base_url, shutdown_tx).
@@ -1023,6 +1075,7 @@ mod tests {
             monitoring_event_sender: create_monitoring_event_channel().0,
             auth_user: None,
             auth_token: None,
+            pplns_window: None,
         });
 
         let app = build_router(state.clone(), state.app_config.clone());
