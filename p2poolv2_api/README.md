@@ -37,6 +37,7 @@ token suitable for the config file.
 - [GET /candidates](#get-candidates) -- Candidate shares by height range
 - [GET /share](#get-share) -- Look up a share by hash or height
 - [GET /share_headers](#get-share_headers) -- Raw share headers by height range
+- [GET /miner](#get-miner) -- One miner's shares and weight in the PPLNS window
 - [GET /peers](#get-peers) -- Connected peers
 - [GET /pplns_shares](#get-pplns_shares) -- PPLNS accounting data
 - [WebSocket /ws](#websocket-ws) -- Real-time event subscriptions
@@ -160,6 +161,136 @@ Each header entry contains the flattened `ShareHeader` fields and an
 optional `transactions` array (present only when
 `share_block_transactions=true`).
 
+### GET /miner
+
+Returns one miner's shares and weight in the share chain PPLNS window, so
+a share chain explorer or miner software can show a miner's standing
+without indexing the chain itself.
+
+The window is the one the next share this node mines would pay: anchored
+on the share it mines on, minus the shares not yet mature for payout, then
+`PPLNS_WINDOW_SHARES` shares (see
+`docs/architecture/payout-distribution.md`). It is walked and weighted by
+the same `PplnsWindow` code that builds and validates coinbases, so the
+numbers are the payout's own.
+
+**Query parameters:**
+
+| Parameter | Type     | Default | Description                                         |
+|-----------|----------|---------|-----------------------------------------------------|
+| `address` | `string` | --      | Payout address or share chain address (required)    |
+| `limit`   | `number` | 100     | Max shares listed, newest first (1-100)             |
+
+`address` is either of the two addresses a share header carries; neither
+is derived from the other:
+
+- **Payout address** (`miner_bitcoin_address`), which receives the
+  coinbase payout. On Bitcoin Cash a CashAddr for the node's network, with
+  or without its `bitcoincash:`, `bchtest:` or `bchreg:` prefix. On Bitcoin
+  a Bitcoin address for the node's network.
+- **Share chain address** (`miner_address`), which owns the share. On
+  Bitcoin Cash `p2pool:`, `tp2pool:` or `rp2pool:`; on Bitcoin the bech32m
+  `p2pool1`, `tp2pool1`, `sp2pool1` or `rp2pool1` form. Its shares' weight
+  is paid to the payout address each share names, shown per share.
+
+An address with nothing in the window gets zero counts and an empty
+`shares` list, not an error.
+
+**Response fields:**
+
+| Field             | Type     | Description                                                       |
+|-------------------|----------|-------------------------------------------------------------------|
+| `address`         | `string` | The queried address as this node spells it (CashAddr with prefix) |
+| `address_type`    | `string` | `payout` or `share`                                               |
+| `anchor`          | `string` | Share the window is anchored on (the share this node mines on)    |
+| `anchor_height`   | `number` | Height of the anchor                                              |
+| `window`          | `object` | `newest_height`, `oldest_height`, `share_count` and `weight` of the whole window |
+| `share_count`     | `number` | Window shares this address mined                                  |
+| `uncle_count`     | `number` | Uncles this address mined that window shares include              |
+| `weight`          | `string` | This address's summed weight                                      |
+| `share_fraction`  | `number` | `share_count` / `window.share_count`: its share of the window     |
+| `payout_fraction` | `number` | `weight` / `window.weight`: its fraction of the next block's PPLNS payout |
+| `shares`          | `array`  | Shares and uncles it earns weight from, newest first, at most `limit` |
+
+Each `shares` entry has `blockhash`, `height` (an uncle is credited at the
+height of the share that includes it), `nephew` (that share's blockhash, or
+`null` for a window share), `difficulty`, `weight` and `payout_address`.
+
+Weights are difficulty weights in the payout's scaled units: a share earns
+10 times its difficulty plus 1 times the difficulty of each uncle it
+includes, an uncle 9 times its own. Weights and difficulties are decimal
+strings because a window's total exceeds what a JSON number carries
+exactly in most clients.
+
+`payout_fraction` is a fraction of the PPLNS payout, which is the coinbase
+less the donation and fee set in the header of the share that finds the
+block. It is an estimate: the window moves with every share.
+
+**Example** (Bitcoin Cash chipnet, payout address without its prefix):
+
+```sh
+curl -u user:password 'http://127.0.0.1:46884/miner?address=qze95tc2dqrnltvxfa5yhunwx5952f34fv28vandn2&limit=2'
+```
+
+```json
+{
+  "address": "bchtest:qze95tc2dqrnltvxfa5yhunwx5952f34fv28vandn2",
+  "address_type": "payout",
+  "anchor": "0000000e5c...a41f",
+  "anchor_height": 1250,
+  "window": {
+    "newest_height": 1250,
+    "oldest_height": 0,
+    "share_count": 1251,
+    "weight": "62750000"
+  },
+  "share_count": 312,
+  "uncle_count": 4,
+  "weight": "15780000",
+  "share_fraction": 0.24940047961630696,
+  "payout_fraction": 0.25147410358565736,
+  "shares": [
+    {
+      "blockhash": "0000003b71...9c20",
+      "height": 1249,
+      "nephew": null,
+      "difficulty": "5000",
+      "weight": "50000",
+      "payout_address": "bchtest:qze95tc2dqrnltvxfa5yhunwx5952f34fv28vandn2"
+    },
+    {
+      "blockhash": "00000019d4...07be",
+      "height": 1247,
+      "nephew": "000000a2f8...5d13",
+      "difficulty": "5000",
+      "weight": "45000",
+      "payout_address": "bchtest:qze95tc2dqrnltvxfa5yhunwx5952f34fv28vandn2"
+    }
+  ]
+}
+```
+
+The second entry is an uncle the miner found, included by the share at
+height 1247. The chain here is younger than the maturity depth
+(`COINBASE_MATURITY`, 6,048 shares), so nothing is skipped and the window
+starts at the anchor; on an older chain `window.newest_height` sits that
+many shares below `anchor_height`.
+
+Querying a share chain address, for example
+`?address=tp2pool:qq3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyga4duy5w2`, returns the
+same shape with `"address_type": "share"`, and each share's
+`payout_address` is whatever payout address that share named.
+
+**Errors:**
+
+- `400` -- `address` missing, malformed or for another network, or
+  `limit` out of range:
+  `{"error": "Invalid address 'bitcoincash:qq...': not a share address (...) nor a payout address (...)"}`
+- `404` -- the node does not pay from the share chain PPLNS window
+  (Hydrapool mode), or it has no share chain yet.
+- `503` -- the node's PPLNS window is not loaded yet, or the anchor is
+  deeper than its window cache reaches.
+
 ### GET /peers
 
 Returns the list of currently connected peers.
@@ -266,6 +397,7 @@ HTTP status codes used:
 - `404` -- Resource not found
 - `401` -- Unauthorized (missing or invalid credentials)
 - `500` -- Internal server error
+- `503` -- Not ready yet (for example the PPLNS window is still loading)
 
 ## CLI access
 

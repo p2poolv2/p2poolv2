@@ -26,6 +26,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (P2PKH with `SIGHASH_FORKID` ECDSA or Schnorr).
 - `docs/architecture/payout-distribution.md` describes the whole payout
   scheme, including the maturity window.
+- API `GET /miner?address=...` returns one miner's shares and uncles in the
+  share chain PPLNS window, its summed weight, its share of the window and
+  its fraction of the next block's PPLNS payout, so explorers and miner
+  software need not index the chain. It takes a payout address (CashAddr
+  with or without prefix on Bitcoin Cash) or a share chain address, and is
+  computed by the payout code's own `PplnsWindow`.
 
 ### Fixed
 

@@ -70,8 +70,9 @@ See `pruning.md` for the two-window retention model.
 | Anchor walk | `PplnsWindow::resolve_start_hash`, `collect_candidate_headers` |
 | Paying height | `PplnsWindow::paying_height` |
 | Maturity skip | `PplnsWindow::immature_share_count` |
-| Window walk and weights | `accumulate_window_difficulty`, `add_entry_difficulty` |
+| Window walk and weights | `walk_window_entries`, `for_each_credit` (the only place the weights are applied) |
 | Entry point | `PplnsWindow::get_distribution_from_start_hash` |
+| One miner's view (API `/miner`) | `PplnsWindow::get_miner_window_from_start_hash`, same walk and weights |
 | Producer | `Payout::fill_distribution_from_shares` (`sharechain_pplns/payout.rs`), from `build_output_distribution` (`stratum/work/notify.rs`) |
 | Cuts and split | `include_address_and_cut`, `append_proportional_distribution` (`accounting/payout/payout_distribution.rs`) |
 | Validator | `validate_bitcoin_payout` (`shares/validation/mod.rs`) |
@@ -89,6 +90,7 @@ test with small values (for example 3 and 2).
 | Early shares stay mature | `test_distribution_keeps_early_shares_mature_after_bootstrap` |
 | Full skip at `p = 2N - 1` | `test_distribution_skips_full_maturity_after_early_shares_age_out` |
 | Truncated walk refused | `test_distribution_refuses_when_skip_and_window_exceed_cache` |
+| Miner view equals the distribution | `test_miner_window_weight_matches_distribution_for_payout_address` |
 | Output expiry | `test_validate_prevouts_expires_coinbase_roots_below_payout_depth` (`shares/validation/mod.rs`) |
 | Fixture coinbases match | `test_fixture_coinbase_reconstruction_matches_bitcoin_merkle_root` (`shares/share_block/mod.rs`, mirrors the walk by hand) |
 
