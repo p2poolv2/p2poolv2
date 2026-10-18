@@ -14,12 +14,10 @@ pub mod preflight;
 pub mod signal;
 
 use p2poolv2_api::start_api_server;
-use p2poolv2_lib::accounting::payout::build_payout_for_mode;
+use p2poolv2_lib::accounting::payout::{build_payout_for_mode, payout_pplns_window};
 use p2poolv2_lib::accounting::stats::metrics;
 use p2poolv2_lib::address::bch_share::BchShareNetwork;
-use p2poolv2_lib::config::{
-    BitcoinCashNetwork, Chain, Config, PoolMode, bitcoin_cash_donation_cashaddr,
-};
+use p2poolv2_lib::config::{BitcoinCashNetwork, Chain, Config, bitcoin_cash_donation_cashaddr};
 use p2poolv2_lib::node::actor::NodeHandle;
 use p2poolv2_lib::pool_difficulty::PoolDifficulty;
 use p2poolv2_lib::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -285,10 +283,7 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
         cloned_stratum_config.network,
         stratum_config.bitcoin_cash_network,
     );
-    // Only a share chain PPLNS node pays from this window; Hydrapool's is an
-    // unused placeholder, so the API gets none and `/miner` stays off.
-    let api_pplns_window =
-        (stratum_config.mode == PoolMode::P2poolv2).then(|| Arc::clone(&shared_pplns_window));
+    let api_pplns_window = payout_pplns_window(stratum_config.mode, &shared_pplns_window);
     let exit_sender_notify = exit_sender.clone();
     let exit_receiver_notify = exit_sender.subscribe();
     let notify_transactions = pool_transactions.clone();

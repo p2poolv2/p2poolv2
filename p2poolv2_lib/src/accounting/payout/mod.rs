@@ -44,3 +44,41 @@ pub fn build_payout_for_mode(
         }
     }
 }
+
+/// The window from `build_payout_for_mode` when the payout reads it, for
+/// read-only views of it such as the API's `/miner`.
+///
+/// `None` in Hydrapool mode: the window there is a placeholder its
+/// time-window payout never reads, so a view of it would not be the payout.
+pub fn payout_pplns_window(
+    mode: PoolMode,
+    window: &Arc<RwLock<PplnsWindow>>,
+) -> Option<Arc<RwLock<PplnsWindow>>> {
+    match mode {
+        PoolMode::P2poolv2 => Some(Arc::clone(window)),
+        PoolMode::Hydrapool => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn payout_pplns_window_is_the_shared_window_in_p2poolv2_mode() {
+        let (_payout, window) =
+            build_payout_for_mode(PoolMode::P2poolv2, bitcoin::Network::Signet, None);
+
+        let payout_window = payout_pplns_window(PoolMode::P2poolv2, &window).unwrap();
+
+        assert!(Arc::ptr_eq(&payout_window, &window));
+    }
+
+    #[test]
+    fn payout_pplns_window_is_none_in_hydrapool_mode() {
+        let (_payout, window) =
+            build_payout_for_mode(PoolMode::Hydrapool, bitcoin::Network::Signet, None);
+
+        assert!(payout_pplns_window(PoolMode::Hydrapool, &window).is_none());
+    }
+}
