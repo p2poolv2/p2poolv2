@@ -5,7 +5,7 @@ with the maintainer of [Pickaxe](https://github.com/CyberAshven/pickaxe-miner).
 Audience: contributors and AI agents starting the BCH port. Read
 [AGENTS.md](../AGENTS.md) and `docs/architecture/` before changing code.
 
-## Current requirement checks (2026-10-17)
+## Current requirement checks (2026-10-18)
 
 | Requirement | Status and evidence |
 |---|---|
@@ -20,7 +20,7 @@ Audience: contributors and AI agents starting the BCH port. Read
 | Mineable Job Declaration in both modes | Both the mocked regression and the two-node BCHN regtest use authenticated Noise connections through the actual listener. Both modes mine blocks and emit verifiable proofs. Independent client interoperability remains pending. |
 | Miner-selected auxiliary commitments | Bounded shared trees and full coinbase/header proofs are implemented. An experimental SAFA variant verifies the proof inside the BCH VM and paid tokens in a real two-node regtest. Final SAFA policy, independent covenant review and chipnet issuance remain open. See [bch-auxpow.md](bch-auxpow.md). |
 | PPLNS tuning and independent ASIC/JD interoperability | Pending; retain the existing settings until a justified tuning decision. |
-| Remote CI and chipnet block | No GitHub Actions runs: the web interface still requires activation of workflows on this fork, despite Actions permissions reporting enabled. No chipnet block found. Local checks and recorded propagation do not replace these. |
+| Remote CI and chipnet block | The fork's Actions activation was completed on 2026-10-18, including the Security workflow. Fresh PR checks remain to be verified. No chipnet block found. Local checks and recorded propagation do not replace these. |
 
 ## Implementation checkpoint (2026-10-13)
 
