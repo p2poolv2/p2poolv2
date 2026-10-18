@@ -27,7 +27,7 @@ use axum::{
 use bitcoin::{Address, BlockHash, Network};
 use p2poolv2_lib::accounting::payout::sharechain_pplns::PplnsWindow;
 use p2poolv2_lib::accounting::payout::sharechain_pplns::pplns_window::{
-    MinerCredits, WindowCredit, WindowCredits, WindowError,
+    MinerCredits, WindowCredit, WindowCredits, WindowError, bitcoin_block_difficulty,
 };
 use p2poolv2_lib::address::bch_share::{self, BchShareNetwork};
 use p2poolv2_lib::address::share_owner::{ShareOwner, to_address_string};
@@ -165,11 +165,24 @@ impl MinerWindowSource {
 
 /// Walk the window once for `anchor`, under its write lock. Blocks, so it
 /// runs on a blocking thread.
+///
+/// On Bitcoin Cash the window is sized by the paying block's difficulty, and
+/// the next block has no header yet. The anchor share's own bitcoin header
+/// carries the bits this node last mined on, which the next share carries too
+/// unless a new bitcoin block arrives first, so the view is sized from them.
+/// The fixed Bitcoin window does not read them.
 fn build_window_credits(
     window: &RwLock<PplnsWindow>,
     anchor: BlockHash,
     chain_store_handle: &ChainStoreHandle,
 ) -> Result<WindowCredits, ApiError> {
+    let anchor_bits = chain_store_handle
+        .get_share_header(&anchor)
+        .map_err(|error| {
+            ApiError::ServerError(format!("Failed to read the anchor share: {error}"))
+        })?
+        .bitcoin_header
+        .bits;
     let mut window = window
         .write()
         .map_err(|_| ApiError::ServerError("PPLNS window lock poisoned".to_string()))?;
@@ -178,9 +191,11 @@ fn build_window_credits(
             "PPLNS window is not loaded yet".to_string(),
         ));
     }
+    let paying_block_difficulty = bitcoin_block_difficulty(anchor_bits, window.network());
     window
         .get_window_credits_from_start_hash(
             anchor,
+            paying_block_difficulty,
             chain_store_handle,
             MAX_NUM_SHARES_IN_RESPONSE as usize,
         )
