@@ -245,7 +245,6 @@ dial_timeout_secs = 30
 
 [store]
 path = "$store"
-background_task_frequency_hours = 24
 pplns_ttl_days = 7
 
 [stratum]

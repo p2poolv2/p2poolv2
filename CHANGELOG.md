@@ -30,6 +30,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `docs/architecture/payout-distribution.md` describes the whole payout
   scheme, including the maturity window.
+- Nodes now delete block bodies below `PRUNE_DEPTH + PRUNE_INTERVAL` of the
+  candidate tip. Headers and their merkle branches are kept, so pruned nodes
+  still serve header sync from genesis. Pruning runs automatically while the
+  node is current. The candidate chain refuses a reorg whose fork point is
+  below the deleted range.
+
+### Removed
+
+- The `store.background_task_frequency_hours` config option. Background
+  cleanup now runs every 6 hours, fixed in code. Existing configs that still
+  set it keep loading; the value is ignored.
 
 ## [v0.15.3] - 2026-09-21
 

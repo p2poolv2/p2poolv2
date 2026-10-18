@@ -19,22 +19,10 @@ use crate::store::writer::StoreError;
 use bitcoin::consensus::{self, encode};
 use bitcoin::{BlockHash, Txid};
 use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 
 /// Genesis is defined in code and kept whole, so pruning starts above it.
 const FIRST_PRUNABLE_HEIGHT: u32 = 1;
-
-/// Column families holding block body data, compacted after a large prune.
-const BODY_COLUMN_FAMILIES: [ColumnFamily; 9] = [
-    ColumnFamily::BlockTxids,
-    ColumnFamily::BitcoinTxids,
-    ColumnFamily::BitcoinCoinbase,
-    ColumnFamily::Tx,
-    ColumnFamily::Inputs,
-    ColumnFamily::Outputs,
-    ColumnFamily::TxidsBlocks,
-    ColumnFamily::SpendsIndex,
-    ColumnFamily::BlockHeight,
-];
 
 /// Counts of what a prune deleted, for logging.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -69,6 +57,31 @@ pub fn prune_height_for_tip(candidate_tip_height: u32) -> u32 {
 /// boundary.
 pub fn prune_target_for_tip(candidate_tip_height: u32) -> u32 {
     candidate_tip_height.saturating_sub((PRUNE_DEPTH + PRUNE_INTERVAL) as u32)
+}
+
+/// The heights `[start, target)` the pruner should delete now, or None when
+/// it has nothing to do.
+///
+/// Pruning runs only while the node is current, which keeps the confirmed
+/// tip far above the target, and only once there is a candidate tip. The
+/// start is `next_prune_start`, where the previous run stopped, or else
+/// `find_prune_start` derives it from the store; the search runs only when
+/// both gates pass.
+pub fn get_range_to_prune(
+    is_current: bool,
+    candidate_tip_height: Option<u32>,
+    next_prune_start: Option<u32>,
+    find_prune_start: impl FnOnce(u32) -> Result<u32, StoreError>,
+) -> Result<Option<Range<u32>>, StoreError> {
+    let Some(candidate_tip_height) = candidate_tip_height.filter(|_| is_current) else {
+        return Ok(None);
+    };
+    let prune_target = prune_target_for_tip(candidate_tip_height);
+    let prune_start = match next_prune_start {
+        Some(prune_start) => prune_start,
+        None => find_prune_start(prune_target)?,
+    };
+    Ok((prune_start < prune_target).then_some(prune_start..prune_target))
 }
 
 impl Store {
@@ -170,16 +183,6 @@ impl Store {
             blocks: bodies.len(),
             transactions: deletable_txids.len(),
         })
-    }
-
-    /// Compact the column families that hold block body data, so the space
-    /// freed by a large prune is reclaimed promptly.
-    pub fn compact_body_column_families(&self) {
-        for column_family in BODY_COLUMN_FAMILIES {
-            let handle = self.db.cf_handle(&column_family).unwrap();
-            self.db
-                .compact_range_cf(&handle, None::<&[u8]>, None::<&[u8]>);
-        }
     }
 
     /// The sharechain txids of each block in `blockhashes` that has a body,
@@ -336,6 +339,101 @@ mod tests {
             prune_height_for_tip(candidate_tip_height),
             7 + PRUNE_INTERVAL as u32
         );
+    }
+
+    #[test]
+    fn test_get_range_to_prune_is_none_when_not_current() {
+        let candidate_tip_height = (PRUNE_DEPTH + PRUNE_INTERVAL) as u32 + 100;
+
+        let range = get_range_to_prune(false, Some(candidate_tip_height), None, |_| {
+            panic!("the start search must not run when not current")
+        })
+        .unwrap();
+
+        assert_eq!(range, None);
+    }
+
+    #[test]
+    fn test_get_range_to_prune_is_none_without_candidate_tip() {
+        let range = get_range_to_prune(true, None, None, |_| {
+            panic!("the start search must not run without a candidate tip")
+        })
+        .unwrap();
+
+        assert_eq!(range, None);
+    }
+
+    #[test]
+    fn test_get_range_to_prune_is_none_when_tip_below_prune_depth() {
+        let range = get_range_to_prune(true, Some(PRUNE_DEPTH as u32), None, |target| {
+            assert_eq!(target, 0);
+            Ok(0)
+        })
+        .unwrap();
+
+        assert_eq!(range, None);
+    }
+
+    #[test]
+    fn test_get_range_to_prune_searches_for_start_when_none_remembered() {
+        let candidate_tip_height = (PRUNE_DEPTH + PRUNE_INTERVAL) as u32 + 100;
+
+        let range = get_range_to_prune(true, Some(candidate_tip_height), None, |target| {
+            assert_eq!(target, 100);
+            Ok(40)
+        })
+        .unwrap();
+
+        assert_eq!(range, Some(40..100));
+    }
+
+    #[test]
+    fn test_get_range_to_prune_uses_remembered_start_without_searching() {
+        let candidate_tip_height = (PRUNE_DEPTH + PRUNE_INTERVAL) as u32 + 100;
+
+        let range = get_range_to_prune(true, Some(candidate_tip_height), Some(60), |_| {
+            panic!("the start search must not run with a remembered start")
+        })
+        .unwrap();
+
+        assert_eq!(range, Some(60..100));
+    }
+
+    #[test]
+    fn test_get_range_to_prune_is_none_when_start_reached_target() {
+        let candidate_tip_height = (PRUNE_DEPTH + PRUNE_INTERVAL) as u32 + 100;
+
+        let range = get_range_to_prune(true, Some(candidate_tip_height), Some(100), |_| {
+            panic!("the start search must not run with a remembered start")
+        })
+        .unwrap();
+
+        assert_eq!(range, None);
+    }
+
+    /// A tip that dropped since the last run leaves the target below the
+    /// remembered start; nothing is pruned until the tip passes it again.
+    #[test]
+    fn test_get_range_to_prune_is_none_when_start_above_target() {
+        let candidate_tip_height = (PRUNE_DEPTH + PRUNE_INTERVAL) as u32 + 100;
+
+        let range = get_range_to_prune(true, Some(candidate_tip_height), Some(150), |_| {
+            panic!("the start search must not run with a remembered start")
+        })
+        .unwrap();
+
+        assert_eq!(range, None);
+    }
+
+    #[test]
+    fn test_get_range_to_prune_propagates_start_search_error() {
+        let candidate_tip_height = (PRUNE_DEPTH + PRUNE_INTERVAL) as u32 + 100;
+
+        let result = get_range_to_prune(true, Some(candidate_tip_height), None, |_| {
+            Err(StoreError::Database("read failed".to_string()))
+        });
+
+        assert!(matches!(result, Err(StoreError::Database(_))));
     }
 
     #[test]
@@ -794,22 +892,6 @@ mod tests {
         chain_store_handle.prune_block_bodies(1, 5).await.unwrap();
 
         assert_eq!(chain_store_handle.find_prune_start(100).unwrap(), 100);
-    }
-
-    #[tokio::test]
-    async fn test_compact_body_column_families_keeps_kept_bodies_readable() {
-        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
-        let blocks = build_confirmed_test_chain(&chain_store_handle, 8).await;
-        chain_store_handle.prune_block_bodies(1, 6).await.unwrap();
-        let store = chain_store_handle.store_handle().store();
-
-        store.compact_body_column_families();
-
-        assert!(!store.share_block_exists(&blocks[5].block_hash()));
-        assert_eq!(
-            store.get_share(&blocks[6].block_hash()),
-            Some(blocks[6].clone())
-        );
     }
 
     #[test]
