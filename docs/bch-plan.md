@@ -483,6 +483,20 @@ move most BCH hashrate to the share chain.
     share interval for BCH later, for example after CHIP-2025-03 or a tempnet
     test.
 
+    Leading option for that revisit: size the window by BCH's own block
+    difficulty, which BCHN sets every block with ASERT, instead of a fixed
+    share count. The window would hold `K` expected BCH blocks' worth of
+    work, capped at 120,960 shares, so it spans about `K` of this pool's
+    blocks at any pool size and shrinks by itself if blocks get faster.
+    - The difficulty comes from the BCH header in the paying share, never
+      from a node's own BCHN or config. That keeps every node's payouts
+      identical, the reason upstream dropped its earlier window sized by
+      local difficulty and `difficulty_multiplier`.
+    - `K` is a share-chain rule.
+    - Chipnet and testnet difficulty-1 blocks are ignored when sizing.
+    - It is a consensus change, so it needs simulator and chipnet tests and
+      a coordinated upgrade.
+
 ## BCH porting checklist
 
 Found by reading P2Poolv2's code and docs; each item needs a short design
