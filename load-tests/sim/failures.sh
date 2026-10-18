@@ -28,6 +28,11 @@
 #                     the regtest coinbases that it is paid only once mature.
 #                     Needs a swarm launched with LATE_MINER; not part of
 #                     `all`
+#   pruned-join       once every node has pruned block bodies, one node is
+#                     wiped and rejoins as a fresh node; it must sync from
+#                     genesis off pruned peers without asking for a body they
+#                     deleted. Needs the swarm past the sim prune target, so it
+#                     runs time-compressed; not part of `all`
 #
 # Env overrides:
 #   RUN_DIR                   swarm work dir                (default /tmp/p2pool-sim)
@@ -44,6 +49,7 @@
 #   LATE_MINER                late-miner target node        (required for late-miner)
 #   LATE_MINER_TIP_TIMEOUT    max wait for tip 2*maturity (s) (default 900)
 #   LATE_MINER_CHECK_TIMEOUT  max wait for a verdict (s)    (default 900)
+#   PRUNED_JOIN_TIP_TIMEOUT   max wait for every node to prune (s) (default 900)
 #
 # Node 0 is never a target: metrics.sh derives the share rate and uncle rate
 # from node-0.log alone, so killing it would corrupt the run's own metrics.
@@ -78,6 +84,11 @@ Scenarios:
                     the regtest coinbases that it is paid only once mature.
                     Needs a swarm launched with LATE_MINER; not part of
                     `all`
+  pruned-join       once every node has pruned block bodies, one node is
+                    wiped and rejoins as a fresh node; it must sync from
+                    genesis off pruned peers without asking for a body they
+                    deleted. Needs the swarm past the sim prune target, so it
+                    runs time-compressed; not part of `all`
 
 Env vars:
   RUN_DIR                   swarm work dir                (default /tmp/p2pool-sim)
@@ -94,6 +105,7 @@ Env vars:
   LATE_MINER                late-miner target node        (required for late-miner)
   LATE_MINER_TIP_TIMEOUT    max wait for tip 2*maturity (s) (default 900)
   LATE_MINER_CHECK_TIMEOUT  max wait for a verdict (s)    (default 900)
+  PRUNED_JOIN_TIP_TIMEOUT   max wait for every node to prune (s) (default 900)
 
 Node 0 is never a target: metrics.sh derives the share rate and uncle rate
 from node-0.log alone, so killing it would corrupt the run's own metrics.
@@ -102,6 +114,7 @@ Examples:
   load-tests/sim/failures.sh restart-fast
   FAILURE_WARMUP=20 FAILURE_SLOW_DOWN=60 load-tests/sim/failures.sh restart-delayed
   LATE_MINER=1 load-tests/sim/failures.sh late-miner
+  load-tests/sim/failures.sh pruned-join
 
 Related scripts:
   load-tests/sim/run-swarm.sh N    launch the swarm this operates on
@@ -131,6 +144,7 @@ FAILURE_CATCHUP_TIMEOUT="${FAILURE_CATCHUP_TIMEOUT:-240}"
 LATE_MINER="${LATE_MINER:-}"
 LATE_MINER_TIP_TIMEOUT="${LATE_MINER_TIP_TIMEOUT:-900}"
 LATE_MINER_CHECK_TIMEOUT="${LATE_MINER_CHECK_TIMEOUT:-900}"
+PRUNED_JOIN_TIP_TIMEOUT="${PRUNED_JOIN_TIP_TIMEOUT:-900}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -153,6 +167,8 @@ REJOINED_TOTAL=0
 TIP_AT_KILL=()
 # late-miner only: PASS, FAIL, INCONCLUSIVE or SETUP ERROR from maturity_check.py.
 MATURITY_VERDICT=""
+# pruned-join only: PASS, FAIL (reasons) or INCONCLUSIVE.
+JOIN_VERDICT=""
 
 log_message() {
   echo "[$(date +%H:%M:%S)] $*"
@@ -479,6 +495,123 @@ require_late_miner_setup() {
 }
 
 # ---------------------------------------------------------------------------
+# pruned-join
+# ---------------------------------------------------------------------------
+
+# Prune depth and interval of the sim build, from the "Sim depths" line node 0
+# logs at startup. They are compile-time constants, the same on every node.
+sim_prune_depth() {
+  sed -nE 's/.*Sim depths: .*prune depth ([0-9]+) shares.*/\1/p' "$RUN_DIR/node-0.log" | head -n 1
+}
+
+sim_prune_interval() {
+  sed -nE 's/.*Sim depths: .*prune interval ([0-9]+) shares.*/\1/p' "$RUN_DIR/node-0.log" | head -n 1
+}
+
+# Number of nodes whose log shows a completed block body pruning run.
+count_pruned_nodes() {
+  local index count=0
+  for index in $(seq 0 $((NODE_TOTAL - 1))); do
+    if grep -q "Pruned block bodies at heights" "$RUN_DIR/node-$index.log" 2>/dev/null; then
+      count=$((count + 1))
+    fi
+  done
+  echo "$count"
+}
+
+# Poll until every node has logged a pruning run. Returns non-zero on timeout.
+wait_for_all_nodes_pruned() {
+  local timeout="$1" start
+  start="$(date +%s)"
+  while [ "$(count_pruned_nodes)" -lt "$NODE_TOTAL" ]; do
+    if [ $(($(date +%s) - start)) -ge "$timeout" ]; then
+      log_message "  only $(count_pruned_nodes)/$NODE_TOTAL nodes pruned within ${timeout}s"
+      return 1
+    fi
+    sleep 5
+  done
+}
+
+# Confirmed blockhash a node's API reports at a height, or empty.
+api_confirmed_hash() {
+  local index="$1" height="$2"
+  curl -s -m 5 "http://127.0.0.1:$((BASE_API + index))/share?height=$height" 2>/dev/null \
+    | jq -r '.[]? | select((.chain | ascii_downcase) == "confirmed") | .blockhash' 2>/dev/null \
+    | head -n 1
+}
+
+# A fresh node joins a swarm that has pruned. Wait until the swarm is past the
+# sim prune target and every node has pruned, then wipe one node's store and
+# restart it, so it syncs from genesis off peers that hold headers for every
+# height but bodies only near the tip. The old log is moved aside, to a name
+# outside the node-*.log glob: the fresh node's catch-up must be read from its
+# own log, not the pre-wipe history.
+scenario_pruned_join() {
+  local depth interval tip_target index store low_height high_height
+  local joiner_low peer_low joiner_high peer_high not_found failed_stores reasons=""
+  depth="$(sim_prune_depth)"
+  interval="$(sim_prune_interval)"
+  if [ -z "$depth" ] || [ -z "$interval" ]; then
+    log_message "  node 0 has not logged its sim depths; is it a sim build?"
+    JOIN_VERDICT="INCONCLUSIVE"
+    return
+  fi
+  tip_target=$((depth + 3 * interval))
+  index="$TARGET_SLOW"
+  store="$RUN_DIR/store-$index.db"
+  log_message "--- pruned-join: node $index is wiped once the tip reaches $tip_target and every node has pruned (prune depth $depth, interval $interval) ---"
+  TARGET_LIST="$TARGET_LIST $index"
+  if ! wait_for_swarm_height "$tip_target" "$PRUNED_JOIN_TIP_TIMEOUT" \
+    || ! wait_for_all_nodes_pruned "$PRUNED_JOIN_TIP_TIMEOUT"; then
+    JOIN_VERDICT="INCONCLUSIVE"
+    return
+  fi
+  OBSERVATION_LINES+=("nodes pruned before the join: $(count_pruned_nodes)/$NODE_TOTAL")
+
+  kill_nodes "$index"
+  rm -rf "$store"
+  mv "$RUN_DIR/node-$index.log" "$RUN_DIR/prejoin-node-$index.log"
+  log_message "  wiped node $index store and moved its log to prejoin-node-$index.log"
+  restart_and_verify "$index"
+
+  # One height the joiner holds header-only, below its own prune height, and
+  # one near the tip it holds with a body.
+  low_height=$interval
+  high_height=$(($(log_tip_height "$index") - interval))
+  joiner_low="$(api_confirmed_hash "$index" "$low_height")"
+  peer_low="$(api_confirmed_hash 0 "$low_height")"
+  joiner_high="$(api_confirmed_hash "$index" "$high_height")"
+  peer_high="$(api_confirmed_hash 0 "$high_height")"
+  not_found="$(grep -c "Received not found response" "$RUN_DIR/node-$index.log" 2>/dev/null)"
+  failed_stores="$(grep -c "Failed to store and organise block" "$RUN_DIR/node-$index.log" 2>/dev/null)"
+  OBSERVATION_LINES+=("joiner confirmed hash at $low_height: ${joiner_low:-none} (node 0: ${peer_low:-none})")
+  OBSERVATION_LINES+=("joiner confirmed hash at $high_height: ${joiner_high:-none} (node 0: ${peer_high:-none})")
+  OBSERVATION_LINES+=("joiner not-found responses: $not_found, failed stores: $failed_stores")
+
+  if [ "$REJOINED_OK" -ne "$REJOINED_TOTAL" ]; then
+    reasons="$reasons did-not-catch-up"
+  fi
+  if [ -z "$joiner_low" ] || [ "$joiner_low" != "$peer_low" ]; then
+    reasons="$reasons pruned-height-mismatch"
+  fi
+  if [ -z "$joiner_high" ] || [ "$joiner_high" != "$peer_high" ]; then
+    reasons="$reasons tip-height-mismatch"
+  fi
+  if [ "$not_found" -ne 0 ]; then
+    reasons="$reasons requested-pruned-bodies"
+  fi
+  if [ "$failed_stores" -ne 0 ]; then
+    reasons="$reasons failed-stores"
+  fi
+  if [ -z "$reasons" ]; then
+    JOIN_VERDICT="PASS"
+  else
+    JOIN_VERDICT="FAIL (${reasons# })"
+  fi
+  log_message "  pruned-join: $JOIN_VERDICT"
+}
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 
@@ -498,8 +631,13 @@ write_summary() {
     if [ -n "$MATURITY_VERDICT" ]; then
       echo "maturity verdict: $MATURITY_VERDICT"
     fi
+    if [ -n "$JOIN_VERDICT" ]; then
+      echo "pruned-join verdict: $JOIN_VERDICT"
+    fi
   } | tee "$RESULTS_FILE"
-  [ "$unrecovered" -eq 0 ] && { [ -z "$MATURITY_VERDICT" ] || [ "$MATURITY_VERDICT" = "PASS" ]; }
+  [ "$unrecovered" -eq 0 ] \
+    && { [ -z "$MATURITY_VERDICT" ] || [ "$MATURITY_VERDICT" = "PASS" ]; } \
+    && { [ -z "$JOIN_VERDICT" ] || [ "$JOIN_VERDICT" = "PASS" ]; }
 }
 
 # ---------------------------------------------------------------------------
@@ -507,9 +645,9 @@ write_summary() {
 # ---------------------------------------------------------------------------
 
 case "$SCENARIO" in
-  clean|restart-fast|restart-delayed|partition|all|late-miner) ;;
+  clean|restart-fast|restart-delayed|partition|all|late-miner|pruned-join) ;;
   *)
-    echo "ERROR: unknown scenario '$SCENARIO' (expected clean, restart-fast, restart-delayed, partition, all or late-miner)" >&2
+    echo "ERROR: unknown scenario '$SCENARIO' (expected clean, restart-fast, restart-delayed, partition, all, late-miner or pruned-join)" >&2
     exit 2
     ;;
 esac
@@ -571,6 +709,7 @@ case "$SCENARIO" in
   restart-delayed) scenario_restart_delayed ;;
   partition)       scenario_partition ;;
   late-miner)      scenario_late_miner ;;
+  pruned-join)     scenario_pruned_join ;;
   all)
     scenario_restart_fast
     scenario_restart_delayed

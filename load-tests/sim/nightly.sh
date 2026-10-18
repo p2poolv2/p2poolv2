@@ -18,6 +18,7 @@
 #   SCENARIO                   failure scenario to inject    (default clean)
 #                              clean | restart-fast | restart-delayed |
 #                              partition | all | late-miner (needs LATE_MINER)
+#                              | pruned-join
 #   NODE_COUNT                 number of sim nodes           (default 20)
 #   CONVERGENCE_WAIT_SECONDS   seconds to settle after the
 #                              scenario, before the checks   (default 60)
@@ -51,6 +52,8 @@ Scenarios (see load-tests/sim/failures.sh --help for the details):
   all               the three failure scenarios in sequence
   late-miner        payout maturity: a node mining late is paid only once its
                     shares are mature (needs LATE_MINER)
+  pruned-join       a wiped node syncs from genesis off peers that have
+                    pruned block bodies (run time-compressed)
 
 Examples:
   ./load-tests/sim/nightly.sh                              # 20 nodes, 60s, no failures
@@ -59,6 +62,8 @@ Examples:
   IDEAL_BLOCK_TIME=1 SHARES_PER_BLOCK=100 ./load-tests/sim/nightly.sh  # time-compressed, frequent blocks
   IDEAL_BLOCK_TIME=1 SHARES_PER_BLOCK=20 LATE_MINER=1 \
     ./load-tests/sim/nightly.sh late-miner                 # payout maturity
+  IDEAL_BLOCK_TIME=1 SHARES_PER_BLOCK=20 \
+    ./load-tests/sim/nightly.sh pruned-join                # fresh node off pruned peers
 
 Env vars (nightly-specific):
   SCENARIO                   failure scenario to inject    (default clean)
@@ -121,9 +126,9 @@ FAILURE_OUTPUT=""
 # Validate the scenario here as well as in failures.sh, so a typo fails now
 # rather than after bitcoind and the swarm have been brought up.
 case "$SCENARIO" in
-  clean|restart-fast|restart-delayed|partition|all|late-miner) ;;
+  clean|restart-fast|restart-delayed|partition|all|late-miner|pruned-join) ;;
   *)
-    echo "ERROR: unknown scenario '$SCENARIO' (expected clean, restart-fast, restart-delayed, partition, all or late-miner)" >&2
+    echo "ERROR: unknown scenario '$SCENARIO' (expected clean, restart-fast, restart-delayed, partition, all, late-miner or pruned-join)" >&2
     exit 2
     ;;
 esac
@@ -315,11 +320,14 @@ build_analysis_binaries() {
   # as corrupt -- a confusing failure that looks like data loss. cargo is
   # incremental, so this is nearly free when already current. Both binaries
   # live in p2poolv2_node; p2poolv2_cli is a library-only package, so building
-  # it produces no p2poolv2_cli executable at all.
+  # it produces no p2poolv2_cli executable at all. They are built with the
+  # sim feature so verify_chain checks bodies against the sim build's prune
+  # depth: with the production depth it expects every body the sim nodes have
+  # pruned.
   log_message "Building verify_chain and p2poolv2_cli ($profile)..."
   ( cd "$REPO_ROOT" && cargo build -p p2poolv2_node \
       --bin verify_chain --bin p2poolv2_cli \
-      --features debug-tools $profile_flag )
+      --features debug-tools,sim $profile_flag )
 
   local binary
   for binary in "$VERIFY_BIN" "$CLI_BIN"; do
@@ -530,6 +538,14 @@ check_payout_maturity() {
   [ "$MATURITY_VERDICT" = "PASS" ]
 }
 
+# pruned-join only: the verdict failures.sh recorded for the fresh node's sync
+# off pruned peers. Other scenarios skip it.
+check_pruned_join() {
+  JOIN_VERDICT=$(echo "$FAILURE_OUTPUT" | sed -nE 's/^pruned-join verdict: (.*)$/\1/p')
+  JOIN_VERDICT="${JOIN_VERDICT:-missing}"
+  [ "$JOIN_VERDICT" = "PASS" ]
+}
+
 check_uncle_rate() {
   UNCLE_RATE=$(echo "$METRICS_OUTPUT" \
     | grep -oE "uncle rate \(node 0\): [0-9.]+" \
@@ -598,6 +614,15 @@ evaluate_results() {
     fi
   fi
 
+  local join_result="SKIP"
+  if [ "$SCENARIO" = "pruned-join" ]; then
+    join_result="PASS"
+    if ! check_pruned_join; then
+      join_result="FAIL"
+      failed=1
+    fi
+  fi
+
   echo "=== NIGHTLY SIM RESULTS (scenario: $SCENARIO) ==="
   printf "  nodes alive:        %-4s  (%s/%s)\n" \
     "$alive_result" "$ALIVE_COUNT" "$ALIVE_TOTAL"
@@ -617,6 +642,8 @@ evaluate_results() {
     "$recovery_result" "$FAILURE_TARGETS" "$FAILURE_REJOINED" "$UNRECOVERED_COUNT"
   printf "  payout maturity:    %-4s  (%s)\n" \
     "$maturity_result" "${MATURITY_VERDICT:-late-miner only}"
+  printf "  pruned join:        %-4s  (%s)\n" \
+    "$join_result" "${JOIN_VERDICT:-pruned-join only}"
 
   if [ "$failed" -eq 0 ]; then
     echo "RESULT: PASS"
