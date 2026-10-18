@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use crate::api::endpoints;
+use crate::api::endpoints::miner::MinerWindowSource;
 use crate::api::error::ApiError;
 use crate::api::{auth::auth_middleware, websocket::websocket_handler};
 use axum::{
@@ -46,9 +47,10 @@ pub(crate) struct AppState {
     pub(crate) auth_user: Option<String>,
     pub(crate) auth_token: Option<String>,
     /// The node's share chain PPLNS window, shared with the payout and
-    /// validation code. `None` when the node does not pay from it
-    /// (Hydrapool mode), which turns `/miner` off.
-    pub(crate) pplns_window: Option<Arc<RwLock<PplnsWindow>>>,
+    /// validation code, with the snapshot `/miner` answers from. `None` when
+    /// the node does not pay from it (Hydrapool mode), which turns `/miner`
+    /// off.
+    pub(crate) pplns_window: Option<Arc<MinerWindowSource>>,
 }
 
 /// Stores application config values that don't change across requests
@@ -185,7 +187,7 @@ pub async fn start_api_server(
         monitoring_event_sender,
         auth_user: config.auth_user.clone(),
         auth_token: config.auth_token.clone(),
-        pplns_window,
+        pplns_window: pplns_window.map(|window| Arc::new(MinerWindowSource::new(window))),
     });
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();

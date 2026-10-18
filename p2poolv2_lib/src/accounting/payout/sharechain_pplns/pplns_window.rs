@@ -25,6 +25,7 @@ use p2poolv2_wallet::share_owner::ShareOwner;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::error::Error;
 use std::fmt;
+use std::hash;
 use tracing::debug;
 
 /// The PPLNS window: a coinbase pays `PPLNS_WINDOW_SHARES` shares, each
@@ -191,18 +192,6 @@ struct Credit {
     weight: u128,
 }
 
-/// A miner to look up in a payout window, by either of the two addresses a
-/// share header carries. Neither is derived from the other: each matches
-/// only the shares that name it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum WindowMiner {
-    /// The payout address, `miner_bitcoin_address`. The distribution is
-    /// keyed by it.
-    Payout(Address),
-    /// The share owner, `miner_address`: the share chain address.
-    ShareOwner(ShareOwner),
-}
-
 /// One weight a miner earns in a payout window.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WindowCredit {
@@ -226,14 +215,59 @@ pub struct WindowCredit {
     pub payout_address: Address,
 }
 
-/// What one miner earns in a payout window, and the totals of that window.
+/// What one miner earns in a payout window.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MinerCredits {
+    /// Window shares the miner mined.
+    pub share_count: usize,
+    /// Uncles the miner mined that window shares include.
+    pub uncle_count: usize,
+    /// Sum of the miner's weights.
+    pub weight: u128,
+    /// The miner's weights, newest first, at most the requested number.
+    pub credits: Vec<WindowCredit>,
+}
+
+impl MinerCredits {
+    /// Count one credit, and list it while fewer than `max_credits` are listed.
+    fn add(
+        &mut self,
+        credit: &Credit,
+        height: u32,
+        payout_address: Option<&Address>,
+        max_credits: usize,
+    ) {
+        if credit.nephew.is_some() {
+            self.uncle_count += 1;
+        } else {
+            self.share_count += 1;
+        }
+        self.weight = self.weight.saturating_add(credit.weight);
+        if self.credits.len() < max_credits
+            && let Some(payout_address) = payout_address
+        {
+            self.credits.push(WindowCredit {
+                blockhash: credit.blockhash,
+                height,
+                nephew: credit.nephew,
+                difficulty: credit.difficulty,
+                weight: credit.weight,
+                payout_address: payout_address.clone(),
+            });
+        }
+    }
+}
+
+/// Every miner's credits in one payout window, and the totals of that window.
 ///
 /// Built by the same walk and weighting as
-/// `get_distribution_from_start_hash`, so for `WindowMiner::Payout` the
-/// miner's `weight` is its entry in that distribution, and `window_weight`
-/// is the distribution's total.
+/// `get_distribution_from_start_hash`, so each payout address's `weight` is
+/// its entry in that distribution, and `window_weight` is the distribution's
+/// total. Miners are listed by either of the two addresses a share header
+/// carries, neither derived from the other: a share owner's credits are paid
+/// to the payout address each credit names.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MinerWindow {
+pub struct WindowCredits {
     /// Height of the anchor the window was resolved from.
     pub anchor_height: u32,
     /// Height of the newest share in the window, the first one past the
@@ -245,14 +279,12 @@ pub struct MinerWindow {
     pub window_share_count: usize,
     /// Sum of every weight in the window: what each payout is a share of.
     pub window_weight: u128,
-    /// Window shares the miner mined.
-    pub share_count: usize,
-    /// Uncles the miner mined that window shares include.
-    pub uncle_count: usize,
-    /// Sum of the miner's weights.
-    pub weight: u128,
-    /// The miner's weights, newest first, at most the requested number.
-    pub credits: Vec<WindowCredit>,
+    /// Credits of each payout address (`miner_bitcoin_address`) the window
+    /// credits.
+    pub by_payout_address: HashMap<Address, MinerCredits>,
+    /// Credits of each share owner (`miner_address`, the share chain
+    /// address) the window credits.
+    pub by_share_owner: HashMap<ShareOwner, MinerCredits>,
 }
 
 /// Why a payout distribution could not be produced.
@@ -433,94 +465,61 @@ impl PplnsWindow {
         Ok(self.collect_distribution(&difficulty_by_key))
     }
 
-    /// Read-only view of what one miner earns in the window that
+    /// Read-only view of every miner's credits in the window that
     /// `get_distribution_from_start_hash` pays from `start_hash`.
     ///
-    /// Runs the same walk and the same weighting, so for a payout address the
-    /// miner's `weight` is exactly its entry in that distribution and
-    /// `window_weight` is the distribution's total. A share chain address
-    /// matches the shares and uncles whose share owner it is; their weight is
-    /// paid to the payout address each of them names, which `credits` reports.
+    /// Runs the same walk and the same weighting, so a payout address's
+    /// `weight` is exactly its entry in that distribution and `window_weight`
+    /// is the distribution's total. A share owner, the share chain address,
+    /// gets the shares and uncles that name it as owner; their weight is paid
+    /// to the payout address each of them names, which its credits report.
     ///
-    /// A miner with nothing in the window gets zero counts and no credits.
-    /// At most `max_credits` credits are returned, newest first, while the
-    /// counts and the weight cover the whole window.
+    /// One walk serves every miner, so a caller can build this once per
+    /// anchor and answer any number of lookups without taking the window
+    /// again. Each miner lists at most `max_credits` credits, newest first,
+    /// while its counts and weight cover the whole window.
     ///
     /// Errors exactly when `get_distribution_from_start_hash` does.
-    pub fn get_miner_window_from_start_hash(
+    pub fn get_window_credits_from_start_hash(
         &mut self,
         start_hash: BlockHash,
         chain_store_handle: &ChainStoreHandle,
-        miner: &WindowMiner,
         max_credits: usize,
-    ) -> Result<MinerWindow, WindowError> {
+    ) -> Result<WindowCredits, WindowError> {
         let resolved = self.resolve_window(start_hash, chain_store_handle)?;
-        let miner_key = match miner {
-            WindowMiner::Payout(address) => self.address_keys.find(address),
-            WindowMiner::ShareOwner(owner) => self.owner_keys.find(owner),
-        };
-        let matches_miner = |credit: &Credit| {
-            let credit_key = match miner {
-                WindowMiner::Payout(_) => credit.internal_key,
-                WindowMiner::ShareOwner(_) => credit.owner_key,
-            };
-            miner_key == Some(credit_key)
-        };
 
-        let mut miner_window = MinerWindow {
+        let mut by_payout_key = vec![MinerCredits::default(); self.address_keys.len()];
+        let mut by_owner_key = vec![MinerCredits::default(); self.owner_keys.len()];
+        let mut window_credits = WindowCredits {
             anchor_height: resolved.height_at(0),
             newest_height: None,
             oldest_height: None,
             window_share_count: 0,
             window_weight: 0,
-            share_count: 0,
-            uncle_count: 0,
-            weight: 0,
-            credits: Vec::with_capacity(max_credits.min(INITIAL_ENTRIES_CAPACITY)),
+            by_payout_address: HashMap::new(),
+            by_share_owner: HashMap::new(),
         };
         self.walk_window(start_hash, &resolved, |height, entry| {
-            miner_window.newest_height.get_or_insert(height);
-            miner_window.oldest_height = Some(height);
-            miner_window.window_share_count += 1;
+            window_credits.newest_height.get_or_insert(height);
+            window_credits.oldest_height = Some(height);
+            window_credits.window_share_count += 1;
             Self::for_each_credit(entry, |credit| {
-                miner_window.window_weight =
-                    miner_window.window_weight.saturating_add(credit.weight);
-                if matches_miner(&credit) {
-                    self.add_miner_credit(&mut miner_window, credit, height, max_credits);
-                }
+                window_credits.window_weight =
+                    window_credits.window_weight.saturating_add(credit.weight);
+                let payout_address = self.address_keys.value_for(credit.internal_key);
+                by_payout_key[credit.internal_key].add(
+                    &credit,
+                    height,
+                    payout_address,
+                    max_credits,
+                );
+                by_owner_key[credit.owner_key].add(&credit, height, payout_address, max_credits);
             });
         })?;
 
-        Ok(miner_window)
-    }
-
-    /// Count one of the miner's credits into its window view, and list it
-    /// while fewer than `max_credits` are listed.
-    fn add_miner_credit(
-        &self,
-        miner_window: &mut MinerWindow,
-        credit: Credit,
-        height: u32,
-        max_credits: usize,
-    ) {
-        if credit.nephew.is_some() {
-            miner_window.uncle_count += 1;
-        } else {
-            miner_window.share_count += 1;
-        }
-        miner_window.weight = miner_window.weight.saturating_add(credit.weight);
-        if miner_window.credits.len() < max_credits
-            && let Some(payout_address) = self.address_keys.value_for(credit.internal_key)
-        {
-            miner_window.credits.push(WindowCredit {
-                blockhash: credit.blockhash,
-                height,
-                nephew: credit.nephew,
-                difficulty: credit.difficulty,
-                weight: credit.weight,
-                payout_address: payout_address.clone(),
-            });
-        }
+        window_credits.by_payout_address = credited_by_value(&self.address_keys, by_payout_key);
+        window_credits.by_share_owner = credited_by_value(&self.owner_keys, by_owner_key);
+        Ok(window_credits)
     }
 
     /// Resolve the anchor and work out where its window starts: the walk's
@@ -1117,6 +1116,22 @@ impl PplnsWindow {
         }
         Ok(uncle_lookup)
     }
+}
+
+/// Key each miner's credits by the value its slot in `keys` holds, keeping
+/// only the miners the window credits.
+fn credited_by_value<T: Clone + Eq + hash::Hash>(
+    keys: &AddressKeys<T>,
+    credits_by_key: Vec<MinerCredits>,
+) -> HashMap<T, MinerCredits> {
+    let mut by_value = HashMap::with_capacity(credits_by_key.len());
+    for (index, miner_credits) in credits_by_key.into_iter().enumerate() {
+        let is_credited = miner_credits.share_count + miner_credits.uncle_count > 0;
+        if is_credited && let Some(value) = keys.value_for(index) {
+            by_value.insert(value.clone(), miner_credits);
+        }
+    }
+    by_value
 }
 
 /// Free each slot of `keys` that `referenced` marks unreferenced.
@@ -3147,12 +3162,12 @@ mod tests {
         assert!(!distribution.contains_key(&height_three_miner));
     }
 
-    //* The miner view walks and weighs the window exactly as the
-    //* distribution does: a nephew's weight is its scaled difficulty plus the
-    //* bonus for the uncle it includes, and the window total is the sum of
-    //* the distribution.
+    //* The credits walk and weigh the window exactly as the distribution
+    //* does: every payout address gets its distribution entry, a nephew's
+    //* weight is its scaled difficulty plus the bonus for the uncle it
+    //* includes, and the window total is the sum of the distribution.
     #[test]
-    fn test_miner_window_weight_matches_distribution_for_payout_address() {
+    fn test_window_credits_match_the_distribution_for_every_payout_address() {
         let genesis_hash = BlockHash::all_zeros();
         let header_one = build_test_header(&genesis_hash.to_string(), PUBKEY_2G, 2);
         let uncle_header = build_test_header(&genesis_hash.to_string(), PUBKEY_3G, 2);
@@ -3177,38 +3192,50 @@ mod tests {
                 &MockChainStoreHandle::default(),
             )
             .unwrap();
-        let miner_window = window
-            .get_miner_window_from_start_hash(
+        let window_credits = window
+            .get_window_credits_from_start_hash(
                 nephew_header.block_hash(),
                 &MockChainStoreHandle::default(),
-                &WindowMiner::Payout(nephew_header.miner_bitcoin_address.clone()),
                 10,
             )
             .unwrap();
 
+        let nephew_miner = &nephew_header.miner_bitcoin_address;
+        let uncle_miner = &uncle_header.miner_bitcoin_address;
+        let miner_one = &header_one.miner_bitcoin_address;
+        assert_eq!(window_credits.by_payout_address.len(), distribution.len());
         assert_eq!(
-            miner_window.weight,
-            distribution[&nephew_header.miner_bitcoin_address]
+            window_credits.by_payout_address[nephew_miner].weight,
+            distribution[nephew_miner]
         );
         assert_eq!(
-            miner_window.window_weight,
+            window_credits.by_payout_address[uncle_miner].weight,
+            distribution[uncle_miner]
+        );
+        assert_eq!(
+            window_credits.by_payout_address[miner_one].weight,
+            distribution[miner_one]
+        );
+        assert_eq!(
+            window_credits.window_weight,
             distribution.values().sum::<u128>()
         );
-        assert_eq!(miner_window.anchor_height, 1);
-        assert_eq!(miner_window.window_share_count, 2);
-        assert_eq!(miner_window.newest_height, Some(1));
-        assert_eq!(miner_window.oldest_height, Some(0));
-        assert_eq!(miner_window.share_count, 1);
-        assert_eq!(miner_window.uncle_count, 0);
+        assert_eq!(window_credits.anchor_height, 1);
+        assert_eq!(window_credits.window_share_count, 2);
+        assert_eq!(window_credits.newest_height, Some(1));
+        assert_eq!(window_credits.oldest_height, Some(0));
+        let nephew_credits = &window_credits.by_payout_address[nephew_miner];
+        assert_eq!(nephew_credits.share_count, 1);
+        assert_eq!(nephew_credits.uncle_count, 0);
         assert_eq!(
-            miner_window.credits,
+            nephew_credits.credits,
             vec![WindowCredit {
                 blockhash: nephew_header.block_hash(),
                 height: 1,
                 nephew: None,
                 difficulty: nephew_header.get_difficulty(TEST_NETWORK),
-                weight: distribution[&nephew_header.miner_bitcoin_address],
-                payout_address: nephew_header.miner_bitcoin_address.clone(),
+                weight: distribution[nephew_miner],
+                payout_address: nephew_miner.clone(),
             }]
         );
     }
@@ -3216,7 +3243,7 @@ mod tests {
     //* An uncle is credited at the height of the window share that includes
     //* it, and the credit names both the uncle and that nephew.
     #[test]
-    fn test_miner_window_lists_an_uncle_credit_at_its_nephew_height() {
+    fn test_window_credits_list_an_uncle_at_its_nephew_height() {
         let genesis_hash = BlockHash::all_zeros();
         let header_one = build_test_header(&genesis_hash.to_string(), PUBKEY_2G, 2);
         let uncle_header = build_test_header(&genesis_hash.to_string(), PUBKEY_3G, 2);
@@ -3236,20 +3263,20 @@ mod tests {
         window.confirmed_entries.push_back(nephew_entry);
         window.confirmed_entries.push_back(entry_one);
 
-        let miner_window = window
-            .get_miner_window_from_start_hash(
+        let window_credits = window
+            .get_window_credits_from_start_hash(
                 nephew_header.block_hash(),
                 &MockChainStoreHandle::default(),
-                &WindowMiner::Payout(uncle_header.miner_bitcoin_address.clone()),
                 10,
             )
             .unwrap();
 
-        assert_eq!(miner_window.share_count, 0);
-        assert_eq!(miner_window.uncle_count, 1);
-        assert_eq!(miner_window.weight, uncle_difficulty * UNCLE_SCALED_WEIGHT);
+        let uncle_credits = &window_credits.by_payout_address[&uncle_header.miner_bitcoin_address];
+        assert_eq!(uncle_credits.share_count, 0);
+        assert_eq!(uncle_credits.uncle_count, 1);
+        assert_eq!(uncle_credits.weight, uncle_difficulty * UNCLE_SCALED_WEIGHT);
         assert_eq!(
-            miner_window.credits,
+            uncle_credits.credits,
             vec![WindowCredit {
                 blockhash: uncle_header.block_hash(),
                 height: 1,
@@ -3262,10 +3289,10 @@ mod tests {
     }
 
     //* Two shares pay the same payout address but name different share
-    //* owners. Looking up one owner finds only its own share, and reports the
-    //* payout address that share names.
+    //* owners. Each owner gets only its own share and the payout address
+    //* that share names, while the payout address gets both.
     #[test]
-    fn test_miner_window_matches_share_owner_not_payout_address() {
+    fn test_window_credits_key_share_owners_apart_from_payout_addresses() {
         let genesis_hash = BlockHash::all_zeros();
         let owner_one = ShareOwner::CashP2pkh([0x11; 20]);
         let owner_two = ShareOwner::CashP2pkh([0x22; 20]);
@@ -3288,30 +3315,39 @@ mod tests {
         window.confirmed_entries.push_back(entry_two);
         window.confirmed_entries.push_back(entry_one);
 
-        let miner_window = window
-            .get_miner_window_from_start_hash(
+        let window_credits = window
+            .get_window_credits_from_start_hash(
                 header_two.block_hash(),
                 &MockChainStoreHandle::default(),
-                &WindowMiner::ShareOwner(owner_one),
                 10,
             )
             .unwrap();
 
         let weight_one = header_one.get_difficulty(TEST_NETWORK) * DIFFICULTY_SCALE;
-        assert_eq!(miner_window.share_count, 1);
-        assert_eq!(miner_window.weight, weight_one);
-        assert_eq!(miner_window.credits.len(), 1);
-        assert_eq!(miner_window.credits[0].blockhash, header_one.block_hash());
-        assert_eq!(miner_window.credits[0].height, 0);
+        let owner_one_credits = &window_credits.by_share_owner[&owner_one];
+        assert_eq!(owner_one_credits.share_count, 1);
+        assert_eq!(owner_one_credits.weight, weight_one);
+        assert_eq!(owner_one_credits.credits.len(), 1);
         assert_eq!(
-            miner_window.credits[0].payout_address,
+            owner_one_credits.credits[0].blockhash,
+            header_one.block_hash()
+        );
+        assert_eq!(owner_one_credits.credits[0].height, 0);
+        assert_eq!(
+            owner_one_credits.credits[0].payout_address,
             header_one.miner_bitcoin_address
+        );
+        assert_eq!(window_credits.by_share_owner[&owner_two].share_count, 1);
+        assert_eq!(
+            window_credits.by_payout_address[&header_one.miner_bitcoin_address].share_count,
+            2
         );
     }
 
-    //* A miner with nothing in the window still gets the window's totals.
+    //* A miner with nothing in the window is absent, and the window's totals
+    //* are still there.
     #[test]
-    fn test_miner_window_for_unknown_miner_reports_only_the_window() {
+    fn test_window_credits_leave_out_a_miner_with_nothing_in_the_window() {
         let genesis_hash = BlockHash::all_zeros();
         let header_one = build_test_header(&genesis_hash.to_string(), PUBKEY_G, 2);
         let header_two = build_test_header(&header_one.block_hash().to_string(), PUBKEY_2G, 2);
@@ -3323,11 +3359,10 @@ mod tests {
         window.confirmed_entries.push_back(entry_two);
         window.confirmed_entries.push_back(entry_one);
 
-        let miner_window = window
-            .get_miner_window_from_start_hash(
+        let window_credits = window
+            .get_window_credits_from_start_hash(
                 header_two.block_hash(),
                 &MockChainStoreHandle::default(),
-                &WindowMiner::Payout(unknown.miner_bitcoin_address.clone()),
                 10,
             )
             .unwrap();
@@ -3335,18 +3370,24 @@ mod tests {
         let window_weight = (header_one.get_difficulty(TEST_NETWORK)
             + header_two.get_difficulty(TEST_NETWORK))
             * DIFFICULTY_SCALE;
-        assert_eq!(miner_window.window_share_count, 2);
-        assert_eq!(miner_window.window_weight, window_weight);
-        assert_eq!(miner_window.share_count, 0);
-        assert_eq!(miner_window.uncle_count, 0);
-        assert_eq!(miner_window.weight, 0);
-        assert!(miner_window.credits.is_empty());
+        assert_eq!(window_credits.window_share_count, 2);
+        assert_eq!(window_credits.window_weight, window_weight);
+        assert!(
+            !window_credits
+                .by_payout_address
+                .contains_key(&unknown.miner_bitcoin_address)
+        );
+        assert!(
+            !window_credits
+                .by_share_owner
+                .contains_key(&unknown.miner_address)
+        );
     }
 
     //* The listed credits stop at the requested number, newest first, while
     //* the counts and the weight still cover every share in the window.
     #[test]
-    fn test_miner_window_caps_listed_credits() {
+    fn test_window_credits_cap_listed_credits() {
         let genesis_hash = BlockHash::all_zeros();
         let header_one = build_test_header(&genesis_hash.to_string(), PUBKEY_G, 2);
         let header_two = build_test_header(&header_one.block_hash().to_string(), PUBKEY_G, 2);
@@ -3360,27 +3401,30 @@ mod tests {
         window.confirmed_entries.push_back(entry_two);
         window.confirmed_entries.push_back(entry_one);
 
-        let miner_window = window
-            .get_miner_window_from_start_hash(
+        let window_credits = window
+            .get_window_credits_from_start_hash(
                 header_three.block_hash(),
                 &MockChainStoreHandle::default(),
-                &WindowMiner::Payout(header_one.miner_bitcoin_address.clone()),
                 2,
             )
             .unwrap();
 
-        assert_eq!(miner_window.share_count, 3);
-        assert_eq!(miner_window.weight, miner_window.window_weight);
-        assert_eq!(miner_window.credits.len(), 2);
-        assert_eq!(miner_window.credits[0].blockhash, header_three.block_hash());
-        assert_eq!(miner_window.credits[1].blockhash, header_two.block_hash());
+        let miner_credits = &window_credits.by_payout_address[&header_one.miner_bitcoin_address];
+        assert_eq!(miner_credits.share_count, 3);
+        assert_eq!(miner_credits.weight, window_credits.window_weight);
+        assert_eq!(miner_credits.credits.len(), 2);
+        assert_eq!(
+            miner_credits.credits[0].blockhash,
+            header_three.block_hash()
+        );
+        assert_eq!(miner_credits.credits[1].blockhash, header_two.block_hash());
     }
 
     //* Same chain as test_distribution_skips_immature_shares_from_anchor:
     //* heights 5 and 4 are immature and the window is heights 3 and 2, so the
     //* height four miner has nothing in it.
     #[test]
-    fn test_miner_window_skips_immature_shares_like_the_distribution() {
+    fn test_window_credits_skip_immature_shares_like_the_distribution() {
         let miners = [PUBKEY_G, PUBKEY_2G, PUBKEY_3G, PUBKEY_4G, PUBKEY_5G];
         let (headers, tip_hash) = build_test_chain(6, &miners);
         let height_four_miner = headers[1].header.miner_bitcoin_address.clone();
@@ -3395,27 +3439,26 @@ mod tests {
         let mut window = PplnsWindow::new_with_window_sizes(TEST_NETWORK, 3, 2);
         window.update(&store).unwrap();
 
-        let miner_window = window
-            .get_miner_window_from_start_hash(
-                tip_hash,
-                &MockChainStoreHandle::default(),
-                &WindowMiner::Payout(height_four_miner),
-                10,
-            )
+        let window_credits = window
+            .get_window_credits_from_start_hash(tip_hash, &MockChainStoreHandle::default(), 10)
             .unwrap();
 
-        assert_eq!(miner_window.anchor_height, 5);
-        assert_eq!(miner_window.newest_height, Some(3));
-        assert_eq!(miner_window.oldest_height, Some(2));
-        assert_eq!(miner_window.window_share_count, 2);
-        assert_eq!(miner_window.share_count, 0);
+        assert_eq!(window_credits.anchor_height, 5);
+        assert_eq!(window_credits.newest_height, Some(3));
+        assert_eq!(window_credits.oldest_height, Some(2));
+        assert_eq!(window_credits.window_share_count, 2);
+        assert!(
+            !window_credits
+                .by_payout_address
+                .contains_key(&height_four_miner)
+        );
     }
 
     //* A candidate anchor above the confirmed tip is cached with no height;
-    //* the view gives it its real one. The confirmed chain is heights 0..=4
+    //* the credits give it its real one. The confirmed chain is heights 0..=4
     //* and PUBKEY_G mined height 0 and the candidate at height 5.
     #[test]
-    fn test_miner_window_gives_candidate_entries_their_heights() {
+    fn test_window_credits_give_candidate_entries_their_heights() {
         let miners = [PUBKEY_G, PUBKEY_2G, PUBKEY_3G, PUBKEY_4G, PUBKEY_5G];
         let (headers, tip_hash) = build_test_chain(5, &miners);
         let height_zero_hash = headers[4].blockhash;
@@ -3441,28 +3484,24 @@ mod tests {
             .expect_get_share_headers()
             .returning(|_| Ok(Vec::new()));
 
-        let miner_window = window
-            .get_miner_window_from_start_hash(
-                candidate_hash,
-                &candidate_store,
-                &WindowMiner::Payout(candidate_miner),
-                10,
-            )
+        let window_credits = window
+            .get_window_credits_from_start_hash(candidate_hash, &candidate_store, 10)
             .unwrap();
 
-        assert_eq!(miner_window.window_share_count, 6);
-        assert_eq!(miner_window.newest_height, Some(5));
-        assert_eq!(miner_window.share_count, 2);
-        assert_eq!(miner_window.credits[0].blockhash, candidate_hash);
-        assert_eq!(miner_window.credits[0].height, 5);
-        assert_eq!(miner_window.credits[1].blockhash, height_zero_hash);
-        assert_eq!(miner_window.credits[1].height, 0);
+        let miner_credits = &window_credits.by_payout_address[&candidate_miner];
+        assert_eq!(window_credits.window_share_count, 6);
+        assert_eq!(window_credits.newest_height, Some(5));
+        assert_eq!(miner_credits.share_count, 2);
+        assert_eq!(miner_credits.credits[0].blockhash, candidate_hash);
+        assert_eq!(miner_credits.credits[0].height, 5);
+        assert_eq!(miner_credits.credits[1].blockhash, height_zero_hash);
+        assert_eq!(miner_credits.credits[1].height, 0);
     }
 
     //* Same cache as test_distribution_errors_when_eviction_truncates_the_window:
-    //* the view refuses the truncated window just as the distribution does.
+    //* the credits refuse the truncated window just as the distribution does.
     #[test]
-    fn test_miner_window_errors_when_eviction_truncates_the_window() {
+    fn test_window_credits_error_when_eviction_truncates_the_window() {
         const MAX_SHARES: usize = 3;
         let genesis = BlockHash::all_zeros();
 
@@ -3512,10 +3551,9 @@ mod tests {
         window.update(&mock).unwrap();
 
         let error = window
-            .get_miner_window_from_start_hash(
+            .get_window_credits_from_start_hash(
                 c.block_hash(),
                 &MockChainStoreHandle::default(),
-                &WindowMiner::Payout(c.miner_bitcoin_address.clone()),
                 10,
             )
             .expect_err("only two entries are cached below the anchor, short of the window");
@@ -3536,14 +3574,22 @@ mod tests {
         let mut window = PplnsWindow::new(TEST_NETWORK);
         let entry_b = entry_from_header(&mut window, &header_b, 1);
         let entry_a = entry_from_header(&mut window, &header_a, 0);
+        let owner_key_a = entry_a.owner_key;
+        let owner_key_b = entry_b.owner_key;
         window.confirmed_entries.push_back(entry_b);
         window.confirmed_entries.push_back(entry_a);
-        assert!(window.owner_keys.find(&header_a.miner_address).is_some());
+        assert_eq!(
+            window.owner_keys.value_for(owner_key_a),
+            Some(&header_a.miner_address)
+        );
 
         window.confirmed_entries.pop_back();
         window.prune_unreferenced_keys();
 
-        assert!(window.owner_keys.find(&header_a.miner_address).is_none());
-        assert!(window.owner_keys.find(&header_b.miner_address).is_some());
+        assert_eq!(window.owner_keys.value_for(owner_key_a), None);
+        assert_eq!(
+            window.owner_keys.value_for(owner_key_b),
+            Some(&header_b.miner_address)
+        );
     }
 }

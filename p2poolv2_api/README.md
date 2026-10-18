@@ -174,6 +174,12 @@ on the share it mines on, minus the shares not yet mature for payout, then
 the same `PplnsWindow` code that builds and validates coinbases, so the
 numbers are the payout's own.
 
+The node walks that window once per anchor, off the async runtime, and
+records every miner's credits; every request until it starts mining on a
+new share reads that snapshot, whatever address it asks about. So the
+window's lock, which job creation also takes, is held at most once per
+share chain tip, however many requests arrive.
+
 **Query parameters:**
 
 | Parameter | Type     | Default | Description                                         |

@@ -9,6 +9,13 @@
 //! need not index the whole chain. The window is anchored where this node
 //! mines, and walked and weighted by the same `PplnsWindow` code that builds
 //! and validates coinbases.
+//!
+//! That window is shared with the payout and validation code, which take its
+//! write lock for every template and share. `/miner` takes it at most once
+//! per anchor, on a blocking thread: one walk records every miner's credits
+//! (`MinerWindowSource`), and every lookup until the anchor moves reads that
+//! snapshot alone. A stream of requests, for any addresses, therefore cannot
+//! hold up job creation.
 
 use crate::api::endpoints::MAX_NUM_SHARES_IN_RESPONSE;
 use crate::api::error::ApiError;
@@ -17,17 +24,20 @@ use axum::{
     Json,
     extract::{Query, State},
 };
-use bitcoin::Network;
+use bitcoin::{Address, BlockHash, Network};
+use p2poolv2_lib::accounting::payout::sharechain_pplns::PplnsWindow;
 use p2poolv2_lib::accounting::payout::sharechain_pplns::pplns_window::{
-    MinerWindow, WindowCredit, WindowError, WindowMiner,
+    MinerCredits, WindowCredit, WindowCredits, WindowError,
 };
 use p2poolv2_lib::address::bch_share::{self, BchShareNetwork};
 use p2poolv2_lib::address::share_owner::{ShareOwner, to_address_string};
 use p2poolv2_lib::address_display::payout_address_string;
 use p2poolv2_lib::config::{BitcoinCashNetwork, Chain, parse_payout_address, parse_share_address};
+use p2poolv2_lib::shares::chain::chain_store_handle::ChainStoreHandle;
 use p2poolv2_lib::store::writer::StoreError;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
+use tokio::sync::Mutex;
 
 /// Query parameters for the /miner endpoint.
 #[derive(Deserialize)]
@@ -103,6 +113,88 @@ pub struct MinerShare {
     pub payout_address: String,
 }
 
+/// The node's share chain PPLNS window, and the snapshot of it `/miner`
+/// answers from.
+pub(crate) struct MinerWindowSource {
+    /// The window the payout and validation code share.
+    window: Arc<RwLock<PplnsWindow>>,
+    /// Every miner's credits at the last anchor asked about. One entry is
+    /// enough, since the anchor only moves with the chain, and a window's
+    /// credits at one anchor never change. Holding this async lock while a
+    /// snapshot is built makes concurrent requests at a new anchor build it
+    /// once.
+    snapshot: Mutex<Option<(BlockHash, Arc<WindowCredits>)>>,
+}
+
+impl MinerWindowSource {
+    pub(crate) fn new(window: Arc<RwLock<PplnsWindow>>) -> Self {
+        Self {
+            window,
+            snapshot: Mutex::new(None),
+        }
+    }
+
+    /// Every miner's credits at `anchor`: the snapshot when it is for
+    /// `anchor`, otherwise a new one built on a blocking thread, which
+    /// replaces it.
+    async fn credits_at(
+        &self,
+        anchor: BlockHash,
+        chain_store_handle: &ChainStoreHandle,
+    ) -> Result<Arc<WindowCredits>, ApiError> {
+        let mut snapshot = self.snapshot.lock().await;
+        if let Some((snapshot_anchor, credits)) = snapshot.as_ref()
+            && *snapshot_anchor == anchor
+        {
+            return Ok(Arc::clone(credits));
+        }
+
+        let window = Arc::clone(&self.window);
+        let chain_store_handle = chain_store_handle.clone();
+        let credits = tokio::task::spawn_blocking(move || {
+            build_window_credits(&window, anchor, &chain_store_handle)
+        })
+        .await
+        .map_err(|error| ApiError::ServerError(format!("PPLNS window task failed: {error}")))??;
+
+        let credits = Arc::new(credits);
+        *snapshot = Some((anchor, Arc::clone(&credits)));
+        Ok(credits)
+    }
+}
+
+/// Walk the window once for `anchor`, under its write lock. Blocks, so it
+/// runs on a blocking thread.
+fn build_window_credits(
+    window: &RwLock<PplnsWindow>,
+    anchor: BlockHash,
+    chain_store_handle: &ChainStoreHandle,
+) -> Result<WindowCredits, ApiError> {
+    let mut window = window
+        .write()
+        .map_err(|_| ApiError::ServerError("PPLNS window lock poisoned".to_string()))?;
+    if window.is_empty() {
+        return Err(ApiError::ServiceUnavailable(
+            "PPLNS window is not loaded yet".to_string(),
+        ));
+    }
+    window
+        .get_window_credits_from_start_hash(
+            anchor,
+            chain_store_handle,
+            MAX_NUM_SHARES_IN_RESPONSE as usize,
+        )
+        .map_err(window_error)
+}
+
+/// Which of a share header's two addresses a query names.
+enum MinerAddress {
+    /// The payout address, `miner_bitcoin_address`.
+    Payout(Address),
+    /// The share owner, `miner_address`: the share chain address.
+    ShareOwner(ShareOwner),
+}
+
 /// Returns one miner's shares and weight in the PPLNS window the next share
 /// this node mines would pay.
 ///
@@ -127,7 +219,7 @@ pub(crate) async fn miner(
     }
     let miner = parse_miner(address, &state.app_config)?;
 
-    let pplns_window = state.pplns_window.as_ref().ok_or_else(|| {
+    let window_source = state.pplns_window.as_ref().ok_or_else(|| {
         ApiError::NotFound("This node does not pay from the share chain PPLNS window".to_string())
     })?;
     let anchor = state
@@ -139,30 +231,15 @@ pub(crate) async fn miner(
             }
             error => ApiError::ServerError(format!("Failed to get the mining base: {error}")),
         })?;
-
-    let miner_window = {
-        let mut window = pplns_window
-            .write()
-            .map_err(|_| ApiError::ServerError("PPLNS window lock poisoned".to_string()))?;
-        if window.is_empty() {
-            return Err(ApiError::ServiceUnavailable(
-                "PPLNS window is not loaded yet".to_string(),
-            ));
-        }
-        window
-            .get_miner_window_from_start_hash(
-                anchor,
-                &state.chain_store_handle,
-                &miner,
-                limit as usize,
-            )
-            .map_err(window_error)?
-    };
+    let window_credits = window_source
+        .credits_at(anchor, &state.chain_store_handle)
+        .await?;
 
     Ok(Json(build_response(
         &miner,
         anchor,
-        miner_window,
+        &window_credits,
+        limit as usize,
         &state.app_config,
     )))
 }
@@ -170,7 +247,7 @@ pub(crate) async fn miner(
 /// Read `address` as either of the two addresses a share header carries,
 /// for the chain this node mines. A share chain address is tried first: its
 /// prefix and checksum keep it from also decoding as a payout.
-fn parse_miner(address: &str, app_config: &AppConfig) -> Result<WindowMiner, ApiError> {
+fn parse_miner(address: &str, app_config: &AppConfig) -> Result<MinerAddress, ApiError> {
     match app_config.cash_network {
         Some(share_network) => parse_bitcoin_cash_miner(address, share_network),
         None => parse_bitcoin_miner(address, app_config.network),
@@ -184,10 +261,10 @@ fn parse_miner(address: &str, app_config: &AppConfig) -> Result<WindowMiner, Api
 fn parse_bitcoin_cash_miner(
     address: &str,
     share_network: BchShareNetwork,
-) -> Result<WindowMiner, ApiError> {
+) -> Result<MinerAddress, ApiError> {
     let share_error = match bch_share::parse(address, share_network) {
         Ok(share_address) => {
-            return Ok(WindowMiner::ShareOwner(ShareOwner::CashP2pkh(
+            return Ok(MinerAddress::ShareOwner(ShareOwner::CashP2pkh(
                 share_address.hash,
             )));
         }
@@ -205,7 +282,7 @@ fn parse_bitcoin_cash_miner(
         cash_network.legacy_network(),
         Some(cash_network),
     )
-    .map(WindowMiner::Payout)
+    .map(MinerAddress::Payout)
     .map_err(|payout_error| {
         ApiError::BadRequest(format!(
             "Invalid address '{address}': not a share address ({share_error}) nor a payout address ({})",
@@ -215,17 +292,17 @@ fn parse_bitcoin_cash_miner(
 }
 
 /// A share chain address for `network`, or a Bitcoin payout address.
-fn parse_bitcoin_miner(address: &str, network: Network) -> Result<WindowMiner, ApiError> {
+fn parse_bitcoin_miner(address: &str, network: Network) -> Result<MinerAddress, ApiError> {
     let share_error = match parse_share_address(address, network) {
         Ok(share_address) => {
-            return Ok(WindowMiner::ShareOwner(ShareOwner::from(
+            return Ok(MinerAddress::ShareOwner(ShareOwner::from(
                 share_address.witness_program(),
             )));
         }
         Err(error) => error,
     };
     parse_payout_address(address, Chain::Bitcoin, network, None)
-        .map(WindowMiner::Payout)
+        .map(MinerAddress::Payout)
         .map_err(|payout_error| {
             ApiError::BadRequest(format!(
                 "Invalid address '{address}': not a share address ({}) nor a payout address ({})",
@@ -246,27 +323,34 @@ fn window_error(error: WindowError) -> ApiError {
     }
 }
 
-/// Shape a miner's window view for the wire, rendering every address for
-/// this node's chain.
+/// Shape a miner's credits for the wire, listing at most `limit` shares and
+/// rendering every address for this node's chain. A miner the window does
+/// not credit gets zeros.
 fn build_response(
-    miner: &WindowMiner,
-    anchor: bitcoin::BlockHash,
-    miner_window: MinerWindow,
+    miner: &MinerAddress,
+    anchor: BlockHash,
+    window_credits: &WindowCredits,
+    limit: usize,
     app_config: &AppConfig,
 ) -> MinerResponse {
-    let (address, address_type) = match miner {
-        WindowMiner::Payout(address) => (
+    let (address, address_type, miner_credits) = match miner {
+        MinerAddress::Payout(address) => (
             payout_address_string(address, app_config.cash_network),
             "payout",
+            window_credits.by_payout_address.get(address),
         ),
-        WindowMiner::ShareOwner(owner) => (
+        MinerAddress::ShareOwner(owner) => (
             to_address_string(owner, app_config.network, app_config.cash_network),
             "share",
+            window_credits.by_share_owner.get(owner),
         ),
     };
-    let shares = miner_window
+    let no_credits = MinerCredits::default();
+    let miner_credits = miner_credits.unwrap_or(&no_credits);
+    let shares = miner_credits
         .credits
         .iter()
+        .take(limit)
         .map(|credit| miner_share(credit, app_config.cash_network))
         .collect();
 
@@ -274,21 +358,21 @@ fn build_response(
         address,
         address_type,
         anchor: anchor.to_string(),
-        anchor_height: miner_window.anchor_height,
+        anchor_height: window_credits.anchor_height,
         window: WindowSummary {
-            newest_height: miner_window.newest_height,
-            oldest_height: miner_window.oldest_height,
-            share_count: miner_window.window_share_count,
-            weight: miner_window.window_weight.to_string(),
+            newest_height: window_credits.newest_height,
+            oldest_height: window_credits.oldest_height,
+            share_count: window_credits.window_share_count,
+            weight: window_credits.window_weight.to_string(),
         },
-        share_count: miner_window.share_count,
-        uncle_count: miner_window.uncle_count,
-        weight: miner_window.weight.to_string(),
+        share_count: miner_credits.share_count,
+        uncle_count: miner_credits.uncle_count,
+        weight: miner_credits.weight.to_string(),
         share_fraction: fraction(
-            miner_window.share_count as u128,
-            miner_window.window_share_count as u128,
+            miner_credits.share_count as u128,
+            window_credits.window_share_count as u128,
         ),
-        payout_fraction: fraction(miner_window.weight, miner_window.window_weight),
+        payout_fraction: fraction(miner_credits.weight, window_credits.window_weight),
         shares,
     }
 }
@@ -319,7 +403,6 @@ mod tests {
     use super::*;
     use crate::api::server::{AppConfig, AppState};
     use axum::extract::{Query, State};
-    use p2poolv2_lib::accounting::payout::sharechain_pplns::PplnsWindow;
     use p2poolv2_lib::accounting::stats::metrics;
     use p2poolv2_lib::address::bch_share::BchShareAddress;
     use p2poolv2_lib::config::bitcoin_cash_donation_cashaddr;
@@ -330,7 +413,6 @@ mod tests {
     use p2poolv2_lib::test_utils::{
         PUBKEY_G, TestShareBlockBuilder, genesis_for_tests, setup_test_chain_store_handle,
     };
-    use std::sync::RwLock;
 
     /// Hash of the Bitcoin Cash share owner the BCH test genesis names.
     const CASH_SHARE_HASH: [u8; 20] = [0x22; 20];
@@ -360,7 +442,7 @@ mod tests {
             monitoring_event_sender: create_monitoring_event_channel().0,
             auth_user: None,
             auth_token: None,
-            pplns_window,
+            pplns_window: pplns_window.map(|window| Arc::new(MinerWindowSource::new(window))),
         });
         (state, temp_dir)
     }
@@ -387,6 +469,7 @@ mod tests {
             .pplns_window
             .as_ref()
             .unwrap()
+            .window
             .write()
             .unwrap()
             .update(&state.chain_store_handle)
@@ -794,5 +877,74 @@ mod tests {
         .await;
 
         assert!(matches!(result, Err(ApiError::ServiceUnavailable(_))));
+    }
+
+    /// After the first request at an anchor the window is replaced by an
+    /// empty one. Rebuilding would now answer 503, so a second request at the
+    /// same anchor, for another address, can only succeed from the snapshot:
+    /// it neither walks nor locks the window.
+    #[tokio::test]
+    async fn a_second_request_at_the_same_anchor_reuses_the_snapshot() {
+        let window = Arc::new(RwLock::new(PplnsWindow::new(Network::Signet)));
+        let (state, _temp_dir) =
+            build_test_state(Network::Signet, None, Some(Arc::clone(&window))).await;
+        let genesis = genesis_for_tests();
+        let genesis_payout = genesis.header.miner_bitcoin_address.to_string();
+        let genesis_share_address =
+            to_address_string(&genesis.header.miner_address, Network::Signet, None);
+        state
+            .chain_store_handle
+            .init_or_setup_genesis(genesis)
+            .await
+            .unwrap();
+        update_window(&state);
+        let first = miner(State(Arc::clone(&state)), query(&genesis_payout))
+            .await
+            .unwrap()
+            .0;
+
+        *window.write().unwrap() = PplnsWindow::new(Network::Signet);
+        let second = miner(State(state), query(&genesis_share_address))
+            .await
+            .unwrap()
+            .0;
+
+        assert_eq!(second.anchor, first.anchor);
+        assert_eq!(second.window.weight, first.window.weight);
+        assert_eq!(second.address_type, "share");
+        assert_eq!(second.share_count, 1);
+    }
+
+    #[tokio::test]
+    async fn a_new_anchor_rebuilds_the_snapshot() {
+        let window = Arc::new(RwLock::new(PplnsWindow::new(Network::Signet)));
+        let (state, _temp_dir) = build_test_state(Network::Signet, None, Some(window)).await;
+        let genesis = genesis_for_tests();
+        let genesis_payout = genesis.header.miner_bitcoin_address.to_string();
+        state
+            .chain_store_handle
+            .init_or_setup_genesis(genesis.clone())
+            .await
+            .unwrap();
+        update_window(&state);
+        let first = miner(State(Arc::clone(&state)), query(&genesis_payout))
+            .await
+            .unwrap()
+            .0;
+        let share = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .miner_pubkey(PUBKEY_G)
+            .build();
+        confirm_share(&state, &share).await;
+        update_window(&state);
+
+        let second = miner(State(state), query(&genesis_payout)).await.unwrap().0;
+
+        assert_eq!(first.anchor_height, 0);
+        assert_eq!(first.window.share_count, 1);
+        assert_eq!(second.anchor, share.block_hash().to_string());
+        assert_eq!(second.anchor_height, 1);
+        assert_eq!(second.window.share_count, 2);
+        assert_eq!(second.payout_fraction, 0.5);
     }
 }

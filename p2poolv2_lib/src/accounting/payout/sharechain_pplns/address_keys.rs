@@ -49,12 +49,6 @@ impl<T: PartialEq> AddressKeys<T> {
         }
     }
 
-    /// Returns the index for the value without inserting it, or `None`
-    /// when no cached entry references it.
-    pub(super) fn find(&self, value: &T) -> Option<usize> {
-        self.0.iter().position(|slot| slot.as_ref() == Some(value))
-    }
-
     /// Return the number of slots in the backing vector.
     pub(super) fn len(&self) -> usize {
         self.0.len()
@@ -139,30 +133,6 @@ mod tests {
 
         let key_c = address_keys.key_for(addr_c);
         assert_eq!(key_c, key_a);
-    }
-
-    #[test]
-    fn find_returns_the_key_without_inserting() {
-        let mut address_keys = AddressKeys::default();
-        let addr_a = parse_address_from_string("bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr");
-        let addr_b = parse_address_from_string("bcrt1qlk935ze2fsu86zjp395uvtegztrkaezawxx0wf");
-
-        let key_a = address_keys.key_for(addr_a.clone());
-
-        assert_eq!(address_keys.find(&addr_a), Some(key_a));
-        assert_eq!(address_keys.find(&addr_b), None);
-        assert_eq!(address_keys.len(), 1);
-    }
-
-    #[test]
-    fn find_does_not_return_a_removed_value() {
-        let mut address_keys = AddressKeys::default();
-        let addr = parse_address_from_string("bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr");
-
-        let key = address_keys.key_for(addr.clone());
-        address_keys.remove(key);
-
-        assert_eq!(address_keys.find(&addr), None);
     }
 
     #[test]
