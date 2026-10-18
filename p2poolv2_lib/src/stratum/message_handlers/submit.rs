@@ -486,6 +486,8 @@ mod handle_submit_tests {
         assert_eq!(response.result, Some(json!(true)));
 
         // The accepted block asks the template task for a new template once.
+        // The sim feature compiles block submission out, so it asks for none.
+        #[cfg(not(feature = "sim"))]
         assert_eq!(template_refresh_rx.try_recv(), Ok(()));
         assert!(template_refresh_rx.try_recv().is_err());
 
