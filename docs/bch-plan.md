@@ -20,7 +20,7 @@ Audience: contributors and AI agents starting the BCH port. Read
 | Declared BCH coinbase peer validation | Implemented; bounded header extension, prefix/aux proof tampering, payout diversion, storage and compressed-header tests. |
 | Mineable Job Declaration in both modes | Both the mocked regression and the two-node BCHN regtest use authenticated Noise connections through the actual listener. Both modes mine blocks and emit verifiable proofs. Independent client interoperability remains pending. |
 | Miner-selected auxiliary commitments | Bounded shared trees and full coinbase/header proofs are implemented. An experimental SAFA variant verifies the proof inside the BCH VM and paid tokens in a real two-node regtest. Final SAFA policy, independent covenant review and chipnet issuance remain open. See [bch-auxpow.md](bch-auxpow.md). |
-| PPLNS tuning and independent ASIC/JD interoperability | Pending. Since the upstream sync a coinbase pays a fixed `PPLNS_WINDOW_SHARES` (120,960) shares. They start `COINBASE_MATURITY` (6,048) shares below the paying share, about 17 hours at 10-second shares, once the chain is past its first 6,048 shares. That replaces the window sized by block difficulty. Keep upstream's constants until a justified BCH tuning decision. |
+| PPLNS tuning and independent ASIC/JD interoperability | Pending. Since the upstream sync a coinbase pays a fixed `PPLNS_WINDOW_SHARES` (120,960) shares. They start `COINBASE_MATURITY` (6,048) shares below the paying share, about 17 hours at 10-second shares, once the chain is past its first 6,048 shares. That replaces the window sized by block difficulty. Decision 11 keeps upstream's constants for now and may revisit them. |
 | Remote CI and chipnet block | The fork's Actions activation was completed on 2026-10-18, including the Security workflow. Fresh PR checks remain to be verified. No chipnet block found. Local checks and recorded propagation do not replace these. |
 
 ## Implementation checkpoint (2026-10-13)
@@ -473,6 +473,15 @@ move most BCH hashrate to the share chain.
 10. **Rust stays the implementation.** Ideas from P2Pool v1, CashStratum and
     other BCH software are reimplemented in Rust here, never ported back as
     Python or C.
+11. **PPLNS window: upstream's default for now (2026-10-18).** A coinbase pays
+    the last `PPLNS_WINDOW_SHARES` (120,960) shares, about two weeks at
+    10-second shares. The window starts `COINBASE_MATURITY` (6,048) shares,
+    about 17 hours, below the paying share. This is longer than Monero's
+    P2Pool (2,160 shares, about 6 hours): payouts are smoother, but a new
+    miner waits about 17 hours for a first payout, and a miner who stops is
+    paid for about two weeks. We may revisit the window, the maturity and the
+    share interval for BCH later, for example after CHIP-2025-03 or a tempnet
+    test.
 
 ## BCH porting checklist
 
