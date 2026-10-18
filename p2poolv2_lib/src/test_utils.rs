@@ -65,7 +65,7 @@ use crate::stratum::work::block_template::BlockTemplate;
 use crate::stratum::work::coinbase::build_bitcoin_coinbase_transaction;
 #[cfg(test)]
 use crate::stratum::work::gbt::build_merkle_branches_for_template;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 use bitcoin::TxMerkleNode;
 #[cfg(any(test, feature = "test-utils"))]
 use bitcoin::script::PushBytesBuf;
@@ -214,8 +214,9 @@ pub fn test_funding_transaction(value: u64) -> bitcoin::Transaction {
 /// above it.
 ///
 /// The block at height `h` carries `test_funding_transaction(h)`, so every
-/// block holds a transaction no other block has. Returns the blocks indexed
-/// by height, genesis at 0.
+/// block holds a transaction no other block has, and a one-node coinbase
+/// merkle branch of byte `h`, so every block's stored branch is distinct
+/// and non-empty. Returns the blocks indexed by height, genesis at 0.
 #[cfg(any(test, feature = "test-utils"))]
 pub async fn build_confirmed_test_chain(
     chain_store_handle: &ChainStoreHandle,
@@ -229,11 +230,12 @@ pub async fn build_confirmed_test_chain(
     let mut blocks = Vec::with_capacity(length + 1);
     blocks.push(genesis);
     for height in 1..=length {
-        let block = TestShareBlockBuilder::new()
+        let mut block = TestShareBlockBuilder::new()
             .prev_share_blockhash(blocks[height - 1].block_hash().to_string())
             .time(1_700_000_000 + height as u32)
             .add_transaction(test_funding_transaction(height as u64))
             .build();
+        block.template_merkle_branches = vec![TxMerkleNode::from_byte_array([height as u8; 32])];
         confirm_test_block(chain_store_handle, &block).await;
         blocks.push(block);
     }
