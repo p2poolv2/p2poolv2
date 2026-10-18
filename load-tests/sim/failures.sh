@@ -26,8 +26,8 @@
 #                     with its emitter off, starts mining once the chain is past
 #                     the maturity depth; maturity_check.py then checks against
 #                     the regtest coinbases that it is paid only once mature.
-#                     Needs a swarm launched with LATE_MINER and a small
-#                     MATURITY_SHARES; not part of `all`
+#                     Needs a swarm launched with LATE_MINER; not part of
+#                     `all`
 #
 # Env overrides:
 #   RUN_DIR                   swarm work dir                (default /tmp/p2pool-sim)
@@ -42,7 +42,6 @@
 #   FAILURE_PARTITION_DOWN    partition downtime (s)        (default 90)
 #   FAILURE_CATCHUP_TIMEOUT   max wait for catch-up (s)     (default 240)
 #   LATE_MINER                late-miner target node        (required for late-miner)
-#   LATE_MINER_MAX_MATURITY   refuse larger maturity (shares) (default 500)
 #   LATE_MINER_TIP_TIMEOUT    max wait for tip 2*maturity (s) (default 900)
 #   LATE_MINER_CHECK_TIMEOUT  max wait for a verdict (s)    (default 900)
 #
@@ -77,8 +76,8 @@ Scenarios:
                     with its emitter off, starts mining once the chain is past
                     the maturity depth; maturity_check.py then checks against
                     the regtest coinbases that it is paid only once mature.
-                    Needs a swarm launched with LATE_MINER and a small
-                    MATURITY_SHARES; not part of `all`
+                    Needs a swarm launched with LATE_MINER; not part of
+                    `all`
 
 Env vars:
   RUN_DIR                   swarm work dir                (default /tmp/p2pool-sim)
@@ -93,7 +92,6 @@ Env vars:
   FAILURE_PARTITION_DOWN    partition downtime (s)        (default 90)
   FAILURE_CATCHUP_TIMEOUT   max wait for catch-up (s)     (default 240)
   LATE_MINER                late-miner target node        (required for late-miner)
-  LATE_MINER_MAX_MATURITY   refuse larger maturity (shares) (default 500)
   LATE_MINER_TIP_TIMEOUT    max wait for tip 2*maturity (s) (default 900)
   LATE_MINER_CHECK_TIMEOUT  max wait for a verdict (s)    (default 900)
 
@@ -131,7 +129,6 @@ FAILURE_SLOW_DOWN="${FAILURE_SLOW_DOWN:-330}"
 FAILURE_PARTITION_DOWN="${FAILURE_PARTITION_DOWN:-90}"
 FAILURE_CATCHUP_TIMEOUT="${FAILURE_CATCHUP_TIMEOUT:-240}"
 LATE_MINER="${LATE_MINER:-}"
-LATE_MINER_MAX_MATURITY="${LATE_MINER_MAX_MATURITY:-500}"
 LATE_MINER_TIP_TIMEOUT="${LATE_MINER_TIP_TIMEOUT:-900}"
 LATE_MINER_CHECK_TIMEOUT="${LATE_MINER_CHECK_TIMEOUT:-900}"
 
@@ -384,10 +381,12 @@ scenario_partition() {
   restart_and_verify $killed
 }
 
-# Coinbase maturity depth the swarm was launched with, from the late node's
-# config (consensus, so every node has the same value).
+# Coinbase maturity depth of the sim build, from the "Sim depths" line the
+# late node logs at startup. It is a compile-time constant, so every node has
+# the same value.
 late_miner_maturity() {
-  awk -F' = ' '/^coinbase_maturity/ { print $2 }' "$RUN_DIR/node-$LATE_MINER.toml"
+  sed -nE 's/.*Sim depths: coinbase maturity ([0-9]+) shares.*/\1/p' \
+    "$RUN_DIR/node-$LATE_MINER.log" | head -n 1
 }
 
 # Poll until the swarm tip reaches the given height. Returns non-zero on
@@ -461,7 +460,7 @@ scenario_late_miner() {
 }
 
 # Refuse a late-miner run that cannot finish: the swarm must have a late node
-# with its emitter off, and a maturity small enough to reach in the run time.
+# with its emitter off, and that node must have logged its maturity depth.
 require_late_miner_setup() {
   local maturity
   if [ -z "$LATE_MINER" ]; then
@@ -473,9 +472,8 @@ require_late_miner_setup() {
     exit 2
   fi
   maturity="$(late_miner_maturity)"
-  if [ -z "$maturity" ] || [ "$maturity" -gt "$LATE_MINER_MAX_MATURITY" ]; then
-    echo "ERROR: coinbase maturity '${maturity:-unset}' is above LATE_MINER_MAX_MATURITY ($LATE_MINER_MAX_MATURITY);" \
-      "launch the swarm with a small MATURITY_SHARES (e.g. 50) or the run takes hours." >&2
+  if [ -z "$maturity" ]; then
+    echo "ERROR: node $LATE_MINER has not logged its sim depths; is it a sim build?" >&2
     exit 2
   fi
 }

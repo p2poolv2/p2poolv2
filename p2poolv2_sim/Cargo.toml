@@ -29,7 +29,7 @@ p2poolv2_config = { path = "../p2poolv2_config" }
 default = []
 # No-PoW load-test simulation; see docs/simulation/load-test-plan.md.
 # MUST NEVER be enabled in a release/production build.
-sim = ["p2poolv2_lib/sim"]
+sim = ["p2poolv2_lib/sim", "p2poolv2_node/sim"]
 
 [[bin]]
 name = "p2poolv2_sim"

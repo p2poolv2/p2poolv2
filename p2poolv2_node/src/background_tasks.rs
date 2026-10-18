@@ -21,7 +21,13 @@ pub const SECONDS_PER_DAY: u64 = 86400;
 /// How often the background tasks run. Fixed in code: the PPLNS share TTL
 /// is days long and block body pruning only needs to keep pace with the
 /// chain, so neither is worth tuning.
+///
+/// The sim build runs them every 30 seconds, so its short prune depth sees
+/// frequent pruning runs.
+#[cfg(not(feature = "sim"))]
 pub const BACKGROUND_TASK_INTERVAL: Duration = Duration::from_secs(6 * SECONDS_PER_HOUR);
+#[cfg(feature = "sim")]
+pub const BACKGROUND_TASK_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Spawn the background cleanup task for the pool mode.
 ///
