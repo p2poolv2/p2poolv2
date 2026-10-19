@@ -40,7 +40,7 @@ const SIGNET_GENESIS_DATA: GenesisData = GenesisData {
 const TESTNET4_GENESIS_DATA: GenesisData = GenesisData {
     public_key: "02ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d",
     bitcoin_block: include_bytes!("testnet4.dat"),
-    bitcoin_height: 151197,
+    bitcoin_height: 157012,
     timestamp: 1788701400, // 09-06-2026T1330
 };
 
@@ -102,7 +102,7 @@ mod tests {
 
         assert_eq!(
             block.block_hash(),
-            BlockHash::from_str("0000000000a57b6dd9b7340a2e2cbb7069a0ccdf28f3db69070ea89d7287444b")
+            BlockHash::from_str("000000000000000216cf4048741d60335f27012c271df95ce43eb97a79357a40")
                 .unwrap()
         );
         assert!(block.check_merkle_root());
