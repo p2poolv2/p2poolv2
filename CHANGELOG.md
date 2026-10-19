@@ -7,8 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.16.0] - 2026-10-19
+
+This release changes consensus and the store format. It needs a chain reset,
+and existing share chain stores must be cleared.
+
 ### Changed
 
+- Every share header field is now bound to the proof of work, so one bitcoin
+  header can no longer stand behind many share hashes. The share commitment
+  moves to the last output of the bitcoin coinbase (`OP_RETURN` after the
+  BIP141 witness commitment, with zero padding before it). Each header carries
+  a `CoinbaseProof`: a SHA256 midstate of the coinbase prefix, its length and
+  the share witness root. Header sync verifies every header's proof against its
+  coinbase merkle branch before storing it. The commitment also digests the
+  miner bitcoin address and the share witness root (`share_witness_root`
+  replaces `non_coinbase_root`). This is a consensus change.
+- The header's `merkle_root`, `coinbase_value`, aux flags, extranonce,
+  nanosecond timestamp and witness commitment are removed. The share block now
+  carries the bitcoin coinbase the miner hashed, stored in a new
+  `BitcoinCoinbase` column family, and payout validation reads those values
+  back out of it. The API and CLI report the share witness root instead of the
+  merkle root.
+- `ShareHeaders` responses are now a `ShareHeaderBatch`. Each distinct
+  coinbase merkle branch is sent once, and headers omit the bitcoin merkle root
+  that the proof and branch give back. Addresses encode as a network class
+  byte plus the script pubkey. `MAX_HEADERS_IN_RESPONSE` drops from 1,500 to
+  900, and header merkle branches are kept in a new `TemplateMerkleBranches`
+  column family so pruned nodes can serve header sync.
+- The pool signature is no longer part of consensus, so each node can tag the
+  bitcoin coinbase with its own.
+- The share chain PPLNS window no longer weights shares by a difficulty
+  multiplier.
 - A found block's coinbase now pays only shares that are mature for it. The
   PPLNS walk skips the shares less than `COINBASE_MATURITY` (6,048) below the
   paying share, the same depth spending a share coinbase needs, then pays the
@@ -23,24 +53,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The full-validation zone, the PPLNS window cache and `PRUNE_DEPTH` grow with
   the maturity skip: the zone is `PAYOUT_DEPTH`, the cache holds
   `PAYOUT_DEPTH` plus its 1% buffer, and `PRUNE_DEPTH` is `2 * PAYOUT_DEPTH`
-  (254,016). Nodes retain about 5% more block bodies. No store migration is
-  needed.
+  (254,016). Nodes retain about 5% more block bodies.
+- The default stratum version rolling mask is now the BIP323 mask `1fffffe0`
+  (previously `1fffe000`).
+- The P2P message size limit drops from 5 MB to 1 MB.
+- The Rust toolchain is pinned to 1.99.0 for CI, development and the Docker
+  build.
+- The `p2poolv2_address` crate is renamed to `p2poolv2_wallet`.
+- The mining base is now the highest-work valid block.
+- The debug log file is truncated on restart, keeping its latest entries.
 
 ### Added
 
+- Nodes now delete block bodies more than `PRUNE_DEPTH + PRUNE_INTERVAL`
+  below the confirmed tip. Headers and their merkle branches are kept, so
+  pruned nodes still serve header sync from genesis. Pruning runs
+  automatically while the node is current. The candidate chain refuses a reorg
+  whose fork point is below the prune target, or less than `MAX_UNCLES_DEPTH`
+  above it.
+- Found bitcoin blocks are recorded in a new `FoundBlocks` column family, so
+  they survive restarts. `/metrics` reads them as `bitcoin_blocks_found_total`
+  and `bitcoin_block_found_time_seconds`, labeled with block hash, height and
+  miner. This replaces the in-memory list persisted in `pool_stats.json`.
+- The Grafana pool dashboards show a found blocks table with block explorer
+  links, and the public dashboard shows a 1h average hashrate.
+- P2P health metrics (`p2p_` prefix: peers, ping failures, message failures,
+  dropped messages) on `/metrics`, with a P2P health row on the private node
+  dashboard.
+- The node dashboard links to Grafana.
 - `docs/architecture/payout-distribution.md` describes the whole payout
-  scheme, including the maturity window.
-- Nodes now delete block bodies below `PRUNE_DEPTH + PRUNE_INTERVAL` of the
-  candidate tip. Headers and their merkle branches are kept, so pruned nodes
-  still serve header sync from genesis. Pruning runs automatically while the
-  node is current. The candidate chain refuses a reorg whose fork point is
-  below the deleted range.
+  scheme, including the maturity window. `docs/architecture/pruning.md` and
+  `docs/architecture/mine-on-bitcoin-chain.md` describe pruning and the planned
+  rule for mining on the active bitcoin chain.
+
+### Fixed
+
+- The node no longer deadlocks under flaky network conditions. The event loop
+  awaited a swarm channel that only it drained. Swarm responses are now
+  handled in their own task, workers are supervised in a `JoinSet`, and every
+  exit goes through one teardown.
+- Connections to a peer no longer pile up when the link is flaky. Peers are
+  tracked by dial address, redials are skipped while connected, idle
+  connections are closed, and at most two connections per peer are allowed.
+  Ping failures now disconnect the peer.
+- Sync no longer stalls during initial body sync. A full header sync scanning
+  the whole chain every minute is now gated, restarts sync headers from the
+  candidate tip, and a handshake requests headers unless the peer's tip is
+  already validated (a taller but lower-work tip no longer skips it).
+- A node restart no longer gets stuck on candidates that have bodies but were
+  never validated. They are revalidated in batches on startup, and a parent
+  with a body that is not yet validated is redriven when its child arrives.
+- Bodies with a repeated share transaction (CVE-2012-2459), a bitcoin coinbase
+  with a witness, or a coinbase other than the one the header's proof gives
+  are rejected at the admission gate, before they can mark the real block
+  invalid. The share block size check now includes the bitcoin coinbase.
+- The admission gate now verifies the coinbase proof of every header. It had
+  exempted any header with an all-zeros parent.
+- `ShareHeaderBatch` decoding rejects branch and header counts above a full
+  response before allocating.
 
 ### Removed
 
 - The `store.background_task_frequency_hours` config option. Background
   cleanup now runs every 6 hours, fixed in code. Existing configs that still
   set it keep loading; the value is ignored.
+
+### Security
+
+- Updated `rustls` to 0.23.46, flagged by `cargo-deny`.
 
 ## [v0.15.3] - 2026-09-21
 
@@ -1154,7 +1234,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 We used tags like hydrapool.v0.x.0 and we didn't keep a changelog.
 
-[Unreleased]: https://github.com/p2poolv2/p2poolv2/compare/v0.15.2...HEAD
+[Unreleased]: https://github.com/p2poolv2/p2poolv2/compare/v0.16.0...HEAD
+[v0.16.0]: https://github.com/p2poolv2/p2poolv2/compare/v0.15.3...v0.16.0
+[v0.15.3]: https://github.com/p2poolv2/p2poolv2/compare/v0.15.2...v0.15.3
 [v0.15.2]: https://github.com/p2poolv2/p2poolv2/compare/v0.15.1...v0.15.2
 [v0.15.1]: https://github.com/p2poolv2/p2poolv2/compare/v0.14.1...v0.15.1
 [v0.14.1]: https://github.com/p2poolv2/p2poolv2/compare/v0.14.0...v0.14.1
