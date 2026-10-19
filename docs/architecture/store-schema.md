@@ -15,7 +15,7 @@ This document captures the RocksDB storage schema used by `Store` and `ChainStor
 
 - **Database**: RocksDB with column families for independent compaction
 - **Serialization**: Bitcoin consensus encoding for most types
-- **Location**: `p2poolv2_lib/src/store/` and `p2poolv2_lib/src/shares/chain/chain_store.rs`
+- **Location**: `p2poolv2_lib/src/store/` and `p2poolv2_lib/src/shares/chain/chain_store_handle.rs`
 
 ## Architecture
 
@@ -89,6 +89,8 @@ header's `CoinbaseProof` gives.
 |------------------------|----------------------------------------|-------|
 | `blockhash` (32 bytes) | `Transaction` (consensus serialized)   | Written with a full block only; a header held without its body has none, and `get_share` returns `None` without it |
 
+Body data: deleted by the pruner below the prune target.
+
 ---
 
 ### 2. `BlockIndex` - Parent->Children Index
@@ -101,13 +103,16 @@ Tracks parent-to-children relationships for DAG traversal. Uses merge operator f
 
 ---
 
-### 3. `BlockHeight` - Height→Blockhashes Index
+### 3. `BlockHeight` - Height Indexes
 
-Maps heights to all blocks at that height (multiple due to uncles). Uses merge operator.
+Three key kinds share this column family. The merge operator is registered
+for it and only the `h:` keys use it.
 
-| Key                   | Value                         |
-|-----------------------|-------------------------------|
-| `height` (4 bytes BE) | `Vec<BlockHash>` (serialized) |
+| Key                                  | Value                         | Notes |
+|--------------------------------------|-------------------------------|-------|
+| `h:` + `height` (4 bytes BE)         | `Vec<BlockHash>` (serialized) | Every block at that height, forks and uncles included. Kept forever |
+| `height` (4 bytes BE) + `:c`         | `blockhash` (32 bytes)        | Candidate chain entry. Deleted by the pruner below the prune target |
+| `height` (4 bytes BE) + `:f`         | `blockhash` (32 bytes)        | Confirmed chain entry. Kept forever |
 
 ---
 
@@ -119,6 +124,9 @@ Maps share blocks to their sharechain transaction IDs.
 |------------------------|--------------------------------|
 | `blockhash` + `_txids` | `Txids` (Vec<Txid> serialized) |
 
+`share_block_exists` keys off this entry, so a block with no entry is held
+header-only. Body data: deleted by the pruner below the prune target.
+
 ---
 
 ### 5. `BitcoinTxids` - Block→Bitcoin Transaction IDs
@@ -128,6 +136,9 @@ Maps share blocks to their Bitcoin transaction IDs (separate from sharechain txs
 | Key                            | Value                          |
 |--------------------------------|--------------------------------|
 | `blockhash` + `_bitcoin_txids` | `Txids` (Vec<Txid> serialized) |
+
+Nothing writes this column family yet. The pruner still deletes its key for
+every pruned block, so a future writer cannot leak data.
 
 ---
 
@@ -173,13 +184,49 @@ Stores individual transaction outputs.
 
 ---
 
-### 9. `UnspentOutputs` - UTXO Set
+### 9. `TxidsBlocks` - Transaction→Blocks Index
 
-Tracks unspent outputs for the sharechain.
+The blocks that include a transaction. Uses the merge operator for appends.
+The pruner reads it to keep a transaction that a kept block still includes,
+and rewrites the list without the pruned blocks.
 
-| Key                       | Value            |
-|---------------------------|------------------|
-| `{txid}:{index}` (string) | empty bytes `[]` |
+| Key               | Value                         |
+|-------------------|-------------------------------|
+| `txid` (32 bytes) | `Vec<BlockHash>` (serialized) |
+
+---
+
+### 9b. `SpendsIndex` - Outpoint→Spending Input
+
+Records which input on the confirmed chain spends an outpoint. Written only
+from the confirmation path (`put_confirmed_entry`) and cleared on reorg-out,
+so presence means "spent on the confirmed chain". This replaces the old
+`UnspentOutputs` set.
+
+| Key                       | Value                                              |
+|---------------------------|----------------------------------------------------|
+| `{txid}:{index}` (string) | spending `txid` (32 bytes) + input index (4 bytes) |
+
+---
+
+### 9c. `Uncles` - Uncle→Nephews Index
+
+The blocks that declare a block as an uncle. Uses the merge operator.
+
+| Key                    | Value                         |
+|------------------------|-------------------------------|
+| `blockhash` (32 bytes) | `Vec<BlockHash>` (serialized) |
+
+---
+
+### Pruning
+
+`Tx`, `Inputs`, `Outputs`, `TxidsBlocks` and `SpendsIndex` rows are deleted
+with a pruned block unless a kept block still includes the transaction.
+`BlockTxids`, `BitcoinTxids`, `BitcoinCoinbase` and candidate `BlockHeight`
+entries are deleted below the prune target. Headers, metadata, the block
+index, `h:` and confirmed height entries, `TemplateMerkleBranches`, `Uncles`
+and `FoundBlocks` are kept forever. See `pruning.md`.
 
 ---
 
@@ -236,17 +283,7 @@ Secondary index for looking up users by Bitcoin address.
 
 ---
 
-### 13. `Job` - Mining Jobs
-
-Stores stratum mining jobs with timestamp-based keys.
-
-| Key                             | Value                              |
-|---------------------------------|------------------------------------|
-| `timestamp_micros` (8 bytes BE) | `serialized_notify` (string bytes) |
-
----
-
-### 14. `Metadata` - General Metadata
+### 13. `Metadata` - General Metadata
 
 Reserved for general metadata storage.
 
@@ -256,7 +293,7 @@ Reserved for general metadata storage.
 
 ---
 
-### 15. `FoundBlocks` - Bitcoin Blocks Found by the Pool
+### 14. `FoundBlocks` - Bitcoin Blocks Found by the Pool
 
 One entry per bitcoin block carried by a confirmed share or by an uncle
 of a confirmed share (a share header whose bitcoin header meets the
@@ -275,11 +312,16 @@ rewrites identical bytes. Never pruned. Read by the `/metrics` handler.
 ## Key Constants
 
 ```rust
-// From chain_store.rs
-const MAX_UNCLE_DEPTH: usize = 3;            // Max uncle inclusion depth
-const COMMON_ANCESTOR_DEPTH: usize = 2160;   // Ancestor search depth (6 hours)
-const PPLNS_WINDOW: usize = 2160;            // PPLNS window in shares
+// store/dag_store.rs
+pub const MAX_UNCLES_DEPTH: u8 = 3;                  // Max uncle inclusion depth
+// shares/chain/chain_store_handle.rs
+pub(crate) const COMMON_ANCESTOR_DEPTH: usize = 2160; // Ancestor search depth (6 hours)
 ```
+
+The depths that size the PPLNS window, full validation and pruning
+(`PPLNS_WINDOW_SHARES`, `COINBASE_MATURITY`, `PAYOUT_DEPTH`, `PRUNE_DEPTH`,
+`PRUNE_INTERVAL`) are in `accounting/payout/sharechain_pplns/pplns_window.rs`;
+see `pruning.md`.
 
 ---
 
@@ -287,9 +329,10 @@ const PPLNS_WINDOW: usize = 2160;            // PPLNS window in shares
 
 ### Adding a Share
 
-1. Store transactions in `Inputs`, `Outputs`, `Tx`, and add to `UnspentOutputs`
+1. Store transactions in `Inputs`, `Outputs` and `Tx`, and append the block to
+   each transaction's `TxidsBlocks` list
 2. Store `blockhash → txids` in `BlockTxids`
-3. Store `blockhash → bitcoin_txids` in `BitcoinTxids`
+3. Store the bitcoin coinbase in `BitcoinCoinbase`
 4. Update `BlockIndex` (parent→child relationship)
 5. Update `BlockHeight` (height→blockhash mapping)
 6. Store `BlockMetadata` (height + chain_work)
@@ -315,10 +358,10 @@ const PPLNS_WINDOW: usize = 2160;            // PPLNS window in shares
 | DAG Store          | `p2poolv2_lib/src/store/dag_store.rs`             | DAG traversal, common ancestor, locators |
 | Share Store        | `p2poolv2_lib/src/store/share_store.rs`           | Share block storage and retrieval        |
 | Transaction Store  | `p2poolv2_lib/src/store/transaction_store.rs`     | Transaction storage, inputs, outputs     |
-| Job Store          | `p2poolv2_lib/src/store/job_store.rs`             | Mining job storage and queries           |
 | User Store         | `p2poolv2_lib/src/store/user.rs`                  | User CRUD operations                     |
 | StoredUser         | `p2poolv2_lib/src/store/stored_user.rs`           | StoredUser struct definition             |
 | PPLNS Shares       | `p2poolv2_lib/src/store/pplns_shares.rs`          | PPLNS share storage and filtering        |
-| Background Tasks   | `p2poolv2_lib/src/store/background_tasks.rs`      | Async background operations              |
-| ChainStore         | `p2poolv2_lib/src/shares/chain/chain_store.rs`    | High-level chain operations              |
+| Block Pruning      | `p2poolv2_lib/src/store/prune_blocks.rs`          | Prune boundaries and body deletion       |
+| Background Tasks   | `p2poolv2_node/src/background_tasks.rs`           | Periodic pruning, per pool mode          |
+| ChainStoreHandle   | `p2poolv2_lib/src/shares/chain/chain_store_handle.rs` | High-level chain operations          |
 | SimplePplnsShare   | `p2poolv2_lib/src/accounting/payout/simple_pplns/mod.rs` | PPLNS share struct definition            |
