@@ -466,15 +466,15 @@ impl ShareBlock {
             &secp,
         )?
         .witness_program();
-        let block_hex = hex::decode(genesis_data.bitcoin_block_hex).unwrap();
         // panic here, as if the genesis block is bad, we bail at the start of the process
-        let bitcoin_block: bitcoin::Block = match bitcoin::consensus::deserialize(&block_hex) {
-            Ok(block) => block,
-            Err(e) => {
-                tracing::error!("Failed to deserialize genesis block: {e}");
-                return Err("Invalid genesis block data".into());
-            }
-        };
+        let bitcoin_block: bitcoin::Block =
+            match bitcoin::consensus::deserialize(genesis_data.bitcoin_block) {
+                Ok(block) => block,
+                Err(e) => {
+                    tracing::error!("Failed to deserialize genesis block: {e}");
+                    return Err("Invalid genesis block data".into());
+                }
+            };
 
         // The bitcoin block is deserialized before the coinbase is built,
         // because the share coinbase now carries its hash. Genesis is the one
