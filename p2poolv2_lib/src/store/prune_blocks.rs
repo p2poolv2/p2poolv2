@@ -4,9 +4,9 @@
 
 //! Block body pruning.
 //!
-//! Every boundary is derived from the candidate tip and the pruner's start
-//! point is derived from the data; nothing is persisted. See
-//! `docs/architecture/pruning.md`.
+//! The gates' boundary is derived from the candidate tip, the deletion
+//! target from the confirmed tip, and the pruner's start point from the
+//! data; nothing is persisted. See `docs/architecture/pruning.md`.
 
 use crate::accounting::payout::sharechain_pplns::pplns_window::{PRUNE_DEPTH, PRUNE_INTERVAL};
 use crate::shares::share_block::Txids;
@@ -49,34 +49,35 @@ pub fn prune_height_for_tip(candidate_tip_height: u32) -> u32 {
     candidate_tip_height.saturating_sub(PRUNE_DEPTH as u32)
 }
 
-/// Height below which block bodies are deleted for a candidate tip.
+/// Height below which block bodies are deleted, for a confirmed tip.
 ///
-/// Lags `prune_height_for_tip` by one `PRUNE_INTERVAL`, so a candidate tip
-/// that drops by less than an interval never makes the gates demand a
-/// deleted body, and peers slightly behind can still fetch bodies near the
-/// boundary.
-pub fn prune_target_for_tip(candidate_tip_height: u32) -> u32 {
-    candidate_tip_height.saturating_sub((PRUNE_DEPTH + PRUNE_INTERVAL) as u32)
+/// Measured from the confirmed tip, not the candidate tip, so deletion never
+/// reaches heights the confirmed chain has not got to, and does not follow
+/// the candidate tip when `mark_invalid` cuts it back. The confirmed tip never
+/// passes the candidate tip, so the target stays at least one
+/// `PRUNE_INTERVAL` below the gates' `prune_height_for_tip`: peers slightly
+/// behind can still fetch bodies near the boundary.
+pub fn prune_target_for_tip(confirmed_tip_height: u32) -> u32 {
+    confirmed_tip_height.saturating_sub((PRUNE_DEPTH + PRUNE_INTERVAL) as u32)
 }
 
-/// The heights `[start, target)` the pruner should delete now, or None when
-/// it has nothing to do.
+/// The heights `[start, prune_target)` the pruner should delete now, or None
+/// when it has nothing to do.
 ///
-/// Pruning runs only while the node is current, which keeps the confirmed
-/// tip far above the target, and only once there is a candidate tip. The
-/// start is `next_prune_start`, where the previous run stopped, or else
+/// Pruning runs only while the node is current, and only once the target is
+/// above genesis, which also means there is a confirmed tip. The start is
+/// `next_prune_start`, where the previous run stopped, or else
 /// `find_prune_start` derives it from the store; the search runs only when
 /// both gates pass.
 pub fn get_range_to_prune(
     is_current: bool,
-    candidate_tip_height: Option<u32>,
+    prune_target: u32,
     next_prune_start: Option<u32>,
     find_prune_start: impl FnOnce(u32) -> Result<u32, StoreError>,
 ) -> Result<Option<Range<u32>>, StoreError> {
-    let Some(candidate_tip_height) = candidate_tip_height.filter(|_| is_current) else {
+    if !is_current || prune_target <= FIRST_PRUNABLE_HEIGHT {
         return Ok(None);
-    };
-    let prune_target = prune_target_for_tip(candidate_tip_height);
+    }
     let prune_start = match next_prune_start {
         Some(prune_start) => prune_start,
         None => find_prune_start(prune_target)?,
@@ -97,14 +98,15 @@ impl Store {
         }
     }
 
-    /// The prune target for the current candidate tip: bodies below it are
-    /// deleted and never stored again.
+    /// The prune target for the current confirmed tip: bodies below it are
+    /// deleted and never stored again. The pruner, the writer guard and the
+    /// reorg depth limit all read it here.
     ///
-    /// Returns 0 when there is no candidate tip yet. Store read errors are
+    /// Returns 0 when there is no confirmed tip yet. Store read errors are
     /// propagated.
     pub fn prune_target(&self) -> Result<u32, StoreError> {
-        match self.get_top_candidate_height() {
-            Ok(candidate_tip_height) => Ok(prune_target_for_tip(candidate_tip_height)),
+        match self.get_top_confirmed_height() {
+            Ok(confirmed_tip_height) => Ok(prune_target_for_tip(confirmed_tip_height)),
             Err(StoreError::NotFound(_)) => Ok(0),
             Err(error) => Err(error),
         }
@@ -343,9 +345,7 @@ mod tests {
 
     #[test]
     fn test_get_range_to_prune_is_none_when_not_current() {
-        let candidate_tip_height = (PRUNE_DEPTH + PRUNE_INTERVAL) as u32 + 100;
-
-        let range = get_range_to_prune(false, Some(candidate_tip_height), None, |_| {
+        let range = get_range_to_prune(false, 100, None, |_| {
             panic!("the start search must not run when not current")
         })
         .unwrap();
@@ -353,21 +353,24 @@ mod tests {
         assert_eq!(range, None);
     }
 
+    /// A target of 0 means no confirmed tip, or one below the prune depth;
+    /// the search must not run, as it reads the confirmed tip.
     #[test]
-    fn test_get_range_to_prune_is_none_without_candidate_tip() {
-        let range = get_range_to_prune(true, None, None, |_| {
-            panic!("the start search must not run without a candidate tip")
+    fn test_get_range_to_prune_is_none_when_target_at_genesis() {
+        let range = get_range_to_prune(true, 0, None, |_| {
+            panic!("the start search must not run without a target above genesis")
         })
         .unwrap();
 
         assert_eq!(range, None);
     }
 
+    /// Height 1 is the first prunable height, so a target of 1 leaves nothing
+    /// to prune.
     #[test]
-    fn test_get_range_to_prune_is_none_when_tip_below_prune_depth() {
-        let range = get_range_to_prune(true, Some(PRUNE_DEPTH as u32), None, |target| {
-            assert_eq!(target, 0);
-            Ok(0)
+    fn test_get_range_to_prune_is_none_when_target_at_first_prunable_height() {
+        let range = get_range_to_prune(true, 1, None, |_| {
+            panic!("the start search must not run with nothing to prune")
         })
         .unwrap();
 
@@ -376,9 +379,7 @@ mod tests {
 
     #[test]
     fn test_get_range_to_prune_searches_for_start_when_none_remembered() {
-        let candidate_tip_height = (PRUNE_DEPTH + PRUNE_INTERVAL) as u32 + 100;
-
-        let range = get_range_to_prune(true, Some(candidate_tip_height), None, |target| {
+        let range = get_range_to_prune(true, 100, None, |target| {
             assert_eq!(target, 100);
             Ok(40)
         })
@@ -389,9 +390,7 @@ mod tests {
 
     #[test]
     fn test_get_range_to_prune_uses_remembered_start_without_searching() {
-        let candidate_tip_height = (PRUNE_DEPTH + PRUNE_INTERVAL) as u32 + 100;
-
-        let range = get_range_to_prune(true, Some(candidate_tip_height), Some(60), |_| {
+        let range = get_range_to_prune(true, 100, Some(60), |_| {
             panic!("the start search must not run with a remembered start")
         })
         .unwrap();
@@ -401,9 +400,7 @@ mod tests {
 
     #[test]
     fn test_get_range_to_prune_is_none_when_start_reached_target() {
-        let candidate_tip_height = (PRUNE_DEPTH + PRUNE_INTERVAL) as u32 + 100;
-
-        let range = get_range_to_prune(true, Some(candidate_tip_height), Some(100), |_| {
+        let range = get_range_to_prune(true, 100, Some(100), |_| {
             panic!("the start search must not run with a remembered start")
         })
         .unwrap();
@@ -411,13 +408,12 @@ mod tests {
         assert_eq!(range, None);
     }
 
-    /// A tip that dropped since the last run leaves the target below the
-    /// remembered start; nothing is pruned until the tip passes it again.
+    /// A confirmed tip that dropped since the last run (a confirmed reorg)
+    /// leaves the target below the remembered start; nothing is pruned until
+    /// the tip passes it again.
     #[test]
     fn test_get_range_to_prune_is_none_when_start_above_target() {
-        let candidate_tip_height = (PRUNE_DEPTH + PRUNE_INTERVAL) as u32 + 100;
-
-        let range = get_range_to_prune(true, Some(candidate_tip_height), Some(150), |_| {
+        let range = get_range_to_prune(true, 100, Some(150), |_| {
             panic!("the start search must not run with a remembered start")
         })
         .unwrap();
@@ -427,9 +423,7 @@ mod tests {
 
     #[test]
     fn test_get_range_to_prune_propagates_start_search_error() {
-        let candidate_tip_height = (PRUNE_DEPTH + PRUNE_INTERVAL) as u32 + 100;
-
-        let result = get_range_to_prune(true, Some(candidate_tip_height), None, |_| {
+        let result = get_range_to_prune(true, 100, None, |_| {
             Err(StoreError::Database("read failed".to_string()))
         });
 
@@ -895,7 +889,7 @@ mod tests {
     }
 
     #[test]
-    fn test_store_prune_target_without_candidate_tip_is_zero() {
+    fn test_store_prune_target_without_confirmed_tip_is_zero() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
@@ -913,22 +907,9 @@ mod tests {
         let mut batch = Store::get_write_batch();
         store.setup_genesis(&genesis, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
-        let candidate_tip_height = (PRUNE_DEPTH + PRUNE_INTERVAL) as u32 + 2;
-        let mut tip_metadata = BlockMetadata {
-            expected_height: Some(candidate_tip_height),
-            chain_work: genesis.header.get_work(),
-            status: Status::HeaderValid,
-            chain: ChainMembership::None,
-        };
+        let confirmed_tip_height = (PRUNE_DEPTH + PRUNE_INTERVAL) as u32 + 2;
         let mut batch = Store::get_write_batch();
-        store
-            .append_to_candidates(
-                &BlockHash::from_byte_array([0x77; 32]),
-                candidate_tip_height,
-                &mut tip_metadata,
-                &mut batch,
-            )
-            .unwrap();
+        store.set_top_confirmed_height(confirmed_tip_height, &mut batch);
         store.commit_batch(batch).unwrap();
         let block = TestShareBlockBuilder::new()
             .prev_share_blockhash(genesis.block_hash().to_string())
@@ -952,13 +933,7 @@ mod tests {
         let mut batch = Store::get_write_batch();
         store.setup_genesis(&genesis, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
-        let candidate_tip_height = (PRUNE_DEPTH + PRUNE_INTERVAL) as u32 + 2;
-        let mut tip_metadata = BlockMetadata {
-            expected_height: Some(candidate_tip_height),
-            chain_work: genesis.header.get_work(),
-            status: Status::HeaderValid,
-            chain: ChainMembership::None,
-        };
+        let confirmed_tip_height = (PRUNE_DEPTH + PRUNE_INTERVAL) as u32 + 2;
         let parent = TestShareBlockBuilder::new()
             .prev_share_blockhash(genesis.block_hash().to_string())
             .time(1_700_000_001)
@@ -970,14 +945,88 @@ mod tests {
             chain: ChainMembership::None,
         };
         let mut batch = Store::get_write_batch();
+        store.set_top_confirmed_height(confirmed_tip_height, &mut batch);
         store
-            .append_to_candidates(
-                &BlockHash::from_byte_array([0x77; 32]),
-                candidate_tip_height,
-                &mut tip_metadata,
-                &mut batch,
-            )
+            .update_block_metadata(&parent.block_hash(), &parent_metadata, &mut batch)
             .unwrap();
+        store.commit_batch(batch).unwrap();
+        let block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(parent.block_hash().to_string())
+            .time(1_700_000_002)
+            .build();
+        let mut batch = Store::get_write_batch();
+
+        store.add_share_block(&block, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        assert!(store.share_block_exists(&block.block_hash()));
+    }
+
+    /// The candidate tip can run far ahead of a confirmed tip that is still
+    /// current, e.g. during header sync at short sim depths. Deletion must
+    /// never reach heights the confirmed chain has not got to, so the target
+    /// follows the confirmed tip.
+    #[test]
+    fn test_prune_target_follows_confirmed_tip_when_candidate_runs_ahead() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let confirmed_tip_height = (PRUNE_DEPTH + PRUNE_INTERVAL) as u32 + 50;
+        let mut batch = Store::get_write_batch();
+        store.set_top_confirmed_height(confirmed_tip_height, &mut batch);
+        store.set_top_candidate_height(confirmed_tip_height + 1000, &mut batch);
+        store.commit_batch(batch).unwrap();
+
+        assert_eq!(store.prune_target().unwrap(), 50);
+    }
+
+    /// `mark_invalid` can cut the candidate chain back toward the confirmed
+    /// tip. The target must not move with it, and must stay at least one
+    /// interval below the gates' prune height, or the gates would demand
+    /// bodies already deleted.
+    #[test]
+    fn test_prune_target_unchanged_when_candidate_tip_drops() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let confirmed_tip_height = (PRUNE_DEPTH + PRUNE_INTERVAL) as u32 + 50;
+        let mut batch = Store::get_write_batch();
+        store.set_top_confirmed_height(confirmed_tip_height, &mut batch);
+        store.set_top_candidate_height(confirmed_tip_height + 1000, &mut batch);
+        store.commit_batch(batch).unwrap();
+        let target_before_drop = store.prune_target().unwrap();
+        let mut batch = Store::get_write_batch();
+        store.set_top_candidate_height(confirmed_tip_height + 1, &mut batch);
+        store.commit_batch(batch).unwrap();
+
+        let target_after_drop = store.prune_target().unwrap();
+
+        assert_eq!(target_after_drop, target_before_drop);
+        assert!(target_after_drop + PRUNE_INTERVAL as u32 <= store.prune_height().unwrap());
+    }
+
+    /// A body above the confirmed-based target is still within what this node
+    /// keeps, even when the candidate tip runs far ahead, so it is stored.
+    #[test]
+    fn test_add_share_block_above_confirmed_target_is_stored_when_candidate_runs_ahead() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let genesis = TestShareBlockBuilder::new().build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+        let confirmed_tip_height = (PRUNE_DEPTH + PRUNE_INTERVAL) as u32 + 2;
+        let parent = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .time(1_700_000_001)
+            .build();
+        let parent_metadata = BlockMetadata {
+            expected_height: Some(1),
+            chain_work: genesis.header.get_work(),
+            status: Status::HeaderValid,
+            chain: ChainMembership::None,
+        };
+        let mut batch = Store::get_write_batch();
+        store.set_top_confirmed_height(confirmed_tip_height, &mut batch);
+        store.set_top_candidate_height(confirmed_tip_height + 100, &mut batch);
         store
             .update_block_metadata(&parent.block_hash(), &parent_metadata, &mut batch)
             .unwrap();
