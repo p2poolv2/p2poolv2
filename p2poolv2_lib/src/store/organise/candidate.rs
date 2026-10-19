@@ -19,6 +19,7 @@ use tracing::debug;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use super::{Chain, Height, TopResult, height_to_key_with_suffix};
+use crate::store::dag_store::MAX_UNCLES_DEPTH;
 use crate::store::prune_blocks::prune_height_for_tip;
 
 const CANDIDATE_SUFFIX: &str = ":c";
@@ -550,14 +551,20 @@ impl Store {
     }
 
     /// Whether the reorg branch ending at `blockhash` forks from the candidate
-    /// or confirmed chain below the prune target (`Store::prune_target`, from
-    /// the confirmed tip).
+    /// or confirmed chain too close to, or below, the prune target
+    /// (`Store::prune_target`, from the confirmed tip).
     ///
     /// Bodies below the prune target are deleted, so the confirmed chain can
     /// never reorg onto such a branch: `reorg_confirmed` needs the fork
     /// point's body. Refusing the candidate reorg turns that open-ended stall
     /// into a clean refusal, a reorg depth limit. Following such a branch
     /// would take out-working the whole pool for about `PRUNE_DEPTH` blocks.
+    ///
+    /// The limit sits `MAX_UNCLES_DEPTH` above the target. The branch's first
+    /// block may name an uncle up to `MAX_UNCLES_DEPTH - 1` heights below the
+    /// fork point, and after a height-dropping reorg the gates may ask for
+    /// that uncle's body, which must not be deleted. The margin is
+    /// conservative by one height.
     ///
     /// Returns false when the confirmed tip is too low for any pruning (or
     /// absent), or when the branch does not reach either chain.
@@ -585,7 +592,7 @@ impl Store {
                     "Branch point {branch_point} missing expected_height"
                 ))
             })?;
-        Ok(branch_point_height < prune_target)
+        Ok(branch_point_height < prune_target + MAX_UNCLES_DEPTH as u32)
     }
 
     /// Reorgs the candidate chain to the branch ending at `blockhash`.
@@ -2634,10 +2641,11 @@ mod tests {
         );
     }
 
-    /// A branch forking exactly at the prune target still has its fork point's
-    /// body, so it is followed.
+    /// A branch forking exactly at the prune target is refused: a block on it
+    /// may name an uncle up to `MAX_UNCLES_DEPTH - 1` heights below the fork
+    /// point, whose body is already deleted.
     #[test]
-    fn test_reorg_branch_forking_at_prune_target_is_followed() {
+    fn test_reorg_branch_forking_at_prune_target_is_refused() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
         let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
@@ -2664,15 +2672,16 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         assert!(
-            !store
+            store
                 .reorg_branch_forks_below_prune_target(&fork.block_hash())
                 .unwrap()
         );
     }
 
-    /// A branch forking above the prune target is followed.
+    /// A branch forking `MAX_UNCLES_DEPTH - 1` heights above the prune target
+    /// is refused: its first block may name an uncle just below the target.
     #[test]
-    fn test_reorg_branch_forking_above_prune_target_is_followed() {
+    fn test_reorg_branch_forking_within_uncle_depth_of_prune_target_is_refused() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
         let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
@@ -2689,8 +2698,59 @@ mod tests {
             .nonce(0xe9695793)
             .build();
         store.push_to_candidate_chain(&share_2).unwrap();
-        let fork = TestShareBlockBuilder::new()
+        let share_3 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share_2.block_hash().to_string())
+            .nonce(0xe9695794)
+            .build();
+        store.push_to_candidate_chain(&share_3).unwrap();
+        let fork = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_3.block_hash().to_string())
+            .nonce(0xe9695799)
+            .build();
+        store.store_with_valid_metadata(&fork);
+        let mut batch = Store::get_write_batch();
+        store.set_top_confirmed_height((PRUNE_DEPTH + PRUNE_INTERVAL) as u32 + 1, &mut batch);
+        store.commit_batch(batch).unwrap();
+
+        assert!(
+            store
+                .reorg_branch_forks_below_prune_target(&fork.block_hash())
+                .unwrap()
+        );
+    }
+
+    /// A branch forking `MAX_UNCLES_DEPTH` heights above the prune target is
+    /// followed: every uncle its blocks can name is at or above the target.
+    #[test]
+    fn test_reorg_branch_forking_uncle_depth_above_prune_target_is_followed() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+        let share_1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        store.push_to_candidate_chain(&share_1).unwrap();
+        let share_2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_1.block_hash().to_string())
+            .nonce(0xe9695793)
+            .build();
+        store.push_to_candidate_chain(&share_2).unwrap();
+        let share_3 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_2.block_hash().to_string())
+            .nonce(0xe9695794)
+            .build();
+        store.push_to_candidate_chain(&share_3).unwrap();
+        let share_4 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_3.block_hash().to_string())
+            .nonce(0xe9695795)
+            .build();
+        store.push_to_candidate_chain(&share_4).unwrap();
+        let fork = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_4.block_hash().to_string())
             .nonce(0xe9695799)
             .build();
         store.store_with_valid_metadata(&fork);
@@ -2725,13 +2785,23 @@ mod tests {
             .nonce(0xe9695793)
             .build();
         store.push_to_candidate_chain(&share_2).unwrap();
-        let fork = TestShareBlockBuilder::new()
+        let share_3 = TestShareBlockBuilder::new()
             .prev_share_blockhash(share_2.block_hash().to_string())
+            .nonce(0xe9695794)
+            .build();
+        store.push_to_candidate_chain(&share_3).unwrap();
+        let share_4 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_3.block_hash().to_string())
+            .nonce(0xe9695795)
+            .build();
+        store.push_to_candidate_chain(&share_4).unwrap();
+        let fork = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_4.block_hash().to_string())
             .nonce(0xe9695799)
             .build();
         store.store_with_valid_metadata(&fork);
         let mut batch = Store::get_write_batch();
-        store.set_top_confirmed_height((PRUNE_DEPTH + PRUNE_INTERVAL) as u32 + 2, &mut batch);
+        store.set_top_confirmed_height((PRUNE_DEPTH + PRUNE_INTERVAL) as u32 + 1, &mut batch);
         store.set_top_candidate_height((PRUNE_DEPTH + PRUNE_INTERVAL) as u32 + 100, &mut batch);
         store.commit_batch(batch).unwrap();
 
