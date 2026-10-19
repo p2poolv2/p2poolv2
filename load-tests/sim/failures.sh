@@ -33,6 +33,14 @@
 #                     genesis off pruned peers without asking for a body they
 #                     deleted. Needs the swarm past the sim prune target, so it
 #                     runs time-compressed; not part of `all`
+#   deep-fork-refused reorg depth limit: the swarm is launched split in two
+#                     (FORK_GROUP_FROM) so the chain forks at genesis. Once
+#                     every node has pruned, one minority node reconnects to
+#                     the heavier majority and must refuse to reorg onto it,
+#                     keep its own chain and keep confirming; not part of `all`
+#   shallow-fork-reorged  control for deep-fork-refused: the minority node
+#                     reconnects before the prune target, and must reorg onto
+#                     the majority chain; not part of `all`
 #
 # Env overrides:
 #   RUN_DIR                   swarm work dir                (default /tmp/p2pool-sim)
@@ -50,6 +58,9 @@
 #   LATE_MINER_TIP_TIMEOUT    max wait for tip 2*maturity (s) (default 900)
 #   LATE_MINER_CHECK_TIMEOUT  max wait for a verdict (s)    (default 900)
 #   PRUNED_JOIN_TIP_TIMEOUT   max wait for every node to prune (s) (default 900)
+#   FORK_GROUP_FROM           first node of the minority group (fork scenarios)
+#   FORK_TIP_TIMEOUT          max wait to reach the reconnect point (s) (default 900)
+#   FORK_OBSERVE_SECS         watch after the reconnect (s) (default 90)
 #
 # Node 0 is never a target: metrics.sh derives the share rate and uncle rate
 # from node-0.log alone, so killing it would corrupt the run's own metrics.
@@ -89,6 +100,14 @@ Scenarios:
                     genesis off pruned peers without asking for a body they
                     deleted. Needs the swarm past the sim prune target, so it
                     runs time-compressed; not part of `all`
+  deep-fork-refused reorg depth limit: the swarm is launched split in two
+                    (FORK_GROUP_FROM) so the chain forks at genesis. Once
+                    every node has pruned, one minority node reconnects to
+                    the heavier majority and must refuse to reorg onto it,
+                    keep its own chain and keep confirming; not part of `all`
+  shallow-fork-reorged  control for deep-fork-refused: the minority node
+                    reconnects before the prune target, and must reorg onto
+                    the majority chain; not part of `all`
 
 Env vars:
   RUN_DIR                   swarm work dir                (default /tmp/p2pool-sim)
@@ -106,6 +125,9 @@ Env vars:
   LATE_MINER_TIP_TIMEOUT    max wait for tip 2*maturity (s) (default 900)
   LATE_MINER_CHECK_TIMEOUT  max wait for a verdict (s)    (default 900)
   PRUNED_JOIN_TIP_TIMEOUT   max wait for every node to prune (s) (default 900)
+  FORK_GROUP_FROM           first node of the minority group (fork scenarios)
+  FORK_TIP_TIMEOUT          max wait to reach the reconnect point (s) (default 900)
+  FORK_OBSERVE_SECS         watch after the reconnect (s) (default 90)
 
 Node 0 is never a target: metrics.sh derives the share rate and uncle rate
 from node-0.log alone, so killing it would corrupt the run's own metrics.
@@ -115,6 +137,7 @@ Examples:
   FAILURE_WARMUP=20 FAILURE_SLOW_DOWN=60 load-tests/sim/failures.sh restart-delayed
   LATE_MINER=1 load-tests/sim/failures.sh late-miner
   load-tests/sim/failures.sh pruned-join
+  FORK_GROUP_FROM=4 load-tests/sim/failures.sh deep-fork-refused
 
 Related scripts:
   load-tests/sim/run-swarm.sh N    launch the swarm this operates on
@@ -145,6 +168,9 @@ LATE_MINER="${LATE_MINER:-}"
 LATE_MINER_TIP_TIMEOUT="${LATE_MINER_TIP_TIMEOUT:-900}"
 LATE_MINER_CHECK_TIMEOUT="${LATE_MINER_CHECK_TIMEOUT:-900}"
 PRUNED_JOIN_TIP_TIMEOUT="${PRUNED_JOIN_TIP_TIMEOUT:-900}"
+FORK_GROUP_FROM="${FORK_GROUP_FROM:-}"
+FORK_TIP_TIMEOUT="${FORK_TIP_TIMEOUT:-900}"
+FORK_OBSERVE_SECS="${FORK_OBSERVE_SECS:-90}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -169,6 +195,9 @@ TIP_AT_KILL=()
 MATURITY_VERDICT=""
 # pruned-join only: PASS, FAIL (reasons) or INCONCLUSIVE.
 JOIN_VERDICT=""
+# deep-fork-refused and shallow-fork-reorged only: PASS, FAIL (reasons) or
+# INCONCLUSIVE.
+FORK_VERDICT=""
 
 log_message() {
   echo "[$(date +%H:%M:%S)] $*"
@@ -612,6 +641,190 @@ scenario_pruned_join() {
 }
 
 # ---------------------------------------------------------------------------
+# deep-fork-refused / shallow-fork-reorged
+# ---------------------------------------------------------------------------
+
+# Add node 0, in the majority group, to a node's dial list, so its next start
+# connects the two groups. Uses awk + mv like set_node_pid.
+dial_majority_group() {
+  local config="$RUN_DIR/node-$1.toml" address tmp
+  address="\"/ip4/127.0.0.1/tcp/$BASE_P2P\""
+  tmp="$(mktemp "$RUN_DIR/config.XXXXXX")"
+  awk -v address="$address" '
+    /^dial_peers = \[\]$/ { print "dial_peers = [" address "]"; next }
+    /^dial_peers = \[/ { sub(/^dial_peers = \[/, "dial_peers = [" address ", "); print; next }
+    { print }' "$config" > "$tmp"
+  mv "$tmp" "$config"
+}
+
+# Restart a minority node dialing the majority group. Sets RECONNECT_LOG_LINE
+# to the log line count before the restart, so later checks read only what the
+# node logged after it met the majority chain.
+reconnect_to_majority() {
+  local index="$1"
+  kill_nodes "$index"
+  dial_majority_group "$index"
+  RECONNECT_LOG_LINE="$(wc -l < "$RUN_DIR/node-$index.log" | tr -d ' ')"
+  start_node "$index"
+}
+
+# Lines a node logged since RECONNECT_LOG_LINE.
+log_since_reconnect() {
+  tail -n "+$((RECONNECT_LOG_LINE + 1))" "$RUN_DIR/node-$1.log" 2>/dev/null
+}
+
+# The majority group must outwork the minority, so a reorg onto it is wanted
+# by chain work; only the reorg depth limit may refuse it. The swarm must have
+# been launched split, with node 0 in the majority group.
+require_fork_setup() {
+  if [ -z "$FORK_GROUP_FROM" ] || [ "$FORK_GROUP_FROM" -lt 2 ] \
+    || [ "$FORK_GROUP_FROM" -ge "$NODE_TOTAL" ]; then
+    echo "ERROR: $SCENARIO needs a swarm launched with FORK_GROUP_FROM between 2 and $((NODE_TOTAL - 1))." >&2
+    exit 2
+  fi
+  if grep -q "tcp/$BASE_P2P\"" "$RUN_DIR/node-$FORK_GROUP_FROM.toml" 2>/dev/null; then
+    echo "ERROR: node $FORK_GROUP_FROM already dials node 0; launch the swarm with FORK_GROUP_FROM=$FORK_GROUP_FROM." >&2
+    exit 2
+  fi
+}
+
+# The groups fork at launch. Once both are past the sim prune target and every
+# node has pruned, the minority group's fork point (genesis) is below its
+# prune target. Reconnect one minority node: the majority chain has more work,
+# but the node must refuse to reorg onto it, keep its own chain and keep
+# confirming, while the majority keeps advancing.
+scenario_deep_fork_refused() {
+  local depth interval index tip_target minority_tip_before majority_tip_before
+  local check_height minority_hash_before majority_hash links refusals
+  local minority_hash_after minority_tip_after majority_tip_after reasons=""
+  depth="$(sim_prune_depth)"
+  interval="$(sim_prune_interval)"
+  if [ -z "$depth" ] || [ -z "$interval" ]; then
+    log_message "  node 0 has not logged its sim depths; is it a sim build?"
+    FORK_VERDICT="INCONCLUSIVE"
+    return
+  fi
+  index="$FORK_GROUP_FROM"
+  tip_target=$((depth + 3 * interval))
+  log_message "--- deep-fork-refused: node $index reconnects to the majority once every node has pruned (prune depth $depth, interval $interval) ---"
+  TARGET_LIST="$TARGET_LIST $index"
+  if ! wait_for_swarm_height "$tip_target" "$FORK_TIP_TIMEOUT" \
+    || ! wait_for_all_nodes_pruned "$FORK_TIP_TIMEOUT"; then
+    # A minority whose hashrate needs a share target easier than the ASERT
+    # clamp mines below the ideal rate and may never reach the prune target.
+    log_message "  if the minority lags, raise HASHRATE (e.g. 1e13 at IDEAL_BLOCK_TIME=1)"
+    FORK_VERDICT="INCONCLUSIVE"
+    return
+  fi
+
+  minority_tip_before="$(log_tip_height "$index")"
+  majority_tip_before="$(log_tip_height 0)"
+  check_height=$((minority_tip_before - interval))
+  minority_hash_before="$(api_confirmed_hash "$index" "$check_height")"
+  majority_hash="$(api_confirmed_hash 0 "$check_height")"
+  OBSERVATION_LINES+=("before reconnect: minority tip $minority_tip_before, majority tip $majority_tip_before")
+
+  reconnect_to_majority "$index"
+  log_message "  observing for ${FORK_OBSERVE_SECS}s"
+  sleep "$FORK_OBSERVE_SECS"
+
+  links="$(count_links_between "$index" 0)"
+  refusals="$(log_since_reconnect "$index" | grep -c "branch forks below the prune target")"
+  minority_hash_after="$(api_confirmed_hash "$index" "$check_height")"
+  minority_tip_after="$(log_tip_height "$index")"
+  majority_tip_after="$(log_tip_height 0)"
+  OBSERVATION_LINES+=("after reconnect: minority tip $minority_tip_after, majority tip $majority_tip_after, links to node 0: $links, refusals: $refusals")
+  OBSERVATION_LINES+=("confirmed hash at $check_height: minority ${minority_hash_before:-none} -> ${minority_hash_after:-none}, majority ${majority_hash:-none}")
+
+  if [ "$links" -lt 1 ]; then
+    FORK_VERDICT="INCONCLUSIVE (node $index never connected to node 0)"
+    log_message "  deep-fork-refused: $FORK_VERDICT"
+    return
+  fi
+  if [ "$refusals" -lt 1 ]; then
+    reasons="$reasons no-refusal"
+  fi
+  if [ -z "$minority_hash_before" ] || [ "$minority_hash_after" != "$minority_hash_before" ]; then
+    reasons="$reasons left-own-branch"
+  fi
+  if [ "$minority_hash_before" = "$majority_hash" ]; then
+    reasons="$reasons groups-did-not-fork"
+  fi
+  if [ "$minority_tip_after" -le "$minority_tip_before" ]; then
+    reasons="$reasons minority-stalled"
+  fi
+  if [ "$majority_tip_after" -le "$majority_tip_before" ]; then
+    reasons="$reasons majority-stalled"
+  fi
+  if [ -z "$reasons" ]; then
+    FORK_VERDICT="PASS"
+  else
+    FORK_VERDICT="FAIL (${reasons# })"
+  fi
+  log_message "  deep-fork-refused: $FORK_VERDICT"
+}
+
+# Control for deep-fork-refused: the same split, but the minority node
+# reconnects while the tips are still below the prune target. The fork point
+# is then above it, so the node must follow the majority chain and log no
+# refusal; the nightly convergence check then sees one chain. The reconnect
+# height also keeps the fork within the PPLNS window cache, which bounds how
+# deep a fork a node can pay out for.
+scenario_shallow_fork_reorged() {
+  local interval index reconnect_height check_height links refusals
+  local minority_hash majority_hash reasons=""
+  interval="$(sim_prune_interval)"
+  if [ -z "$interval" ]; then
+    log_message "  node 0 has not logged its sim depths; is it a sim build?"
+    FORK_VERDICT="INCONCLUSIVE"
+    return
+  fi
+  index="$FORK_GROUP_FROM"
+  reconnect_height=$((3 * interval))
+  log_message "--- shallow-fork-reorged: node $index reconnects to the majority at height $reconnect_height, above the prune target ---"
+  TARGET_LIST="$TARGET_LIST $index"
+  if ! wait_for_swarm_height "$reconnect_height" "$FORK_TIP_TIMEOUT"; then
+    FORK_VERDICT="INCONCLUSIVE"
+    return
+  fi
+  if [ "$(count_pruned_nodes)" -ne 0 ]; then
+    FORK_VERDICT="INCONCLUSIVE (a node pruned before the reconnect)"
+    log_message "  shallow-fork-reorged: $FORK_VERDICT"
+    return
+  fi
+
+  reconnect_to_majority "$index"
+  log_message "  observing for ${FORK_OBSERVE_SECS}s"
+  sleep "$FORK_OBSERVE_SECS"
+
+  links="$(count_links_between "$index" 0)"
+  refusals="$(log_since_reconnect "$index" | grep -c "branch forks below the prune target")"
+  check_height=$(($(log_tip_height 0) - interval))
+  minority_hash="$(api_confirmed_hash "$index" "$check_height")"
+  majority_hash="$(api_confirmed_hash 0 "$check_height")"
+  OBSERVATION_LINES+=("after reconnect: links to node 0: $links, refusals: $refusals")
+  OBSERVATION_LINES+=("confirmed hash at $check_height: minority ${minority_hash:-none}, majority ${majority_hash:-none}")
+
+  if [ "$links" -lt 1 ]; then
+    FORK_VERDICT="INCONCLUSIVE (node $index never connected to node 0)"
+    log_message "  shallow-fork-reorged: $FORK_VERDICT"
+    return
+  fi
+  if [ "$refusals" -ne 0 ]; then
+    reasons="$reasons refused"
+  fi
+  if [ -z "$minority_hash" ] || [ "$minority_hash" != "$majority_hash" ]; then
+    reasons="$reasons did-not-reorg"
+  fi
+  if [ -z "$reasons" ]; then
+    FORK_VERDICT="PASS"
+  else
+    FORK_VERDICT="FAIL (${reasons# })"
+  fi
+  log_message "  shallow-fork-reorged: $FORK_VERDICT"
+}
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 
@@ -634,10 +847,14 @@ write_summary() {
     if [ -n "$JOIN_VERDICT" ]; then
       echo "pruned-join verdict: $JOIN_VERDICT"
     fi
+    if [ -n "$FORK_VERDICT" ]; then
+      echo "fork verdict: $FORK_VERDICT"
+    fi
   } | tee "$RESULTS_FILE"
   [ "$unrecovered" -eq 0 ] \
     && { [ -z "$MATURITY_VERDICT" ] || [ "$MATURITY_VERDICT" = "PASS" ]; } \
-    && { [ -z "$JOIN_VERDICT" ] || [ "$JOIN_VERDICT" = "PASS" ]; }
+    && { [ -z "$JOIN_VERDICT" ] || [ "$JOIN_VERDICT" = "PASS" ]; } \
+    && { [ -z "$FORK_VERDICT" ] || [ "$FORK_VERDICT" = "PASS" ]; }
 }
 
 # ---------------------------------------------------------------------------
@@ -646,8 +863,9 @@ write_summary() {
 
 case "$SCENARIO" in
   clean|restart-fast|restart-delayed|partition|all|late-miner|pruned-join) ;;
+  deep-fork-refused|shallow-fork-reorged) ;;
   *)
-    echo "ERROR: unknown scenario '$SCENARIO' (expected clean, restart-fast, restart-delayed, partition, all, late-miner or pruned-join)" >&2
+    echo "ERROR: unknown scenario '$SCENARIO' (expected clean, restart-fast, restart-delayed, partition, all, late-miner, pruned-join, deep-fork-refused or shallow-fork-reorged)" >&2
     exit 2
     ;;
 esac
@@ -674,6 +892,9 @@ if [ ! -x "$BIN" ]; then
 fi
 if [ "$SCENARIO" = "late-miner" ]; then
   require_late_miner_setup
+fi
+if [ "$SCENARIO" = "deep-fork-refused" ] || [ "$SCENARIO" = "shallow-fork-reorged" ]; then
+  require_fork_setup
 fi
 if [ "$NODE_TOTAL" -lt 3 ]; then
   echo "ERROR: failure injection needs at least 3 nodes (node 0 is never a target); have $NODE_TOTAL." >&2
@@ -710,6 +931,8 @@ case "$SCENARIO" in
   partition)       scenario_partition ;;
   late-miner)      scenario_late_miner ;;
   pruned-join)     scenario_pruned_join ;;
+  deep-fork-refused)    scenario_deep_fork_refused ;;
+  shallow-fork-reorged) scenario_shallow_fork_reorged ;;
   all)
     scenario_restart_fast
     scenario_restart_delayed

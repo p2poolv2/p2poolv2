@@ -415,6 +415,44 @@ The summary prints `pruned-join verdict: PASS` or `FAIL (<reasons>)`, and
 
 ---
 
+## 9b. Test I — the reorg depth limit refuses a deep fork
+
+Checks that a node refuses to reorg onto a heavier branch whose fork point is
+below its prune target, instead of stalling on bodies every node has deleted.
+`FORK_GROUP_FROM` launches the swarm in two groups that never connect: nodes
+at that index and above dial only each other. Hashrate is zipf-weighted by
+index, so the lower group is heavier.
+
+```sh
+IDEAL_BLOCK_TIME=1 SHARES_PER_BLOCK=20 NODE_COUNT=6 FORK_GROUP_FROM=4 HASHRATE=1e13 \
+  ./load-tests/sim/nightly.sh deep-fork-refused
+IDEAL_BLOCK_TIME=1 SHARES_PER_BLOCK=20 NODE_COUNT=6 FORK_GROUP_FROM=4 HASHRATE=1e13 \
+  ./load-tests/sim/nightly.sh shallow-fork-reorged
+```
+
+`HASHRATE=1e13` matters. Each group's ASERT regulates its own rate, but the
+share target cannot get easier than the clamp (difficulty about 1,000). At
+1s shares a group needs about 4.3e12 H/s to keep pace; with the default
+1e12 per node the minority mines at a fraction of the rate and never reaches
+the prune target.
+
+`deep-fork-refused` waits for every node to prune, then restarts node
+`FORK_GROUP_FROM` with node 0 added to its `dial_peers` and watches it for
+`FORK_OBSERVE_SECS` (default 90). It passes when the node connects to node 0,
+logs `Refusing candidate reorg to <hash>: branch forks below the prune
+target`, keeps the same confirmed hash at a height below its tip, and keeps
+confirming, while node 0 keeps advancing. The convergence check is skipped.
+
+`shallow-fork-reorged` is the control: it reconnects at height 60, before any
+node prunes. The node must log no refusal and end up with node 0's confirmed
+hash, and the normal convergence check applies. Height 60 also keeps the fork
+within the sim PPLNS window cache (about 120 entries), which bounds how deep a
+fork a node can pay out for.
+
+The summary prints `fork verdict: PASS` or `FAIL (<reasons>)`.
+
+---
+
 ## 10. Where things live
 
 | Thing              | Path                                                      |
@@ -461,6 +499,7 @@ curl -s :7600/chain_info | jq            # tip/candidate heights (prefer logs fo
 | `IDEAL_BLOCK_TIME`                   | 10              | share interval (s); lower = time-compressed, more blocks/min for faster data (auto-scales `LATENCY_MS`); floor ~1s |
 | `HASHRATE`                           | 1.0e12          | modeled per-node hashrate (higher = faster shares)                                                                 |
 | `LATE_MINER`                         | unset           | node index launched with its emitter off, for `failures.sh late-miner` (Test G)                                    |
+| `FORK_GROUP_FROM`                    | unset           | split the swarm: nodes at this index and above dial only each other, for the fork scenarios (Test I)               |
 | `DISTINCT_ADDR`                      | 1               | each node gets its own payout address via the wallet                                                               |
 | `DIAL_FANOUT`                        | 3               | how many earlier peers each node dials                                                                             |
 | `PROFILE`                            | release         | `release` or `debug`                                                                                               |
