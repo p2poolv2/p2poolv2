@@ -16,47 +16,50 @@ pub struct GenesisData {
     /// The public key hex string used to derive the miner's bitcoin
     /// address for the genesis share block coinbase
     pub public_key: &'static str,
-    /// The bitcoin block in hex for the share
-    pub bitcoin_block_hex: &'static str,
+    /// The consensus serialized bitcoin block for the share, embedded
+    /// from a raw `.dat` file, e.g. the output of
+    /// `bitcoin-cli getblock <hash> 0 | xxd -r -p`
+    pub bitcoin_block: &'static [u8],
     /// Bitcoin header height
     pub bitcoin_height: u64,
     /// Unix timestamp for the genesis share block
     pub timestamp: u32,
 }
 
+// Bitcoin signet genesis block (height 0), hash
+// 00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6.
 const SIGNET_GENESIS_DATA: GenesisData = GenesisData {
     public_key: "02ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d",
-    // for bitcoin blockhash 00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6
-    // bitcoin_header_hex: "0100000000000000000000000000000000000000000000000000000000000000000000003ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a008f4d5fae77031e8ad22203",
-    bitcoin_block_hex: include!("signet.rs"),
+    bitcoin_block: include_bytes!("signet.dat"),
     bitcoin_height: 0,
     timestamp: 1776855600,
 };
 
+// Testnet4 block hash 0000000000a57b6dd9b7340a2e2cbb7069a0ccdf28f3db69070ea89d7287444b,
+// mined on previousblockhash 0000000000652fb23ade2b38f96257dc2b7d2cb487cc2344cac2d2546e5ceec5.
 const TESTNET4_GENESIS_DATA: GenesisData = GenesisData {
     public_key: "02ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d",
-    // for bitcoin blockhash 0000000000a57b6dd9b7340a2e2cbb7069a0ccdf28f3db69070ea89d7287444b
-    bitcoin_block_hex: include!("testnet4.rs"),
+    bitcoin_block: include_bytes!("testnet4.dat"),
     bitcoin_height: 151197,
     timestamp: 1788701400, // 09-06-2026T1330
 };
 
-// Using the following JSON data for the genesis block
+// Mainnet block hash 000000000000000000006fa29653a523d531657ad20d6f946d0fef88c97cd935,
+// mined on previousblockhash 00000000000000000001414ee2ca686bd8dc13a40f02d94ff96cb1279dac64aa.
 const MAINNET_GENESIS_DATA: GenesisData = GenesisData {
     public_key: "02ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d",
-    // for header hash 00000000000adb0f8eff963322f447aed003a1861009009b7bcab355bbc8e54d. Mining on previousblockhash 000000000000000000011c80ec9a34567d2c612781b2d7b98c30f689e13c7ad1 height 920526
-    // header in hex "00a06f239cf5fe7a514fd6f9e64d77cd2345cf225ee3fe9b75bf00000000000000000000923435bf0a5f91886f7f94ade677752a526dec905eef07d181893faf15113a75b039fb6821eb01173c0137da"
-    bitcoin_block_hex: include!("main.rs"),
+    bitcoin_block: include_bytes!("main.dat"),
     bitcoin_height: 920527,
     timestamp: 1776855600,
 };
 
-// Regtest genesis: anchors the share chain on a local regtest bitcoind.
-// The bitcoin block is regtest height 0; it is only a fixed starting
-// point and need not match the connected node's tip.
+// Bitcoin regtest genesis block (height 0), hash
+// 0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206.
+// Used only as a fixed anchor for the share chain on regtest; it does
+// not need to match the connected bitcoind's current tip.
 const REGTEST_GENESIS_DATA: GenesisData = GenesisData {
     public_key: "02ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d",
-    bitcoin_block_hex: include!("regtest.rs"),
+    bitcoin_block: include_bytes!("regtest.dat"),
     bitcoin_height: 0,
     timestamp: 1776855600,
 };
@@ -75,18 +78,60 @@ pub fn genesis_data(network: bitcoin::Network) -> Result<GenesisData, Box<dyn Er
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bitcoin::consensus::deserialize;
+    use bitcoin::{Block, BlockHash};
+    use std::str::FromStr;
 
     #[test]
-    fn test_signet_genesis_data() {
+    fn test_signet_genesis_block_hash() {
         let genesis = genesis_data(bitcoin::Network::Signet).unwrap();
+        let block = deserialize::<Block>(genesis.bitcoin_block).unwrap();
 
-        let block = bitcoin::consensus::deserialize::<bitcoin::Block>(
-            hex::decode(genesis.bitcoin_block_hex).unwrap().as_slice(),
+        assert_eq!(
+            block.block_hash(),
+            BlockHash::from_str("00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6")
+                .unwrap()
         );
+        assert!(block.check_merkle_root());
+    }
 
-        assert!(block.is_ok());
-        let header = block.unwrap().header;
-        assert_eq!(header.prev_blockhash, bitcoin::hashes::Hash::all_zeros());
-        assert_eq!(header.version, bitcoin::block::Version::ONE);
+    #[test]
+    fn test_testnet4_genesis_block_hash() {
+        let genesis = genesis_data(bitcoin::Network::Testnet4).unwrap();
+        let block = deserialize::<Block>(genesis.bitcoin_block).unwrap();
+
+        assert_eq!(
+            block.block_hash(),
+            BlockHash::from_str("0000000000a57b6dd9b7340a2e2cbb7069a0ccdf28f3db69070ea89d7287444b")
+                .unwrap()
+        );
+        assert!(block.check_merkle_root());
+        assert_eq!(block.bip34_block_height().unwrap(), genesis.bitcoin_height);
+    }
+
+    #[test]
+    fn test_mainnet_genesis_block_hash() {
+        let genesis = genesis_data(bitcoin::Network::Bitcoin).unwrap();
+        let block = deserialize::<Block>(genesis.bitcoin_block).unwrap();
+
+        assert_eq!(
+            block.block_hash(),
+            BlockHash::from_str("000000000000000000006fa29653a523d531657ad20d6f946d0fef88c97cd935")
+                .unwrap()
+        );
+        assert!(block.check_merkle_root());
+    }
+
+    #[test]
+    fn test_regtest_genesis_block_hash() {
+        let genesis = genesis_data(bitcoin::Network::Regtest).unwrap();
+        let block = deserialize::<Block>(genesis.bitcoin_block).unwrap();
+
+        assert_eq!(
+            block.block_hash(),
+            BlockHash::from_str("0f9188f13cb7b2c71f2a335e3a4fc328bf5beb436012afca590b1a11466e2206")
+                .unwrap()
+        );
+        assert!(block.check_merkle_root());
     }
 }
