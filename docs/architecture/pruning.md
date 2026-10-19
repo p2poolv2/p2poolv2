@@ -10,10 +10,12 @@ spendability, and deleting old block bodies.
 
 **Status.**
 - Implemented: header sync, body fetch, two-zone validation, output
-  spendability and the confirmation pipeline.
-- Designed, not implemented: block body deletion ("Block Body
-  Pruning") and the missing-input marker ("Missing Input at Write
-  Time").
+  spendability, the confirmation pipeline, block body deletion and the
+  reorg depth limit ("Block Body Pruning").
+- Open: the reorg depth limit redoes its refusal on every announcement of a
+  refused block (see "Reorg Depth Limit").
+- Designed, not implemented: the missing-input marker ("Missing Input at
+  Write Time").
 
 ## Overview
 
@@ -64,7 +66,7 @@ a node's tip.
 local.** These are:
 - `prune_height = candidate_tip - PRUNE_DEPTH`;
 - the body fetch range;
-- the prune watermark.
+- the prune target, where deletion stops.
 
 They decide what a node stores, never whether a block is valid. Nodes
 with different tips have different prune heights and still reach the
@@ -83,8 +85,8 @@ inferred from data being absent.
    gap is short-lived:
    - Headers sync before bodies are fetched, so a node's tip matches its
      peers' before it asks for bodies.
-   - Deletion lags the boundary by one `PRUNE_INTERVAL` (see "Watermark
-     and Boundary"), which serves peers up to 360 blocks behind.
+   - Deletion lags the boundary by one `PRUNE_INTERVAL` (see
+     "Boundaries"), which serves peers up to 360 blocks behind.
 2. **The validation zone a block gets depends on the tip.**
    - A block is fully validated on a node whose tip is near it. It gets
      PoW-only checks on a node whose tip is far ahead, such as a fresh
@@ -247,7 +249,7 @@ without requiring block body data.
 ### Flow
 
 `organise_block` computes `prune_height = candidate_tip - PRUNE_DEPTH`
-once from a single candidate tip snapshot, then passes it to all
+(`prune_height_for_tip`) once from a single candidate tip snapshot, then passes it to all
 downstream functions to avoid inconsistency from concurrent updates.
 
 ### Gates modified for pruning
@@ -293,170 +295,260 @@ Relevant code:
   `all_block_and_uncle_data_available`, `should_extend_confirmed`,
   `reorg_confirmed`)
 
-## Block Body Pruning (designed, not implemented)
+## Block Body Pruning
 
 ### What is kept and what is deleted
 
 | Data | Fate | Why |
 |---|---|---|
-| `Header`, `BlockMetadata` (incl. `chain_work`), `BlockIndex`, confirmed `BlockHeight` entries | kept forever | Header sync starts from genesis; the hashrate metric reads `chain_work` |
+| `Header`, `BlockMetadata` (incl. `chain_work`), `BlockIndex`, `h:` height lists, confirmed `BlockHeight` entries | kept forever | Header sync starts from genesis; the hashrate metric reads `chain_work` |
 | `TemplateMerkleBranches` | kept forever | `getheaders` sends each header with its branch (`receivers/getheaders.rs`) |
 | `FoundBlocks` | kept forever | Never pruned (`metrics.md`) |
 | `Uncles` | kept | Small, and derived from headers |
-| `BlockTxids`, `BitcoinTxids`, `BitcoinCoinbase` | deleted below the boundary | Body data |
-| `Tx`, `Inputs`, `Outputs`, `TxidsBlocks`, `SpendsIndex` | deleted below the boundary, unless a kept block still references the txid | Body data that can be shared between blocks |
-| candidate `BlockHeight` entries | deleted below the boundary, at confirmed heights only | Below the confirmed tip they duplicate the confirmed entries |
+| `BlockTxids`, `BitcoinTxids`, `BitcoinCoinbase` | deleted below the prune target | Body data. Nothing writes `BitcoinTxids` yet; its key is deleted anyway so a future writer cannot leak data |
+| `Tx`, `Inputs`, `Outputs`, `TxidsBlocks`, `SpendsIndex` | deleted below the prune target, unless a kept block still includes the txid | Body data that can be shared between blocks |
+| candidate `BlockHeight` entries | deleted at every height below the prune target | Far below the confirmed tip they duplicate the confirmed entries |
 
 Out of scope:
 - the Hydrapool `Share` CF, which has its own TTL pruning
-  (`prune_shares`);
+  (`prune_shares`, Hydrapool mode only);
 - the wallet API, whose window follows `PAYOUT_DEPTH`.
 
-### Watermark and Boundary
+### Boundaries
 
-A `Metadata` CF key, `meta:pruned_below_height` (u32), records that
-every height below it has had its bodies deleted. It is written in the
-same `WriteBatch` as those deletions, so after a crash either both are
-on disk or neither is.
-
-One function replaces the separate computations in `organise_block`,
-`BlockReceiver::current_prune_height`, `missing_data_scan_start` and
-`verify_chain`:
+Nothing about pruning is persisted. Both boundaries are computed from the
+candidate tip (`store/prune_blocks.rs`):
 
 ```
-prune_height() = max(candidate_tip_height - PRUNE_DEPTH, pruned_below_height)
+prune_height_for_tip(tip) = tip - PRUNE_DEPTH                   // the gates
+prune_target_for_tip(tip) = tip - PRUNE_DEPTH - PRUNE_INTERVAL  // deletion
 ```
 
-- **The boundary never moves down.** The tip height can drop after a
-  reorg to a shorter chain with more work, or after `mark_invalid`.
-  Without the `max`, the gates would then demand deleted bodies and
-  confirmation would freeze.
-- **A failed tip read falls back to the watermark,** not to 0.
-- **`organise_block` still reads it once** and passes it down (see
-  "Consistency").
-
-Deletion lags the boundary by one interval:
-`prune_target = candidate_tip - PRUNE_DEPTH - PRUNE_INTERVAL`. The gates
-keep using `prune_height()`, so a node never needs bodies below its own
-boundary. It keeps 360 to 720 extra heights that slightly lagging peers
-may still fetch.
+- **The gates use `prune_height`.** `organise_block`,
+  `missing_data_scan_start`, `BlockReceiver` and `verify_chain` all call
+  `prune_height_for_tip` (or `Store::prune_height`, which reads the
+  candidate tip and returns 0 when there is none).
+- **Deletion stops at `prune_target`,** one `PRUNE_INTERVAL` lower. The gap
+  does two jobs:
+  - A node keeps 360 or more heights below its own boundary, which peers
+    slightly behind it may still fetch.
+  - It replaces a "never move down" watermark. A tip drop smaller than
+    `PRUNE_INTERVAL` can never make the gates demand a deleted body. A larger
+    drop needs a reorg to a chain hundreds of blocks shorter with more work;
+    even then the bodies are fetched again from peers that hold them. The gap
+    absorbs honest reorgs only, not attacks (see "Reorg Depth Limit").
+- **A failed tip read in `BlockReceiver`** falls back to the last prune
+  height it computed, cached in memory, not to 0.
 
 ### Pruner
 
-`store/prune_blocks.rs` is a functional module, following the
-`prune_shares.rs` precedent. It runs on the writer thread through
-`WriteCommand::PruneBlocks { target, reply }`.
+The work is split in two:
+- `Store::prune_block_bodies_chunk(from, to, batch)` deletes the bodies at
+  heights `[from, to)` into one `WriteBatch`. It runs on the writer thread
+  through `WriteCommand::PruneBlockBodiesChunk { from, to, reply }`, which
+  commits the batch.
+- `ChainStoreHandle::prune_block_bodies(from, target)` sends one chunk command
+  per `PRUNE_INTERVAL` heights, so normal writes run between chunks. It
+  returns `PruneStats` (blocks and transactions deleted).
 
-It walks upward from the watermark to `target` in chunks of
-`PRUNE_INTERVAL` heights. Each chunk is one batch and one writer
-command, so normal writes run between chunks. For each chunk:
+For each chunk:
 
-1. **Enumerate.** Use `BlockHeight` to find every block at each height,
-   including forks and uncles.
-2. **Find bodies.** Read `BlockTxids` with one `multi_get`. Blocks with
-   no entry are header-only and have nothing to delete.
+1. **Enumerate.** Use the `h:` height lists to find every block at each
+   height, including forks and uncles. Genesis (height 0) is never pruned.
+2. **Find bodies.** Read `BlockTxids` with one `multi_get`. Blocks with no
+   entry are header-only and have nothing to delete.
 3. **Reference check.** Read `TxidsBlocks` for the txids, then the
-   referencing blocks' heights from `BlockMetadata`, one `multi_get`
-   each. The walk is upward, so a referencing block is kept exactly when
-   its height is at or above the chunk end.
+   referencing blocks' heights from `BlockMetadata`. A referencer is kept
+   when its height is at or above the chunk end, or when its metadata or
+   height is missing (kept to be safe).
    - A txid with no kept referencer is deleted.
    - A txid with a kept referencer has its `TxidsBlocks` list rewritten
      without the pruned blocks.
 
    Share coinbase txids are unique, because the coinbase `script_sig`
    pushes the weak bitcoin block hash (`shares/transactions/coinbase.rs`).
-   So sharing only happens for a non-coinbase transaction included in
-   several blocks. That path is rare and gets its own test.
+   Sharing only happens for a non-coinbase transaction included in several
+   blocks.
 4. **Delete transactions.** Read the input and output counts from `Tx`
-   metadata, then delete `Tx[txid]`, `Inputs[txid:i]`,
-   `Outputs[txid:o]`, `SpendsIndex[txid:o]` and `TxidsBlocks[txid]`.
+   metadata, then delete `Tx[txid]`, `Inputs[txid:i]`, `Outputs[txid:o]`,
+   `SpendsIndex[txid:o]` and `TxidsBlocks[txid]`.
 5. **Delete per-block data:** `BlockTxids`, `BitcoinTxids` and
    `BitcoinCoinbase`.
-6. **Delete candidate index entries** (`height:c` in `BlockHeight`) at
-   heights in the chunk that are at or below the confirmed tip.
-   - Confirmed blocks carry `ChainMembership::Confirmed`, and reorgs
-     that branch from the confirmed chain do not read the candidate
-     index.
-   - Promotion below the boundary is header-only, so the confirmed tip
-     normally sits far above the chunk. The guard only matters during
-     sync.
-7. **Advance the watermark** to the chunk end in the same batch, then
-   commit.
+6. **Delete the candidate index entry** (`height:c` in `BlockHeight`) at
+   every height in the chunk.
+   - Promotion reads candidates above the confirmed tip, so this needs the
+     confirmed tip above the chunk. Pruning only runs while the node is
+     current, which keeps the confirmed tip far above the prune target.
+   - Confirmed blocks carry `ChainMembership::Confirmed`, and reorgs that
+     branch from the confirmed chain do not read the candidate index.
 
-An interrupted chunk repeats cleanly: the deletes are idempotent, and
-the watermark only moves when the batch commits.
+An interrupted chunk repeats cleanly: every delete is idempotent.
 
 `share_block_exists` keys off `BlockTxids`. The gates already accept a
-missing body below `prune_height`, so they need no change beyond the
-boundary function.
+missing body below `prune_height`, so they need no other change.
 
-Reorg-out of a pruned block needs no new code.
+Reorg-out of a pruned confirmed block needs no new code:
 `rewind_confirmed_entries` reads an empty transaction list, and step 4
-already deleted the block's spends. This needs a test.
+already deleted the block's spends.
+
+### Start point
+
+The pruner's start is derived, not stored.
+`Store::find_prune_start(target)` binary-searches heights
+`[1, min(target, top_confirmed + 1))` for the lowest confirmed block that
+still has a body, and returns `target` when none does. The predicate is
+monotone: heights are header-only below the original fetch floor or the
+pruned range, and have bodies above it, because the gates require bodies
+for confirmation at or above `prune_height`.
+
+Correctness does not depend on the search. A start that is too low only
+re-checks heights, and a start that is too high only leaks a few fork
+bodies; neither deletes anything at or above the target.
+
+After a run that prunes, the background task keeps its target in memory as
+the next start, so the search only runs until the first such run after a
+restart.
 
 ### Triggering
 
-- **Steady state.** A background task in `background_tasks.rs`, like
-  the existing `prune_shares` task, checks once a minute. It sends
-  `PruneBlocks` when the node `is_current()` and `prune_target >=
-  pruned_below_height + PRUNE_INTERVAL`.
-- **Startup.** Before networking starts, prune against the stored
-  candidate tip. This is not gated on `is_current`, because a stored tip
-  can only give a lower, and therefore safe, boundary. If anything was
-  pruned, compact the body CFs in `spawn_blocking`. In steady state,
-  RocksDB's automatic compaction clears the tombstones.
+Pruning is fully automatic. There is no CLI command and no API trigger.
+
+- **Task.** `start_background_tasks` (`p2poolv2_node/src/background_tasks.rs`)
+  starts one task per pool mode. P2Poolv2 mode runs
+  `start_block_body_pruning`; Hydrapool mode runs the PPLNS share pruning
+  instead, since it has no share chain to prune.
+- **Interval.** Every `BACKGROUND_TASK_INTERVAL`, fixed at 6 hours in code
+  (the old `background_task_frequency_hours` config option is removed). The
+  first tick fires at startup. A run that overruns the interval delays the
+  next tick (`MissedTickBehavior::Delay`) rather than bursting.
+- **Decision.** Each tick calls `ChainStoreHandle::prune_block_bodies_if_due`.
+  The pure function `get_range_to_prune(is_current, candidate_tip_height,
+  next_prune_start, find_prune_start)` returns the range `[start, target)`,
+  or nothing when:
+  - the node is not current (`is_current()`);
+  - there is no candidate tip;
+  - the start has reached the target.
+
+  The start search only runs when both gates pass.
+- **No startup prune.** An ungated prune could run while the confirmed
+  chain lags the candidate chain, for example after a restart mid-sync, and
+  step 6 would delete candidate entries promotion still needs. After a
+  restart the backlog is pruned on the first tick once the node is current.
+- **No manual compaction.** The body column families are keyed by hash, not
+  height, so a manual compaction would rewrite each of them whole. It is
+  exclusive by default, which blocks RocksDB's automatic compaction under
+  write load, and it cannot be cancelled at shutdown. Automatic compaction
+  reclaims the space and the tombstones.
+- **Errors** shut the node down through `ShutdownReason::Error`.
+
+Tombstones scale with the data deleted, not with how often the pruner runs.
+At 6 hours a run deletes about 2,160 heights, and the node holds between
+`PRUNE_DEPTH + 360` and about `PRUNE_DEPTH + 2,520` heights of bodies.
 
 ### Ingress and serving
 
-- **`BlockReceiver`.** If a block's header height is below
-  `prune_height()`, mark the fetch complete and drop the block without
-  storing it. The header and metadata already exist.
-- **Writer guard.** `add_share_block` refuses a body below
-  `pruned_below_height`.
-  - The receiver check alone can race with a prune chunk: a block
-    passes the check, the chunk commits, then the write brings the body
-    back.
-  - The writer runs both commands one after the other, so its check
-    cannot race.
-- **Parent-wait buffer.** Eviction (`mine-on-bitcoin-chain.md` change 2)
-  uses `prune_height()`.
+- **`BlockReceiver`.** If a block's known height is below
+  `current_prune_height()`, it drops the block without storing it. The
+  header and metadata already exist.
+- **Writer guard.** `add_share_block` refuses a body whose height is below
+  `prune_target()` with `StoreError::BelowPruneHeight`. The receiver check
+  alone can race with a prune chunk; the writer runs both commands in
+  order, so its check cannot. `store_and_emit_validation` treats the error
+  as success without queuing validation.
 - **Block requests.** A pruned body goes through the existing
-  `get_share -> None` path. Confirm that this path replies not-found and
-  does not penalise the requester. The API share endpoint returns the
-  header with a `pruned` marker.
-- **`verify_chain`.** It uses `prune_height()`.
+  `get_share -> None` path, which replies `NotFound` without penalising the
+  requester.
+- **Headers.** `getheaders` serves every header from genesis with its
+  stored merkle branch, pruned heights included.
+- **API.** `/share` with `full=true` returns the header with
+  `"pruned": true` for a pruned body below `prune_height`, instead of
+  `NotFound`.
 - **Candidate readers.** These need no change:
-  - `build_locator` already falls back to the confirmed index.
-  - `get_chain_range` iterates and skips missing keys, so
-    `query_candidates` (the API `candidates` endpoint and CLI
-    `db_query`) returns only heights above the deleted range. Document
-    this on the function.
+  - `build_locator` falls back to the confirmed index.
+  - `query_candidates` (the API `candidates` endpoint and CLI `db_query`)
+    returns only heights above the deleted range; its doc says so.
   - `organise_block`, `detach_candidate_branch` and
     `reorg_candidate_from_candidate` read only above the confirmed tip.
+- **Parent-wait buffer.** Eviction (`mine-on-bitcoin-chain.md` change 2) is
+  still pending; when it lands it should use `prune_height`.
 
-### CLI
+### Reorg Depth Limit
 
-`p2poolv2_cli prune --store <path>` runs with the node stopped, because
-RocksDB holds a lock. It runs the same pruner against the stored
-candidate tip, then compacts.
-- There is no depth argument, because `PRUNE_DEPTH` is a safety bound,
-  not a preference.
-- There is no online trigger through the API. The background task
-  covers a running node.
+Pruning makes the prune target an implicit checkpoint. A heavier branch
+forking below it needs the fork point's body, which every node has deleted,
+so following it would stall confirmation for as long as the attacker keeps
+the work lead.
 
-### Future: bitcoin header store (#652)
+`organise_header` therefore refuses to reorg the candidate chain onto a
+branch whose fork point is below `prune_target_for_tip(candidate tip)`.
+`reorg_branch_forks_below_prune_target` (`store/organise/candidate.rs`)
+walks `get_branch_to_chain` to the branch point, the same walk
+`reorg_candidate` does, and compares its height. On a refusal it logs
+`Refusing candidate reorg to <hash>: branch forks below the prune target`
+at info and returns `Ok(None)`, as the invalid-branch refusal does. The
+walk stops on chain membership, not on the candidate index, so deleting
+candidate entries does not affect it.
 
-When the bitcoin header store lands, it keeps at least `PAYOUT_DEPTH +
-PRUNE_DEPTH` plus one retarget period, about 8,400 headers (see
-`mine-on-bitcoin-chain.md` "Retention"). Its pruning belongs in the
-same background task.
+What different attacks achieve:
 
-### Documentation to update with the implementation
+| Attack | Result |
+|---|---|
+| A lower tip by itself (a lighter fork, a withheld chain) | Harmless: lighter branches are never followed, and the 360-height gap absorbs honest tip drops |
+| A heavier branch forking above the prune target | Followed normally; every body it needs is still held |
+| A heavier branch forking below the prune target | Refused. Building one means out-working about 29.4 days of the whole pool. Honest nodes keep confirming and mining their own chain |
+| Spending a pruned output | Needs share transactions, which do not exist yet. With them, the limit must tighten (below) |
+| A fake tall tip to move the prune target up | Blocked: headers are PoW-bound, and pruning only runs while `is_current()` |
 
-`store-schema.md` needs these changes:
-- add the watermark key;
-- remove `UnspentOutputs`, which no longer exists;
-- add `TxidsBlocks`, `Uncles` and `SpendsIndex`.
+Fresh nodes syncing from genesis have no competing fork, so they are
+unaffected. Two nodes could only diverge over a majority fork more than
+29.4 days deep, depending on which branch each saw first. That is accepted.
+
+**With share transactions** the limit must tighten to a fork depth of about
+`PAYOUT_DEPTH + PRUNE_INTERVAL` (~14.7 days). Otherwise a valid in-zone
+spend could need a deleted output after a deep, height-dropping reorg. See
+"Missing Input at Write Time".
+
+**Open issue: the refusal is not remembered.** The node redoes it on every
+announcement of a block on the refused branch: it sends `getheaders`, gets
+the branch's headers back from height 1, and refuses each one again with a
+walk to the fork point. The sim `deep-fork-refused` run logged about 10,000
+refusals in 90 seconds over 474 headers. At production depth that cost is
+quadratic in the fork depth, and a peer holding such a branch can trigger it
+with made-up announcements at no extra work. Reaching it needs a majority
+attack first. The planned fix keeps refused fork points in memory so a
+repeat refusal costs a lookup, and disconnects a peer whose chain is
+refused.
+
+### Tests
+
+- Store level (`store/prune_blocks.rs`): one test per case of the
+  boundaries, `get_range_to_prune`, `find_prune_start`, the chunk deletes,
+  shared txids, forks, reruns and the writer guard.
+- Serving (`p2poolv2_tests/src/pruned_serving_test.rs`): the real
+  `getheaders` and `getdata` handlers against a pruned store, and the
+  locator.
+- Reorg depth limit: `candidate.rs` unit tests for
+  `reorg_branch_forks_below_prune_target`.
+- Sim (`load-tests/sim`, RUNBOOK Tests H and I). The sim build compiles
+  short depths (prune depth 200, interval 20, background interval 30s; see
+  `docs/simulation/overview.md`), so every scenario prunes:
+  - `pruned-join`: a wiped node syncs from genesis off pruned peers;
+  - `deep-fork-refused`: a minority group forked at genesis refuses the
+    heavier majority once every node has pruned;
+  - `shallow-fork-reorged`: the control, where the same minority reconnects
+    above the prune target and follows the majority.
+
+### Deferred
+
+- **Conditional deletes.** The chunk deletes candidate entries for every
+  height, `SpendsIndex` rows for every output (most are unspent) and the
+  unused `BitcoinTxids` key without checking that they exist, and each
+  delete writes a tombstone, again on every rerun. Checking each set with
+  one `multi_get` first and deleting only present keys would avoid that.
+- **Bitcoin header store (#652).** When it lands it keeps at least
+  `PAYOUT_DEPTH + PRUNE_DEPTH` plus one retarget period, about 8,400
+  headers (see `mine-on-bitcoin-chain.md` "Retention"). Its pruning belongs
+  in the same background task.
 
 ## Missing Input at Write Time (decided, deferred)
 
@@ -533,18 +625,41 @@ never matter.
 - **Uncapped coinbase payout outputs are accepted.** Pruning holds
   `PRUNE_DEPTH` blocks of coinbases, about 8 GB at 1,000 miners. Capping
   outputs is a payout design change, tracked separately.
-- **Candidate index entries below the boundary are deleted** (pruner
-  step 6).
-- **The CLI prune runs offline only,** with no API trigger.
 - **A missing input at write time gets an unknown-root marker,** which
   is deferred until share transactions land.
+
+## Decisions (2026-10-16 to 2026-10-18, implementation)
+
+- **No persisted watermark.** Both boundaries are computed from the
+  candidate tip, and the pruner's start is derived from the data. A stored
+  watermark would have to be kept consistent with the store, and later
+  cleanup would be harder.
+- **Candidate index entries are deleted at every height below the prune
+  target,** not only below the confirmed tip (pruner step 6).
+- **Fully automatic.** No CLI command and no API trigger.
+- **A fixed 6 hour interval,** in code. The
+  `store.background_task_frequency_hours` option is removed.
+- **`BitcoinTxids` keys are deleted** although nothing writes them yet.
+- **A reorg depth limit at the prune target,** refusing forks below it.
+- **No manual compaction and no startup prune** (see "Triggering").
+- **Separate tasks per pool mode:** block body pruning in P2Poolv2 mode,
+  PPLNS share pruning in Hydrapool mode.
+- **Sim depths are compile-time constants** under `cfg(feature = "sim")`,
+  not sim config, so every node built from one binary agrees on them.
+- **Deferred:** the conditional-delete tombstone fix, and the fix for the
+  repeated refusal (see "Reorg Depth Limit").
 
 ## Alternatives Rejected
 
 - **Height-prefixed transaction keys with `delete_range`.** Outpoint
   lookups need txid-keyed rows, so this would need a second index.
 - **A RocksDB compaction filter.** It cannot do the cross-key reference
-  check, and it cannot commit atomically with the watermark.
+  check.
+- **A persisted watermark** (`meta:pruned_below_height`) written in the
+  same batch as each chunk's deletes. Replaced by derived boundaries and a
+  derived start point (see "Decisions (2026-10-16 to 2026-10-18)").
+- **An offline CLI prune** (`p2poolv2_cli prune`). The background task
+  covers every case.
 - **A column family per epoch, dropped whole.** Shared txids span
   epochs, and every reader would fan out across column families.
 
