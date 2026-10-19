@@ -21,7 +21,7 @@ Audience: contributors and AI agents starting the BCH port. Read
 | Declared BCH coinbase peer validation | Implemented; bounded header extension, prefix/aux proof tampering, payout diversion, storage and compressed-header tests. |
 | Mineable Job Declaration in both modes | Both the mocked regression and the two-node BCHN regtest use authenticated Noise connections through the actual listener. Both modes mine blocks and emit verifiable proofs. Independent client interoperability remains pending. |
 | Miner-selected auxiliary commitments | Bounded shared trees and full coinbase/header proofs are implemented. An experimental SAFA variant verifies the proof inside the BCH VM and paid tokens in a real two-node regtest. Final SAFA policy, independent covenant review and chipnet issuance remain open. See [bch-auxpow.md](bch-auxpow.md). |
-| PPLNS tuning and independent ASIC/JD interoperability | Pending. Since the upstream sync a coinbase pays a fixed `PPLNS_WINDOW_SHARES` (120,960) shares. They start `COINBASE_MATURITY` (6,048) shares below the paying share, about 17 hours at 10-second shares, once the chain is past its first 6,048 shares. That replaces the window sized by block difficulty. Decision 11 keeps upstream's constants for now. A window sized by the paying header's BCH difficulty (`BCH_PPLNS_WINDOW_BLOCKS` = 3 blocks' worth of work, as P2Pool v1 on BCH, capped at 120,960 shares) behind a 100-share maturity (Satoshi's 100, `BCH_COINBASE_MATURITY`) is prototyped as a consensus change in draft PR #4; see decision 11. |
+| PPLNS window and maturity; independent ASIC/JD interoperability | PPLNS adopted 2026-10-19 (PR #4, decision 11): on Bitcoin Cash a coinbase pays the shares holding 3 BCH blocks' worth of work (`BCH_PPLNS_WINDOW_BLOCKS`, as P2Pool v1 on BCH), sized by the paying header's own difficulty and capped at 120,960 shares, behind a 100-share maturity (Satoshi's 100, `BCH_COINBASE_MATURITY`). Bitcoin keeps upstream's fixed window and 6,048-share maturity. Not yet run on chipnet; the chipnet nodes restart together on a fresh store path. Independent ASIC and Job Declaration interoperability remains pending. |
 | Remote CI and chipnet block | Rust tests, linting, Security and BCH Covenant Tests pass on GitHub; Code Coverage fails only at the Codecov upload until the fork has a `CODECOV_TOKEN`. First chipnet block on 2026-10-18: height 328451, `00000000000cb752459c2b08e1955e5f33252b0207b1c7b5b2f069d5254b9025`, found by an Avalon ASIC on Stratum V1 through the two-node chipnet pool, with templates from a remote BCHN 29.1.0 (Start9, over Tailscale). Its coinbase paid 25.00462191 BCH: 1.5% (0.37506932) to the donation address, the PPLNS window to two miners (17.05914219 and 7.50989553), 0.06051487 to the genesis share's NUMS key, then the merge-mining, padding and share-commitment outputs. Two more blocks found within five seconds at the same height lost, because nothing refreshed the template right after a found block. PR #3 fixed that on 2026-10-18: an accepted block now triggers an immediate template fetch, and the pool hears BCHN's ZMQ over Tailscale. After the fix the pool found blocks 328455 and 328456 at real difficulty, each submitted once with no sibling, paying the donation and the window. |
 
 ## Implementation checkpoint (2026-10-13)
@@ -474,19 +474,18 @@ move most BCH hashrate to the share chain.
 10. **Rust stays the implementation.** Ideas from P2Pool v1, CashStratum and
     other BCH software are reimplemented in Rust here, never ported back as
     Python or C.
-11. **PPLNS window: upstream's default for now (2026-10-18).** A coinbase pays
-    the last `PPLNS_WINDOW_SHARES` (120,960) shares, about two weeks at
-    10-second shares. The window starts `COINBASE_MATURITY` (6,048) shares,
-    about 17 hours, below the paying share. This is longer than Monero's
-    P2Pool (2,160 shares, about 6 hours): payouts are smoother, but a new
-    miner waits about 17 hours for a first payout, and a miner who stops is
-    paid for about two weeks. We may revisit the window, the maturity and the
-    share interval for BCH later, for example after CHIP-2025-03 or a tempnet
-    test.
+11. **PPLNS window: upstream's default at first (2026-10-18), sized by BCH
+    difficulty with a 100-share maturity since 2026-10-19.** After the
+    upstream sync a coinbase paid the last `PPLNS_WINDOW_SHARES` (120,960)
+    shares, about two weeks at 10-second shares, starting
+    `COINBASE_MATURITY` (6,048) shares, about 17 hours, below the paying
+    share. That was longer than Monero's P2Pool (2,160 shares, about 6
+    hours): payouts were smoother, but a new miner waited about 17 hours for
+    a first payout, and a miner who stopped was paid for about two weeks.
+    Bitcoin keeps that rule.
 
-    Proposed revisit (prototyped 2026-10-18 on branch
-    `claude/bch-difficulty-pplns-window`, a consensus change awaiting the
-    maintainer's decision): size the window by BCH's own block difficulty,
+    Revisited and adopted 2026-10-19 (PR #4, a consensus change): size the
+    window by BCH's own block difficulty,
     which BCHN sets every block with ASERT, instead of a fixed share count,
     as P2Pool v1 on BCH did. Bitcoin keeps upstream's fixed window. Rule and
     reasoning are in `docs/architecture/payout-distribution.md`, "Bitcoin
@@ -533,7 +532,7 @@ move most BCH hashrate to the share chain.
       the other rejects, and a different `K` gets a different tag. Miners
       keep every BCH payout already made. Mainnet starts with the rule from
       its first share. If an existing chain must carry over instead, the rule
-      needs an activation share height, which this prototype does not add.
+      needs an activation share height, which PR #4 does not add.
     - **Maturity: 100 shares** (`BCH_COINBASE_MATURITY`), a count like
       Satoshi's 100-block coinbase maturity, which BCH keeps, rather than a
       span of time. It is one rule for both jobs, as upstream's 6,048 is: a
@@ -633,9 +632,9 @@ check before code.
   lock-in 2026-11-15) before tuning. Since the 2026-10-18 upstream sync the
   window is a fixed share count behind a maturity depth
   (`PPLNS_WINDOW_SHARES`, `COINBASE_MATURITY`), not sized by block
-  difficulty; a window sized by the paying header's difficulty behind a
-  100-share maturity is proposed, and a finder bonus and the share period
-  are weighed, under decision 11. Tempnet, a test network that runs 1-minute blocks, can test a
+  difficulty. Since 2026-10-19 Bitcoin Cash sizes it by the paying header's
+  difficulty behind a 100-share maturity, and a finder bonus and the share
+  period are weighed, under decision 11. Tempnet, a test network that runs 1-minute blocks, can test a
   tuning.
 - Whether 10% is the right consensus cap on donation plus fee.
 - Which scripts beyond P2PKH the share-chain interpreter should accept
