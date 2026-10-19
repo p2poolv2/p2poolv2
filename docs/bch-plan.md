@@ -432,15 +432,22 @@ provider or a second node can then supply templates. Bitcoin and
   provider cannot take goes to the node over RPC instead: its connection is
   gone or queued full, the coinbase is over 64 KiB, or the write fails.
   PR #3's immediate template fetch after a found block applies to
-  `getblocktemplate` only. Template Distribution has no message to ask for a
-  template, so with a provider the next template comes when the provider
-  sees the block; bchn-sv2-bridge polls its node's tip every 2 s.
-- **Tests.** 36 tests with the reference crates: the session state machine,
+  `getblocktemplate` only, and Template Distribution has no message that asks
+  for a template. So after a solution the node declares its
+  `CoinbaseOutputConstraints` again, which the specification allows at any
+  time. A provider that answers that with a fresh template (bchn-sv2-bridge
+  does) then announces the block's successor at once instead of at its next
+  tip check, and miners leave the old parent before they find a same-height
+  sibling, as happened on chipnet before PR #3. The node also remembers the
+  block's height, so the successor needs no parent lookup over
+  `[bitcoinrpc]`, whose node may not have the block yet.
+- **Tests.** 37 tests with the reference crates: the session state machine,
   the mapping against the BCHN regtest and chipnet fixtures, frame contents,
   plain and Noise connections to a stand-in provider over TCP, a provider
-  signed by another authority, a refused setup, `Reconnect`, and found-block
-  routing. One of them runs an SV2 extended channel on a provided template
-  until its block returns as `SubmitSolution`. Configuration has 17 tests.
+  signed by another authority, a refused setup, `Reconnect`, found-block
+  routing, and the successor of a found block. One of them runs an SV2
+  extended channel on a provided template until its block returns as
+  `SubmitSolution`. Configuration has 17 tests.
 - **Live regtest check.** Two BCHN 29.2.0 regtest nodes ran with
   [bchn-sv2-bridge](https://github.com/danhaus93-ops/bchn-sv2-bridge)
   `b87fa60` as the provider and this node built with `template_source =
@@ -451,7 +458,11 @@ provider or a second node can then supply templates. Bitcoin and
   `RequestTransactionData`. Its coinbase paid the 1.5% donation and the
   PPLNS payout with the fees, with sequence `0xfffffffe` and lock time 113.
   BCHN answers `getblocktemplate` only with a peer, so the bridge needs a
-  connected node even on regtest.
+  connected node even on regtest. On 2026-10-19, with the constraints sent
+  again after each solution, blocks 115 to 117 were accepted the same way.
+  Each successor template reached the pool 17 to 30 ms after the block was
+  sent, against 1.45 s for block 111 the day before (the bridge's 2 s tip
+  poll). The bridge's own new-block template came 0.76 s after that.
 - **Not yet checked.** Noise against a real provider: the bridge is
   plaintext only, and Pickaxe's `--tp-listen` serves mainnet and chipnet,
   not regtest. Also unchecked: Knuth's provider and a chipnet block through a
@@ -459,7 +470,7 @@ provider or a second node can then supply templates. Bitcoin and
   to 5 s for the parent's height.
 
 With this and the audit below, rebased on PR #2 (by-address `/miner`) and
-PR #3 (template refresh after a found block), 1,845 default workspace tests
+PR #3 (template refresh after a found block), 1,846 default workspace tests
 passed (two skipped). Clippy passed for all targets in both configurations
 with warnings denied, and formatting passed. Before those rebases, 1,812
 all-features tests passed (one skipped), run with six test threads: with

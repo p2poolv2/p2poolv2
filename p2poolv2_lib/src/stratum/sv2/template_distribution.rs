@@ -135,6 +135,8 @@ const READ_BUFFER_SIZE: usize = 64 * 1024;
 #[derive(Debug)]
 pub(crate) struct Solution {
     template_id: u64,
+    /// Height of the block, the provided template's.
+    height: u64,
     block: Block,
 }
 
@@ -143,6 +145,7 @@ pub(crate) struct Solution {
 #[derive(Debug, Clone)]
 pub struct ProvidedTemplate {
     template_id: u64,
+    height: u64,
     solutions: mpsc::Sender<Solution>,
 }
 
@@ -156,6 +159,7 @@ impl ProvidedTemplate {
         self.solutions
             .try_send(Solution {
                 template_id: self.template_id,
+                height: self.height,
                 block,
             })
             .map_err(|refused| refused.into_inner().block)
@@ -522,6 +526,7 @@ fn provided_block_template(
         default_witness_commitment: None,
         provided: Some(ProvidedTemplate {
             template_id,
+            height,
             solutions,
         }),
     };
@@ -737,6 +742,7 @@ async fn serve_provider(
                 writer,
                 session: ProviderSession::default(),
                 parent_height: None,
+                found_block: None,
                 solutions_tx,
                 published: false,
             };
@@ -840,6 +846,10 @@ struct ProviderConnection<'a> {
     session: ProviderSession,
     /// The parent's hash and the height of a block on it, from the node.
     parent_height: Option<(BlockHash, u64)>,
+    /// The last block this node sent the provider, and the height of a
+    /// block on it: when the provider names it as the parent, the height is
+    /// known without asking the node, which may not have the block yet.
+    found_block: Option<(BlockHash, u64)>,
     /// Given to every template published from this connection.
     solutions_tx: mpsc::Sender<Solution>,
     /// Whether a template from this connection reached the notifier.
@@ -912,8 +922,12 @@ impl ProviderConnection<'_> {
     /// checks is logged and skipped; the provider's next one may pass.
     async fn publish(&mut self, ready: ReadyTemplate) -> Result<(), ConnectionEnd> {
         let prev_hash = ready.tip.prev_hash;
-        let height = match self.parent_height {
-            Some((known, height)) if known == prev_hash => height,
+        let height = match (self.parent_height, self.found_block) {
+            (Some((known, height)), _) if known == prev_hash => height,
+            (_, Some((found, height))) if found == prev_hash => {
+                self.parent_height = Some((prev_hash, height));
+                height
+            }
             _ => match lookup_parent_height(self.bitcoind, prev_hash).await {
                 Ok(parent) => {
                     self.parent_height = Some((prev_hash, parent + 1));
@@ -954,6 +968,14 @@ impl ProviderConnection<'_> {
 
     /// Send `solution` to the provider, or to the node over RPC when it
     /// cannot go to the provider. A write that fails ends the connection.
+    ///
+    /// After the solution the coinbase output constraints are declared
+    /// again. The specification lets a client send them at any time, and a
+    /// provider that answers them with a fresh template (bchn-sv2-bridge
+    /// does) announces the block's successor at once instead of at its next
+    /// tip poll, so miners leave the old parent before they find a
+    /// same-height sibling. Template Distribution has no message that asks
+    /// for a template.
     async fn send_solution(&mut self, solution: Solution) -> Result<(), ConnectionEnd> {
         let block_hash = solution.block.block_hash();
         let Some(frame) = submit_solution_frame(&solution) else {
@@ -967,7 +989,10 @@ impl ProviderConnection<'_> {
                     "Sent block {block_hash} to the Template Provider for template {}",
                     solution.template_id
                 );
-                Ok(())
+                self.found_block = Some((block_hash, solution.height + 1));
+                let constraints =
+                    coinbase_output_constraints_frame().map_err(ConnectionEnd::Failed)?;
+                self.write_frame(constraints).await
             }
             Err(failed) => {
                 warn!(
@@ -1831,6 +1856,7 @@ mod tests {
         };
         let frame = submit_solution_frame(&Solution {
             template_id: 77,
+            height: 102,
             block: block.clone(),
         })
         .unwrap();
@@ -1870,6 +1896,7 @@ mod tests {
         assert!(
             submit_solution_frame(&Solution {
                 template_id: 1,
+                height: 102,
                 block,
             })
             .is_none()
@@ -2136,6 +2163,7 @@ mod tests {
         let mut template: BlockTemplate = serde_json::from_str(REGTEST_TEMPLATE).unwrap();
         template.provided = Some(ProvidedTemplate {
             template_id: 12,
+            height: 102,
             solutions,
         });
         let job = JobDetails {
@@ -2186,6 +2214,7 @@ mod tests {
         let mut template: BlockTemplate = serde_json::from_str(REGTEST_TEMPLATE).unwrap();
         template.provided = Some(ProvidedTemplate {
             template_id: 12,
+            height: 102,
             solutions,
         });
         let job = JobDetails {
@@ -2442,5 +2471,124 @@ mod tests {
         let setup = SetupConnection::from_bytes(&mut setup_payload).unwrap();
         assert_eq!(setup.protocol, Protocol::TemplateDistributionProtocol);
         assert_eq!(setup.endpoint_port, second.local_addr().unwrap().port());
+    }
+
+    #[tokio::test]
+    async fn the_successor_of_a_block_this_node_found_is_published_without_a_parent_lookup() {
+        let fixture: BlockTemplate = serde_json::from_str(REGTEST_TEMPLATE).unwrap();
+        let rpc = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(body_partial_json(
+                serde_json::json!({"method": "getblockheader"}),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": {"height": fixture.height - 1},
+                "error": null,
+                "id": 0,
+            })))
+            .expect(1)
+            .mount(&rpc)
+            .await;
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let provider = TemplateProvider {
+            address: listener.local_addr().unwrap().to_string(),
+            authority_public_key: None,
+            network: BitcoinCashNetwork::Regtest,
+        };
+        let (notify_tx, mut notify_rx) = mpsc::channel(4);
+        start_template_provider(
+            provider,
+            BitcoinRpcConfig {
+                url: rpc.uri(),
+                username: "user".to_string(),
+                password: "pass".to_string(),
+            },
+            notify_tx,
+        )
+        .await
+        .unwrap();
+        let mut server = TestSv2Server::accept(&listener, None).await;
+        server.receive(MESSAGE_TYPE_SETUP_CONNECTION).await;
+        server
+            .send_message(
+                MESSAGE_TYPE_SETUP_CONNECTION_SUCCESS,
+                SetupConnectionSuccess {
+                    used_version: 2,
+                    flags: 0,
+                },
+            )
+            .await;
+        server
+            .receive(MESSAGE_TYPE_COINBASE_OUTPUT_CONSTRAINTS)
+            .await;
+        server
+            .send_message(
+                MESSAGE_TYPE_NEW_TEMPLATE,
+                test_tdp_new_template(1, true, &fixture),
+            )
+            .await;
+        server
+            .send_message(
+                MESSAGE_TYPE_SET_NEW_PREV_HASH,
+                test_tdp_set_new_prev_hash(1, &fixture),
+            )
+            .await;
+        let Some(NotifyCmd::SendToAll { template }) =
+            timeout(Duration::from_secs(5), notify_rx.recv())
+                .await
+                .unwrap()
+        else {
+            panic!("expected a template for the notifier");
+        };
+        let found = Block {
+            header: Header {
+                version: Version::from_consensus(fixture.version),
+                prev_blockhash: BlockHash::from_str(&fixture.previousblockhash).unwrap(),
+                merkle_root: TxMerkleNode::all_zeros(),
+                time: fixture.curtime,
+                bits: CompactTarget::from_unprefixed_hex(&fixture.bits).unwrap(),
+                nonce: 3,
+            },
+            txdata: vec![test_coinbase_transaction(1)],
+        };
+        template
+            .provided
+            .as_ref()
+            .unwrap()
+            .submit(found.clone())
+            .unwrap();
+        server.receive(MESSAGE_TYPE_SUBMIT_SOLUTION).await;
+        let mut constraints_payload = server
+            .receive(MESSAGE_TYPE_COINBASE_OUTPUT_CONSTRAINTS)
+            .await;
+        let constraints = CoinbaseOutputConstraints::from_bytes(&mut constraints_payload).unwrap();
+        assert_eq!(
+            constraints.coinbase_output_max_additional_size,
+            COINBASE_OUTPUT_RESERVE
+        );
+        let mut successor = fixture.clone();
+        successor.previousblockhash = found.block_hash().to_string();
+        successor.height = fixture.height + 1;
+        server
+            .send_message(
+                MESSAGE_TYPE_NEW_TEMPLATE,
+                test_tdp_new_template(2, true, &successor),
+            )
+            .await;
+        server
+            .send_message(
+                MESSAGE_TYPE_SET_NEW_PREV_HASH,
+                test_tdp_set_new_prev_hash(2, &successor),
+            )
+            .await;
+        let Some(NotifyCmd::SendToAll { template }) =
+            timeout(Duration::from_secs(5), notify_rx.recv())
+                .await
+                .unwrap()
+        else {
+            panic!("expected the successor template for the notifier");
+        };
+        assert_eq!(template.height, fixture.height + 1);
+        assert_eq!(template.previousblockhash, found.block_hash().to_string());
     }
 }
