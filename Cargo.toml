@@ -78,6 +78,9 @@ serde_json = "1.0.135"
 zmq = "0.10"
 bitcoin = { version = "0.32.5", features = ["serde", "rand"] }
 bitcoinconsensus = { version = "0.106.0" }
+# Bitcoin Cash Schnorr share signatures; expose-field gives the quadratic-residue
+# check that scheme needs. libp2p-identity already pulls in this version.
+k256 = { version = "0.13.4", default-features = false, features = ["arithmetic", "expose-field"] }
 base64 = "0.23.1"
 chrono = { version = "0.4", features = ["serde"] }
 tokio-util = { version = "0.7.15", features = ["codec"] }

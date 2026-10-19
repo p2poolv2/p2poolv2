@@ -7,7 +7,6 @@
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
-use crate::shares::share_block::MAX_POOL_TARGET;
 use bitcoin::{CompactTarget, Target};
 use std::error::Error;
 use std::fmt;
@@ -15,10 +14,8 @@ use std::fmt;
 // The generated arithmetic trips these lints inside the external macro body,
 // where they cannot be fixed. An outer #[allow] on the macro invocation is
 // ignored, so the allow has to be an inner attribute on a wrapping module.
-// `deprecated`: uint 0.10's expansion calls `max_value()` and `std::isize::MAX`,
-// which Rust 1.99 reports as deprecated.
 mod u512 {
-    #![allow(clippy::manual_div_ceil, clippy::assign_op_pattern, deprecated)]
+    #![allow(clippy::manual_div_ceil, clippy::assign_op_pattern)]
 
     uint::construct_uint! {
         /// 512-bit unsigned integer used as an intermediate type for ASERT target
@@ -58,6 +55,18 @@ fn u512_to_target(value: U512) -> Target {
 // ASERT core algorithm
 // ---------------------------------------------------------------------------
 
+/// Easiest target ASERT may return for this anchor.
+///
+/// The mini Bitcoin Cash chain clamps to its own anchor. Every other anchor,
+/// including Bitcoin, keeps [`MAX_TARGET_CONSENSUS`].
+fn asert_easy_clamp(anchor_target: CompactTarget) -> u32 {
+    if anchor_target.to_consensus() == crate::shares::bch_genesis::MINI_ANCHOR_TARGET {
+        crate::shares::bch_genesis::MINI_ANCHOR_TARGET
+    } else {
+        MAX_TARGET_CONSENSUS
+    }
+}
+
 /// Calculate the next target using the ASERT (aserti3-2d, as
 /// aserti3-10m) algorithm. We use 10m halflife instead of 2 day.
 ///
@@ -84,8 +93,9 @@ pub(crate) fn asert_calculate_target(
     halflife: u32,
     ideal_block_time: u32,
 ) -> CompactTarget {
+    let easy_clamp = asert_easy_clamp(anchor_target);
     let max_target = target_to_u512(Target::from_compact(CompactTarget::from_consensus(
-        MAX_TARGET_CONSENSUS,
+        easy_clamp,
     )));
 
     // Step 1: Compute exponent in 16.16 fixed-point format.
@@ -127,7 +137,7 @@ pub(crate) fn asert_calculate_target(
     if num_shifts >= 0 {
         let available_bits = 512 - next_target.bits();
         if num_shifts as usize > available_bits {
-            return CompactTarget::from_consensus(MAX_TARGET_CONSENSUS);
+            return CompactTarget::from_consensus(easy_clamp);
         }
         next_target <<= num_shifts as usize;
     } else {
@@ -279,8 +289,8 @@ impl PoolDifficulty {
     /// The returned target is clamped in two directions:
     /// 1. Never harder than bitcoin difficulty (floor) -- ASERT can produce a
     ///    target smaller than the bitcoin target.
-    /// 2. Never easier than MAX_POOL_TARGET (ceiling) -- ensures shares always
-    ///    meet the pool's minimum difficulty requirement.
+    /// 2. Never easier than the chain ceiling. Bitcoin and the Bitcoin Cash
+    ///    main chain use MAX_POOL_TARGET. The mini chain uses its own anchor.
     pub fn calculate_target_clamped(
         &self,
         block_parent_time: u32,
@@ -288,7 +298,7 @@ impl PoolDifficulty {
     ) -> CompactTarget {
         let asert_target = self.calculate_target(block_parent_time, block_parent_height);
 
-        let max_pool_target_compact = CompactTarget::from_consensus(MAX_POOL_TARGET);
+        let max_pool_target_compact = self.target_ceiling();
         let max_pool_target = Target::from_compact(max_pool_target_compact);
 
         let result_target = Target::from_compact(asert_target);
@@ -297,6 +307,12 @@ impl PoolDifficulty {
         } else {
             asert_target
         }
+    }
+
+    /// Easiest share target this chain allows: `MAX_POOL_TARGET` on Bitcoin
+    /// and the Bitcoin Cash main chain, the mini chain's own ceiling on mini.
+    pub fn target_ceiling(&self) -> CompactTarget {
+        crate::shares::bch_genesis::target_ceiling(self.anchor_target)
     }
 
     /// Calculate the target and return it as a consensus u32.
@@ -322,6 +338,7 @@ mockall::mock! {
         pub fn calculate_target(&self, block_parent_time: u32, block_parent_height: u32) -> CompactTarget;
         pub fn calculate_target_clamped(&self, block_parent_time: u32, block_parent_height: u32) -> CompactTarget;
         pub fn calculate_target_consensus(&self, block_parent_time: u32, block_parent_height: u32) -> u32;
+        pub fn target_ceiling(&self) -> CompactTarget;
     }
 
     impl Clone for PoolDifficulty {
@@ -336,7 +353,7 @@ mockall::mock! {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shares::share_block::ShareBlock;
+    use crate::shares::share_block::{MAX_POOL_TARGET, ShareBlock};
     use bitcoin::hashes::Hash;
 
     // =======================================================================
@@ -836,5 +853,17 @@ mod tests {
 
             prev_hash = block.block_hash();
         }
+    }
+
+    #[test]
+    fn mini_anchor_stays_easier_than_the_main_ceiling() {
+        let difficulty = PoolDifficulty::new(
+            CompactTarget::from_consensus(crate::shares::bch_genesis::MINI_ANCHOR_TARGET),
+            1_700_000_000,
+            0,
+        );
+        let next = difficulty.calculate_target_clamped(1_700_000_000, 0);
+        let main_ceiling = Target::from_compact(CompactTarget::from_consensus(MAX_POOL_TARGET));
+        assert!(Target::from_compact(next) > main_ceiling);
     }
 }

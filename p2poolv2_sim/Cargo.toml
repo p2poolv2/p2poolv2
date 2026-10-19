@@ -24,13 +24,20 @@ bitcoindrpc = { workspace = true }
 p2poolv2_node = { path = "../p2poolv2_node" }
 p2poolv2_lib = { path = "../p2poolv2_lib" }
 p2poolv2_config = { path = "../p2poolv2_config" }
+rand = { workspace = true, optional = true }
 
 [features]
 default = []
 # No-PoW load-test simulation; see docs/simulation/load-test-plan.md.
 # MUST NEVER be enabled in a release/production build.
-sim = ["p2poolv2_lib/sim"]
+sim = ["p2poolv2_lib/sim", "dep:rand"]
 
 [[bin]]
 name = "p2poolv2_sim"
 path = "src/main.rs"
+
+# Offline comparison of the fixed and BCH difficulty-sized PPLNS windows.
+[[bin]]
+name = "pplns_compare"
+path = "src/pplns_compare.rs"
+required-features = ["sim"]

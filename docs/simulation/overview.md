@@ -58,8 +58,20 @@ or no-ops in production builds (zero overhead). Key overrides:
   be overridden for time-compressed runs.
 - **Genesis anchoring**: `sim_overrides::genesis_timestamp()` and
   `anchor_target()` anchor ASERT at launch time and steady-state difficulty.
-- **PPLNS window**: `sim_overrides::pplns_total_difficulty()` uses
-  `MAX_PPLNS_WINDOW_SHARES` for a realistic multi-miner coinbase on regtest.
+- **PPLNS window**: no override. On Bitcoin the window is
+  `PPLNS_WINDOW_SHARES` shares on every network. On Bitcoin Cash it is sized
+  by the paying header's difficulty, but every regtest header is at the
+  proof-of-work limit, which falls back to `PPLNS_WINDOW_SHARES` shares, so
+  the swarm pays the same fixed window either way. The offline
+  `pplns_compare` binary below exercises the sized window.
+- **Coinbase maturity**: `sim_overrides::coinbase_maturity()` returns
+  `COINBASE_MATURITY` (6,048) in production and `[sim] coinbase_maturity` in
+  sim (`MATURITY_SHARES` in the harness). It governs both payout maturity and
+  spend maturity. This is a deliberate exception to keeping production values:
+  the payout maturity skip only starts at height 6,048 and reaches full size at
+  12,095, which is hours of run time even time-compressed, so without the
+  override no sim run would exercise it. It is consensus, so every node gets the
+  same value.
 - **Propagation delay**: `sim_overrides::spawn_delayed_broadcast()` models
   network latency with per-broadcast jitter.
 - **Auto-submit**: disabled under sim (regtest headers meet bitcoin target ~50%
@@ -135,10 +147,33 @@ env: `RUN_DIR`, `BASE_P2P`/`BASE_STRATUM`/`BASE_API`, `RPC_*`, `ZMQ`,
 default `N*HASHRATE`; anchors genesis at the steady-state difficulty so there's
 no ASERT warmup), `IDEAL_BLOCK_TIME` (default 10s; lower = time-compressed run —
 more blocks/min for faster data, auto-scales `LATENCY_MS`), `DIST_SEED`, `DISTINCT_ADDR`,
-`POOL_SIGNATURE` (must match across nodes), `DIAL_FANOUT`, `PROFILE`. Convergence
+`POOL_SIGNATURE_PREFIX` (node `i` signs as prefix + `i`; signatures differ per
+node because they are not consensus), `DIAL_FANOUT`, `PROFILE`. Convergence
 shows as `distinct tips: 1` (a snapshot may straddle the latest 1–2 heights while
 the frontier propagates). Run release; always `stop-swarm.sh` before relaunching
 (orphans hold ports — `run-swarm.sh` now also clears its RUN_DIR's leftovers).
+
+### Offline PPLNS window comparison
+
+`pplns_compare` is a second binary in `p2poolv2_sim` that needs no node,
+store or bitcoind. For four pool sizes (0.05%, 1%, 10% and 30% of BCH's
+hashrate) and several seeds it draws a share chain at the 10 s target with a
+steady 10% miner, a small 0.1% miner, a 5% miner who mines from day 20 to
+day 40, and the rest of the pool, plus a Bernoulli block find per share. It
+pays every block found after the fixed window has filled through the real
+`PplnsWindow`, under four rules: the fixed `PPLNS_WINDOW_SHARES` window, the
+Bitcoin Cash window at `K` = 2 and at `K` = 3 (the code's value, P2Pool v1's
+`SPREAD`), and `K` = 3 with P2Pool v1's 0.5% finder bonus. It prints window
+length, the work-to-pay delay (maturity skip plus half the window), the
+joining miner's first payout and how long it is paid after leaving, and the
+coefficient of variation (CV) of the miners' daily and weekly income,
+averaged over the seeds. `--maturity` overrides the maturity skip for every
+rule, to measure a shorter one. Uncles are not modelled.
+
+```sh
+cargo run --release -p p2poolv2_sim --features sim --bin pplns_compare -- --seeds 5
+cargo run --release -p p2poolv2_sim --features sim --bin pplns_compare -- --seeds 5 --maturity 360
+```
 
 ### Failure scenarios (Phase 4)
 
@@ -155,6 +190,7 @@ failure mode that caused it.
 | `restart-fast` | a node fails and comes back immediately |
 | `restart-delayed` | a node fails and comes back after `FAILURE_SLOW_DOWN` (default 330s). That crosses the 300s `MAX_TIP_AGE_SECS` threshold, so the node rejoins *not* current: inv gossip is ignored and it must bulk-sync via `getheaders` and block fetch |
 | `partition` | `DIAL_FANOUT` consecutive nodes fail at once, cutting the dial chain, then all come back |
+| `late-miner` | payout maturity: node `LATE_MINER` starts with its emitter off and starts mining once the chain is two maturity depths deep; `maturity_check.py` checks against the regtest coinbases that it is paid only once its shares are mature. Needs a small `MATURITY_SHARES`; not part of `all` (RUNBOOK Test G) |
 | `all` | the three failure scenarios in sequence (local use) |
 
 Tunables: `FAILURE_SEED` (target selection; targets are printed so a failing

@@ -16,6 +16,8 @@ pub enum ApiError {
     BadRequest(String),
     NotFound(String),
     ServerError(String),
+    /// The node cannot answer yet, e.g. its PPLNS window is still loading.
+    ServiceUnavailable(String),
 }
 
 impl fmt::Display for ApiError {
@@ -24,6 +26,7 @@ impl fmt::Display for ApiError {
             ApiError::BadRequest(msg) => write!(f, "bad request: {msg}"),
             ApiError::NotFound(msg) => write!(f, "not found: {msg}"),
             ApiError::ServerError(msg) => write!(f, "axum server error: {msg}"),
+            ApiError::ServiceUnavailable(msg) => write!(f, "service unavailable: {msg}"),
         }
     }
 }
@@ -36,6 +39,7 @@ impl IntoResponse for ApiError {
             ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
             ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
             ApiError::ServerError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+            ApiError::ServiceUnavailable(msg) => (StatusCode::SERVICE_UNAVAILABLE, msg),
         };
         let body = Json(json!({ "error": message }));
         (status, body).into_response()

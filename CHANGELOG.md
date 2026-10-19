@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Bitcoin Cash: `stratum.chain = "bitcoin-cash"` with `bitcoin_cash_network`
+  mines from BCHN templates, pays CashAddr scripts, records P2PKH share owners
+  and starts from a main or mini Bitcoin Cash genesis. See `docs/bch-plan.md`
+  and `docs/bch-design.md`.
+- Bitcoin Cash donation: 1.5% of each block a node finds goes to the P2Poolv2
+  donation address by default. `donation` raises or lowers it and 0 opts out;
+  `fee_address` and `fee` remain the operator's own cut.
+- `p2poolv2_cli bch-share-address` prints the Bitcoin Cash share address for a
+  P2PKH CashAddr.
+- Local Stratum V2 listener (`sv2_port`) with both Job Declaration modes and
+  standard and extended mining channels that share the SV1 job tracker,
+  vardiff, block submission and share chain, with optional Noise encryption
+  signed by an operator-supplied authority key.
+- Bitcoin Cash share transfers are checked by a Bitcoin Cash interpreter
+  (P2PKH with `SIGHASH_FORKID` ECDSA or Schnorr).
+- `docs/architecture/payout-distribution.md` describes the whole payout
+  scheme, including the maturity window.
+- API `GET /miner?address=...` returns one miner's shares and uncles in the
+  share chain PPLNS window, its summed weight, its share of the window and
+  its fraction of the next block's PPLNS payout, so explorers and miner
+  software need not index the chain. It takes a payout address (CashAddr
+  with or without prefix on Bitcoin Cash) or a share chain address, and is
+  computed by the payout code's own `PplnsWindow`.
+
+### Fixed
+
+- A share header with a donation or fee above 10,000 basis points no longer
+  panics the validating node; such shares are rejected.
+- Stratum usernames on a Bitcoin Cash node accept CashAddr payout addresses.
+- Bitcoin Cash nodes derive `stratum.network` from `bitcoin_cash_network`, so
+  nodes on one network no longer split over a leftover Bitcoin value.
+- Stratum V2: Full-Template declarations are matched per connection,
+  `coinbase_outputs` is a counted output list, and the listener accepts host
+  names and stops the node when it cannot bind.
+- Bitcoin Cash shares mined from a BCHN template are no longer rejected by
+  every node because of BCHN's empty `coinbaseaux` flags string.
+- A young Bitcoin Cash mini share chain can be synced over header batches.
+
+### Changed
+
+- On Bitcoin Cash, peers reject shares whose donation plus fee exceed 10%, or
+  whose donation pays another address.
+- A found block's coinbase now pays only shares that are mature for it. The
+  PPLNS walk skips the shares less than `COINBASE_MATURITY` (6,048) below the
+  paying share, the same depth spending a share coinbase needs, then pays the
+  next `PPLNS_WINDOW_SHARES`. The first `COINBASE_MATURITY` shares of the chain
+  are always mature for payout, so a young chain pays its shares and the paid
+  set never shrinks; spending them still needs the full depth. This is a
+  consensus change and needs a chain reset.
+- Share chain outputs now expire at `PAYOUT_DEPTH` (`COINBASE_MATURITY +
+  PPLNS_WINDOW_SHARES`, 127,008) instead of `PPLNS_WINDOW_SHARES`, so an output
+  stays spendable for a full window after it matures. This is a consensus
+  change.
+- The full-validation zone, the PPLNS window cache and `PRUNE_DEPTH` grow with
+  the maturity skip: the zone is `PAYOUT_DEPTH`, the cache holds
+  `PAYOUT_DEPTH` plus its 1% buffer, and `PRUNE_DEPTH` is `2 * PAYOUT_DEPTH`
+  (254,016). Nodes retain about 5% more block bodies. No store migration is
+  needed.
+
 ## [v0.15.3] - 2026-09-21
 
 ### Changed

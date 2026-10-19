@@ -82,11 +82,10 @@ mod tests {
     use crate::accounting::payout::simple_pplns::SimplePplnsShare;
     use crate::node::validation_worker::create_validation_channel;
     use crate::shares::coinbase_proof::CoinbaseProof;
-    use crate::shares::extranonce::Extranonce;
     use crate::store::writer::StoreError;
     use crate::stratum::emission::Emission;
     use crate::stratum::work::block_template::BlockTemplate;
-    use crate::test_utils::{TEST_COINBASE_NSECS, create_test_commitment};
+    use crate::test_utils::{create_test_commitment, test_coinbase_transaction};
     use bitcoin::block::Header;
     use bitcoin::hashes::Hash;
     use bitcoin::{BlockHash, CompactTarget};
@@ -118,6 +117,7 @@ mod tests {
             bits: "207fffff".to_string(),
             height: 1,
             default_witness_commitment: None,
+            provided: None,
         }
     }
 
@@ -147,9 +147,8 @@ mod tests {
             header: bitcoin_header,
             blocktemplate: Arc::new(create_test_blocktemplate()),
             share_commitment: None,
-            coinbase_nsecs: TEST_COINBASE_NSECS,
             template_merkle_branches: vec![],
-            extranonce: Extranonce::default(),
+            bitcoin_coinbase: test_coinbase_transaction(1),
             coinbase_proof: None,
         }
     }
@@ -182,9 +181,8 @@ mod tests {
             header: bitcoin_header,
             blocktemplate: Arc::new(create_test_blocktemplate()),
             share_commitment: Some(commitment),
-            coinbase_nsecs: TEST_COINBASE_NSECS,
             template_merkle_branches: vec![],
-            extranonce: Extranonce::default(),
+            bitcoin_coinbase: test_coinbase_transaction(1),
             coinbase_proof: Some(CoinbaseProof::default()),
         }
     }

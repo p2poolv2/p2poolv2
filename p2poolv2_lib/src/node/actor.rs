@@ -361,14 +361,13 @@ impl NodeActor {
         let block_fetcher_tx_for_receiver = block_fetcher_tx.clone();
         let block_fetcher_tx_for_response = block_fetcher_tx.clone();
         let block_receiver_tx_for_response = block_receiver_tx.clone();
-        let difficulty_multiplier = config.stratum.difficulty_multiplier as u128;
-        let pool_signature = config
-            .stratum
-            .pool_signature
-            .as_deref()
-            .unwrap_or("")
-            .as_bytes()
-            .to_vec();
+        let chain = config.stratum.chain;
+        let target_ceiling = crate::shares::bch_genesis::target_ceiling(
+            crate::shares::bch_genesis::genesis_for_stratum(&config.stratum)
+                .map_err(|error| -> Box<dyn Error> { error })?
+                .header
+                .bits,
+        );
 
         let pool_difficulty = PoolDifficulty::build(&chain_store_handle)
             .map_err(|error| -> Box<dyn Error> { Box::new(error) })?;
@@ -377,12 +376,11 @@ impl NodeActor {
         // mockall_double swaps in the non-Copy MockPoolDifficulty under cfg(test)
         // and pool_difficulty is used again below.
         #[allow(clippy::clone_on_copy)]
-        let share_validator: Arc<dyn ShareValidator + Send + Sync> =
-            Arc::new(DefaultShareValidator::new(
-                pool_difficulty.clone(),
-                difficulty_multiplier,
-                pool_signature.clone(),
-            ));
+        let share_validator: Arc<dyn ShareValidator + Send + Sync> = Arc::new(
+            DefaultShareValidator::new(pool_difficulty.clone())
+                .for_chain(chain)
+                .with_target_ceiling(target_ceiling),
+        );
 
         let node = Node::new(
             config,
@@ -425,10 +423,10 @@ impl NodeActor {
             chain_store_handle.clone(),
             organise_tx.clone(),
             node.swarm_tx.clone(),
-            difficulty_multiplier,
-            pool_signature,
             pool_difficulty,
-        );
+        )
+        .for_chain(chain)
+        .with_target_ceiling(target_ceiling);
         let validation_worker_id = workers
             .spawn(async move {
                 validation_worker

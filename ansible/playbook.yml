@@ -42,7 +42,6 @@
         p2poolv2_max_established_incoming: "{{ instance.max_established_incoming | default(100) }}"
         p2poolv2_max_established_outgoing: "{{ instance.max_established_outgoing | default(100) }}"
         p2poolv2_max_established_per_peer: "{{ instance.max_established_per_peer | default(1) }}"
-        p2poolv2_difficulty_multiplier: "{{ instance.difficulty_multiplier | default(1.0) }}"
         p2poolv2_api_auth_user: "{{ instance.api_auth_user | default(omit) }}"
         p2poolv2_api_auth_token: "{{ instance.api_auth_token | default(omit) }}"
         p2poolv2_external_address: "{{ instance.external_address | default(omit) }}"

@@ -4,7 +4,9 @@
 
 use crate::address::{Address as P2PoolAddress, AddressError};
 use crate::config::PoolMode;
+use crate::config::{BitcoinCashNetwork, Chain};
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
+use crate::stratum::parse_password::extract_string_value;
 use crate::stratum::{
     difficulty_adjuster::DifficultyAdjusterTrait,
     error::{Error, StratumErrorCode},
@@ -14,6 +16,8 @@ use crate::stratum::{
     session::Session,
     validate_username,
 };
+use p2poolv2_wallet::bch_share::{self, BchShareNetwork};
+use p2poolv2_wallet::share_owner::ShareOwner;
 use tracing::debug;
 
 /// Register user in the store and update session with their IDs
@@ -42,7 +46,9 @@ async fn register_user<D: DifficultyAdjusterTrait>(
 /// be told rather than have shares assigned elsewhere.
 ///
 /// Hydrapool builds no share commitment, so no address is needed there.
-fn resolve_share_address(
+/// Stratum V2 channels apply the same rules to the `p2p=` option of their
+/// `user_identity`.
+pub(crate) fn resolve_share_address(
     configured: Option<P2PoolAddress>,
     supplied: Option<&Result<P2PoolAddress, AddressError>>,
     network: bitcoin::Network,
@@ -59,7 +65,7 @@ fn resolve_share_address(
         (Some(configured), Some(Err(error))) => Err(format!(
             "Could not read the p2p= share address ({error}). Remove it to use the node's address {configured}, or correct it. Note p2p=<address> is 71 characters and some miner firmware truncates the password field."
         )),
-	// Double check the configured miner address has correct network
+        // Double check the configured miner address has correct network
         (Some(configured), _) => configured.require_network(network).map(Some).map_err(|error| {
             format!("Configured share address is not usable on this pool: {error}")
         }),
@@ -72,6 +78,48 @@ fn resolve_share_address(
         )),
         (None, None) => Err(
             "This pool needs a share chain address. Set the stratum password to p2p=<address>. See docs/architecture/address-format.md for how to get one from your wallet."
+                .to_string(),
+        ),
+    }
+}
+
+/// Resolve a Bitcoin Cash share owner from configuration and `p2p=`.
+///
+/// Same conflict rules as [`resolve_share_address`]: a configured hash owns
+/// every share, and a miner who names a different hash is told so.
+/// `password` is the SV1 password or the options of an SV2 `user_identity`.
+pub(crate) fn resolve_cash_share(
+    configured: Option<[u8; 20]>,
+    password: Option<&str>,
+    network: BchShareNetwork,
+    mode: PoolMode,
+) -> Result<Option<ShareOwner>, String> {
+    if mode == PoolMode::Hydrapool {
+        return Ok(None);
+    }
+    let supplied = password.and_then(|password| extract_string_value(password, "p2p="));
+    let supplied_hash = supplied.map(|address| {
+        bch_share::parse(address, network)
+            .map(|decoded| decoded.hash)
+            .map_err(|error| error.to_string())
+    });
+    match (configured, supplied_hash) {
+        (Some(configured_hash), Some(Ok(supplied_hash))) if supplied_hash != configured_hash => {
+            Err(
+                "Share address conflicts with the pool's configured address. Remove p2p= from the password, or set it to the node address."
+                    .to_string(),
+            )
+        }
+        (Some(_), Some(Err(error))) => Err(format!(
+            "Could not read the p2p= share address ({error}). Remove it to use the node's address, or correct it."
+        )),
+        (Some(configured_hash), _) => Ok(Some(ShareOwner::CashP2pkh(configured_hash))),
+        (None, Some(Ok(supplied_hash))) => Ok(Some(ShareOwner::CashP2pkh(supplied_hash))),
+        (None, Some(Err(error))) => Err(format!(
+            "Could not read the p2p= share address ({error})."
+        )),
+        (None, None) => Err(
+            "This pool needs a Bitcoin Cash share address. Set the stratum password to p2p=<address>."
                 .to_string(),
         ),
     }
@@ -129,23 +177,29 @@ pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
             )]);
         }
     };
-    let parsed_username =
-        match validate_username::validate(&username, ctx.validate_addresses, ctx.network) {
-            Ok(validated) => validated,
-            Err(_e) => {
-                if !session.auth_failed_once {
-                    session.auth_failed_once = true;
-                    return Ok(vec![Message::Response(
-                        Response::new_error(message.id, StratumErrorCode::UnauthorizedWorker)
-                            .with_message("Invalid username".to_string()),
-                    )]);
-                } else {
-                    return Err(Error::AuthorizationFailure(
-                        "Second invalid username. Disconnecting.".to_string(),
-                    ));
-                }
+    let parsed_username = match validate_username::validate_for_chain(
+        &username,
+        ctx.validate_addresses,
+        ctx.network,
+        ctx.share_chain,
+        ctx.bch_share_network
+            .map(BitcoinCashNetwork::from_share_network),
+    ) {
+        Ok(validated) => validated,
+        Err(_e) => {
+            if !session.auth_failed_once {
+                session.auth_failed_once = true;
+                return Ok(vec![Message::Response(
+                    Response::new_error(message.id, StratumErrorCode::UnauthorizedWorker)
+                        .with_message("Invalid username".to_string()),
+                )]);
+            } else {
+                return Err(Error::AuthorizationFailure(
+                    "Second invalid username. Disconnecting.".to_string(),
+                ));
             }
-        };
+        }
+    };
 
     // Parse once; the password carries both the difficulty hint and the share
     // chain address. Resolve the address before authorizing the session so an
@@ -156,15 +210,38 @@ pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
         .and_then(|parameter| parameter.clone());
     let parsed_password = password.as_deref().map(parse_password);
 
-    let supplied_address = parsed_password
-        .as_ref()
-        .and_then(|parsed| parsed.miner_address.as_ref());
-
-    let miner_address =
-        match resolve_share_address(ctx.miner_address, supplied_address, ctx.network, ctx.mode) {
-            Ok(address) => address,
-            Err(reason) => return reject_authorize(session, message.id, reason),
-        };
+    let (miner_address, share_owner) = match ctx.share_chain {
+        Chain::Bitcoin => {
+            let supplied_address = parsed_password
+                .as_ref()
+                .and_then(|parsed| parsed.miner_address.as_ref());
+            match resolve_share_address(ctx.miner_address, supplied_address, ctx.network, ctx.mode)
+            {
+                Ok(address) => {
+                    let owner =
+                        address.map(|address| ShareOwner::Taproot(address.witness_program()));
+                    (address, owner)
+                }
+                Err(reason) => return reject_authorize(session, message.id, reason),
+            }
+        }
+        Chain::BitcoinCash => {
+            let network = match ctx.bch_share_network {
+                Some(network) => network,
+                None => {
+                    return reject_authorize(
+                        session,
+                        message.id,
+                        "Bitcoin Cash share addresses need a network".to_string(),
+                    );
+                }
+            };
+            match resolve_cash_share(ctx.cash_share, password.as_deref(), network, ctx.mode) {
+                Ok(owner) => (None, owner),
+                Err(reason) => return reject_authorize(session, message.id, reason),
+            }
+        }
+    };
 
     session.username = Some(username.clone());
     session.btcaddress = Some(parsed_username.address_str.to_string());
@@ -174,6 +251,7 @@ pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
         .map(|worker_name| worker_name.to_string());
     session.password = password;
     session.miner_address = miner_address;
+    session.share_owner = share_owner;
 
     // Register user in the store
     register_user(session, parsed_username.address_str, ctx.chain_store_handle).await?;
@@ -272,6 +350,10 @@ mod tests {
             chain_store_handle,
             mode: PoolMode::P2poolv2,
             miner_address: Some(make_test_share_address(1, bitcoin::Network::Testnet4)),
+            share_chain: crate::config::Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
+            template_refresh_tx: None,
         };
 
         // Execute
@@ -362,6 +444,10 @@ mod tests {
             chain_store_handle,
             mode: PoolMode::P2poolv2,
             miner_address: Some(make_test_share_address(1, bitcoin::Network::Testnet4)),
+            share_chain: crate::config::Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
+            template_refresh_tx: None,
         };
 
         // Execute
@@ -493,6 +579,10 @@ mod tests {
             chain_store_handle,
             mode: PoolMode::P2poolv2,
             miner_address: Some(make_test_share_address(1, bitcoin::Network::Testnet4)),
+            share_chain: crate::config::Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
+            template_refresh_tx: None,
         };
 
         // Execute
@@ -589,6 +679,10 @@ mod tests {
             chain_store_handle,
             mode: PoolMode::P2poolv2,
             miner_address: Some(make_test_share_address(1, bitcoin::Network::Testnet4)),
+            share_chain: crate::config::Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
+            template_refresh_tx: None,
         };
 
         let messages = handle_authorize(request, &mut session, ctx).await.unwrap();
@@ -646,6 +740,10 @@ mod tests {
             chain_store_handle,
             mode: PoolMode::P2poolv2,
             miner_address: Some(make_test_share_address(1, bitcoin::Network::Testnet4)),
+            share_chain: crate::config::Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
+            template_refresh_tx: None,
         };
 
         let messages = handle_authorize(request, &mut session, ctx).await.unwrap();
@@ -705,6 +803,10 @@ mod tests {
             chain_store_handle,
             mode: PoolMode::P2poolv2,
             miner_address: Some(make_test_share_address(1, bitcoin::Network::Testnet4)),
+            share_chain: crate::config::Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
+            template_refresh_tx: None,
         };
 
         // Execute
@@ -768,6 +870,10 @@ mod tests {
             chain_store_handle,
             mode: PoolMode::P2poolv2,
             miner_address: Some(make_test_share_address(1, bitcoin::Network::Testnet4)),
+            share_chain: crate::config::Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
+            template_refresh_tx: None,
         };
 
         let result = handle_authorize(request, &mut session, ctx).await;
@@ -839,6 +945,10 @@ mod p2p_miner_address_tests {
             chain_store_handle,
             mode: PoolMode::P2poolv2,
             miner_address: None,
+            share_chain: crate::config::Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
+            template_refresh_tx: None,
         };
 
         handle_authorize(request, &mut session, ctx).await.unwrap();
@@ -885,6 +995,10 @@ mod p2p_miner_address_tests {
             chain_store_handle,
             mode: PoolMode::P2poolv2,
             miner_address: Some(SHARE_ADDRESS.parse().unwrap()),
+            share_chain: crate::config::Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
+            template_refresh_tx: None,
         };
 
         handle_authorize(request, &mut session, ctx).await.unwrap();
@@ -929,6 +1043,10 @@ mod p2p_miner_address_tests {
             chain_store_handle,
             mode: PoolMode::Hydrapool,
             miner_address: None,
+            share_chain: crate::config::Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
+            template_refresh_tx: None,
         };
 
         handle_authorize(request, &mut session, ctx).await.unwrap();
@@ -977,6 +1095,10 @@ mod p2p_miner_address_tests {
             chain_store_handle,
             mode: PoolMode::P2poolv2,
             miner_address: None,
+            share_chain: crate::config::Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
+            template_refresh_tx: None,
         };
 
         let messages = handle_authorize(request, &mut session, ctx.clone())
@@ -1069,6 +1191,10 @@ mod p2p_miner_address_tests {
             chain_store_handle,
             mode: PoolMode::P2poolv2,
             miner_address: None,
+            share_chain: crate::config::Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
+            template_refresh_tx: None,
         };
 
         handle_authorize(request, &mut session, ctx).await.unwrap();
@@ -1123,6 +1249,10 @@ mod p2p_miner_address_tests {
             chain_store_handle,
             mode: PoolMode::P2poolv2,
             miner_address: Some(configured),
+            share_chain: crate::config::Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
+            template_refresh_tx: None,
         };
 
         let messages = handle_authorize(request, &mut session, ctx).await.unwrap();
@@ -1189,6 +1319,10 @@ mod p2p_miner_address_tests {
             chain_store_handle,
             mode: PoolMode::P2poolv2,
             miner_address: Some(configured),
+            share_chain: crate::config::Chain::Bitcoin,
+            bch_share_network: None,
+            cash_share: None,
+            template_refresh_tx: None,
         };
 
         let first = handle_authorize(
@@ -1431,5 +1565,51 @@ mod resolve_share_address_tests {
 
         assert!(reason.contains("p2p="), "{reason}");
         assert!(reason.contains("address-format.md"), "{reason}");
+    }
+}
+
+#[cfg(test)]
+mod resolve_cash_share_tests {
+    use super::resolve_cash_share;
+    use crate::config::PoolMode;
+    use p2poolv2_wallet::bch_share::{BchShareAddress, BchShareNetwork};
+    use p2poolv2_wallet::share_owner::ShareOwner;
+
+    #[test]
+    fn password_hash_owns_the_share() {
+        let text = BchShareAddress::new(BchShareNetwork::Chipnet, [0x22; 20]).encode();
+        let owner = resolve_cash_share(
+            None,
+            Some(&format!("p2p={text}")),
+            BchShareNetwork::Chipnet,
+            PoolMode::P2poolv2,
+        )
+        .unwrap();
+        assert_eq!(owner, Some(ShareOwner::CashP2pkh([0x22; 20])));
+    }
+
+    #[test]
+    fn payout_cashaddr_is_rejected() {
+        let reason = resolve_cash_share(
+            None,
+            Some("p2p=bitcoincash:qpm2qsznhks23z7629mms6s4cwef74vcwvy22gdx6a"),
+            BchShareNetwork::Mainnet,
+            PoolMode::P2poolv2,
+        )
+        .unwrap_err();
+        assert!(reason.contains("p2p="), "{reason}");
+    }
+
+    #[test]
+    fn configured_hash_rejects_a_different_password() {
+        let text = BchShareAddress::new(BchShareNetwork::Regtest, [0x33; 20]).encode();
+        let reason = resolve_cash_share(
+            Some([0x22; 20]),
+            Some(&format!("p2p={text}")),
+            BchShareNetwork::Regtest,
+            PoolMode::P2poolv2,
+        )
+        .unwrap_err();
+        assert!(reason.contains("conflicts"), "{reason}");
     }
 }

@@ -19,6 +19,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use bitcoin::{Address, Amount, BlockHash};
+use std::collections::HashMap;
 use std::error::Error;
 use std::sync::{Arc, RwLock};
 
@@ -30,13 +31,42 @@ use std::sync::{Arc, RwLock};
 /// acquires a write lock to update the window and compute the distribution.
 pub struct Payout {
     pplns_window: Arc<RwLock<PplnsWindow>>,
+    last_weights: Option<HashMap<Address, u128>>,
 }
 
 impl Payout {
     /// Create a new Payout with an empty PPLNS window for the given network.
+    ///
+    /// The window is the fixed Bitcoin one. A Bitcoin Cash node builds its
+    /// window with `PplnsWindow::for_chain` and passes it to `with_window`.
     pub fn new(network: bitcoin::Network) -> Self {
+        Self::with_window(PplnsWindow::new(network))
+    }
+
+    /// Create a new Payout around an empty PPLNS window built by the caller.
+    pub fn with_window(pplns_window: PplnsWindow) -> Self {
         Self {
-            pplns_window: Arc::new(RwLock::new(PplnsWindow::new(network))),
+            pplns_window: Arc::new(RwLock::new(pplns_window)),
+            last_weights: None,
+        }
+    }
+
+    /// Test-only constructor with a short maturity depth and window, so the
+    /// share-count cutoff can be driven without a `PAYOUT_DEPTH`-sized
+    /// fixture.
+    #[cfg(test)]
+    fn new_with_window_sizes(
+        network: bitcoin::Network,
+        maturity_skip: usize,
+        max_window_shares: usize,
+    ) -> Self {
+        Self {
+            pplns_window: Arc::new(RwLock::new(PplnsWindow::new_with_window_sizes(
+                network,
+                maturity_skip,
+                max_window_shares,
+            ))),
+            last_weights: None,
         }
     }
 
@@ -50,28 +80,32 @@ impl Payout {
 }
 
 impl PayoutDistribution for Payout {
+    fn pplns_weights(&self) -> Option<HashMap<Address, u128>> {
+        self.last_weights.clone()
+    }
+
     /// Fill payout distribution from the incrementally maintained PPLNS window.
     ///
-    /// A zero total difficulty and an empty window are both errors.
+    /// The window starts below the shares not yet mature for the paying
+    /// share. On Bitcoin it is `PPLNS_WINDOW_SHARES` shares and the bitcoin
+    /// difficulty plays no part. On Bitcoin Cash `bitcoin_difficulty`, the
+    /// difficulty of the template the job is built on and so of the header
+    /// the share will carry, sizes it (see `BCH_PPLNS_WINDOW_BLOCKS`). The
+    /// validator calls the same window with the difficulty in the share's
+    /// header. An empty window is an error.
     fn fill_distribution_from_shares(
         &mut self,
         distribution: &mut Vec<OutputPair>,
         chain_store_handle: &ChainStoreHandle,
         anchor: BlockHash,
-        total_difficulty: u128,
+        bitcoin_difficulty: u128,
         _total_amount: bitcoin::Amount,
         remaining_total_amount: Amount,
         _bootstrap_address: Address,
     ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        self.last_weights = None;
         if remaining_total_amount == Amount::ZERO {
             return Ok(());
-        }
-
-        if total_difficulty == 0 {
-            return Err(format!(
-                "PPLNS total difficulty is zero, cannot build a payout for anchor {anchor}"
-            )
-            .into());
         }
 
         // expect will stop start_notify task in main
@@ -89,8 +123,8 @@ impl PayoutDistribution for Payout {
         }
 
         let address_difficulty_map = window.get_distribution_from_start_hash(
-            total_difficulty,
             anchor,
+            bitcoin_difficulty,
             chain_store_handle,
         )?;
 
@@ -99,6 +133,7 @@ impl PayoutDistribution for Payout {
             remaining_total_amount,
             distribution,
         )?;
+        self.last_weights = Some(address_difficulty_map);
 
         Ok(())
     }
@@ -107,48 +142,25 @@ impl PayoutDistribution for Payout {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::accounting::payout::payout_distribution::build_pplns_outputs;
     use crate::accounting::payout::sharechain_pplns::pplns_window::{
-        DIFFICULTY_SCALE, NEPHEW_SCALED_BONUS, UNCLE_SCALED_WEIGHT,
+        DIFFICULTY_SCALE, NEPHEW_SCALED_BONUS, UNCLE_SCALED_WEIGHT, bitcoin_block_difficulty,
     };
+    use crate::config::Chain;
     use crate::shares::chain::chain_store_handle::ConfirmedHeaderResult;
     use crate::shares::chain::chain_store_handle::MockChainStoreHandle;
     use crate::store::block_tx_metadata::{BlockMetadata, ChainMembership, Status};
     use crate::test_utils::{
-        PUBKEY_2G, PUBKEY_3G, PUBKEY_4G, PUBKEY_G, build_test_header, build_test_header_with_uncles,
+        PUBKEY_2G, PUBKEY_3G, PUBKEY_4G, PUBKEY_5G, PUBKEY_G, build_test_header,
+        build_test_header_with_uncles,
     };
     use bitcoin::hashes::Hash;
-    use bitcoin::{BlockHash, Work};
+    use bitcoin::{BlockHash, CompactTarget, Work};
     use p2poolv2_config::StratumConfig;
     use std::collections::HashSet;
 
     fn make_test_config() -> crate::config::StratumConfig<crate::config::Parsed> {
         StratumConfig::new_for_test_default().parse().unwrap()
-    }
-
-    /// A zero total difficulty is an error the notifier turns into a node
-    /// shutdown. It cannot come from the chain: the only route is a
-    /// `difficulty_multiplier` below 1.0, which truncates to zero when cast.
-    #[test]
-    fn test_zero_total_difficulty_is_an_error() {
-        let genesis_hash = BlockHash::all_zeros();
-        let mut payout = Payout::new(bitcoin::Network::Signet);
-        let config = make_test_config();
-
-        // No store expectations: the guard fires before the window is touched.
-        let error = payout
-            .get_output_distribution(
-                &MockChainStoreHandle::default(),
-                genesis_hash,
-                0,
-                Amount::from_sat(100_000_000),
-                &config,
-            )
-            .unwrap_err();
-
-        assert!(
-            error.to_string().contains("total difficulty is zero"),
-            "unexpected error: {error}"
-        );
     }
 
     /// An empty window is an error the notifier turns into a node shutdown, not
@@ -498,8 +510,11 @@ mod tests {
         assert!(total_weight > 0, "Total weight should be positive");
     }
 
+    /// The window is the last `max_window_shares` shares: with a one-share
+    /// window only the newest share is paid. The bitcoin difficulty passed in
+    /// is far below the chain's work and plays no part.
     #[test]
-    fn test_difficulty_cutoff() {
+    fn test_window_of_one_share_pays_only_the_newest() {
         let genesis_hash = BlockHash::all_zeros();
 
         // Create 3 confirmed shares, newest to oldest
@@ -546,12 +561,10 @@ mod tests {
         mock.expect_get_share_headers()
             .returning(|_| Ok(Vec::new()));
 
-        let mut payout = Payout::new(bitcoin::Network::Signet);
+        let mut payout = Payout::new_with_window_sizes(bitcoin::Network::Signet, 0, 1);
         let config = make_test_config();
         let total_amount = Amount::from_sat(100_000_000);
 
-        // Set total_difficulty to just one share's difficulty -- should include
-        // the first (newest) share only
         let result = payout
             .get_output_distribution(
                 &mock,
@@ -568,8 +581,10 @@ mod tests {
         assert_eq!(result[0].amount, total_amount);
     }
 
+    /// With a two-share window, the two newest of three shares are paid,
+    /// however small the bitcoin difficulty.
     #[test]
-    fn test_difficulty_cutoff_two_of_three() {
+    fn test_window_of_two_shares_pays_the_two_newest() {
         let genesis_hash = BlockHash::all_zeros();
 
         // Create 3 confirmed shares with different miners
@@ -616,17 +631,15 @@ mod tests {
         mock.expect_get_share_headers()
             .returning(|_| Ok(Vec::new()));
 
-        let mut payout = Payout::new(bitcoin::Network::Signet);
+        let mut payout = Payout::new_with_window_sizes(bitcoin::Network::Signet, 0, 2);
         let config = make_test_config();
         let total_amount = Amount::from_sat(100_000_000);
 
-        // Set total_difficulty to two shares' worth -- should include
-        // only the two newest shares (header3 and header2)
         let result = payout
             .get_output_distribution(
                 &mock,
                 tip_hash,
-                single_share_difficulty * 2,
+                single_share_difficulty,
                 total_amount,
                 &config,
             )
@@ -713,5 +726,198 @@ mod tests {
 
         let total_distributed: Amount = result.iter().map(|pair| pair.amount).sum();
         assert_eq!(total_distributed, total_amount);
+    }
+
+    /// The notifier and the validator size a Bitcoin Cash window through the
+    /// same `get_distribution_from_start_hash` on the same window, from the
+    /// same bits: the notifier from its template, the validator from the
+    /// share header those bits went into. Each share here is one block's
+    /// worth of work, so the window is the three newest of four shares, and
+    /// both sides build the same outputs.
+    #[test]
+    fn test_bch_notifier_and_validator_build_identical_outputs() {
+        let genesis_hash = BlockHash::all_zeros();
+        let header1 = build_test_header(&genesis_hash.to_string(), PUBKEY_G, 2);
+        let header2 = build_test_header(&header1.block_hash().to_string(), PUBKEY_2G, 2);
+        let header3 = build_test_header(&header2.block_hash().to_string(), PUBKEY_3G, 2);
+        let header4 = build_test_header(&header3.block_hash().to_string(), PUBKEY_5G, 2);
+        let oldest_miner = header1.miner_bitcoin_address.clone();
+        let tip_hash = header4.block_hash();
+        let template_bits = header1.bits;
+        let mut paying_header = build_test_header(&tip_hash.to_string(), PUBKEY_4G, 2);
+        paying_header.bitcoin_header.bits = template_bits;
+
+        // Newest-to-oldest order
+        let confirmed_headers = vec![
+            ConfirmedHeaderResult {
+                height: 3,
+                blockhash: header4.block_hash(),
+                header: header4.clone(),
+            },
+            ConfirmedHeaderResult {
+                height: 2,
+                blockhash: header3.block_hash(),
+                header: header3.clone(),
+            },
+            ConfirmedHeaderResult {
+                height: 1,
+                blockhash: header2.block_hash(),
+                header: header2.clone(),
+            },
+            ConfirmedHeaderResult {
+                height: 0,
+                blockhash: header1.block_hash(),
+                header: header1.clone(),
+            },
+        ];
+
+        let mut mock = MockChainStoreHandle::default();
+        mock.expect_get_chain_tip().returning(move || Ok(tip_hash));
+        mock.expect_get_block_metadata().returning(move |_| {
+            Ok(BlockMetadata {
+                expected_height: Some(3),
+                chain_work: Work::from_le_bytes([0u8; 32]),
+                status: Status::BlockValid,
+                chain: ChainMembership::Confirmed,
+            })
+        });
+        mock.expect_get_confirmed_headers_in_range()
+            .returning(move |_, _| Ok(confirmed_headers.clone()));
+        mock.expect_get_share_headers()
+            .returning(|_| Ok(Vec::new()));
+
+        let mut payout = Payout::with_window(
+            PplnsWindow::new(bitcoin::Network::Testnet).for_chain(Chain::BitcoinCash),
+        );
+        let config = make_test_config();
+        let total_amount = Amount::from_sat(100_000_000);
+
+        let notifier_outputs = payout
+            .get_output_distribution(
+                &mock,
+                tip_hash,
+                bitcoin_block_difficulty(template_bits, bitcoin::Network::Testnet),
+                total_amount,
+                &config,
+            )
+            .unwrap();
+        let shared_window = payout.shared_pplns_window();
+        let mut window = shared_window.write().unwrap();
+        let paying_block_difficulty =
+            bitcoin_block_difficulty(paying_header.bitcoin_header.bits, window.network());
+        let validator_weights = window
+            .get_distribution_from_start_hash(
+                paying_header.prev_share_blockhash,
+                paying_block_difficulty,
+                &mock,
+            )
+            .unwrap();
+        let validator_outputs = build_pplns_outputs(
+            total_amount.to_sat(),
+            &validator_weights,
+            &config.donation_address_parsed,
+            config.donation,
+            &config.fee_address_parsed,
+            config.fee,
+        )
+        .unwrap();
+
+        assert_eq!(notifier_outputs, validator_outputs);
+        assert_eq!(validator_weights.len(), 3);
+        assert!(!validator_weights.contains_key(&oldest_miner));
+    }
+
+    /// The window is consensus: a validator reading other bits from the
+    /// header, here a chipnet 20-minute block's, sizes another window and so
+    /// rebuilds other outputs than the notifier committed to.
+    #[test]
+    fn test_bch_validator_with_other_header_bits_builds_other_outputs() {
+        let genesis_hash = BlockHash::all_zeros();
+        let header1 = build_test_header(&genesis_hash.to_string(), PUBKEY_G, 2);
+        let header2 = build_test_header(&header1.block_hash().to_string(), PUBKEY_2G, 2);
+        let header3 = build_test_header(&header2.block_hash().to_string(), PUBKEY_3G, 2);
+        let header4 = build_test_header(&header3.block_hash().to_string(), PUBKEY_5G, 2);
+        let tip_hash = header4.block_hash();
+        let template_bits = header1.bits;
+        let mut paying_header = build_test_header(&tip_hash.to_string(), PUBKEY_4G, 2);
+        paying_header.bitcoin_header.bits = CompactTarget::from_consensus(0x1d00ffff);
+
+        // Newest-to-oldest order
+        let confirmed_headers = vec![
+            ConfirmedHeaderResult {
+                height: 3,
+                blockhash: header4.block_hash(),
+                header: header4.clone(),
+            },
+            ConfirmedHeaderResult {
+                height: 2,
+                blockhash: header3.block_hash(),
+                header: header3.clone(),
+            },
+            ConfirmedHeaderResult {
+                height: 1,
+                blockhash: header2.block_hash(),
+                header: header2.clone(),
+            },
+            ConfirmedHeaderResult {
+                height: 0,
+                blockhash: header1.block_hash(),
+                header: header1.clone(),
+            },
+        ];
+
+        let mut mock = MockChainStoreHandle::default();
+        mock.expect_get_chain_tip().returning(move || Ok(tip_hash));
+        mock.expect_get_block_metadata().returning(move |_| {
+            Ok(BlockMetadata {
+                expected_height: Some(3),
+                chain_work: Work::from_le_bytes([0u8; 32]),
+                status: Status::BlockValid,
+                chain: ChainMembership::Confirmed,
+            })
+        });
+        mock.expect_get_confirmed_headers_in_range()
+            .returning(move |_, _| Ok(confirmed_headers.clone()));
+        mock.expect_get_share_headers()
+            .returning(|_| Ok(Vec::new()));
+
+        let mut payout = Payout::with_window(
+            PplnsWindow::new(bitcoin::Network::Testnet).for_chain(Chain::BitcoinCash),
+        );
+        let config = make_test_config();
+        let total_amount = Amount::from_sat(100_000_000);
+
+        let notifier_outputs = payout
+            .get_output_distribution(
+                &mock,
+                tip_hash,
+                bitcoin_block_difficulty(template_bits, bitcoin::Network::Testnet),
+                total_amount,
+                &config,
+            )
+            .unwrap();
+        let shared_window = payout.shared_pplns_window();
+        let mut window = shared_window.write().unwrap();
+        let paying_block_difficulty =
+            bitcoin_block_difficulty(paying_header.bitcoin_header.bits, window.network());
+        let validator_weights = window
+            .get_distribution_from_start_hash(
+                paying_header.prev_share_blockhash,
+                paying_block_difficulty,
+                &mock,
+            )
+            .unwrap();
+        let validator_outputs = build_pplns_outputs(
+            total_amount.to_sat(),
+            &validator_weights,
+            &config.donation_address_parsed,
+            config.donation,
+            &config.fee_address_parsed,
+            config.fee,
+        )
+        .unwrap();
+
+        assert_ne!(notifier_outputs, validator_outputs);
+        assert_eq!(validator_weights.len(), 4);
     }
 }

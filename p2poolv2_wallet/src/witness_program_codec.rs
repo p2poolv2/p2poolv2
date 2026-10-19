@@ -58,6 +58,19 @@ pub fn consensus_decode<R: bitcoin::io::Read + ?Sized>(
     reader: &mut R,
 ) -> Result<WitnessProgram, encode::Error> {
     let version_byte = u8::consensus_decode(reader)?;
+    consensus_decode_from_version(version_byte, reader)
+}
+
+/// Read the length and program that follow an already-consumed version byte.
+///
+/// [`crate::share_owner`] reads the first byte itself so a tag outside the
+/// witness version range can name a Bitcoin Cash share hash. Versions 0
+/// through 16 still decode here, and the bytes after that first byte are the
+/// same layout [`consensus_encode`] writes.
+pub fn consensus_decode_from_version<R: bitcoin::io::Read + ?Sized>(
+    version_byte: u8,
+    reader: &mut R,
+) -> Result<WitnessProgram, encode::Error> {
     let version = WitnessVersion::try_from(version_byte)
         .map_err(|_| encode::Error::ParseFailed("invalid witness version"))?;
 

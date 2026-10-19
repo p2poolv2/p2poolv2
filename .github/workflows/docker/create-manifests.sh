@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_GHCR="ghcr.io/${GITHUB_REPOSITORY}"
-REPO_DH="docker.io/${GITHUB_REPOSITORY}"
+REPO_GHCR="ghcr.io/${GITHUB_REPOSITORY,,}"
+REPO_DH="docker.io/${GITHUB_REPOSITORY,,}"
 SRC_TAG="${REPO_GHCR}:${IMAGE_SHA}"
 DH_TAG="${REPO_DH}:${IMAGE_SHA}"
 ANNOTATION_SOURCE="index:org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}"

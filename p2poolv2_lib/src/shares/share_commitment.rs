@@ -3,15 +3,16 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use super::address_serde;
+use super::bch_coinbase::BchCoinbase;
 use super::option_address_serde;
-use super::share_block::{ShareBlock, ShareHeader};
-use super::transactions::coinbase::compute_non_coinbase_root;
-use bitcoin::WitnessProgram;
-use bitcoin::consensus::Encodable;
+use super::share_block::{ShareBlock, ShareHeader, decode_optional_address, encode_address};
+use super::transactions::coinbase::compute_witness_root;
+use super::validation::MAX_UNCLES;
+use bitcoin::consensus::encode::VarInt;
+use bitcoin::consensus::{Decodable, Encodable, serialize};
 use bitcoin::hashes::Hash;
 use bitcoin::io::Write;
-use bitcoin::{Address, BlockHash, CompactTarget, TxMerkleNode, hashes};
-use p2poolv2_wallet::witness_program_codec;
+use bitcoin::{Address, BlockHash, CompactTarget, WitnessMerkleNode, hashes};
 use serde::Serialize;
 
 /// Share commitment created by miner and embedded in the bitcoin
@@ -44,17 +45,19 @@ pub struct ShareCommitment {
     /// Hashed directly. The coinbase is no longer in the commitment,
     /// as it carries the weak block hash, so this is now the only thing
     /// binding a miner to the proof of work produced.
-    #[serde(with = "p2poolv2_wallet::witness_program_codec::serde_hex")]
-    pub miner_address: WitnessProgram,
-    /// Merkle root over this share's *non-coinbase* transactions.
+    #[serde(with = "p2poolv2_wallet::share_owner::serde_hex")]
+    pub miner_address: p2poolv2_wallet::share_owner::ShareOwner,
+    /// BIP141 witness root over this share's *non-coinbase* transactions,
+    /// with the coinbase leaf all zeros (`compute_witness_root`).
     ///
     /// The coinbase is deliberately absent: it carries the weak block hash, so
     /// it cannot exist until the work is done, while this commitment is fixed
-    /// before the miner starts hashing. Validation binds the coinbase by
-    /// rebuilding it instead. Committing this root still ties the rest of the
-    /// transaction set to the proof of work, which is what stops a peer taking
-    /// a valid share, swapping its transactions and republishing.
-    pub non_coinbase_root: TxMerkleNode,
+    /// before the miner starts hashing. Committing this root ties the rest of
+    /// the transaction set, witnesses included, to the proof of work, which is
+    /// what stops a peer taking a valid share, swapping or altering its
+    /// transactions and republishing. With it bound, the share coinbase is
+    /// determined by the header too.
+    pub share_witness_root: WitnessMerkleNode,
     /// Share chain difficult as compact target
     pub bits: CompactTarget,
     /// Timestamp for the share, as set by the miner
@@ -69,8 +72,9 @@ pub struct ShareCommitment {
     pub fee_address: Option<Address>,
     /// Fee in basis points
     pub fee: Option<u16>,
-    /// Total bitcoin coinbase value
-    pub coinbase_value: u64,
+    /// Declared BCH layout, committed before hashing begins. Legacy jobs omit it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bch_coinbase: Option<BchCoinbase>,
 }
 
 /// Bytes the timestamp contributes to the commitment encoding.
@@ -89,12 +93,17 @@ const COMMITMENT_TIME_SIZE: usize = size_of::<u32>();
 /// ```
 const MAX_ENCODED_SCRIPT_PUBKEY_SIZE: usize = 1 + 1 + 1 + 40;
 
-/// A `TxMerkleNode` is a 32 byte hash and encodes as exactly that.
-const MERKLE_ROOT_SIZE: usize = 32;
+/// The network class byte written before the bitcoin address script.
+const ADDRESS_NETWORK_CLASS_SIZE: usize = 1;
+
+/// A witness program as `witness_program_codec` writes it: version, length,
+/// and at most 40 program bytes.
+const MAX_ENCODED_WITNESS_PROGRAM_SIZE: usize = 1 + 1 + 40;
 
 /// Bytes appended after the suffix, per miner. Only a capacity hint, so an
 /// over-estimate costs nothing and an under-estimate costs one realloc.
-const COMMITMENT_TAIL_SIZE: usize = MAX_ENCODED_SCRIPT_PUBKEY_SIZE + MERKLE_ROOT_SIZE;
+const COMMITMENT_TAIL_SIZE: usize =
+    ADDRESS_NETWORK_CLASS_SIZE + MAX_ENCODED_SCRIPT_PUBKEY_SIZE + MAX_ENCODED_WITNESS_PROGRAM_SIZE;
 
 /// Serialize the commitment fields before time:
 /// prev_share_blockhash + uncles + bits.
@@ -121,19 +130,19 @@ pub(crate) fn build_commitment_prefix(
 }
 
 /// Serialize the commitment fields after time:
-/// donation_address + donation + fee_address + fee + non_coinbase_root.
+/// donation_address + donation + fee_address + fee + share_witness_root.
 ///
 /// Shared across miners for a template. Worth pre-building: the addresses
 /// encode as their bech32 *strings*, so each one costs a checksum computation
 /// and an allocation that would otherwise repeat for every connected miner.
-/// `non_coinbase_root` belongs here for the same reason: it is a property of
+/// `share_witness_root` belongs here for the same reason: it is a property of
 /// the template's share transaction set, not of any one miner.
 pub(crate) fn build_commitment_suffix(
     donation_address: &Option<Address>,
     donation: Option<u16>,
     fee_address: &Option<Address>,
     fee: Option<u16>,
-    non_coinbase_root: TxMerkleNode,
+    share_witness_root: WitnessMerkleNode,
 ) -> Vec<u8> {
     let mut suffix = Vec::with_capacity(128);
     encode_optional_address(donation_address, &mut suffix)
@@ -147,9 +156,9 @@ pub(crate) fn build_commitment_suffix(
     fee.unwrap_or(0)
         .consensus_encode(&mut suffix)
         .expect("encoding fee should never fail");
-    non_coinbase_root
+    share_witness_root
         .consensus_encode(&mut suffix)
-        .expect("encoding non-coinbase root should never fail");
+        .expect("encoding share witness root should never fail");
     suffix
 }
 
@@ -165,7 +174,7 @@ pub(crate) fn commitment_digest(
     time: u32,
     suffix: &[u8],
     miner_bitcoin_address: Option<&Address>,
-    miner_address: Option<WitnessProgram>,
+    miner_address: Option<p2poolv2_wallet::share_owner::ShareOwner>,
 ) -> hashes::sha256::Hash {
     let mut serialized = Vec::with_capacity(
         prefix.len() + COMMITMENT_TIME_SIZE + suffix.len() + COMMITMENT_TAIL_SIZE,
@@ -175,14 +184,16 @@ pub(crate) fn commitment_digest(
         .expect("encoding time should never fail");
     serialized.extend_from_slice(suffix);
 
+    //* The bitcoin address is digested exactly as the header encodes it,
+    //* network class and script. The script alone would leave the class free,
+    //* and since the header hash covers it, one proof of work would stand
+    //* behind a share hash per class.
     if let Some(address) = miner_bitcoin_address {
-        address
-            .script_pubkey()
-            .consensus_encode(&mut serialized)
-            .expect("encoding address script_pubkey should never fail");
+        encode_address(address, &mut serialized)
+            .expect("encoding miner bitcoin address should never fail");
     }
     if let Some(program) = miner_address {
-        witness_program_codec::consensus_encode(&program, &mut serialized)
+        p2poolv2_wallet::share_owner::consensus_encode(&program, &mut serialized)
             .expect("encoding miner address should never fail");
     }
 
@@ -190,6 +201,52 @@ pub(crate) fn commitment_digest(
 }
 
 impl ShareCommitment {
+    /// Decode this pool's BCH job terms; authenticity is checked by the pool's token registry.
+    /// A declarator supplies its own identities; the coinbase value comes from
+    /// the coinbase the share block carries.
+    pub fn from_mining_job_token(
+        token: &[u8],
+        miner_bitcoin_address: Address,
+        miner_address: p2poolv2_wallet::share_owner::ShareOwner,
+    ) -> Result<Self, bitcoin::consensus::encode::Error> {
+        let invalid = bitcoin::consensus::encode::Error::ParseFailed;
+        if token.len() < 33 || token.len() > 255 || token[0] != 1 {
+            return Err(invalid("unknown BCH job token format"));
+        }
+        let mut reader = &token[33..];
+        let prev_share_blockhash = BlockHash::consensus_decode(&mut reader)?;
+        let uncle_count = VarInt::consensus_decode(&mut reader)?.0;
+        if uncle_count > MAX_UNCLES as u64 {
+            return Err(invalid("too many job token uncles"));
+        }
+        let uncles = (0..uncle_count)
+            .map(|_| BlockHash::consensus_decode(&mut reader))
+            .collect::<Result<Vec<_>, _>>()?;
+        let bits = CompactTarget::consensus_decode(&mut reader)?;
+        let time = u32::consensus_decode(&mut reader)?;
+        let donation_address = decode_optional_address(&mut reader)?;
+        let donation = u16::consensus_decode(&mut reader)?;
+        let fee_address = decode_optional_address(&mut reader)?;
+        let fee = u16::consensus_decode(&mut reader)?;
+        if !reader.is_empty() {
+            return Err(invalid("trailing BCH job token data"));
+        }
+        Ok(Self {
+            prev_share_blockhash,
+            uncles,
+            miner_bitcoin_address,
+            miner_address,
+            share_witness_root: compute_witness_root(&[]),
+            bits,
+            time,
+            donation_address,
+            donation: (donation > 0).then_some(donation),
+            fee_address,
+            fee: (fee > 0).then_some(fee),
+            bch_coinbase: None,
+        })
+    }
+
     /// Make a SHA256 hash for commitment using consensus encoding.
     ///
     /// Hash of this commitment, as embedded in the bitcoin coinbase scriptSig.
@@ -207,17 +264,26 @@ impl ShareCommitment {
     /// per share, so this is now the only binding between a share's owner and
     /// its proof of work.
     ///
-    /// `non_coinbase_root` commits to the non-coinbase tx in share block. The
-    /// coinbase is bound separately, by rebuilding it during validation.
+    /// `share_witness_root` commits to the non-coinbase transactions in the
+    /// share block. The share coinbase follows from the header, so it needs no
+    /// commitment of its own.
+    ///
+    /// Every field is digested: a field the header carries but the digest
+    /// leaves out could be changed without touching the proof of work, giving
+    /// one proof of work many share hashes.
     pub fn hash(&self) -> hashes::sha256::Hash {
         let prefix = build_commitment_prefix(self.prev_share_blockhash, &self.uncles, self.bits);
-        let suffix = build_commitment_suffix(
+        let mut suffix = build_commitment_suffix(
             &self.donation_address,
             self.donation,
             &self.fee_address,
             self.fee,
-            self.non_coinbase_root,
+            self.share_witness_root,
         );
+        if let Some(coinbase) = &self.bch_coinbase {
+            suffix.push(0x21);
+            suffix.extend_from_slice(&serialize(coinbase));
+        }
         commitment_digest(
             &prefix,
             self.time,
@@ -230,8 +296,8 @@ impl ShareCommitment {
     /// Reconstruct a ShareCommitment from a share block.
     ///
     /// Takes the whole block, not just its header, because
-    /// `non_coinbase_root` is recomputed from the block's transactions rather
-    /// than stored on the header. Keeping it off the header is what stops the
+    /// `share_witness_root` is recomputed from the block's transactions rather
+    /// than taken from the header's proof. Keeping it off the header is what stops the
     /// header growing with the share transaction set, and the block is always
     /// in hand where this is used: the only caller is `validate_bitcoin_payout`,
     /// which already takes a `ShareBlock`.
@@ -244,33 +310,32 @@ impl ShareCommitment {
     pub fn from_share_block(share: &ShareBlock) -> Self {
         Self::from_share_header_and_root(
             &share.header,
-            compute_non_coinbase_root(share.transactions.get(1..).unwrap_or_default()),
+            compute_witness_root(share.transactions.get(1..).unwrap_or_default()),
         )
     }
 
-    /// Reconstruct a ShareCommitment from a share header and the root of its
-    /// non-coinbase transactions, the one commitment input the header does
-    /// not carry.
+    /// Reconstruct a ShareCommitment from a share header and the witness root
+    /// of its non-coinbase transactions.
     ///
     /// Header sync uses the root from the header's `CoinbaseProof`, so it can
     /// check the commitment without the block body.
     pub fn from_share_header_and_root(
         header: &ShareHeader,
-        non_coinbase_root: TxMerkleNode,
+        share_witness_root: WitnessMerkleNode,
     ) -> Self {
         Self {
             prev_share_blockhash: header.prev_share_blockhash,
             uncles: header.uncles.clone(),
             miner_bitcoin_address: header.miner_bitcoin_address.clone(),
             miner_address: header.miner_address,
-            non_coinbase_root,
+            share_witness_root,
             bits: header.bits,
             time: header.time,
             donation_address: header.donation_address.clone(),
             donation: header.donation,
             fee_address: header.fee_address.clone(),
             fee: header.fee,
-            coinbase_value: header.coinbase_value,
+            bch_coinbase: header.bch_coinbase.clone(),
         }
     }
 }
@@ -297,18 +362,15 @@ pub(crate) fn encode_optional_address<W: Write + ?Sized>(
 mod tests {
     use super::*;
     use crate::shares::coinbase_proof::CoinbaseProof;
-    use crate::shares::coinbaseaux_flags::CoinbaseAuxFlags;
-    use crate::shares::extranonce::Extranonce;
     use crate::shares::share_block::{ShareHeader, ShareTransaction};
     use crate::shares::transactions::coinbase::build_sharechain_coinbase_transaction;
-    use crate::shares::transactions::coinbase::compute_non_coinbase_root;
-    use crate::shares::witness_commitment::WitnessCommitment;
+    use crate::shares::transactions::coinbase::compute_witness_root;
     use crate::stratum::work::block_template::BlockTemplate;
     use crate::test_utils::create_test_commitment;
     use crate::test_utils::make_test_share_program;
     use crate::test_utils::test_coinbase_transaction;
     use bitcoin::hashes::Hash;
-    use bitcoin::{CompressedPublicKey, Network, TxMerkleNode};
+    use bitcoin::{CompressedPublicKey, Network, ScriptBuf, TxMerkleNode};
     use std::str::FromStr;
 
     #[test]
@@ -377,7 +439,7 @@ mod tests {
             commitment1.miner_bitcoin_address, commitment2.miner_bitcoin_address,
             "only the share address may differ for this test to mean anything"
         );
-        commitment2.miner_address = make_test_share_program(2);
+        commitment2.miner_address = make_test_share_program(2).into();
 
         assert_ne!(commitment1.hash(), commitment2.hash());
     }
@@ -387,13 +449,27 @@ mod tests {
     /// could swap a share's transactions, recompute the root, and republish
     /// under someone else's proof of work.
     #[test]
-    fn test_hash_uniqueness_different_merkle_root() {
+    fn test_hash_uniqueness_different_share_witness_root() {
         let commitment1 = create_test_commitment();
         let mut commitment2 = create_test_commitment();
 
-        commitment2.non_coinbase_root =
-            compute_non_coinbase_root(&[ShareTransaction(test_coinbase_transaction(3))]);
+        commitment2.share_witness_root =
+            compute_witness_root(&[ShareTransaction(test_coinbase_transaction(3))]);
 
+        assert_ne!(commitment1.hash(), commitment2.hash());
+    }
+
+    #[test]
+    fn test_hash_changes_with_bitcoin_address_network() {
+        let mut commitment1 = create_test_commitment();
+        let mut commitment2 = create_test_commitment();
+        commitment1.miner_bitcoin_address = Address::p2wsh(&ScriptBuf::new(), Network::Testnet);
+        commitment2.miner_bitcoin_address = Address::p2wsh(&ScriptBuf::new(), Network::Regtest);
+
+        assert_eq!(
+            commitment1.miner_bitcoin_address.script_pubkey(),
+            commitment2.miner_bitcoin_address.script_pubkey()
+        );
         assert_ne!(commitment1.hash(), commitment2.hash());
     }
 
@@ -427,8 +503,8 @@ mod tests {
     /// Build a ShareBlock from a commitment and a realistic bitcoin coinbase.
     ///
     /// Returns the whole block rather than a header because reconstructing a
-    /// commitment needs the transactions: `non_coinbase_root` is recomputed
-    /// from them rather than stored on the header.
+    /// commitment needs the transactions: `share_witness_root` is recomputed
+    /// from them rather than taken from the header.
     fn block_from_commitment(commitment: ShareCommitment) -> ShareBlock {
         let coinbase = test_coinbase_transaction(1);
 
@@ -437,12 +513,8 @@ mod tests {
         let template: BlockTemplate =
             serde_json::from_str(json_content).expect("Failed to parse template JSON");
 
-        let mut bitcoin_transactions: Vec<bitcoin::Transaction> = template
-            .transactions
-            .iter()
-            .map(bitcoin::Transaction::from)
-            .collect();
-        bitcoin_transactions.insert(0, coinbase);
+        let mut bitcoin_transactions = template.decode_transactions().unwrap();
+        bitcoin_transactions.insert(0, coinbase.clone());
 
         let template_merkle_root: TxMerkleNode = bitcoin::merkle_tree::calculate_root(
             bitcoin_transactions.iter().map(|tx| tx.compute_txid()),
@@ -460,36 +532,18 @@ mod tests {
         };
 
         //* The share coinbase depends on the bitcoin header, so it is built
-        //* here and the share merkle root computed from it, mirroring what
-        //* handle_stratum_share does.
+        //* here, mirroring what handle_stratum_share does.
         let share_coinbase = ShareTransaction(build_sharechain_coinbase_transaction(
             &commitment.miner_address,
             bitcoin_header.block_hash(),
             &[],
         ));
         let share_transactions = vec![share_coinbase];
-        let share_merkle_root: TxMerkleNode = bitcoin::merkle_tree::calculate_root(
-            share_transactions.iter().map(|tx| tx.compute_txid()),
-        )
-        .unwrap()
-        .into();
 
         let header = ShareHeader::from_commitment_and_header(
             commitment,
-            share_merkle_root,
             bitcoin_header,
-            template
-                .coinbaseaux
-                .get("flags")
-                .and_then(|flags| hex::decode(flags).ok())
-                .map(|bytes| CoinbaseAuxFlags::new(&bytes)),
-            template
-                .default_witness_commitment
-                .as_deref()
-                .and_then(|hex_str| WitnessCommitment::from_hex(hex_str).ok()),
             template.height as u64,
-            0,
-            Extranonce::default(),
             CoinbaseProof::default(),
         );
 
@@ -497,6 +551,7 @@ mod tests {
             header,
             transactions: share_transactions,
             template_merkle_branches: vec![],
+            bitcoin_coinbase: coinbase,
         }
     }
 

@@ -155,6 +155,7 @@ pub(crate) async fn share_headers(
         &mut value["headers"],
         &response.headers,
         state.app_config.network,
+        state.app_config.cash_network,
         |entry| &entry.header,
     );
 
@@ -168,7 +169,7 @@ mod tests {
     use axum::extract::{Query, State};
     use bitcoin::Network;
     use p2poolv2_lib::accounting::stats::metrics;
-    use p2poolv2_lib::address::witness_program_codec::to_address_string;
+    use p2poolv2_lib::address::share_owner::to_address_string;
     use p2poolv2_lib::monitoring_events::create_monitoring_event_channel;
     use p2poolv2_lib::node::actor::NodeHandle;
     use p2poolv2_lib::stratum::work::tracker::start_tracker_actor;
@@ -186,6 +187,7 @@ mod tests {
             app_config: AppConfig {
                 pool_signature_length: 0,
                 network: bitcoin::Network::Signet,
+                cash_network: None,
                 cors_allowed: false,
             },
             chain_store_handle,
@@ -195,6 +197,7 @@ mod tests {
             monitoring_event_sender: create_monitoring_event_channel().0,
             auth_user: None,
             auth_token: None,
+            pplns_window: None,
         });
         (state, temp_dir)
     }
@@ -260,12 +263,12 @@ mod tests {
         // ShareHeaderEntry flattens the header, so its fields sit at the top
         // level of the entry.
         assert_eq!(
-            response["headers"][0]["merkle_root"],
-            genesis.header.merkle_root.to_string()
+            response["headers"][0]["prev_share_blockhash"],
+            genesis.header.prev_share_blockhash.to_string()
         );
         assert_eq!(
             response["headers"][0]["miner_address"],
-            to_address_string(&genesis.header.miner_address, Network::Signet)
+            to_address_string(&genesis.header.miner_address, Network::Signet, None)
         );
         assert!(response["headers"][0]["transactions"].is_null());
     }
@@ -297,8 +300,8 @@ mod tests {
         assert_eq!(response["to_height"], 0);
         assert_eq!(response["headers"].as_array().unwrap().len(), 1);
         assert_eq!(
-            response["headers"][0]["merkle_root"],
-            genesis.header.merkle_root.to_string()
+            response["headers"][0]["prev_share_blockhash"],
+            genesis.header.prev_share_blockhash.to_string()
         );
         assert_eq!(
             response["headers"][0]["transactions"],

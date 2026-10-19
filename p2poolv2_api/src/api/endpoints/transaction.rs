@@ -146,6 +146,7 @@ mod tests {
             app_config: AppConfig {
                 pool_signature_length: 0,
                 network: bitcoin::Network::Signet,
+                cash_network: None,
                 cors_allowed: false,
             },
             chain_store_handle,
@@ -155,6 +156,7 @@ mod tests {
             monitoring_event_sender: create_monitoring_event_channel().0,
             auth_user: None,
             auth_token: None,
+            pplns_window: None,
         });
         (state, temp_dir)
     }

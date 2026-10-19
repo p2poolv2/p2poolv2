@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use crate::api::endpoints;
+use crate::api::endpoints::miner::MinerWindowSource;
 use crate::api::error::ApiError;
 use crate::api::{auth::auth_middleware, websocket::websocket_handler};
 use axum::{
@@ -14,6 +15,8 @@ use axum::{
     routing::{delete, get, post},
 };
 use chrono::DateTime;
+use p2poolv2_lib::accounting::payout::sharechain_pplns::PplnsWindow;
+use p2poolv2_lib::address::bch_share::BchShareNetwork;
 use p2poolv2_lib::monitoring_events::MonitoringEventSender;
 use p2poolv2_lib::node::actor::NodeHandle;
 use p2poolv2_lib::stratum::work::tracker::{JobTracker, parse_coinbase};
@@ -21,9 +24,11 @@ use p2poolv2_lib::{
     accounting::{payout::simple_pplns::SimplePplnsShare, stats::metrics::MetricsHandle},
     config::ApiConfig,
     shares::chain::chain_store_handle::ChainStoreHandle,
+    store::found_block::FoundBlock,
 };
 use serde::Deserialize;
 use std::path::PathBuf;
+use std::sync::RwLock;
 use std::time::Duration;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::oneshot;
@@ -41,6 +46,11 @@ pub(crate) struct AppState {
     pub(crate) monitoring_event_sender: MonitoringEventSender,
     pub(crate) auth_user: Option<String>,
     pub(crate) auth_token: Option<String>,
+    /// The node's share chain PPLNS window, shared with the payout and
+    /// validation code, with the snapshot `/miner` answers from. `None` when
+    /// the node does not pay from it (Hydrapool mode), which turns `/miner`
+    /// off.
+    pub(crate) pplns_window: Option<Arc<MinerWindowSource>>,
 }
 
 /// Stores application config values that don't change across requests
@@ -49,6 +59,9 @@ pub(crate) struct AppState {
 pub struct AppConfig {
     pub pool_signature_length: usize,
     pub network: bitcoin::Network,
+    /// Bitcoin Cash share prefix. Independent of `network`, which stays the
+    /// Bitcoin share-chain network used for taproot addresses and genesis.
+    pub cash_network: Option<BchShareNetwork>,
     pub cors_allowed: bool,
 }
 
@@ -101,6 +114,7 @@ fn build_router(app_state: Arc<AppState>, app_config: AppConfig) -> Router {
         .route("/candidates", get(endpoints::candidates::candidates))
         .route("/share", get(endpoints::share::share))
         .route("/dag", get(endpoints::dag::dag))
+        .route("/miner", get(endpoints::miner::miner))
         .route("/transaction", get(endpoints::transaction::transaction))
         .route(
             "/share_headers",
@@ -141,6 +155,9 @@ fn build_router(app_state: Arc<AppState>, app_config: AppConfig) -> Router {
 }
 
 /// Start the API server and return a shutdown channel and the actual bound port.
+///
+/// `pplns_window` is the node's share chain PPLNS window, or `None` when the
+/// node does not pay from it; `/miner` reads it.
 #[allow(clippy::too_many_arguments)] // wiring constructor: each parameter is a distinct collaborator, a params struct would only move the list
 pub async fn start_api_server(
     config: ApiConfig,
@@ -150,11 +167,14 @@ pub async fn start_api_server(
     node_handle: NodeHandle,
     monitoring_event_sender: MonitoringEventSender,
     network: bitcoin::Network,
+    cash_network: Option<BchShareNetwork>,
     pool_signature: Option<String>,
+    pplns_window: Option<Arc<RwLock<PplnsWindow>>>,
 ) -> Result<(oneshot::Sender<()>, u16), std::io::Error> {
     let app_config = AppConfig {
         pool_signature_length: pool_signature.unwrap_or_default().len(),
         network,
+        cash_network,
         cors_allowed: config.cors_allowed,
     };
 
@@ -167,6 +187,7 @@ pub async fn start_api_server(
         monitoring_event_sender,
         auth_user: config.auth_user.clone(),
         auth_token: config.auth_token.clone(),
+        pplns_window: pplns_window.map(|window| Arc::new(MinerWindowSource::new(window))),
     });
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
@@ -258,6 +279,18 @@ async fn metrics(State(state): State<Arc<AppState>>) -> String {
         ));
     }
 
+    // Found bitcoin blocks are read live from the store, where they are
+    // recorded on confirmation. Not gated on is_current: the list is derived
+    // from the share chain and timestamped with bitcoin header times, so it is
+    // correct during sync and the same on every node.
+    match state.chain_store_handle.get_found_blocks() {
+        Ok(found_blocks) => exposition.push_str(&found_blocks_exposition(
+            &found_blocks,
+            state.app_config.network,
+        )),
+        Err(error) => warn!("Failed to read found blocks for /metrics: {error}"),
+    }
+
     match tokio::time::timeout(P2P_HEALTH_TIMEOUT, state.node_handle.get_p2p_health()).await {
         Ok(Ok(p2p_health)) => exposition.push_str(&p2p_health.exposition()),
         Ok(Err(error)) => warn!("Failed to read P2P health for /metrics: {error}"),
@@ -265,6 +298,42 @@ async fn metrics(State(state): State<Arc<AppState>>) -> String {
     }
 
     exposition
+}
+
+/// Exposition for the bitcoin blocks found by the pool.
+///
+/// Emits a counter of all found blocks and one gauge line per block, set to
+/// its bitcoin header time and labeled with blockhash, height, miner and the
+/// bitcoin network so Grafana can list the blocks and link each to the block
+/// explorer for that network. The network label uses bitcoin core's names
+/// (main, testnet4, signet, regtest). Entries are never deleted from the
+/// store, so the counter is monotonic.
+fn found_blocks_exposition(found_blocks: &[FoundBlock], network: bitcoin::Network) -> String {
+    let mut output = String::with_capacity(256 + found_blocks.len() * 256);
+    output.push_str(
+        "# HELP bitcoin_blocks_found_total Total number of bitcoin blocks found by the pool\n",
+    );
+    output.push_str("# TYPE bitcoin_blocks_found_total counter\n");
+    output.push_str(&format!(
+        "bitcoin_blocks_found_total {}\n",
+        found_blocks.len()
+    ));
+    output.push_str(
+        "# HELP bitcoin_block_found_time_seconds Bitcoin header time of a block found by the pool, labeled with blockhash, height, miner and network\n",
+    );
+    output.push_str("# TYPE bitcoin_block_found_time_seconds gauge\n");
+    let network_name = network.to_core_arg();
+    for found_block in found_blocks {
+        output.push_str(&format!(
+            "bitcoin_block_found_time_seconds{{blockhash=\"{}\",height=\"{}\",miner=\"{}\",network=\"{}\"}} {}\n",
+            found_block.bitcoin_blockhash,
+            found_block.bitcoin_height,
+            found_block.miner_bitcoin_address,
+            network_name,
+            found_block.bitcoin_time
+        ));
+    }
+    output
 }
 
 /// Convert 256-bit chain work to an f64 for Prometheus exposition. Lossy in the
@@ -424,6 +493,7 @@ mod tests {
     }
 
     use base64::Engine;
+    use bitcoin::blockdata::constants::genesis_block;
     use bitcoin::{Amount, Network, TxOut};
     use p2poolv2_lib::accounting::stats::metrics;
     use p2poolv2_lib::monitoring_events::create_monitoring_event_channel;
@@ -431,7 +501,7 @@ mod tests {
     use p2poolv2_lib::stratum::work::block_template::BlockTemplate;
     use p2poolv2_lib::stratum::work::coinbase::parse_address;
     use p2poolv2_lib::stratum::work::tracker::start_tracker_actor;
-    use p2poolv2_lib::test_utils::setup_test_chain_store_handle;
+    use p2poolv2_lib::test_utils::{TestShareBlockBuilder, setup_test_chain_store_handle};
     use std::collections::HashMap;
     use std::str::FromStr;
     use std::sync::Arc;
@@ -449,6 +519,7 @@ mod tests {
             app_config: AppConfig {
                 pool_signature_length: 0,
                 network: bitcoin::Network::Signet,
+                cash_network: None,
                 cors_allowed: false,
             },
             chain_store_handle,
@@ -458,6 +529,7 @@ mod tests {
             monitoring_event_sender: create_monitoring_event_channel().0,
             auth_user: None,
             auth_token: None,
+            pplns_window: None,
         });
         (state, temp_dir)
     }
@@ -471,6 +543,85 @@ mod tests {
 
         assert!(exposition.contains("# TYPE p2p_connected_peers gauge\np2p_connected_peers 0\n"));
         assert!(exposition.contains("p2p_connections_closed_unresponsive_total 0\n"));
+    }
+
+    #[test]
+    fn test_found_blocks_exposition_lists_each_block() {
+        let found_blocks = vec![FoundBlock {
+            bitcoin_height: 840000,
+            bitcoin_blockhash: bitcoin::BlockHash::from_str(
+                "0000000000000000000320283a032748cef8227873ff4872689bf23f1cda83a5",
+            )
+            .unwrap(),
+            share_blockhash: bitcoin::BlockHash::from_str(
+                "00000000000000000001b4e3a8b6c1d2e3f405162738495a6b7c8d9e0f1a2b3c",
+            )
+            .unwrap(),
+            bitcoin_time: 1713571767,
+            miner_bitcoin_address: "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh".to_string(),
+        }];
+
+        let exposition = found_blocks_exposition(&found_blocks, Network::Bitcoin);
+
+        assert!(
+            exposition.contains(
+                "# TYPE bitcoin_blocks_found_total counter\nbitcoin_blocks_found_total 1\n"
+            )
+        );
+        assert!(exposition.contains("# TYPE bitcoin_block_found_time_seconds gauge\n"));
+        assert!(exposition.contains(
+            "bitcoin_block_found_time_seconds{blockhash=\"0000000000000000000320283a032748cef8227873ff4872689bf23f1cda83a5\",height=\"840000\",miner=\"bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh\",network=\"main\"} 1713571767\n"
+        ));
+    }
+
+    #[test]
+    fn test_found_blocks_exposition_with_no_blocks() {
+        let exposition = found_blocks_exposition(&[], Network::Testnet4);
+
+        assert!(exposition.contains("bitcoin_blocks_found_total 0\n"));
+        assert!(!exposition.contains("bitcoin_block_found_time_seconds{"));
+    }
+
+    #[tokio::test]
+    async fn test_metrics_endpoint_exposes_found_blocks() {
+        let node_handle = NodeHandle::new_for_test();
+        let (state, _temp_dir) = build_test_state(node_handle).await;
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        state
+            .chain_store_handle
+            .init_or_setup_genesis(genesis.clone())
+            .await
+            .unwrap();
+
+        // The regtest genesis header meets its own target, so confirming
+        // this share records a found bitcoin block.
+        let mut share = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        share.header.bitcoin_header = genesis_block(Network::Regtest).header;
+        state
+            .chain_store_handle
+            .add_share_block_and_organise_header(share.clone())
+            .await
+            .unwrap();
+        state
+            .chain_store_handle
+            .mark_block_valid(share.block_hash())
+            .await
+            .unwrap();
+        state.chain_store_handle.organise_block().await.unwrap();
+
+        let exposition = metrics(State(state)).await;
+
+        assert!(exposition.contains("bitcoin_blocks_found_total 1\n"));
+        assert!(exposition.contains(&format!(
+            "bitcoin_block_found_time_seconds{{blockhash=\"{}\",height=\"{}\",miner=\"{}\",network=\"signet\"}} {}\n",
+            share.header.bitcoin_header.block_hash(),
+            share.header.bitcoin_height,
+            share.header.miner_bitcoin_address,
+            share.header.bitcoin_header.time
+        )));
     }
 
     #[tokio::test]
@@ -551,6 +702,7 @@ mod tests {
             sigoplimit: 0,
             sizelimit: 0,
             weightlimit: 0,
+            provided: None,
         };
 
         let pool_signature = b"P2Poolv2";
@@ -603,6 +755,7 @@ mod tests {
             app_config: AppConfig {
                 pool_signature_length: 8,
                 network: bitcoin::Network::Signet,
+                cash_network: None,
                 cors_allowed: false,
             },
             chain_store_handle,
@@ -612,6 +765,7 @@ mod tests {
             monitoring_event_sender: create_monitoring_event_channel().0,
             auth_user: None,
             auth_token: None,
+            pplns_window: None,
         });
 
         let response_body = metrics(State(state)).await;
@@ -711,6 +865,7 @@ mod tests {
             app_config: AppConfig {
                 pool_signature_length: 0,
                 network: bitcoin::Network::Signet,
+                cash_network: None,
                 cors_allowed: false,
             },
             chain_store_handle,
@@ -720,6 +875,7 @@ mod tests {
             monitoring_event_sender: create_monitoring_event_channel().0,
             auth_user: Some(username.to_string()),
             auth_token: Some(token),
+            pplns_window: None,
         });
         (state, temp_dir, base64_credentials)
     }
@@ -772,6 +928,41 @@ mod tests {
 
         let response = app.oneshot(request).await.unwrap();
         assert_eq!(response.status(), http::StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_miner_route_without_auth_header_returns_401() {
+        use tower::ServiceExt;
+
+        let (state, _temp_dir, _base64_credentials) = build_auth_test_state().await;
+        let app = build_router(state.clone(), state.app_config.clone());
+
+        let request = http::Request::builder()
+            .uri("/miner?address=tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d")
+            .body(http_body_util::Empty::<bytes::Bytes>::new())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), http::StatusCode::UNAUTHORIZED);
+    }
+
+    /// A malformed address is a 400 from the handler, which tells a routed
+    /// request apart from the 404 an unknown path gets.
+    #[tokio::test]
+    async fn test_miner_route_with_auth_reaches_the_handler() {
+        use tower::ServiceExt;
+
+        let (state, _temp_dir, base64_credentials) = build_auth_test_state().await;
+        let app = build_router(state.clone(), state.app_config.clone());
+
+        let request = http::Request::builder()
+            .uri("/miner?address=not-an-address")
+            .header("Authorization", format!("Basic {base64_credentials}"))
+            .body(http_body_util::Empty::<bytes::Bytes>::new())
+            .unwrap();
+
+        let response = app.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), http::StatusCode::BAD_REQUEST);
     }
 
     /// Start a real HTTP server on a random port and return (base_url, shutdown_tx).
@@ -875,6 +1066,7 @@ mod tests {
             app_config: AppConfig {
                 pool_signature_length: 0,
                 network: bitcoin::Network::Signet,
+                cash_network: None,
                 cors_allowed: true,
             },
             chain_store_handle,
@@ -884,6 +1076,7 @@ mod tests {
             monitoring_event_sender: create_monitoring_event_channel().0,
             auth_user: None,
             auth_token: None,
+            pplns_window: None,
         });
 
         let app = build_router(state.clone(), state.app_config.clone());

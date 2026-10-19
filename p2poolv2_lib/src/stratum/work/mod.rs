@@ -9,4 +9,5 @@ pub(crate) mod error;
 pub mod gbt;
 pub mod notify;
 pub mod prepared_notify;
+pub mod template_trigger;
 pub mod tracker;

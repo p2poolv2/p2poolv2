@@ -2,9 +2,9 @@ name: Rust CI
 
 on:
   push:
-    branches: ["main"]
+    branches: ["main", "bch-plan", "alpha"]
   pull_request:
-    branches: ["main"]
+    branches: ["main", "bch-plan", "alpha"]
 
 env:
   CARGO_TERM_COLOR: always
@@ -57,6 +57,22 @@ jobs:
       - name: Run sim-feature tests
         run: cargo nextest run -p p2poolv2_lib --features sim
 
+  covenants:
+    name: BCH Covenant Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools/safa-auxpow
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+      - run: npm ci --ignore-scripts
+      - run: npm test
+
   coverage:
     name: Code Coverage
     runs-on: ubuntu-latest
@@ -82,8 +98,16 @@ jobs:
       # bump that breaks the build. The delta itself is not useful on a
       # lockfile bump, and skipping keeps the token out of a job that compiles
       # and runs build scripts from newly proposed dependency versions.
+      # A fork without a CODECOV_TOKEN secret cannot upload; tokenless
+      # uploads are refused. Only this step sees the secret, and it reports
+      # just whether one is set, so the upload is skipped instead of failing.
+      - name: Check for a Codecov token
+        id: codecov_token
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        run: echo "present=$([ -n "$CODECOV_TOKEN" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
       - name: Upload coverage to Codecov
-        if: github.actor != 'dependabot[bot]'
+        if: github.actor != 'dependabot[bot]' && steps.codecov_token.outputs.present == 'true'
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           token: ${{ secrets.CODECOV_TOKEN }}

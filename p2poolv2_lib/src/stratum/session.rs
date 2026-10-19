@@ -9,6 +9,7 @@ use crate::{
 };
 use bitcoin::Address;
 use bitcoin::secp256k1::rand::{self, Rng};
+use p2poolv2_wallet::share_owner::ShareOwner;
 use std::time::SystemTime;
 
 /// Use 4 byte extranonce1
@@ -38,6 +39,9 @@ pub struct Session<D: DifficultyAdjusterTrait> {
     /// share coinbase outputs. Set once at authorization time. Distinct from
     /// `parsed_address`, which is the bitcoin payout address on the other chain.
     pub miner_address: Option<P2PoolAddress>,
+    /// Share owner committed into the work notify. Taproot for Bitcoin, a
+    /// 20-byte P2PKH hash for Bitcoin Cash. Set once at authorization.
+    pub share_owner: Option<ShareOwner>,
     /// Worker name for the mining device
     pub workername: Option<String>,
     /// Optional password of the miner, supplied by the miner, we just store it in session
@@ -83,6 +87,7 @@ impl<D: DifficultyAdjusterTrait> Session<D> {
             btcaddress: None,
             parsed_address: None,
             miner_address: None,
+            share_owner: None,
             password: None,
             user_id: None,
             worker_id: None,

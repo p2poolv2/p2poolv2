@@ -17,7 +17,8 @@
 # Env overrides (nightly-specific):
 #   SCENARIO                   failure scenario to inject    (default clean)
 #                              clean | restart-fast | restart-delayed |
-#                              partition | all
+#                              partition | all | late-miner (needs LATE_MINER
+#                              and a small MATURITY_SHARES)
 #   NODE_COUNT                 number of sim nodes           (default 20)
 #   CONVERGENCE_WAIT_SECONDS   seconds to settle after the
 #                              scenario, before the checks   (default 60)
@@ -49,12 +50,16 @@ Scenarios (see load-tests/sim/failures.sh --help for the details):
   restart-delayed   a node fails and comes back after a long delay
   partition         several nodes fail at once, cutting the dial chain
   all               the three failure scenarios in sequence
+  late-miner        payout maturity: a node mining late is paid only once its
+                    shares are mature (needs LATE_MINER, small MATURITY_SHARES)
 
 Examples:
   ./load-tests/sim/nightly.sh                              # 20 nodes, 60s, no failures
   ./load-tests/sim/nightly.sh restart-delayed              # long-downtime catch-up
   NODE_COUNT=5 CONVERGENCE_WAIT_SECONDS=30 ./load-tests/sim/nightly.sh
   IDEAL_BLOCK_TIME=1 SHARES_PER_BLOCK=100 ./load-tests/sim/nightly.sh  # time-compressed, frequent blocks
+  IDEAL_BLOCK_TIME=1 SHARES_PER_BLOCK=20 MATURITY_SHARES=50 LATE_MINER=1 \
+    ./load-tests/sim/nightly.sh late-miner                 # payout maturity
 
 Env vars (nightly-specific):
   SCENARIO                   failure scenario to inject    (default clean)
@@ -69,6 +74,7 @@ Env vars (nightly-specific):
 Env vars (passed through to run-swarm.sh):
   RUN_DIR                    work dir for configs/logs     (default /tmp/p2pool-sim)
   SHARES_PER_BLOCK           shares per block-find         (default 10000)
+  MATURITY_SHARES            coinbase maturity in shares   (default 6048)
   IDEAL_BLOCK_TIME           share interval in seconds     (default 10; lower = time-compressed)
   LATENCY_MS                 per-node outbound delay ms    (default 0)
   DIAL_FANOUT                peers each node dials         (default 3)
@@ -105,7 +111,8 @@ ZMQ="${ZMQ:-tcp://127.0.0.1:28332}"
 RUN_DIR="${RUN_DIR:-/tmp/p2pool-sim}"
 SHARES_PER_BLOCK="${SHARES_PER_BLOCK:-10000}"
 DIAL_FANOUT="${DIAL_FANOUT:-3}"
-export RUN_DIR RPC_URL RPC_USER RPC_PASS ZMQ SHARES_PER_BLOCK DIAL_FANOUT
+MATURITY_SHARES="${MATURITY_SHARES:-6048}"
+export RUN_DIR RPC_URL RPC_USER RPC_PASS ZMQ SHARES_PER_BLOCK DIAL_FANOUT MATURITY_SHARES
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -117,9 +124,9 @@ FAILURE_OUTPUT=""
 # Validate the scenario here as well as in failures.sh, so a typo fails now
 # rather than after bitcoind and the swarm have been brought up.
 case "$SCENARIO" in
-  clean|restart-fast|restart-delayed|partition|all) ;;
+  clean|restart-fast|restart-delayed|partition|all|late-miner) ;;
   *)
-    echo "ERROR: unknown scenario '$SCENARIO' (expected clean, restart-fast, restart-delayed, partition or all)" >&2
+    echo "ERROR: unknown scenario '$SCENARIO' (expected clean, restart-fast, restart-delayed, partition, all or late-miner)" >&2
     exit 2
     ;;
 esac
@@ -518,6 +525,14 @@ check_failure_recovery() {
   [ "$UNRECOVERED_COUNT" -eq 0 ]
 }
 
+# late-miner only: the payout maturity verdict failures.sh recorded from
+# maturity_check.py. Other scenarios skip it.
+check_payout_maturity() {
+  MATURITY_VERDICT=$(echo "$FAILURE_OUTPUT" | sed -nE 's/^maturity verdict: (.*)$/\1/p')
+  MATURITY_VERDICT="${MATURITY_VERDICT:-missing}"
+  [ "$MATURITY_VERDICT" = "PASS" ]
+}
+
 check_uncle_rate() {
   UNCLE_RATE=$(echo "$METRICS_OUTPUT" \
     | grep -oE "uncle rate \(node 0\): [0-9.]+" \
@@ -577,6 +592,15 @@ evaluate_results() {
     failed=1
   fi
 
+  local maturity_result="SKIP"
+  if [ "$SCENARIO" = "late-miner" ]; then
+    maturity_result="PASS"
+    if ! check_payout_maturity; then
+      maturity_result="FAIL"
+      failed=1
+    fi
+  fi
+
   echo "=== NIGHTLY SIM RESULTS (scenario: $SCENARIO) ==="
   printf "  nodes alive:        %-4s  (%s/%s)\n" \
     "$alive_result" "$ALIVE_COUNT" "$ALIVE_TOTAL"
@@ -594,6 +618,8 @@ evaluate_results() {
     "$verify_result" "$((VERIFY_CHAIN_TOTAL - VERIFY_CHAIN_FAILURES))" "$VERIFY_CHAIN_TOTAL"
   printf "  failure recovery:   %-4s  (targets: %s, rejoined %s, unrecovered %s)\n" \
     "$recovery_result" "$FAILURE_TARGETS" "$FAILURE_REJOINED" "$UNRECOVERED_COUNT"
+  printf "  payout maturity:    %-4s  (%s)\n" \
+    "$maturity_result" "${MATURITY_VERDICT:-late-miner only}"
 
   if [ "$failed" -eq 0 ]; then
     echo "RESULT: PASS"

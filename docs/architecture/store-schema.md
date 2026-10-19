@@ -66,7 +66,9 @@ Stores share headers independently, enabling header-first sync before full block
 | `blockhash` (32 bytes) | `ShareHeader` (serialized)   | Written during header sync and block storage |
 
 The serialized header carries its `CoinbaseProof` and encodes each address as a
-one-byte network class (main, test, regtest) followed by its script pubkey.
+one-byte network class (main, test, regtest) followed by its script pubkey. It
+holds no share merkle root and no bitcoin coinbase data: every header field is
+bound to the proof of work, and the coinbase lives in `BitcoinCoinbase`.
 
 ### 1c. `TemplateMerkleBranches` - Coinbase Merkle Branches
 
@@ -75,6 +77,17 @@ The coinbase merkle branch a header's `CoinbaseProof` is checked against.
 | Key                    | Value                                  | Notes |
 |------------------------|----------------------------------------|-------|
 | `blockhash` (32 bytes) | `MerkleBranches` (count + 32-byte nodes) | Written with a full block, and during header sync for headers held without their body, so they can be served on |
+
+### 1d. `BitcoinCoinbase` - Bitcoin Coinbase
+
+The bitcoin coinbase a share block carries: the transaction the miner hashed,
+holding the aux flags, extranonce, nanosecond timestamp, payouts and BIP141
+witness commitment. Not part of the block hash; its txid is the one the
+header's `CoinbaseProof` gives.
+
+| Key                    | Value                                  | Notes |
+|------------------------|----------------------------------------|-------|
+| `blockhash` (32 bytes) | `Transaction` (consensus serialized)   | Written with a full block only; a header held without its body has none, and `get_share` returns `None` without it |
 
 ---
 
@@ -240,6 +253,22 @@ Reserved for general metadata storage.
 | Key | Value |
 |-----|-------|
 | TBD | TBD   |
+
+---
+
+### 15. `FoundBlocks` - Bitcoin Blocks Found by the Pool
+
+One entry per bitcoin block carried by a confirmed share or by an uncle
+of a confirmed share (a share header whose bitcoin header meets the
+bitcoin network target). Written in `confirm_blocks`, in the same batch
+as the confirmation, from header data only, so prune-zone header-only
+confirmation during sync rebuilds the list. Entries are never deleted:
+a share chain reorg does not undo the bitcoin block, and re-confirmation
+rewrites identical bytes. Never pruned. Read by the `/metrics` handler.
+
+| Key                                                     | Value                                                                                      |
+|---------------------------------------------------------|--------------------------------------------------------------------------------------------|
+| `bitcoin_height` (8 bytes BE) + `bitcoin_blockhash` (32 bytes) | consensus-encoded `share_blockhash` (32 bytes), `bitcoin_time` (u32), `miner_bitcoin_address` (string) |
 
 ---
 

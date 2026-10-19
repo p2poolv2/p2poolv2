@@ -6,7 +6,7 @@ use crate::accounting::stats::pool_local_stats::load_pool_local_stats;
 use crate::accounting::stats::user::User;
 use crate::accounting::{payout::simple_pplns::SimplePplnsShare, stats::pool_local_stats};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::time::SystemTime;
 use tokio::sync::{mpsc, oneshot};
 use tracing::error;
@@ -14,25 +14,6 @@ use tracing::error;
 const METRICS_MESSAGE_BUFFER_SIZE: usize = 1000;
 pub const INITIAL_USER_MAP_CAPACITY: usize = 1000;
 const METRICS_SAVE_INTERVAL: u64 = 5;
-/// Maximum number of recently found blocks retained for the block-found
-/// metric. Bounds the label cardinality of `bitcoin_block_found_time_seconds`.
-pub const MAX_BLOCKS_FOUND_TRACKED: usize = 20;
-
-/// A bitcoin block found by the pool, retained for the block-found metric.
-///
-/// blockhash and height are exposed as Prometheus labels so Grafana can
-/// build block explorer links. The retained set is bounded by
-/// MAX_BLOCKS_FOUND_TRACKED so label cardinality stays low.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct BlockFound {
-    /// Block hash as a hex string, used as a Grafana data-link label
-    pub blockhash: String,
-    /// Bitcoin block height
-    pub height: u64,
-    /// Unix timestamp in seconds when the block was found
-    pub timestamp: u64,
-}
-
 /// Represents the metrics for the P2Poolv2 pool, we derive the stats every five minutes from this
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PoolMetrics {
@@ -54,14 +35,6 @@ pub struct PoolMetrics {
     pub users: HashMap<String, User>,
     /// Current pool difficulty
     pub pool_difficulty: u64,
-    /// Total number of bitcoin blocks found by the pool (monotonic counter)
-    #[serde(default)]
-    pub blocks_found_total: u64,
-    /// Ring of the most recently found blocks, capped at
-    /// MAX_BLOCKS_FOUND_TRACKED. Exposed with blockhash/height labels for
-    /// Grafana block explorer links.
-    #[serde(default)]
-    pub blocks_found: VecDeque<BlockFound>,
     /// Confirmed sharechain pool difficulty since the last bitcoin block was
     /// found; reset to zero on each block find. Numerator of the block effort
     /// metric (`work_since_last_block / network_difficulty`). Runtime-only (not
@@ -86,8 +59,6 @@ impl Default for PoolMetrics {
             best_share_ever: 0,
             users: HashMap::with_capacity(INITIAL_USER_MAP_CAPACITY),
             pool_difficulty: 0,
-            blocks_found_total: 0,
-            blocks_found: VecDeque::with_capacity(MAX_BLOCKS_FOUND_TRACKED),
             work_since_last_block: 0.0,
         }
     }
@@ -102,8 +73,6 @@ impl PoolMetrics {
             accepted_difficulty_total: pool_stats.accepted_difficulty_total,
             rejected_total: pool_stats.rejected_total,
             users: pool_stats.users,
-            blocks_found_total: pool_stats.blocks_found_total,
-            blocks_found: pool_stats.blocks_found,
             ..Default::default()
         })
     }
@@ -122,9 +91,7 @@ pub enum MetricsMessage {
     RecordShareRejected {
         response: oneshot::Sender<()>,
     },
-    RecordBlockFound {
-        blockhash: String,
-        height: u64,
+    ResetBlockEffort {
         response: oneshot::Sender<()>,
     },
     RecordConfirmedShare {
@@ -157,6 +124,7 @@ pub enum MetricsMessage {
 pub struct MetricsActor {
     metrics: PoolMetrics,
     receiver: mpsc::Receiver<MetricsMessage>,
+    worker_connections: HashMap<(String, String), usize>,
 }
 
 impl MetricsActor {
@@ -165,6 +133,7 @@ impl MetricsActor {
         Self {
             metrics: PoolMetrics::default(),
             receiver,
+            worker_connections: HashMap::with_capacity(INITIAL_USER_MAP_CAPACITY),
         }
     }
 
@@ -174,7 +143,11 @@ impl MetricsActor {
         receiver: mpsc::Receiver<MetricsMessage>,
     ) -> Result<Self, std::io::Error> {
         let metrics = PoolMetrics::load_existing(log_dir)?;
-        Ok(Self { metrics, receiver })
+        Ok(Self {
+            metrics,
+            receiver,
+            worker_connections: HashMap::with_capacity(INITIAL_USER_MAP_CAPACITY),
+        })
     }
 
     /// Start the actor's message handling loop
@@ -200,12 +173,8 @@ impl MetricsActor {
                 self.record_share_rejected();
                 let _ = response.send(());
             }
-            MetricsMessage::RecordBlockFound {
-                blockhash,
-                height,
-                response,
-            } => {
-                self.record_block_found(blockhash, height);
+            MetricsMessage::ResetBlockEffort { response } => {
+                self.reset_block_effort();
                 let _ = response.send(());
             }
             MetricsMessage::RecordConfirmedShare {
@@ -275,37 +244,11 @@ impl MetricsActor {
         self.metrics.rejected_total += 1;
     }
 
-    /// Record a bitcoin block found by the pool.
+    /// Reset the block effort accumulator after the pool finds a bitcoin
+    /// block, so work counts toward the next block.
     ///
-    /// Increments the monotonic counter, appends to the bounded ring of
-    /// recently found blocks (evicting the oldest past MAX_BLOCKS_FOUND_TRACKED).
-    /// Also resets the block effort accumulator since work now targets the
-    /// next block.
-    ///
-    /// A blockhash already present in the ring is ignored, so a share that is
-    /// re-promoted after a reorg does not double-count or reset effort twice.
-    fn record_block_found(&mut self, blockhash: String, height: u64) {
-        if self
-            .metrics
-            .blocks_found
-            .iter()
-            .any(|block| block.blockhash == blockhash)
-        {
-            return;
-        }
-        let timestamp = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        self.metrics.blocks_found_total += 1;
-        self.metrics.blocks_found.push_back(BlockFound {
-            blockhash,
-            height,
-            timestamp,
-        });
-        while self.metrics.blocks_found.len() > MAX_BLOCKS_FOUND_TRACKED {
-            self.metrics.blocks_found.pop_front();
-        }
+    /// The found block itself is recorded in the store, not here.
+    fn reset_block_effort(&mut self) {
         self.metrics.work_since_last_block = 0.0;
     }
 
@@ -319,6 +262,10 @@ impl MetricsActor {
     /// Increment worker counts - called after worker has authorised successfully.
     /// Uses entry().or_default() to preserve existing worker stats on reconnect.
     fn worker_authorized(&mut self, btcaddress: String, workername: String) {
+        *self
+            .worker_connections
+            .entry((btcaddress.clone(), workername.clone()))
+            .or_insert(0) += 1;
         let worker = self
             .metrics
             .users
@@ -332,13 +279,25 @@ impl MetricsActor {
     }
 
     /// Decrement pool wide worker counts, if worker found as authorised. Unauthorised workers are not counted.
-    /// Also marks Worker inactive, if found.
+    /// Keep a worker active until its last SV1 connection or SV2 channel closes.
     fn mark_worker_inactive(&mut self, btcaddress: Option<String>, workername: String) {
-        if let Some(btcaddress) = btcaddress
-            && let Some(user) = self.metrics.users.get_mut(&btcaddress)
-            && let Some(worker) = user.workers.get_mut(&workername)
-        {
-            worker.active = false;
+        if let Some(btcaddress) = btcaddress {
+            let identity = (btcaddress, workername);
+            let active = self
+                .worker_connections
+                .get_mut(&identity)
+                .is_some_and(|count| {
+                    *count = count.saturating_sub(1);
+                    *count > 0
+                });
+            if !active {
+                self.worker_connections.remove(&identity);
+            }
+            if let Some(user) = self.metrics.users.get_mut(&identity.0)
+                && let Some(worker) = user.workers.get_mut(&identity.1)
+            {
+                worker.active = active;
+            }
         }
     }
 
@@ -403,21 +362,16 @@ impl MetricsHandle {
         response_rx.await
     }
 
-    /// Record a bitcoin block found by the pool
-    pub async fn record_block_found(
-        &self,
-        blockhash: String,
-        height: u64,
-    ) -> Result<(), tokio::sync::oneshot::error::RecvError> {
+    /// Reset the block effort accumulator after the pool finds a bitcoin
+    /// block.
+    pub async fn reset_block_effort(&self) -> Result<(), tokio::sync::oneshot::error::RecvError> {
         let (response_tx, response_rx) = oneshot::channel();
         self.sender
-            .send(MetricsMessage::RecordBlockFound {
-                blockhash,
-                height,
+            .send(MetricsMessage::ResetBlockEffort {
                 response: response_tx,
             })
             .await
-            .expect("Error recording block found");
+            .expect("Error resetting block effort");
         response_rx.await
     }
 
@@ -558,6 +512,22 @@ mod tests {
     use crate::accounting::stats::pool_local_stats::save_pool_local_stats;
 
     #[test]
+    fn shared_worker_stays_active_until_the_last_connection_closes() {
+        let (_sender, receiver) = mpsc::channel(8);
+        let mut actor = MetricsActor::new(receiver);
+        actor.worker_authorized("miner".into(), "worker".into());
+        actor.worker_authorized("miner".into(), "worker".into());
+        actor.mark_worker_inactive(Some("miner".into()), "worker".into());
+        assert!(actor.metrics.users["miner"].workers["worker"].active);
+        actor.mark_worker_inactive(Some("miner".into()), "worker".into());
+        assert!(!actor.metrics.users["miner"].workers["worker"].active);
+        assert!(actor.worker_connections.is_empty());
+        actor.mark_worker_inactive(Some("miner".into()), "worker".into());
+        actor.worker_authorized("miner".into(), "worker".into());
+        assert!(actor.metrics.users["miner"].workers["worker"].active);
+    }
+
+    #[test]
     fn test_pool_metrics_default() {
         let metrics = PoolMetrics::default();
         assert!(metrics.lastupdate.is_none());
@@ -640,7 +610,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_confirmed_share_and_block_found_reset() {
+    async fn test_confirmed_share_and_block_effort_reset() {
         let log_dir = tempfile::tempdir().unwrap();
         let handle = start_metrics(log_dir.path().to_str().unwrap().to_string())
             .await
@@ -653,48 +623,11 @@ mod tests {
         let metrics = handle.get_metrics().await;
         assert_eq!(metrics.work_since_last_block, 750.0);
 
-        let _ = handle
-            .record_block_found(
-                "00000000000000000000abcdef0123456789abcdef0123456789abcdef012345".to_string(),
-                840000,
-            )
-            .await;
+        let _ = handle.reset_block_effort().await;
 
         let metrics = handle.get_metrics().await;
-        assert_eq!(metrics.blocks_found_total, 1);
-        assert_eq!(metrics.blocks_found.len(), 1);
-        let found = metrics.blocks_found.front().unwrap();
-        assert_eq!(
-            found.blockhash,
-            "00000000000000000000abcdef0123456789abcdef0123456789abcdef012345"
-        );
-        assert_eq!(found.height, 840000);
-        assert!(found.timestamp > 0);
         // Finding a block resets effort toward the next block.
         assert_eq!(metrics.work_since_last_block, 0.0);
-    }
-
-    #[tokio::test]
-    async fn test_blocks_found_ring_evicts_oldest() {
-        let log_dir = tempfile::tempdir().unwrap();
-        let handle = start_metrics(log_dir.path().to_str().unwrap().to_string())
-            .await
-            .unwrap();
-
-        let overflow = MAX_BLOCKS_FOUND_TRACKED as u64 + 5;
-        for height in 0..overflow {
-            let _ = handle
-                .record_block_found(format!("hash{height:064x}"), height)
-                .await;
-        }
-
-        let metrics = handle.get_metrics().await;
-        // Counter is monotonic and counts every find
-        assert_eq!(metrics.blocks_found_total, overflow);
-        // Ring is capped and holds only the most recent finds
-        assert_eq!(metrics.blocks_found.len(), MAX_BLOCKS_FOUND_TRACKED);
-        assert_eq!(metrics.blocks_found.front().unwrap().height, 5);
-        assert_eq!(metrics.blocks_found.back().unwrap().height, overflow - 1);
     }
 
     #[tokio::test]

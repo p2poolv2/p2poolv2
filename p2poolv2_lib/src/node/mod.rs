@@ -135,10 +135,11 @@ impl Node {
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let id_keys = libp2p::identity::Keypair::generate_ed25519();
 
-        let genesis_hash = ShareBlock::build_genesis_for_network(config.stratum.network)
+        let genesis_hash = crate::shares::bch_genesis::genesis_for_stratum(&config.stratum)
             .map_err(|error| -> Box<dyn Error> { error })?
             .block_hash();
-        let network_protocol = protocol_string(config.stratum.network, genesis_hash);
+        let network_protocol =
+            protocol_string(config.stratum.network, config.stratum.chain, genesis_hash);
 
         let behavior = match P2PoolBehaviour::new(&id_keys, &config, genesis_hash) {
             Ok(behavior) => behavior,

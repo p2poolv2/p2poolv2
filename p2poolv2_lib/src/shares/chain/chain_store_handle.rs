@@ -12,6 +12,7 @@ use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::store::block_tx_metadata::{BlockMetadata, Status};
 use crate::store::dag_store::{BlockValidSearch, ShareDag, UncleInfo};
+use crate::store::found_block::FoundBlock;
 use crate::store::transaction_store::PrevoutCheck;
 use crate::store::writer::{StoreError, StoreHandle};
 use bitcoin::{BlockHash, TxMerkleNode, Work};
@@ -374,6 +375,11 @@ impl ChainStoreHandle {
     /// Get total work from chain state
     pub fn get_total_work(&self) -> Result<Work, StoreError> {
         self.store_handle.get_total_work()
+    }
+
+    /// Get every bitcoin block found by the pool, ordered by bitcoin height.
+    pub fn get_found_blocks(&self) -> Result<Vec<FoundBlock>, StoreError> {
+        self.store_handle.get_found_blocks()
     }
 
     /// Get the confirmed blockhash at the height
@@ -915,6 +921,7 @@ mockall::mock! {
         pub fn get_shares_at_height(&self, height: u32) -> Result<HashMap<BlockHash, ShareBlock>, StoreError>;
         pub fn get_share_headers(&self, share_hashes: &[BlockHash]) -> Result<Vec<(BlockHash, ShareHeader)>, StoreError>;
         pub fn get_share_header(&self, share_hash: &BlockHash) -> Result<ShareHeader, StoreError>;
+        pub fn get_found_blocks(&self) -> Result<Vec<FoundBlock>, StoreError>;
         pub fn get_headers_for_locator(&self, block_hashes: &[BlockHash], stop_block_hash: &BlockHash, limit: usize) -> Result<Vec<ShareHeader>, StoreError>;
         pub fn get_blockhashes_for_locator(&self, locator: &[BlockHash], stop_block_hash: &BlockHash, max_blockhashes: usize) -> Result<Vec<BlockHash>, StoreError>;
         pub fn get_tip_height(&self) -> Result<Option<u32>, StoreError>;

@@ -7,10 +7,9 @@ use super::{ColumnFamily, Store, writer::StoreError};
 use crate::shares::chain::chain_store_handle::{COMMON_ANCESTOR_DEPTH, ConfirmedHeaderResult};
 use crate::shares::share_block::{ShareBlock, ShareHeader, is_terminal_blockhash};
 use crate::shares::validation::MAX_UNCLES;
-use bitcoin::WitnessProgram;
 use bitcoin::consensus::{self, Encodable, encode};
 use bitcoin::hashes::Hash;
-use bitcoin::{BlockHash, CompactTarget, Work};
+use bitcoin::{Address, BlockHash, CompactTarget, Work};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet, VecDeque};
 use tracing::{debug, warn};
@@ -50,14 +49,21 @@ pub struct ShareInfo {
     pub blockhash: BlockHash,
     pub prev_blockhash: BlockHash,
     pub height: u32,
-    pub miner_bitcoin_address: String,
+    /// Payout address, as the header stores it.
+    ///
+    /// Not rendered to text here: a Bitcoin Cash payout is held under the
+    /// legacy network whose base58 version bytes match, and only the API and
+    /// CLI layers know to spell it as CashAddr. Serializes as the address
+    /// string, as the header does.
+    #[serde(with = "crate::shares::address_serde")]
+    pub miner_bitcoin_address: Address,
     /// Miner address, as the witness program the header stores.
     ///
     /// Not the bech32m form: rendering that needs a network, and the store is
     /// network agnostic by design. The API and CLI layers hold the configured
     /// network and render it there.
-    #[serde(with = "p2poolv2_wallet::witness_program_codec::serde_hex")]
-    pub miner_address: WitnessProgram,
+    #[serde(with = "p2poolv2_wallet::share_owner::serde_hex")]
+    pub miner_address: p2poolv2_wallet::share_owner::ShareOwner,
     pub timestamp: u32,
     pub bits: CompactTarget,
     pub uncles: Vec<UncleInfo>,
@@ -68,11 +74,14 @@ pub struct ShareInfo {
 pub struct UncleInfo {
     pub blockhash: BlockHash,
     pub prev_blockhash: BlockHash,
-    pub miner_bitcoin_address: String,
+    /// Payout address, as the header stores it. See
+    /// [`ShareInfo::miner_bitcoin_address`].
+    #[serde(with = "crate::shares::address_serde")]
+    pub miner_bitcoin_address: Address,
     /// Miner address, as the witness program the header stores. See
     /// [`ShareInfo::miner_address`].
-    #[serde(with = "p2poolv2_wallet::witness_program_codec::serde_hex")]
-    pub miner_address: WitnessProgram,
+    #[serde(with = "p2poolv2_wallet::share_owner::serde_hex")]
+    pub miner_address: p2poolv2_wallet::share_owner::ShareOwner,
     pub timestamp: u32,
     pub height: Option<u32>,
 }
@@ -651,7 +660,7 @@ impl Store {
             .map(|(blockhash, header)| UncleInfo {
                 blockhash,
                 prev_blockhash: header.prev_share_blockhash,
-                miner_bitcoin_address: header.miner_bitcoin_address.to_string(),
+                miner_bitcoin_address: header.miner_bitcoin_address,
                 miner_address: header.miner_address,
                 timestamp: header.time,
                 height: metadata_map.get(&blockhash).copied(),
@@ -709,7 +718,7 @@ impl Store {
                 blockhash: *blockhash,
                 prev_blockhash: header.prev_share_blockhash,
                 height: *height,
-                miner_bitcoin_address: header.miner_bitcoin_address.to_string(),
+                miner_bitcoin_address: header.miner_bitcoin_address.clone(),
                 miner_address: header.miner_address,
                 timestamp: header.time,
                 bits: header.bits,
@@ -809,10 +818,10 @@ impl Store {
                         Ok(Some(header)) => (
                             header.prev_share_blockhash,
                             header.uncles.clone(),
-                            header.miner_bitcoin_address.to_string(),
+                            Some(header.miner_bitcoin_address),
                             Some(header.miner_address),
                         ),
-                        _ => (BlockHash::all_zeros(), vec![], "unknown".to_string(), None),
+                        _ => (BlockHash::all_zeros(), vec![], None, None),
                     };
 
                 let has_block_data = self.share_block_exists(blockhash);
@@ -849,13 +858,16 @@ pub struct DagEntry {
     pub chain: String,
     pub parent: BlockHash,
     pub uncles: Vec<BlockHash>,
-    pub miner_bitcoin_address: String,
+    /// Payout address, or `None` when the header could not be read. See
+    /// [`ShareInfo::miner_bitcoin_address`].
+    #[serde(with = "crate::shares::option_address_serde")]
+    pub miner_bitcoin_address: Option<Address>,
     /// Miner address, or `None` when the header could not be read.
     ///
     /// The witness program rather than the bech32m form: the store is network
     /// agnostic, so the API and CLI layers render it.
-    #[serde(with = "p2poolv2_wallet::witness_program_codec::serde_hex_option")]
-    pub miner_address: Option<WitnessProgram>,
+    #[serde(with = "p2poolv2_wallet::share_owner::serde_hex_option")]
+    pub miner_address: Option<p2poolv2_wallet::share_owner::ShareOwner>,
     pub has_block_data: bool,
 }
 
@@ -864,6 +876,7 @@ mod tests {
     use super::*;
     use crate::test_utils::TestShareBlockBuilder;
     use crate::test_utils::make_test_share_program;
+    use crate::test_utils::parse_address_from_string;
     use bitcoin::hashes::Hash;
     use p2poolv2_wallet::witness_program_codec::to_hex;
     use tempfile::tempdir;
@@ -4008,8 +4021,10 @@ mod tests {
             blockhash: BlockHash::all_zeros(),
             prev_blockhash: BlockHash::all_zeros(),
             height: 42,
-            miner_bitcoin_address: "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q".to_string(),
-            miner_address: make_test_share_program(1),
+            miner_bitcoin_address: parse_address_from_string(
+                "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q",
+            ),
+            miner_address: make_test_share_program(1).into(),
             timestamp: 1_700_000_000,
             bits: CompactTarget::from_consensus(0x1b4188f5),
             uncles: vec![],
@@ -4034,8 +4049,10 @@ mod tests {
         let uncle = UncleInfo {
             blockhash: BlockHash::all_zeros(),
             prev_blockhash: BlockHash::all_zeros(),
-            miner_bitcoin_address: "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string(),
-            miner_address: make_test_share_program(2),
+            miner_bitcoin_address: parse_address_from_string(
+                "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk",
+            ),
+            miner_address: make_test_share_program(2).into(),
             timestamp: 1_700_000_010,
             height: Some(41),
         };
@@ -4044,8 +4061,10 @@ mod tests {
             blockhash: BlockHash::all_zeros(),
             prev_blockhash: BlockHash::all_zeros(),
             height: 42,
-            miner_bitcoin_address: "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q".to_string(),
-            miner_address: make_test_share_program(1),
+            miner_bitcoin_address: parse_address_from_string(
+                "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q",
+            ),
+            miner_address: make_test_share_program(1).into(),
             timestamp: 1_700_000_020,
             bits: CompactTarget::from_consensus(0x1b4188f5),
             uncles: vec![uncle],
@@ -4061,8 +4080,10 @@ mod tests {
         let uncle = UncleInfo {
             blockhash: BlockHash::all_zeros(),
             prev_blockhash: BlockHash::all_zeros(),
-            miner_bitcoin_address: "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q".to_string(),
-            miner_address: make_test_share_program(2),
+            miner_bitcoin_address: parse_address_from_string(
+                "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q",
+            ),
+            miner_address: make_test_share_program(2).into(),
             timestamp: 1_700_000_005,
             height: Some(10),
         };
@@ -4086,8 +4107,10 @@ mod tests {
         let uncle = UncleInfo {
             blockhash: BlockHash::all_zeros(),
             prev_blockhash: BlockHash::all_zeros(),
-            miner_bitcoin_address: "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string(),
-            miner_address: make_test_share_program(2),
+            miner_bitcoin_address: parse_address_from_string(
+                "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk",
+            ),
+            miner_address: make_test_share_program(2).into(),
             timestamp: 1_700_000_005,
             height: None,
         };

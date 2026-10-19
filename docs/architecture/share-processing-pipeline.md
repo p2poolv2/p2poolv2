@@ -172,8 +172,8 @@ and `collect_spent_outputs` would fail on a block that is perfectly valid.
 
 Blocks below `prune_height` are exempt because their bodies are never fetched;
 requiring one would stall the chain permanently at the boundary. Spends cannot
-reach below it either: `min_coinbase_root_height` caps them one window back
-(`MAX_PPLNS_WINDOW_SHARES`) while bodies are retained for two (`PRUNE_DEPTH`).
+reach below it either: `min_coinbase_root_height` caps them one payout depth
+back (`PAYOUT_DEPTH`) while bodies are retained for two (`PRUNE_DEPTH`).
 
 ### OrganiseEvent::InvalidBlock(BlockHash)
 - **Purpose**: Record that a block failed pre-context validation
@@ -232,17 +232,19 @@ receiving the PPLNS payout from a found block's coinbase) and `miner_address`
 never derived from one another, and every stage below treats them separately:
 
 - `build_sharechain_coinbase_transaction` pays `miner_address`, so the share
-  coinbase and therefore `merkle_root` depend on it.
-- `validate_share_coinbase` rejects a share whose coinbase output 0 does not
-  pay the header's `miner_address`.
+  coinbase depends on it.
+- `validate_body_matches_header` rejects a block whose share coinbase is not
+  the one its header implies, so output 0 must pay the header's
+  `miner_address`.
 - The PPLNS window, `append_proportional_distribution` and
   `validate_bitcoin_payout` use `miner_bitcoin_address` only.
 
 `ShareCommitment::hash()` digests `miner_address` directly, together with
-`non_coinbase_root`, the root of the share's non-coinbase transactions. The
-share coinbase carries the bitcoin weak block hash, so it is unique per share
-and cannot be in the commitment; it is bound by being rebuilt during
-validation. See `docs/architecture/address-format.md`.
+`share_witness_root`, the BIP141 witness root of the share's non-coinbase
+transactions. The share coinbase carries the bitcoin weak block hash, so it is
+unique per share and cannot be in the commitment; with its payee and the
+witness root bound, it follows from the header. See
+`docs/architecture/address-format.md`.
 
 ### OrganiseWorker (`node/organise_worker.rs`)
 - Runs in dedicated tokio task, spawned by NodeActor
@@ -300,8 +302,8 @@ validation. See `docs/architecture/address-format.md`.
 | write_tx/rx | std::sync mpsc | unbounded | StoreHandle -> StoreWriter (serialized writes) |
 
 The organise channel and the organise worker's `pending_blocks` buffer both
-hold whole `ShareBlock`s, each bounded at `BLOCK_TXS_SIZE_LIMIT` (200 KB) by
-`handle_share_block`, so their capacities set the worst-case memory of the
+hold whole `ShareBlock`s, each bounded at `BLOCK_TXS_SIZE_LIMIT` (200 KB, the
+share transactions and the bitcoin coinbase together) by `handle_share_block`, so their capacities set the worst-case memory of the
 organise path -- 512 + 1024 entries, rather than the 8192 + 16384 they held
 before, which allowed several GB of bodies in flight. The channel is pure
 backpressure between the parallel validation tasks and the serial organise
@@ -388,7 +390,7 @@ Two of the prevout rules -- is the spent output's source on the confirmed chain,
 and is the output already spent -- are answered relative to whichever branch this
 node has confirmed, and a reorg changes both answers. `validate_prevouts` at
 ingest therefore does not judge them at all; it enforces only what the block
-itself fixes (the output exists, its coinbase root is within the payout window,
+itself fixes (the output exists, its coinbase root is within `PAYOUT_DEPTH`,
 a coinbase output is mature at this block's height, and no output is spent twice
 within the block), so its verdicts stay true under any reorg. Deciding the other
 two at ingest would mark a fork block `Invalid` for spending an output the
@@ -481,7 +483,7 @@ block that failed without a verdict").
 
 ### PPLNS zone tiering
 
-`is_in_pplns_zone(H, tip) = H > tip - MAX_PPLNS_WINDOW_SHARES` splits blocks
+`is_in_pplns_zone(H, tip) = H > tip - PAYOUT_DEPTH` splits blocks
 into two tiers, and `check_pplns_zone` is called independently by the
 validation worker (choosing full content validation vs PoW-only) and by the
 organise worker (choosing whether `validate_with_chain_context` runs).
@@ -500,7 +502,7 @@ it.
 sound.** The PPLNS window credits each share by the miner *bitcoin* address
 and difficulty in its *header*, which PoW validation already covers. A share's
 coinbase only matters if that share won a bitcoin block, and a block more than
-one window (~14 days at one share per 10s) below the tip has long since had any
+one payout depth (~14.7 days at one share per 10s) below the tip has long since had any
 such block settled on the bitcoin chain. This is the same trade as Bitcoin
 Core's `assumevalid`: old blocks are accepted on accumulated work rather than
 re-verified.
@@ -508,8 +510,8 @@ re-verified.
 **Because the tip moves between the two reads, a block can change tier
 mid-flight.** Exposure is `gap / 10s` per boundary block, where `gap` is the
 stage-1 to stage-2 latency. In steady state it is zero -- blocks are validated
-at `H ~ candidate_tip`, a full window above the boundary. It is systematic only
-for a node chronically ~1 window behind and syncing at roughly the network
+at `H ~ candidate_tip`, a full payout depth above the boundary. It is systematic only
+for a node chronically ~1 payout depth behind and syncing at roughly the network
 rate, whose frontier sits on the boundary. The organise channel bounds that
 gap: it is deliberately shallow (512) so a queued block waits behind at most a
 few hundred others rather than thousands.
@@ -541,6 +543,14 @@ Chain-context validation (`validate_bitcoin_payout` in
 window and checks it against the share's bitcoin merkle root. Success is what
 transitions a block from `HeaderValid` to `BlockValid`.
 
+The distribution is the one described in `payout-distribution.md`: skip the
+shares not yet mature for the paying share (`COINBASE_MATURITY`, with the first
+`COINBASE_MATURITY` shares of the chain always mature), then pay the next
+`PPLNS_WINDOW_SHARES` (120,960) shares, each weighted by its share difficulty.
+Both counts are fixed share counts with no node-local setting and no bitcoin
+difficulty in them. Every node must pay the same window, so they are network
+constants rather than config.
+
 The window is anchored on the share's declared `prev_share_blockhash`, not the
 live confirmed tip, via `PplnsWindow::get_distribution_from_start_hash`. The
 work-building path (notify) anchors the coinbase it hands to miners on the same
@@ -555,8 +565,8 @@ Resolving the window walks parent pointers back to a confirmed ancestor and:
   parent-gated, not because the walk itself checks;
 - returns an `Err` -- rather than a bootstrap or empty distribution -- on a
   store failure or an unresolvable anchor, so a transient read error cannot
-  silently misdirect the reward. The producer pays the bootstrap address only
-  for the explicit empty/genesis case (`PplnsWindow::is_empty`).
+  silently misdirect the reward. An empty window is an error too: the share
+  chain mode never pays the node-local bootstrap address.
 
 ### Header proof-of-work binding
 
@@ -566,6 +576,18 @@ coinbase. Without checking that binding, one bitcoin header -- and any real
 bitcoin block header meets every share target -- replays under unlimited share
 fields, each credited the work its declared `bits` claim.
 
+The rule: every field of `ShareHeader` is fixed by the proof of work, because
+`block_hash` covers every field and a free field would give one proof of work
+many share hashes. Each field is the bitcoin header itself, digested into the
+`ShareCommitment` (the bitcoin address's network class included), fixed by the
+coinbase tail (`bitcoin_height`, through the locktime), or the
+`coinbase_proof`, whose coinbase txid the bitcoin merkle root fixes. Data the
+proof of work fixes but a header cannot check -- the coinbase value, aux
+flags, extranonce, nanosecond timestamp and BIP141 witness commitment -- is
+not in the header: the `ShareBlock` carries the bitcoin coinbase itself, and
+payout validation divides that coinbase's own output total.
+`coinbase_proof.rs` has one test per header field.
+
 The binding is checkable from the header alone because of where the
 commitment sits. The bitcoin coinbase ends with
 `[padding output][OP_RETURN OP_PUSHBYTES_32 <commitment> output][locktime]`
@@ -574,17 +596,18 @@ witness commitment, whose pattern it does not match. The zero-padding output
 makes everything before the commitment output a whole number of SHA256 blocks.
 
 `ShareHeader.coinbase_proof` (`shares/coinbase_proof.rs`) carries the SHA256
-midstate of that prefix, its length, and `non_coinbase_root`. A verifier:
+midstate of that prefix, its length, and `share_witness_root`. A verifier:
 
-1. rebuilds the commitment from the header fields and `non_coinbase_root`;
+1. rebuilds the commitment from the header fields and `share_witness_root`;
 2. resumes SHA256 from the midstate over the commitment output and locktime,
    and hashes again, giving the coinbase txid;
 3. folds the coinbase merkle branch, giving the bitcoin merkle root, and
    requires it to match the bitcoin header.
 
 No body, store or PPLNS read is needed. The merkle root is fixed by the proof
-of work, so a forged proof would need a SHA256 collision. The genesis share is
-exempt, because its coinbase predates the share chain.
+of work, so a forged proof would need a SHA256 collision. Nothing is exempt:
+the genesis share, whose coinbase predates the share chain, has no proof, but
+it is built locally and never verified.
 
 `validate_coinbase_proof` runs:
 
@@ -592,8 +615,28 @@ exempt, because its coinbase predates the share chain.
 - at the block admission gate in `handle_share_block`, before buffering;
 - in `validate_share_block` and `validate_below_pplns_depth`.
 
-Both `validate_share_block` and `validate_below_pplns_depth` also check the
-proof's `non_coinbase_root` against the block's own transactions.
+The block body is not in the block hash, so it is checked against the header
+before it is stored. `validate_body_matches_header` runs at the admission gate
+and again in both validation paths, reading only the block itself:
+
+1. the non-coinbase transactions each appear once and have the proof's
+   `share_witness_root` (a repeated trailing transaction keeps a merkle root,
+   CVE-2012-2459);
+2. the share coinbase is the one the header implies
+   (`build_sharechain_coinbase_for_witness_root`);
+3. the bitcoin coinbase has the txid the proof gives
+   (`CoinbaseProof::coinbase_txid_for`) and no witness, which a txid does not
+   cover.
+
+A failure at the gate is a bad copy of the block, not a bad block: it is never
+stored, so the hash stays fetchable. After the gate the body is the one the
+proof of work fixes, and a later failure is the miner's. `validate_bitcoin_payout`
+reads the aux flags, extranonce, nanosecond timestamp, pool signature and
+witness commitment back out of the bitcoin coinbase
+(`parse_bitcoin_coinbase_fields`), rebuilds the coinbase from the PPLNS window,
+and requires the two to be equal. The pool signature is read rather than taken
+from this node's config because it is only a tag: nodes configured with
+different signatures must agree on every block.
 
 The coinbase merkle branch travels separately from the header, because shares
 mined on one template share a branch:
@@ -629,7 +672,7 @@ it to a stricter standard than the block itself. Tiering it is also what keeps
 this in step with the BlockReceiver's admission gate, which exempts uncles below
 `prune_height` because those bodies are never fetched: an uncle sits at most
 `MAX_UNCLES_DEPTH` below its nephew, so a nephew with an exempt uncle is a full
-window below the zone boundary and never reaches the check. Requiring the body
+payout depth below the zone boundary and never reaches the check. Requiring the body
 in both tiers left such a block admitted, stored, and permanently
 unvalidatable. An earlier rule -- "an uncle must not be on the confirmed
 chain" -- was removed for exactly this reason after it deadlocked nodes in the

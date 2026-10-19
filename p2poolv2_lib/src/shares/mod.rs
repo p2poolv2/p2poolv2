@@ -2,13 +2,17 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+pub mod auxpow;
+pub mod bch_coinbase;
+pub mod bch_genesis;
+pub mod bch_script;
+pub mod bch_sighash;
 pub mod chain;
 pub mod coinbase_proof;
-pub(crate) mod coinbaseaux_flags;
 pub(crate) mod compact_block;
-pub(crate) mod extranonce;
 pub mod genesis;
 pub mod handle_stratum_share;
+pub mod merge_mining;
 pub mod share_block;
 pub mod share_commitment;
 pub mod transactions;

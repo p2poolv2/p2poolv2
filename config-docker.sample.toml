@@ -49,26 +49,81 @@ solo_address = "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk"
 # miner_address = "sp2pool1..."
 # The bitcoin address to use for first jobs when there are no shares
 bootstrap_address = "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk"
-# Any donation amount for developers to be sent to donation address. Default no donation.
+# Any donation amount for developers to be sent to donation address.
+# On Bitcoin the default is no donation, and both fields must be set together.
+# On Bitcoin Cash (chain = "bitcoin-cash") the donation goes to the built-in
+# P2Poolv2 address bitcoincash:qze95tc2dqrnltvxfa5yhunwx5952f34fvw4g6365k
+# (same key under bchtest: and bchreg:), and the default is 150 basis points
+# (1.5%) of each block this node finds. Set donation to raise or lower it, or
+# to 0 to opt out. donation_address may be left out there; if set it must be
+# that same address, because the share chain rejects a Bitcoin Cash donation
+# paid anywhere else.
 # donation_address = "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk"
-# In basis points, 1% = 100 basis points. Default 0
+# In basis points, 1% = 100 basis points. Default 0 on Bitcoin, 150 on Bitcoin Cash
 # donation = 0
 # Any fee amount for node/hydrapool provider to be sent to fee address. Default no fee.
+# This is where a public pool operator takes their own cut. It is taken after
+# the donation. On Bitcoin Cash, donation plus fee may not exceed 1000 basis
+# points (10%); peers reject shares above that.
 # fee_address = "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk"
 # In basis points, 1% = 100 basis points. Default 0
 # fee = 0
 zmqpubhashblock = "tcp://bitcoind:28332"
-# The network can be "main", "testnet4" or "signet"
+# Block chain for templates and payout scripts. Default "bitcoin".
+# "bitcoin-cash" fetches BCHN templates without SegWit rules and requires
+# CashAddr payout addresses. A configured miner_address on that chain is a
+# CashAddr share address (p2pool, tp2pool, or rp2pool), not a payout address.
+# chain = "bitcoin"
+# Required with chain = "bitcoin-cash": "mainnet", "chipnet", or "regtest".
+# bitcoin_cash_network = "chipnet"
+# Main or mini Bitcoin Cash share chain. Default "main". "mini" is rejected
+# unless chain is "bitcoin-cash". Mini's share target is 256 times easier.
+# bch_share_chain = "main"
+# Stratum V2 listen port. Absent means the node does not open an SV2 socket.
+# Local frames are unencrypted, so keep it on localhost or a trusted LAN.
+# A Mining connection opens standard or extended channels with
+# user_identity "<payout address>.<worker>"; its shares belong to
+# miner_address. Without miner_address, a miner appends its own share
+# address as in the SV1 password: "<payout address>.<worker>,p2p=<address>".
+# Job Declaration connections are served too. Bitcoin Cash jobs include one
+# AuxPoW output.
+# sv2_port = 3336
+# Noise encryption for Stratum V2, signed by your authority key. Set both
+# keys, in the Stratum V2 reference implementation's text form, to require
+# the encrypted handshake on every SV2 connection; miners pin the public key.
+# Make the keys with an external tool (this node never generates keys) and
+# prefer the env var P2POOL__STRATUM__SV2_AUTHORITY_SECRET_KEY for the secret.
+# sv2_authority_public_key = "9b..."
+# sv2_authority_secret_key = "..."
+# Seconds each Noise certificate stays valid. Default 3600.
+# sv2_cert_validity_secs = 3600
+# Where block templates come from. Default "rpc": getblocktemplate from the
+# node in [bitcoinrpc]. "sv2" takes them from a Stratum V2 Template Provider
+# (Template Distribution Protocol), on chain = "bitcoin-cash" only, and sends
+# found blocks back to it; [bitcoinrpc] is still required, to check each
+# template's parent, validate shares and take blocks the provider cannot.
+# template_source = "rpc"
+# HOST:PORT of the Template Provider, with template_source = "sv2".
+# template_provider_address = "127.0.0.1:8442"
+# The provider's authority public key (same text form as above). Pinning it
+# runs the Noise handshake; it is required unless the provider is on this
+# computer (a loopback address).
+# template_provider_authority_public_key = "9b..."
+# The share-chain network can be "main", "testnet4" or "signet"
+# On Bitcoin Cash it is ignored and derived from bitcoin_cash_network.
 network = "signet"
 # Use BIP 323 mask for version rolling (see https://github.com/bitcoin/bips/blob/622e47722cd35514e96da37ae89f868e18d581e4/bip-0323.mediawiki#specification)
 version_mask = "1fffffe0"
-# The difficulty multiplier defines the window size for calculating payout proportions
-# See https://github.com/p2poolv2/p2poolv2/wiki/Difficult-Multiplier on how to choose this
-difficulty_multiplier = 1.0
+# The PPLNS payout window is fixed for the network, not configured: each
+# coinbase pays the last 120,960 shares (about two weeks at the 10 second
+# share target), weighted by share difficulty.
 # Add a pool signature, if you want. Comment out the line if you want
 # to mine anonymous blocks. This signature is only used to show others
 # how large your pool is, if you are running private, there is no need
 # to add a pool signature. Maximum length 16 bytes.
+# It only tags the coinbases this node builds. It is not part of consensus:
+# peers read each block's signature from its own coinbase, so nodes with
+# different signatures, or none, still accept each other's shares.
 pool_signature = "P2Poolv2"
 
 [bitcoinrpc]

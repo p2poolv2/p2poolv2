@@ -4,21 +4,23 @@
 
 //! Benchmarks for PplnsWindow update and accumulate_weighted_difficulty.
 //!
-//! Fills the PPLNS window to its maximum capacity (120,960 confirmed entries)
-//! with 10% uncle ratio, then benchmarks both operations.
+//! Fills the PPLNS window to its payout depth (maturity skip plus window,
+//! 127,008 confirmed entries) with 10% uncle ratio, then benchmarks both
+//! operations.
 
 use bitcoin::BlockHash;
 use bitcoin::CompressedPublicKey;
 use bitcoin::hashes::Hash;
 use criterion::{Criterion, criterion_group, criterion_main};
-use p2poolv2_lib::accounting::payout::sharechain_pplns::pplns_window::PplnsWindow;
+use p2poolv2_lib::accounting::payout::sharechain_pplns::pplns_window::{PAYOUT_DEPTH, PplnsWindow};
 use p2poolv2_lib::test_utils::{
     PUBKEY_2G, PUBKEY_3G, PUBKEY_4G, PUBKEY_5G, PUBKEY_G, setup_test_chain_store_handle,
 };
 use std::hint::black_box;
 
-/// Total confirmed shares to fill the window (MAX_PPLNS_WINDOW_SHARES).
-const TOTAL_CONFIRMED_SHARES: usize = 120960;
+/// Total confirmed shares to fill the window: the full payout walk from the
+/// tip covers the maturity skip and the window.
+const TOTAL_CONFIRMED_SHARES: usize = PAYOUT_DEPTH;
 
 /// Every Nth confirmed share references one uncle, yielding ~10% uncles.
 const UNCLE_INTERVAL: usize = 10;
@@ -102,11 +104,19 @@ fn bench_get_distribution_from_start_hash(criterion: &mut Criterion) {
     // populate_for_benchmark pushes newest-to-oldest, so index 0 is the tip.
     let tip = blockhash_from_index(0);
 
+    // The window is the fixed Bitcoin one, which does not read the paying
+    // block's difficulty.
+    let paying_block_difficulty = 1;
+
     criterion.bench_function("get_distribution_from_start_hash_full_window", |bencher| {
         bencher.iter(|| {
             black_box(
                 window
-                    .get_distribution_from_start_hash(u128::MAX, tip, &chain_store_handle)
+                    .get_distribution_from_start_hash(
+                        tip,
+                        paying_block_difficulty,
+                        &chain_store_handle,
+                    )
                     .expect("tip should be in window"),
             );
         });

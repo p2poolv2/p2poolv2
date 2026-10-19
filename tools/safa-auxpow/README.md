@@ -1,0 +1,158 @@
+# Experimental SAFA AuxPoW covenant
+
+This is a working AuxPoW variant of [2qx's SAFA draft](https://bitcoincashresearch.org/t/safas-a-sha256-asic-minable-automated-token-market/2123).
+It is a reference covenant and adapter for this BCH port, not the author's
+published token or a production deployment. The mining branch verifies the
+shared P2Pool proof inside the BCH 2026 VM; the market branch retains the
+unchanged-baton constant-product rule.
+
+`safa.cash` compiles with pinned Libauth `3.1.0-next.8`. Its redeem script is
+839 bytes, with raw SHA256d hash
+`41487c18c5644504dd4c13015739131d21cac3b0961ffd05a5d1d7f02bc7e3da`.
+The output is P2SH32. The existing Rust node and `AuxPowProof` representation
+are unchanged; JavaScript supplies the BCH VM and token adapter.
+
+```sh
+npm ci --ignore-scripts
+npm test
+node cli.mjs work state.json
+node cli.mjs unlock proof.json 71
+```
+
+The work input has `category` (display-order hex), `previous_baton` (80 bytes
+of hex), recipient locking bytecode as `recipient` hex, integer `age`, Unix
+`timestamp`, and `nonce`. The result includes the next baton, expected work,
+target and covenant bytecode. Add its `work` object to a selection consumed
+by `p2poolv2_cli bch-auxpow build`. Declare the resulting commitment under
+the [BCH JD contract](../../docs/bch-job-declaration.md).
+The unlock command takes the full Rust proof JSON and prints scriptSig hex.
+Both commands read public data only, bounded to 1 MiB per input file.
+
+## Variant rules
+
+The baton keeps the draft's 80-byte layout: scalar (4), previous baton hash
+(32), recipient locking-bytecode hash (32), timestamp (4), compact target
+(4) and nonce (4). Integers are little endian; hashes here are raw digest
+bytes. The covenant requires a mutable NFT and exact 80-byte commitments.
+Every invocation returns the same category, mutable capability and covenant
+at output `active_input_index`.
+
+For mining, the payout is at output `input_count + active_input_index`.
+These two output ranges are disjoint across all inputs, including batches.
+The token reward is exactly `floor(input_tokens / 420000)`, must be positive,
+and has the vault category. The continuation keeps exactly the remainder.
+The vault can contribute at most 1,500 satoshis; additional fees may use a
+sponsor input. The next baton binds that payout's locking bytecode. Its
+timestamp cannot decrease, and CLTV enforces it. CSV enforces the claimed
+block age (`0 <= age < 65535`) on a version-2 transaction.
+
+The next target is the previous decoded target multiplied by
+`(floor(age * 5000 / 71) + 5000) / 10000`, with integer division. Clamp to
+`[1, 2^256 - 1]`, encode canonically as Bitcoin compact, then decode that
+rounded target for the PoW comparison. Negative, zero, overflowing and
+noncanonical compact encodings are rejected. Hash-to-integer conversion
+appends a zero sign byte, fixing the draft's signed comparison issue.
+
+The work leaf is:
+
+```text
+SHA256d("BCH-SAFA-AUXPOW-V1\0" || category_wire_bytes ||
+        SHA256d(UTXO_locking_bytecode) || SHA256d(previous_baton) ||
+        SHA256d(next_baton))
+```
+
+The ASCII domain is 19 bytes, including its NUL terminator. Category wire
+bytes are the reverse of a displayed token category. The chain id is the
+first four raw leaf bytes interpreted as unsigned little endian. This lets
+several threads from the same token participate with distinct work ids.
+Slot collisions use the shared tree builder's growth and rejection rules.
+
+The covenant parses the complete version-2 coinbase, including its unique
+null input, bounded scriptSig, canonical CompactSize fields and all outputs.
+It requires exactly one canonical, zero-value auxiliary output. It derives
+the slot and exact branch depth from that output, folds the auxiliary and
+coinbase paths, and compares the parent hash to its state-derived target.
+The parent header's own `nBits` cannot choose the token's target.
+
+Market/oracle spends keep the baton identical and enforce
+`(output_cash + virtual_cash) * output_tokens >=
+(input_cash + virtual_cash) * input_tokens`.
+This variant uses the linked executable template's `scalar * 10000000`
+virtual reserve; the forum narrative's `1000000` multiplier differs. That
+economic parameter needs agreement before any real SAFA issuance.
+
+The permissionless market path also accepts a zero-change self-cycle: it
+preserves the vault's satoshis, tokens, locking bytecode and baton exactly,
+while a sponsor input pays the fee. No AuxPoW or relative age is required
+for that market spend. A standard BCH 2026 VM regression accepts this shape
+with a 1,000-satoshi sponsor fee and verifies that it replaces the outpoint.
+The unchanged state still accepts the same mining proof when its claimed
+age is supported by the input sequence; this does not make that replacement
+output mature on the chain.
+
+Once such a transaction confirms, the replacement UTXO's relative age
+starts again. A mining transaction prepared against the spent outpoint
+loses that input; using its age-71 proof against the replacement requires
+waiting for that output to mature. Mining with a smaller claimed age needs
+work for its newly adjusted target; age zero halves the previous target
+before the existing clamp and compact rounding.
+Repeated public self-cycles can therefore delay mining or push miners
+toward harder work without taking vault funds. This is a liveness and
+economic property of the retained market rules. Its policy remains open.
+The regression checks VM rules and transaction structure, not source-output
+creation heights or a confirmed chain attack. No live self-cycle was
+broadcast as part of this check.
+
+The complete scriptSig, including redeem script, must fit 10,000 bytes.
+Both maximum-depth branches (30 auxiliary, 25 coinbase) pass the standard VM.
+Large pool coinbases may exceed the remaining budget and are refused by the
+adapter. This does not claim full parent-block validity or chain membership.
+As in the draft, initially identical threads must have distinct randomized
+batons; a mutable NFT category alone does not establish unique thread state.
+
+## Regtest evidence and reproduction
+
+On 2026-10-17 two isolated BCHN 29.2.0 nodes accepted P2Pool JD blocks 173
+and 174 through the actual listener and authenticated Noise connections.
+The Full-Template proof covered two work items; Coinbase-Only selected just
+SAFA. Both passed the Rust verifier and the covenant VM.
+
+The baton requires 74 blocks. At tip 174, BCHN rejected the signed withdrawal
+with `non-BIP68-final`. The identical transaction passed at tip 175 and both
+nodes accepted it in block 176, continuing 419,999,000 tokens and paying 1,000.
+Its txid is `d1d879194e1ca5df8a2dad35ebdf6436841b903a29ad6a3e484beb47d05c79be`,
+in block `4aa8b6848906eba9df5d8293e08e00a047812f43b1003c569a3fdafbeda46d2e`.
+Its scriptSig is 1,266 bytes; the two-level Full-Template proof uses 1,330.
+The transaction paid 5,000 satoshis in fees with a sponsor input reserved
+against selection by the JD wallet payments. BCHN rejected a changed Merkle
+sibling. Public transaction/proof bytes and maturity results in
+`test_data/regtest-withdrawal.json` are replayed by the offline VM tests,
+including the BCHN-signed sponsor input. The VM checks scripts and signatures;
+the BCHN run establishes actual chain maturity.
+
+Use two disposable, connected regtest nodes and the funded `jd-regtest`
+wallet from [the JD test setup](../../docs/bch-job-declaration.md#two-node-bchn-regtest-check).
+The opt-in harness refuses other chains and non-loopback endpoints. It
+creates test tokens and spends regtest wallet funds; it never reads keys.
+In PowerShell from the repository root:
+
+```powershell
+$env:BCHN_JD_CLIENT_RPC = 'http://127.0.0.1:19453'
+$env:BCHN_JD_POOL_RPC = 'http://127.0.0.1:19455'
+$safaEvidence = Join-Path $env:TEMP ('safa-auxpow-' + (Get-Date -Format yyyyMMdd-HHmmss))
+node tools/safa-auxpow/live-regtest.mjs prepare $safaEvidence
+$env:BCHN_JD_AUXILIARY_WORK = Join-Path $safaEvidence 'work.json'
+cargo nextest run -p p2poolv2_lib --run-ignored ignored-only -E 'test(bchn_declared_jobs_reach_both_real_nodes_over_noise)' --nocapture *> "$safaEvidence/jd.log"
+$records = Get-Content "$safaEvidence/jd.log" | Where-Object { $_.StartsWith('{"auxiliary_chains"') } | ConvertFrom-Json
+$records[1].auxpow_proof | ConvertTo-Json -Depth 30 | Set-Content "$safaEvidence/proof.json"
+node tools/safa-auxpow/live-regtest.mjs spend $safaEvidence "$safaEvidence/proof.json"
+Remove-Item Env:BCHN_JD_AUXILIARY_WORK
+```
+
+The harness prepares a baton requiring 74 blocks and mines 71 blocks. Run
+exactly the two JD blocks next. The spend command verifies `non-BIP68-final`
+one block before maturity, mines that block, and requires the identical signed
+transaction to pass. It preserves both results, state, genesis, candidate
+withdrawal and final evidence in the new directory. Stop only the disposable
+nodes you started. This is local regtest validation. Chipnet issuance, independent review of the new
+covenant and compatibility with a final SAFA specification remain open.

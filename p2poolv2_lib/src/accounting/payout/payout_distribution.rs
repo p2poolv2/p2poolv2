@@ -22,6 +22,11 @@ use std::error::Error;
 /// chain data.
 #[cfg_attr(test, mockall::automock)]
 pub trait PayoutDistribution {
+    /// Snapshot used by declared jobs to split a miner-selected fee revenue.
+    fn pplns_weights(&self) -> Option<HashMap<Address, u128>> {
+        None
+    }
+
     /// Fill distribution according to the the Payout mechanism.  The
     /// donation and fees amount have already been filled by the trait
     /// common implementation of get_outpoint_distribution
@@ -31,7 +36,7 @@ pub trait PayoutDistribution {
         distribution: &mut Vec<OutputPair>,
         chain_store_handle: &ChainStoreHandle,
         anchor: BlockHash,
-        total_difficulty: u128,
+        bitcoin_difficulty: u128,
         total_amount: bitcoin::Amount,
         remaining_total_amount: Amount,
         bootstrap_address: Address,
@@ -45,7 +50,12 @@ pub trait PayoutDistribution {
     ///   passes the same tip it commits as `prev_share_blockhash`, so the
     ///   window it pays matches the one the validator reconstructs from
     ///   that prev, closing the read-tip-vs-payout-tip race.
-    /// * `total_difficulty` - Target cumulative difficulty to collect shares for
+    /// * `bitcoin_difficulty` - Difficulty of the bitcoin block being paid for,
+    ///   from the bits of the template the job is built on (see
+    ///   `bitcoin_block_difficulty`). Hydrapool's time-window PPLNS uses it as
+    ///   its window target. The share chain window uses it on Bitcoin Cash, to
+    ///   hold `BCH_PPLNS_WINDOW_BLOCKS` blocks' worth of work, and ignores it
+    ///   on Bitcoin, where the window is `PPLNS_WINDOW_SHARES` mature shares.
     /// * `total_amount` - Total bitcoin amount to distribute among contributors
     ///
     /// # Returns
@@ -54,7 +64,7 @@ pub trait PayoutDistribution {
         &mut self,
         chain_store_handle: &ChainStoreHandle,
         anchor: BlockHash,
-        total_difficulty: u128,
+        bitcoin_difficulty: u128,
         total_amount: bitcoin::Amount,
         config: &StratumConfig<crate::config::Parsed>,
     ) -> Result<Vec<OutputPair>, Box<dyn Error + Send + Sync>> {
@@ -77,7 +87,7 @@ pub trait PayoutDistribution {
             &mut distribution,
             chain_store_handle,
             anchor,
-            total_difficulty,
+            bitcoin_difficulty,
             total_amount,
             remaining_total_amount,
             config.bootstrap_address().clone(),
@@ -86,7 +96,36 @@ pub trait PayoutDistribution {
     }
 }
 
-/// Appends new output pair to distribution and returns remaining amount
+/// Apply donation, operator fee and the exact share-chain difficulty weights.
+pub(crate) fn build_pplns_outputs(
+    value: u64,
+    weights: &HashMap<Address, u128>,
+    donation_address: &Option<Address>,
+    donation: Option<u16>,
+    fee_address: &Option<Address>,
+    fee: Option<u16>,
+) -> Result<Vec<OutputPair>, Box<dyn Error + Send + Sync>> {
+    if weights.is_empty() {
+        return Err("Can't build output from empty distribution. There should be at least one payout address".into());
+    }
+    let mut outputs = Vec::with_capacity(weights.len() + 2);
+    let remaining = include_address_and_cut(
+        &mut outputs,
+        Amount::from_sat(value),
+        donation_address,
+        donation,
+    );
+    let remaining = include_address_and_cut(&mut outputs, remaining, fee_address, fee);
+    append_proportional_distribution(weights, remaining, &mut outputs)?;
+    Ok(outputs)
+}
+
+/// Appends new output pair to distribution and returns remaining amount.
+///
+/// A cut above 10,000 basis points would take more than `total_amount`; it is
+/// skipped with a warning instead of underflowing. Config parsing and share
+/// validation both reject such a cut first, so this only guards a caller
+/// that bypassed them, such as a header decoded from a peer.
 pub(crate) fn include_address_and_cut(
     distribution: &mut Vec<OutputPair>,
     total_amount: bitcoin::Amount,
@@ -97,11 +136,16 @@ pub(crate) fn include_address_and_cut(
     if let (Some(addr), Some(cut_bp)) = (address.as_ref(), cut.filter(|c| *c > 0)) {
         if let Some(amount) = total_amount.checked_mul(cut_bp.into()) {
             if let Some(div_amount) = amount.checked_div(BASIS_POINT_FACTOR) {
-                distribution.push(OutputPair {
-                    address: addr.clone(),
-                    amount: div_amount,
-                });
-                return total_amount - div_amount;
+                if let Some(remaining) = total_amount.checked_sub(div_amount) {
+                    distribution.push(OutputPair {
+                        address: addr.clone(),
+                        amount: div_amount,
+                    });
+                    return remaining;
+                }
+                tracing::warn!(
+                    "cut of {cut_bp} basis points exceeds total_amount: {total_amount:?}"
+                );
             } else {
                 tracing::warn!("checked_div failed for amount: {amount:?}");
             }
@@ -163,6 +207,34 @@ pub(crate) fn append_proportional_distribution(
 mod tests {
     use super::*;
     use crate::test_utils::parse_address_from_string;
+
+    #[test]
+    fn a_cut_above_one_hundred_percent_is_skipped_instead_of_underflowing() {
+        let address = parse_address_from_string("bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq");
+        let mut distribution = Vec::with_capacity(1);
+        let remaining = include_address_and_cut(
+            &mut distribution,
+            bitcoin::Amount::from_sat(100_000),
+            &Some(address),
+            Some(10_001),
+        );
+        assert_eq!(remaining, bitcoin::Amount::from_sat(100_000));
+        assert!(distribution.is_empty());
+    }
+
+    #[test]
+    fn a_full_cut_takes_everything() {
+        let address = parse_address_from_string("bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq");
+        let mut distribution = Vec::with_capacity(1);
+        let remaining = include_address_and_cut(
+            &mut distribution,
+            bitcoin::Amount::from_sat(100_000),
+            &Some(address),
+            Some(10_000),
+        );
+        assert_eq!(remaining, bitcoin::Amount::ZERO);
+        assert_eq!(distribution[0].amount, bitcoin::Amount::from_sat(100_000));
+    }
 
     #[test]
     fn test_create_proportional_distribution() {

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_GHCR="ghcr.io/${GITHUB_REPOSITORY}"
-REPO_DH="docker.io/${GITHUB_REPOSITORY}"
+REPO_GHCR="ghcr.io/${GITHUB_REPOSITORY,,}"
+REPO_DH="docker.io/${GITHUB_REPOSITORY,,}"
 
 TAGS_GHCR="${REPO_GHCR}:${IMAGE_SHA}"
 TAGS_DH="${REPO_DH}:${IMAGE_SHA}"

@@ -38,6 +38,8 @@ impl std::ops::Add<u64> for JobId {
 /// Capture job details to be used when reconstructing the block from a submitted job.
 #[derive(Debug, Clone)]
 pub struct JobDetails {
+    /// False for private Coinbase-only jobs: only the declarator can broadcast.
+    pub block_available: bool,
     pub blocktemplate: Arc<BlockTemplate>,
     pub coinbase1: String,
     pub coinbase2: String,
@@ -86,9 +88,10 @@ impl JobTracker {
         template_merkle_branches: Vec<bitcoin::TxMerkleNode>,
         job_id: JobId,
     ) -> JobId {
-        self.job_details.insert(
+        self.insert_job_details(
             job_id,
             JobDetails {
+                block_available: true,
                 blocktemplate: block_template,
                 coinbase1,
                 coinbase2,
@@ -101,9 +104,14 @@ impl JobTracker {
                 template_merkle_branches,
             },
         );
+        job_id
+    }
+
+    /// Install a fully validated job and initialize its duplicate tracking.
+    pub(crate) fn insert_job_details(&self, job_id: JobId, details: JobDetails) {
+        self.job_details.insert(job_id, details);
         self.job_shares
             .insert(job_id, Vec::with_capacity(EXPECTED_SHARES_PER_JOB));
-        job_id
     }
 
     /// Get the next job id, incrementing it atomically

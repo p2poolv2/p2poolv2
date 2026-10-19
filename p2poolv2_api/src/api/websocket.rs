@@ -17,7 +17,9 @@ use axum::{
     response::Response,
 };
 use bitcoin::Network;
-use p2poolv2_lib::address::witness_program_codec::to_address_string;
+use p2poolv2_lib::address::bch_share::BchShareNetwork;
+use p2poolv2_lib::address::share_owner::to_address_string;
+use p2poolv2_lib::address_display::payout_address_string;
 use p2poolv2_lib::monitoring_events::{MonitoringEvent, MonitoringEventSender};
 use serde::Deserialize;
 use serde_json::Value;
@@ -82,31 +84,57 @@ pub(crate) async fn websocket_handler(
 
     let monitoring_event_sender = state.monitoring_event_sender.clone();
     let network = state.app_config.network;
-    Ok(upgrade.on_upgrade(move |socket| handle_socket(socket, monitoring_event_sender, network)))
+    let cash_network = state.app_config.cash_network;
+    Ok(upgrade.on_upgrade(move |socket| {
+        handle_socket(socket, monitoring_event_sender, network, cash_network)
+    }))
 }
 
 /// Serialize a monitoring event for the wire, rendering miner addresses in
-/// bech32m for the pool's configured network.
+/// bech32m for the pool's configured network, and payout addresses as
+/// CashAddr on a Bitcoin Cash node.
 ///
 /// A `ShareInfo` carries the miner address as a bare witness program, because the
 /// store that builds it is network agnostic. This is the layer that knows the
-/// network, so it is the one that can render the bech32m form.
+/// network, so it is the one that can render the bech32m form. Its payout
+/// address serializes in Bitcoin's spelling, which on a Bitcoin Cash node is
+/// the right key hash under the wrong prefix.
 ///
-/// The miner address fields are overwritten on the serialized value, from the typed
-/// event rather than by parsing the hex back, so no round trip is involved.
+/// The address fields are overwritten on the serialized value, from the typed
+/// event rather than by parsing the strings back, so no round trip is involved.
 /// Mirroring `ShareInfo` in a second struct would be the alternative, and it
 /// would silently drop any field added to `ShareInfo` later; this carries new
 /// fields through untouched and rewrites only what needs the network.
-fn event_to_json(event: &MonitoringEvent, network: Network) -> Result<String, serde_json::Error> {
+fn event_to_json(
+    event: &MonitoringEvent,
+    network: Network,
+    cash_network: Option<BchShareNetwork>,
+) -> Result<String, serde_json::Error> {
     let mut value = serde_json::to_value(event)?;
 
     if let MonitoringEvent::Share(share) = event
         && let Some(data) = value.get_mut("data")
     {
-        data["miner_address"] = Value::String(to_address_string(&share.miner_address, network));
+        data["miner_address"] = Value::String(to_address_string(
+            &share.miner_address,
+            network,
+            cash_network,
+        ));
+        data["miner_bitcoin_address"] = Value::String(payout_address_string(
+            &share.miner_bitcoin_address,
+            cash_network,
+        ));
         for (index, uncle) in share.uncles.iter().enumerate() {
-            data["uncles"][index]["miner_address"] =
-                Value::String(to_address_string(&uncle.miner_address, network));
+            let rendered_uncle = &mut data["uncles"][index];
+            rendered_uncle["miner_address"] = Value::String(to_address_string(
+                &uncle.miner_address,
+                network,
+                cash_network,
+            ));
+            rendered_uncle["miner_bitcoin_address"] = Value::String(payout_address_string(
+                &uncle.miner_bitcoin_address,
+                cash_network,
+            ));
         }
     }
 
@@ -122,6 +150,7 @@ async fn handle_socket(
     mut socket: WebSocket,
     monitoring_event_sender: MonitoringEventSender,
     network: Network,
+    cash_network: Option<BchShareNetwork>,
 ) {
     let mut event_receiver = monitoring_event_sender.subscribe();
     let mut subscriptions: HashSet<Topic> = HashSet::with_capacity(TOPIC_COUNT);
@@ -150,7 +179,7 @@ async fn handle_socket(
                 match event_result {
                     Ok(event) => {
                         if event_matches_subscriptions(&event, &subscriptions) {
-                            match event_to_json(&event, network) {
+                            match event_to_json(&event, network, cash_network) {
                                 Ok(json) => {
                                     if socket.send(Message::Text(json.into())).await.is_err() {
                                         debug!("WebSocket send failed, closing connection");
@@ -210,9 +239,11 @@ fn handle_client_message(text: &str, subscriptions: &mut HashSet<Topic>) {
 mod tests {
     use super::*;
     use bitcoin::hashes::Hash;
+    use p2poolv2_lib::address::share_owner::ShareOwner;
+    use p2poolv2_lib::address::witness_program_codec::to_address_string as witness_to_address_string;
     use p2poolv2_lib::monitoring_events::create_monitoring_event_channel;
     use p2poolv2_lib::store::dag_store::{ShareInfo, UncleInfo};
-    use p2poolv2_lib::test_utils::make_test_share_program;
+    use p2poolv2_lib::test_utils::{make_test_share_program, parse_address_from_string};
 
     #[test]
     fn test_parse_topic_valid() {
@@ -235,8 +266,10 @@ mod tests {
             blockhash: bitcoin::BlockHash::all_zeros(),
             prev_blockhash: bitcoin::BlockHash::all_zeros(),
             height: 1,
-            miner_bitcoin_address: "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q".to_string(),
-            miner_address: make_test_share_program(1),
+            miner_bitcoin_address: parse_address_from_string(
+                "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q",
+            ),
+            miner_address: make_test_share_program(1).into(),
             timestamp: 0,
             bits: bitcoin::CompactTarget::from_consensus(0x1d00ffff),
             uncles: vec![],
@@ -315,8 +348,10 @@ mod tests {
             blockhash: bitcoin::BlockHash::all_zeros(),
             prev_blockhash: bitcoin::BlockHash::all_zeros(),
             height: 42,
-            miner_bitcoin_address: "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q".to_string(),
-            miner_address: make_test_share_program(1),
+            miner_bitcoin_address: parse_address_from_string(
+                "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q",
+            ),
+            miner_address: make_test_share_program(1).into(),
             timestamp: 1000,
             bits: bitcoin::CompactTarget::from_consensus(0x1d00ffff),
             uncles: vec![],
@@ -327,7 +362,7 @@ mod tests {
         let received = receiver.recv().await.unwrap();
         assert!(event_matches_subscriptions(&received, &subscriptions));
 
-        let json = event_to_json(&received, Network::Signet).unwrap();
+        let json = event_to_json(&received, Network::Signet, None).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed["topic"], "Share");
         assert_eq!(parsed["data"]["height"], 42);
@@ -349,8 +384,10 @@ mod tests {
         let uncle = UncleInfo {
             blockhash: bitcoin::BlockHash::all_zeros(),
             prev_blockhash: bitcoin::BlockHash::all_zeros(),
-            miner_bitcoin_address: "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q".to_string(),
-            miner_address: make_test_share_program(2),
+            miner_bitcoin_address: parse_address_from_string(
+                "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q",
+            ),
+            miner_address: make_test_share_program(2).into(),
             timestamp: 999,
             height: Some(41),
         };
@@ -358,23 +395,25 @@ mod tests {
             blockhash: bitcoin::BlockHash::all_zeros(),
             prev_blockhash: bitcoin::BlockHash::all_zeros(),
             height: 42,
-            miner_bitcoin_address: "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q".to_string(),
-            miner_address: make_test_share_program(1),
+            miner_bitcoin_address: parse_address_from_string(
+                "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q",
+            ),
+            miner_address: make_test_share_program(1).into(),
             timestamp: 1000,
             bits: bitcoin::CompactTarget::from_consensus(0x1d00ffff),
             uncles: vec![uncle],
         });
 
-        let json = event_to_json(&event, Network::Signet).unwrap();
+        let json = event_to_json(&event, Network::Signet, None).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
 
         assert_eq!(
             parsed["data"]["miner_address"],
-            to_address_string(&make_test_share_program(1), Network::Signet)
+            witness_to_address_string(&make_test_share_program(1), Network::Signet)
         );
         assert_eq!(
             parsed["data"]["uncles"][0]["miner_address"],
-            to_address_string(&make_test_share_program(2), Network::Signet)
+            witness_to_address_string(&make_test_share_program(2), Network::Signet)
         );
     }
 
@@ -386,17 +425,19 @@ mod tests {
             blockhash: bitcoin::BlockHash::all_zeros(),
             prev_blockhash: bitcoin::BlockHash::all_zeros(),
             height: 42,
-            miner_bitcoin_address: "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q".to_string(),
-            miner_address: make_test_share_program(1),
+            miner_bitcoin_address: parse_address_from_string(
+                "tb1q4axuxtvt0q6x4r7g8qjqmzfhkkw4tjgvjrxe7q",
+            ),
+            miner_address: make_test_share_program(1).into(),
             timestamp: 1000,
             bits: bitcoin::CompactTarget::from_consensus(0x1d00ffff),
             uncles: vec![],
         });
 
         let signet: serde_json::Value =
-            serde_json::from_str(&event_to_json(&event, Network::Signet).unwrap()).unwrap();
+            serde_json::from_str(&event_to_json(&event, Network::Signet, None).unwrap()).unwrap();
         let mainnet: serde_json::Value =
-            serde_json::from_str(&event_to_json(&event, Network::Bitcoin).unwrap()).unwrap();
+            serde_json::from_str(&event_to_json(&event, Network::Bitcoin, None).unwrap()).unwrap();
 
         assert!(
             signet["data"]["miner_address"]
@@ -409,6 +450,67 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .starts_with("p2pool1")
+        );
+    }
+
+    /// A Bitcoin Cash node holds a chipnet payout under the legacy testnet
+    /// network, so it serializes as base58. The feed must show the CashAddr
+    /// the operator configured, for the share and for its uncles.
+    #[test]
+    fn event_to_json_renders_cash_payouts_of_the_share_and_its_uncles_as_cashaddr() {
+        let uncle = UncleInfo {
+            blockhash: bitcoin::BlockHash::all_zeros(),
+            prev_blockhash: bitcoin::BlockHash::all_zeros(),
+            miner_bitcoin_address: parse_address_from_string("n28xPk5xbxNaaht399cZP9WDvyTMwaYaGe"),
+            miner_address: ShareOwner::CashP2pkh([0x22; 20]),
+            timestamp: 999,
+            height: Some(41),
+        };
+        let event = MonitoringEvent::Share(ShareInfo {
+            blockhash: bitcoin::BlockHash::all_zeros(),
+            prev_blockhash: bitcoin::BlockHash::all_zeros(),
+            height: 42,
+            miner_bitcoin_address: parse_address_from_string("n28xPk5xbxNaaht399cZP9WDvyTMwaYaGe"),
+            miner_address: ShareOwner::CashP2pkh([0x11; 20]),
+            timestamp: 1000,
+            bits: bitcoin::CompactTarget::from_consensus(0x1d00ffff),
+            uncles: vec![uncle],
+        });
+
+        let json = event_to_json(&event, Network::Testnet, Some(BchShareNetwork::Chipnet)).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(
+            parsed["data"]["miner_bitcoin_address"],
+            "bchtest:qr3rryn6ugv8qpk82ccaqzk4ras92vpluvr2yclquu"
+        );
+        assert_eq!(
+            parsed["data"]["uncles"][0]["miner_bitcoin_address"],
+            "bchtest:qr3rryn6ugv8qpk82ccaqzk4ras92vpluvr2yclquu"
+        );
+    }
+
+    /// The same base58 string is a Bitcoin testnet address, and a Bitcoin
+    /// node shows it unchanged.
+    #[test]
+    fn event_to_json_keeps_a_bitcoin_public_key_hash_payout_in_base58() {
+        let event = MonitoringEvent::Share(ShareInfo {
+            blockhash: bitcoin::BlockHash::all_zeros(),
+            prev_blockhash: bitcoin::BlockHash::all_zeros(),
+            height: 42,
+            miner_bitcoin_address: parse_address_from_string("n28xPk5xbxNaaht399cZP9WDvyTMwaYaGe"),
+            miner_address: make_test_share_program(1).into(),
+            timestamp: 1000,
+            bits: bitcoin::CompactTarget::from_consensus(0x1d00ffff),
+            uncles: vec![],
+        });
+
+        let json = event_to_json(&event, Network::Testnet, None).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(
+            parsed["data"]["miner_bitcoin_address"],
+            "n28xPk5xbxNaaht399cZP9WDvyTMwaYaGe"
         );
     }
 
@@ -428,8 +530,10 @@ mod tests {
             blockhash: bitcoin::BlockHash::all_zeros(),
             prev_blockhash: bitcoin::BlockHash::all_zeros(),
             height: 1,
-            miner_bitcoin_address: "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string(),
-            miner_address: make_test_share_program(1),
+            miner_bitcoin_address: parse_address_from_string(
+                "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk",
+            ),
+            miner_address: make_test_share_program(1).into(),
             timestamp: 0,
             bits: bitcoin::CompactTarget::from_consensus(0x1d00ffff),
             uncles: vec![],

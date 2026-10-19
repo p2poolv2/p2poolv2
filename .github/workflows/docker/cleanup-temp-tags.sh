@@ -9,7 +9,8 @@ if [[ "${CLEANUP_TEMP_TAGS:-true}" == "false" || "${CLEANUP_TEMP_TAGS:-true}" ==
 fi
 
 OWNER="${GITHUB_REPOSITORY_OWNER}"
-PKG="p2poolv2"
+REPOSITORY="${GITHUB_REPOSITORY,,}"
+PKG="${REPOSITORY#*/}"
 
 if gh api "/orgs/${OWNER}" --silent 2>/dev/null; then
   BASE="/orgs/${OWNER}/packages/container/${PKG}"

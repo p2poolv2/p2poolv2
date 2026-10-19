@@ -3,25 +3,27 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use super::block_template::{BlockTemplate, parse_flags};
-use super::coinbase::{
-    LOCKTIME_LENGTH, build_bitcoin_coinbase_transaction, get_timestamp_bytes, split_coinbase,
-};
+#[cfg(test)]
+use super::coinbase::build_bitcoin_coinbase_transaction;
+use super::coinbase::{LOCKTIME_LENGTH, build_coinbase, get_timestamp_bytes, split_coinbase};
 use super::error::WorkError;
 use super::gbt::build_merkle_branches_for_template;
-use super::tracker::JobTracker;
+use super::tracker::{JobId, JobTracker};
 use crate::accounting::OutputPair;
-use crate::address::Address as P2PoolAddress;
+use crate::accounting::payout::payout_distribution::build_pplns_outputs;
+use crate::shares::share_block::encode_optional_address;
 use crate::shares::share_commitment::{
     ShareCommitment, build_commitment_prefix, build_commitment_suffix, commitment_digest,
 };
-use crate::shares::transactions::coinbase::compute_non_coinbase_root;
+use crate::shares::transactions::coinbase::compute_witness_root;
 use crate::shares::witness_commitment::WitnessCommitment;
 use crate::stratum::util::{reverse_four_byte_chunks, to_be_hex};
 use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
-use bitcoin::WitnessProgram;
+use bitcoin::consensus::Encodable;
 use bitcoin::hashes::{self, Hash};
 use bitcoin::transaction::Version;
 use bitcoin::{Address, BlockHash, CompactTarget};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Hex characters per byte.
@@ -101,6 +103,8 @@ fn split_coinbase2(
 /// suffix (fields after time), so that per-share hashing inserts a fresh 4-byte
 /// timestamp between them without rebuilding the whole commitment.
 pub struct PreparedNotifyParams {
+    /// Exact difficulty weights at this job's share-chain anchor.
+    pplns_weights: Option<HashMap<Address, u128>>,
     /// Pre-serialized JSON notify string with placeholder job_id and coinbase2
     json_template: String,
     /// Byte offset of the 16-char job_id placeholder in json_template
@@ -144,6 +148,58 @@ pub struct PreparedNotifyParams {
 }
 
 impl PreparedNotifyParams {
+    /// Template whose share-chain payout snapshot this job commits to.
+    pub(crate) fn template(&self) -> &Arc<BlockTemplate> {
+        &self.template
+    }
+
+    /// Versioned BCH job terms, preceded by an unpredictable connection nonce.
+    pub(crate) fn mining_job_token(
+        &self,
+        nonce: [u8; 32],
+        time: u32,
+    ) -> Result<Vec<u8>, WorkError> {
+        let mut token = Vec::with_capacity(255);
+        token.push(1);
+        token.extend_from_slice(&nonce);
+        token.extend_from_slice(&self.commitment_prefix);
+        time.consensus_encode(&mut token).expect("vector writer");
+        encode_optional_address(&self.donation_address, &mut token).expect("vector writer");
+        self.donation
+            .unwrap_or(0)
+            .consensus_encode(&mut token)
+            .expect("vector writer");
+        encode_optional_address(&self.fee_address, &mut token).expect("vector writer");
+        self.fee
+            .unwrap_or(0)
+            .consensus_encode(&mut token)
+            .expect("vector writer");
+        if token.len() > 255 {
+            return Err(WorkError {
+                message: "BCH job terms exceed the SV2 token budget".into(),
+            });
+        }
+        Ok(token)
+    }
+
+    /// Recompute payouts when a declared transaction set changes fee revenue.
+    pub(crate) fn declared_outputs(&self, value: u64) -> Result<Vec<OutputPair>, WorkError> {
+        let weights = self.pplns_weights.as_ref().ok_or_else(|| WorkError {
+            message: "PPLNS snapshot is unavailable for declared work".into(),
+        })?;
+        build_pplns_outputs(
+            value,
+            weights,
+            &self.donation_address,
+            self.donation,
+            &self.fee_address,
+            self.fee,
+        )
+        .map_err(|error| WorkError {
+            message: error.to_string(),
+        })
+    }
+
     /// The ASERT-computed pool target for shares built on these params.
     pub fn bits(&self) -> bitcoin::CompactTarget {
         self.bits
@@ -228,6 +284,7 @@ fn build_json_template(
 /// params and use the miner address to build share commitment, thus
 /// the coinbase1 for each individual client.
 pub(crate) struct PreparedNotifyParamsBuilder {
+    pplns_weights: Option<HashMap<Address, u128>>,
     template: Arc<BlockTemplate>,
     output_distribution: Vec<OutputPair>,
     pool_signature: Vec<u8>,
@@ -239,6 +296,7 @@ pub(crate) struct PreparedNotifyParamsBuilder {
     donation: Option<u16>,
     fee_address: Option<Address>,
     fee: Option<u16>,
+    include_merge_mining: bool,
 }
 
 impl PreparedNotifyParamsBuilder {
@@ -250,6 +308,7 @@ impl PreparedNotifyParamsBuilder {
         clean_jobs: bool,
     ) -> Self {
         Self {
+            pplns_weights: None,
             template,
             output_distribution,
             pool_signature: pool_signature.to_vec(),
@@ -261,11 +320,17 @@ impl PreparedNotifyParamsBuilder {
             donation: None,
             fee_address: None,
             fee: None,
+            include_merge_mining: false,
         }
     }
 
     pub fn prev_share_blockhash(mut self, prev_share_blockhash: BlockHash) -> Self {
         self.prev_share_blockhash = prev_share_blockhash;
+        self
+    }
+
+    pub fn pplns_weights(mut self, weights: Option<HashMap<Address, u128>>) -> Self {
+        self.pplns_weights = weights;
         self
     }
 
@@ -299,6 +364,13 @@ impl PreparedNotifyParamsBuilder {
         self
     }
 
+    /// Append the reserved AuxPoW output and check final BCH block size.
+    /// Only Bitcoin Cash sets this.
+    pub fn include_merge_mining(mut self, include_merge_mining: bool) -> Self {
+        self.include_merge_mining = include_merge_mining;
+        self
+    }
+
     /// Build the PreparedNotifyParams by constructing the coinbase transaction
     /// with a dummy commitment hash, splitting it, and constructing the
     /// pre-serialized JSON template.
@@ -324,7 +396,12 @@ impl PreparedNotifyParamsBuilder {
         // [commitment_hash][locktime].
         let dummy_commitment_hash = hashes::sha256::Hash::from_byte_array([0xab_u8; 32]);
 
-        let coinbase = build_bitcoin_coinbase_transaction(
+        let merge_mining = if self.include_merge_mining {
+            Some(crate::shares::merge_mining::MergeMiningCommitment::reserved())
+        } else {
+            None
+        };
+        let coinbase = build_coinbase(
             Version::TWO,
             self.output_distribution.as_slice(),
             self.template.height as i64,
@@ -334,7 +411,12 @@ impl PreparedNotifyParamsBuilder {
             Some(dummy_commitment_hash),
             0u64,
             None,
+            merge_mining,
         )?;
+
+        if self.include_merge_mining {
+            self.template.validate_bch_block_size(&coinbase)?;
+        }
 
         let (coinbase1, coinbase2_full) = split_coinbase(&coinbase)?;
 
@@ -344,7 +426,7 @@ impl PreparedNotifyParamsBuilder {
         )?;
 
         // Pre-compute merkle branches
-        let merkle_branches_raw = build_merkle_branches_for_template(&self.template);
+        let merkle_branches_raw = build_merkle_branches_for_template(&self.template)?;
         let merkle_branches_hex: Vec<String> = merkle_branches_raw
             .iter()
             .map(|branch| to_be_hex(&branch.to_string()))
@@ -381,10 +463,11 @@ impl PreparedNotifyParamsBuilder {
             self.donation,
             &self.fee_address,
             self.fee,
-            compute_non_coinbase_root(&[]),
+            compute_witness_root(&[]),
         );
 
         Ok(PreparedNotifyParams {
+            pplns_weights: self.pplns_weights,
             json_template,
             job_id_offset,
             coinbase2_offset,
@@ -422,7 +505,7 @@ fn get_commitment_hex(
     time: u32,
     commitment_suffix: &[u8],
     miner_bitcoin_address: Option<&Address>,
-    miner_address: Option<WitnessProgram>,
+    miner_address: Option<p2poolv2_wallet::share_owner::ShareOwner>,
 ) -> String {
     let digest = commitment_digest(
         commitment_prefix,
@@ -458,19 +541,20 @@ fn build_per_miner_coinbase2(
     coinbase2
 }
 
-/// Build a per-miner notify message from the prepared template.
+/// Insert one miner's job for `prepared` into the tracker.
 ///
-/// Computes the miner-specific commitment hash, assembles per-miner coinbase2,
-/// overwrites placeholders in the pre-built JSON, and inserts the job into the tracker.
+/// Computes the miner-specific commitment hash and coinbase2 and stores the
+/// job, returning its id and coinbase2. SV1 wraps this in a notify message;
+/// Stratum V2 reads the job back from the tracker to build its own messages.
 /// When either address is None (solo or Hydrapool mode), a commitment hash is
-/// still computed from whatever is available, but no `ShareCommitment` is built:
-/// a share needs both a bitcoin payout identity and a share chain owner.
-pub(crate) fn build_notify_from_prepared(
+/// still computed from whatever is available, but no `ShareCommitment` is
+/// built: a share needs both a bitcoin payout identity and a share chain owner.
+pub(crate) fn insert_miner_job(
     prepared: &PreparedNotifyParams,
     miner_bitcoin_address: Option<&Address>,
-    miner_address: Option<&P2PoolAddress>,
+    miner_address: Option<p2poolv2_wallet::share_owner::ShareOwner>,
     tracker_handle: &JobTracker,
-) -> Result<String, WorkError> {
+) -> (JobId, String) {
     let fresh_time = SystemTimeProvider.seconds_since_epoch() as u32;
 
     let nsecs = get_timestamp_bytes(&SystemTimeProvider);
@@ -482,15 +566,15 @@ pub(crate) fn build_notify_from_prepared(
             prev_share_blockhash: prepared.prev_share_blockhash,
             uncles: prepared.uncles.clone(),
             miner_bitcoin_address: bitcoin_address.clone(),
-            miner_address: share_address.witness_program(),
-            non_coinbase_root: compute_non_coinbase_root(&[]),
+            miner_address: share_address,
+            share_witness_root: compute_witness_root(&[]),
             bits: prepared.bits,
             time: fresh_time,
             donation_address: prepared.donation_address.clone(),
             donation: prepared.donation,
             fee_address: prepared.fee_address.clone(),
             fee: prepared.fee,
-            coinbase_value: prepared.template.coinbasevalue,
+            bch_coinbase: None,
         }),
         _ => None,
     };
@@ -503,7 +587,7 @@ pub(crate) fn build_notify_from_prepared(
         fresh_time,
         &prepared.commitment_suffix,
         miner_bitcoin_address,
-        miner_address.map(|address| address.witness_program()),
+        miner_address,
     );
 
     // Build per-miner coinbase2
@@ -514,8 +598,35 @@ pub(crate) fn build_notify_from_prepared(
         &prepared.coinbase2_locktime,
     );
 
-    // Get next job_id
     let job_id = tracker_handle.get_next_job_id();
+    tracker_handle.insert_job(
+        Arc::clone(&prepared.template),
+        prepared.coinbase1.clone(),
+        coinbase2.clone(),
+        share_commitment,
+        nsecs,
+        prepared.merkle_branches.clone(),
+        job_id,
+    );
+    (job_id, coinbase2)
+}
+
+/// Build a per-miner notify message from the prepared template.
+///
+/// Inserts the miner's job with [`insert_miner_job`] and overwrites the
+/// job id and coinbase2 placeholders in the pre-built JSON.
+pub(crate) fn build_notify_from_prepared(
+    prepared: &PreparedNotifyParams,
+    miner_bitcoin_address: Option<&Address>,
+    miner_address: Option<p2poolv2_wallet::share_owner::ShareOwner>,
+    tracker_handle: &JobTracker,
+) -> Result<String, WorkError> {
+    let (job_id, coinbase2) = insert_miner_job(
+        prepared,
+        miner_bitcoin_address,
+        miner_address,
+        tracker_handle,
+    );
     let job_id_hex = format!("{job_id:016x}");
 
     // Clone the JSON template and overwrite the fixed-size placeholders.
@@ -529,28 +640,78 @@ pub(crate) fn build_notify_from_prepared(
         &coinbase2,
     );
 
-    // Insert job into tracker
-    tracker_handle.insert_job(
-        Arc::clone(&prepared.template),
-        prepared.coinbase1.clone(),
-        coinbase2,
-        share_commitment,
-        nsecs,
-        prepared.merkle_branches.clone(),
-        job_id,
-    );
-
     Ok(notify_json)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shares::validation::MAX_UNCLES;
     use crate::stratum::work::block_template::BlockTemplate;
     use crate::stratum::work::tracker::{JobId, start_tracker_actor};
     use crate::test_utils::make_test_share_address;
     use crate::test_utils::make_test_share_program;
+    use crate::test_utils::test_bch_prepared;
     use bitcoin::{CompressedPublicKey, Network};
+    use p2poolv2_wallet::share_owner::ShareOwner;
+
+    #[test]
+    fn bch_job_token_roundtrips_all_terms_within_the_wire_budget() {
+        let mut prepared = Arc::try_unwrap(test_bch_prepared()).ok().unwrap();
+        prepared.uncles = vec![BlockHash::from_byte_array([0x44; 32]); MAX_UNCLES];
+        prepared.commitment_prefix = build_commitment_prefix(
+            prepared.prev_share_blockhash,
+            &prepared.uncles,
+            prepared.bits,
+        );
+        let payout = Address::p2pkh(
+            bitcoin::PubkeyHash::from_byte_array([0x22; 20]),
+            Network::Regtest,
+        );
+        prepared.donation_address = Some(payout.clone());
+        prepared.donation = Some(150);
+        prepared.fee_address = Some(payout.clone());
+        prepared.fee = Some(50);
+        let token = prepared.mining_job_token([9; 32], 1234).unwrap();
+        assert!(token.len() <= 255);
+        let commitment = ShareCommitment::from_mining_job_token(
+            &token,
+            payout.clone(),
+            ShareOwner::CashP2pkh([0x22; 20]),
+        )
+        .unwrap();
+        assert_eq!(
+            commitment.prev_share_blockhash,
+            prepared.prev_share_blockhash
+        );
+        assert_eq!(commitment.uncles, prepared.uncles);
+        assert_eq!(commitment.time, 1234);
+        assert_eq!(commitment.bits, prepared.bits);
+        assert_eq!(commitment.donation_address, Some(payout.clone()));
+        assert_eq!(commitment.fee_address, Some(payout.clone()));
+        assert_eq!(commitment.donation, Some(150));
+        assert_eq!(commitment.fee, Some(50));
+        let mut trailing = token.clone();
+        trailing.push(0);
+        assert!(
+            ShareCommitment::from_mining_job_token(
+                &trailing,
+                payout.clone(),
+                ShareOwner::CashP2pkh([0x22; 20])
+            )
+            .is_err()
+        );
+        let mut excess_uncles = token;
+        excess_uncles[65] = (MAX_UNCLES + 1) as u8;
+        assert!(
+            ShareCommitment::from_mining_job_token(
+                &excess_uncles,
+                payout,
+                ShareOwner::CashP2pkh([0x22; 20])
+            )
+            .is_err()
+        );
+    }
 
     fn test_template() -> BlockTemplate {
         let data = include_str!(
@@ -605,6 +766,25 @@ mod tests {
         );
     }
 
+    #[test]
+    fn bch_job_rejects_a_coinbase_that_exceeds_the_block_limit() {
+        let mut template: BlockTemplate = serde_json::from_str(include_str!(
+            "../../../../bitcoindrpc/test_data/bchn-regtest-template.json"
+        ))
+        .unwrap();
+        template.sizelimit = 81;
+        template.validate_bch().unwrap();
+        let distribution = vec![OutputPair {
+            address: Address::p2pkh(bitcoin::PubkeyHash::all_zeros(), Network::Regtest),
+            amount: bitcoin::Amount::from_sat(template.coinbasevalue),
+        }];
+        let result =
+            PreparedNotifyParamsBuilder::new(Arc::new(template), distribution, b"test_pool", true)
+                .include_merge_mining(true)
+                .build();
+        assert!(result.err().unwrap().message.contains("block size limit"));
+    }
+
     #[tokio::test]
     async fn test_build_notify_from_prepared_produces_valid_notify() {
         let template = Arc::new(test_template());
@@ -618,7 +798,9 @@ mod tests {
         let notify_json = build_notify_from_prepared(
             &prepared,
             Some(&address),
-            Some(&make_test_share_address(1, bitcoin::Network::Signet)),
+            Some(p2poolv2_wallet::share_owner::ShareOwner::Taproot(
+                make_test_share_address(1, bitcoin::Network::Signet).witness_program(),
+            )),
             &tracker_handle,
         )
         .expect("build_notify_from_prepared should succeed");
@@ -658,7 +840,6 @@ mod tests {
         let address = test_address();
         let bits = CompactTarget::from_consensus(0x1d00ffff);
         let tracker_handle = start_tracker_actor();
-        let coinbase_value = template.coinbasevalue;
 
         let prepared = test_notify_params_builder(template, false)
             .build()
@@ -667,7 +848,9 @@ mod tests {
         let notify_json = build_notify_from_prepared(
             &prepared,
             Some(&address),
-            Some(&make_test_share_address(1, bitcoin::Network::Signet)),
+            Some(p2poolv2_wallet::share_owner::ShareOwner::Taproot(
+                make_test_share_address(1, bitcoin::Network::Signet).witness_program(),
+            )),
             &tracker_handle,
         )
         .expect("build_notify_from_prepared should succeed");
@@ -682,18 +865,18 @@ mod tests {
         // Build the same commitment directly using the fresh time that
         // build_notify_from_prepared stored in the tracker.
         let direct_commitment = ShareCommitment {
+            bch_coinbase: None,
             prev_share_blockhash: BlockHash::all_zeros(),
             uncles: Vec::new(),
             miner_bitcoin_address: address,
-            miner_address: make_test_share_program(1),
-            non_coinbase_root: compute_non_coinbase_root(&[]),
+            miner_address: make_test_share_program(1).into(),
+            share_witness_root: compute_witness_root(&[]),
             bits,
             time: commitment.time,
             donation_address: None,
             donation: None,
             fee_address: None,
             fee: None,
-            coinbase_value,
         };
 
         assert_eq!(commitment.hash(), direct_commitment.hash());
@@ -720,14 +903,14 @@ mod tests {
             time,
             &prepared.commitment_suffix,
             Some(&address1),
-            Some(share_address),
+            Some(share_address.into()),
         );
         let hash2 = get_commitment_hex(
             &prepared.commitment_prefix,
             time,
             &prepared.commitment_suffix,
             Some(&address2),
-            Some(share_address),
+            Some(share_address.into()),
         );
 
         assert_ne!(
@@ -757,7 +940,7 @@ mod tests {
 
         let bitcoin_address = test_address();
         let share_address = make_test_share_program(1);
-        let non_coinbase_root = compute_non_coinbase_root(&[]);
+        let share_witness_root = compute_witness_root(&[]);
         let time = 1_700_000_000;
 
         let from_notify = get_commitment_hex(
@@ -765,22 +948,22 @@ mod tests {
             time,
             &prepared.commitment_suffix,
             Some(&bitcoin_address),
-            Some(share_address),
+            Some(share_address.into()),
         );
 
         let commitment = ShareCommitment {
+            bch_coinbase: None,
             prev_share_blockhash: prepared.prev_share_blockhash,
             uncles: prepared.uncles.clone(),
             miner_bitcoin_address: bitcoin_address,
-            miner_address: share_address,
-            non_coinbase_root,
+            miner_address: share_address.into(),
+            share_witness_root,
             bits: prepared.bits,
             time,
             donation_address: prepared.donation_address.clone(),
             donation: prepared.donation,
             fee_address: prepared.fee_address.clone(),
             fee: prepared.fee,
-            coinbase_value: prepared.template.coinbasevalue,
         };
         let from_struct = hex::encode(commitment.hash().as_byte_array());
 
@@ -805,14 +988,14 @@ mod tests {
             time,
             &prepared.commitment_suffix,
             Some(&bitcoin_address),
-            Some(share_address1),
+            Some(share_address1.into()),
         );
         let hash2 = get_commitment_hex(
             &prepared.commitment_prefix,
             time,
             &prepared.commitment_suffix,
             Some(&bitcoin_address),
-            Some(share_address2),
+            Some(share_address2.into()),
         );
 
         assert_ne!(
