@@ -9,6 +9,10 @@ use libp2p::futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use libp2p::request_response::{Codec, OutboundFailure};
 use std::io;
 
+use crate::accounting::payout::sharechain_pplns::pplns_window::{
+    BCH_COINBASE_MATURITY, BCH_PPLNS_WINDOW_BLOCKS,
+};
+use crate::config::Chain;
 use crate::node::messages::{MAX_P2P_MESSAGE_SIZE, Message, RawMessage};
 use bitcoin::BlockHash;
 
@@ -29,31 +33,65 @@ fn genesis_tag(genesis_hash: BlockHash) -> String {
     tag
 }
 
+/// Tag naming the share chain payout rule a Bitcoin Cash node enforces, or
+/// `None` on Bitcoin, whose protocol strings stay upstream's.
+///
+/// Bitcoin Cash sizes the PPLNS window by the paying block's difficulty
+/// (`BCH_PPLNS_WINDOW_BLOCKS`) behind its own maturity
+/// (`BCH_COINBASE_MATURITY`). A node on the earlier fixed window, or with
+/// another number of blocks or another maturity, rebuilds a different
+/// coinbase for every share, so the two must not peer: they would only
+/// exchange shares the other rejects. The tag is derived from the constants,
+/// so changing either rule changes the tag without anyone having to remember
+/// a version bump, as re-anchoring genesis does for `genesis_tag`.
+fn share_chain_rule_tag(chain: Chain) -> Option<String> {
+    match chain {
+        Chain::Bitcoin => None,
+        Chain::BitcoinCash => Some(format!(
+            "pplns-k{BCH_PPLNS_WINDOW_BLOCKS}-m{BCH_COINBASE_MATURITY}"
+        )),
+    }
+}
+
+/// The share chain part of every protocol string: the genesis tag, followed
+/// on Bitcoin Cash by the payout rule tag.
+fn share_chain_segment(chain: Chain, genesis_hash: BlockHash) -> String {
+    match share_chain_rule_tag(chain) {
+        Some(rule_tag) => format!("{}/{rule_tag}", genesis_tag(genesis_hash)),
+        None => genesis_tag(genesis_hash),
+    }
+}
+
 /// Build the libp2p protocol string for a bitcoin network and share chain.
 ///
 /// Network isolation is enforced through protocol negotiation: nodes on
-/// different networks, or on share chains with different genesis blocks,
-/// derive different protocol strings and therefore fail to negotiate a shared
-/// protocol. Centralizing construction here keeps the string consistent across
-/// the request-response protocol, Identify, and the Noise prologue.
-pub fn protocol_string(network: bitcoin::Network, genesis_hash: BlockHash) -> String {
+/// different networks, on share chains with different genesis blocks, or on
+/// Bitcoin Cash with different payout rules derive different protocol strings
+/// and therefore fail to negotiate a shared protocol. Centralizing
+/// construction here keeps the string consistent across the request-response
+/// protocol, Identify, and the Noise prologue.
+pub fn protocol_string(network: bitcoin::Network, chain: Chain, genesis_hash: BlockHash) -> String {
     format!(
         "/p2pool/{}/{}/1.0.0",
         network.to_core_arg(),
-        genesis_tag(genesis_hash)
+        share_chain_segment(chain, genesis_hash)
     )
 }
 
 /// Build the Kademlia protocol string for a bitcoin network and share chain.
 ///
 /// Kademlia uses a distinct protocol name from [`protocol_string`] but shares
-/// the same network and genesis segments, so it is derived here to keep both
-/// in step.
-pub fn kad_protocol_string(network: bitcoin::Network, genesis_hash: BlockHash) -> String {
+/// the same network and share chain segments, so it is derived here to keep
+/// both in step.
+pub fn kad_protocol_string(
+    network: bitcoin::Network,
+    chain: Chain,
+    genesis_hash: BlockHash,
+) -> String {
     format!(
         "/p2pool/{}/{}/kad/1.0.0",
         network.to_core_arg(),
-        genesis_tag(genesis_hash)
+        share_chain_segment(chain, genesis_hash)
     )
 }
 
@@ -62,8 +100,8 @@ pub fn kad_protocol_string(network: bitcoin::Network, genesis_hash: BlockHash) -
 pub struct P2PoolRequestResponseProtocol(String);
 
 impl P2PoolRequestResponseProtocol {
-    pub fn new(network: bitcoin::Network, genesis_hash: BlockHash) -> Self {
-        Self(protocol_string(network, genesis_hash))
+    pub fn new(network: bitcoin::Network, chain: Chain, genesis_hash: BlockHash) -> Self {
+        Self(protocol_string(network, chain, genesis_hash))
     }
 }
 
@@ -209,7 +247,10 @@ pub enum RequestResponseError {
 #[cfg(test)]
 mod tests {
     use super::{GENESIS_TAG_LEN, kad_protocol_string, protocol_string};
+    use crate::config::{BchShareChain, Chain};
+    use crate::shares::bch_genesis;
     use crate::shares::share_block::ShareBlock;
+    use p2poolv2_wallet::bch_share::BchShareNetwork;
 
     #[test]
     fn test_protocol_string_carries_network_and_genesis_tag() {
@@ -219,7 +260,7 @@ mod tests {
         let expected_tag = &genesis_hash.to_string()[..GENESIS_TAG_LEN];
 
         assert_eq!(
-            protocol_string(bitcoin::Network::Signet, genesis_hash),
+            protocol_string(bitcoin::Network::Signet, Chain::Bitcoin, genesis_hash),
             format!("/p2pool/signet/{expected_tag}/1.0.0")
         );
     }
@@ -238,8 +279,12 @@ mod tests {
         assert_ne!(genesis_hash, other_genesis_hash);
 
         assert_ne!(
-            protocol_string(bitcoin::Network::Testnet4, genesis_hash),
-            protocol_string(bitcoin::Network::Testnet4, other_genesis_hash)
+            protocol_string(bitcoin::Network::Testnet4, Chain::Bitcoin, genesis_hash),
+            protocol_string(
+                bitcoin::Network::Testnet4,
+                Chain::Bitcoin,
+                other_genesis_hash
+            )
         );
     }
 
@@ -252,8 +297,60 @@ mod tests {
             .block_hash();
         let expected_tag = &genesis_hash.to_string()[..GENESIS_TAG_LEN];
 
-        let kad = kad_protocol_string(bitcoin::Network::Signet, genesis_hash);
+        let kad = kad_protocol_string(bitcoin::Network::Signet, Chain::Bitcoin, genesis_hash);
         assert_eq!(kad, format!("/p2pool/signet/{expected_tag}/kad/1.0.0"));
-        assert_ne!(kad, protocol_string(bitcoin::Network::Signet, genesis_hash));
+        assert_ne!(
+            kad,
+            protocol_string(bitcoin::Network::Signet, Chain::Bitcoin, genesis_hash)
+        );
+    }
+
+    /// A Bitcoin Cash node names its payout rule after the genesis tag. The
+    /// string feeds the Noise prologue, Identify and request-response, so a
+    /// peer on another rule fails the handshake.
+    #[test]
+    fn test_bitcoin_cash_protocol_string_carries_the_payout_rule() {
+        let genesis_hash = bch_genesis::build(BchShareNetwork::Chipnet, BchShareChain::Main)
+            .unwrap()
+            .block_hash();
+        let expected_tag = &genesis_hash.to_string()[..GENESIS_TAG_LEN];
+
+        assert_eq!(
+            protocol_string(bitcoin::Network::Testnet, Chain::BitcoinCash, genesis_hash),
+            format!("/p2pool/test/{expected_tag}/pplns-k3-m100/1.0.0")
+        );
+    }
+
+    /// The isolation the window rule relies on: a chipnet node from before
+    /// the rule derived `/p2pool/test/<genesis tag>/1.0.0` from the same
+    /// genesis. The new string differs, so the two cannot negotiate and never
+    /// exchange shares the other would reject.
+    #[test]
+    fn test_bitcoin_cash_protocol_string_differs_from_the_fixed_window_string() {
+        let genesis_hash = bch_genesis::build(BchShareNetwork::Chipnet, BchShareChain::Main)
+            .unwrap()
+            .block_hash();
+        let expected_tag = &genesis_hash.to_string()[..GENESIS_TAG_LEN];
+        let fixed_window_string = format!("/p2pool/test/{expected_tag}/1.0.0");
+
+        assert_ne!(
+            protocol_string(bitcoin::Network::Testnet, Chain::BitcoinCash, genesis_hash),
+            fixed_window_string
+        );
+    }
+
+    /// Kademlia carries the same payout rule, so a fixed-window node cannot
+    /// join a sized-window node's DHT either.
+    #[test]
+    fn test_bitcoin_cash_kad_protocol_string_carries_the_payout_rule() {
+        let genesis_hash = bch_genesis::build(BchShareNetwork::Chipnet, BchShareChain::Main)
+            .unwrap()
+            .block_hash();
+        let expected_tag = &genesis_hash.to_string()[..GENESIS_TAG_LEN];
+
+        assert_eq!(
+            kad_protocol_string(bitcoin::Network::Testnet, Chain::BitcoinCash, genesis_hash),
+            format!("/p2pool/test/{expected_tag}/pplns-k3-m100/kad/1.0.0")
+        );
     }
 }

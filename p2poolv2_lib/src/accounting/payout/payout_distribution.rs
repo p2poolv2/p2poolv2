@@ -50,10 +50,12 @@ pub trait PayoutDistribution {
     ///   passes the same tip it commits as `prev_share_blockhash`, so the
     ///   window it pays matches the one the validator reconstructs from
     ///   that prev, closing the read-tip-vs-payout-tip race.
-    /// * `bitcoin_difficulty` - Difficulty of the bitcoin block being paid for.
-    ///   Only Hydrapool's time-window PPLNS uses it, as its window target; the
-    ///   share chain window is `PPLNS_WINDOW_SHARES` mature shares and
-    ///   ignores it.
+    /// * `bitcoin_difficulty` - Difficulty of the bitcoin block being paid for,
+    ///   from the bits of the template the job is built on (see
+    ///   `bitcoin_block_difficulty`). Hydrapool's time-window PPLNS uses it as
+    ///   its window target. The share chain window uses it on Bitcoin Cash, to
+    ///   hold `BCH_PPLNS_WINDOW_BLOCKS` blocks' worth of work, and ignores it
+    ///   on Bitcoin, where the window is `PPLNS_WINDOW_SHARES` mature shares.
     /// * `total_amount` - Total bitcoin amount to distribute among contributors
     ///
     /// # Returns

@@ -12,7 +12,9 @@ use crate::accounting::payout::payout_distribution::build_pplns_outputs;
 use crate::accounting::payout::sharechain_pplns::PplnsWindow;
 #[cfg(not(test))]
 use crate::accounting::payout::sharechain_pplns::PplnsWindow;
-use crate::accounting::payout::sharechain_pplns::pplns_window::{PAYOUT_DEPTH, WindowError};
+use crate::accounting::payout::sharechain_pplns::pplns_window::{
+    PAYOUT_DEPTH, WindowError, bitcoin_block_difficulty,
+};
 use crate::config::{
     BITCOIN_CASH_DONATION_PUBKEY_HASH, Chain, MAX_BASIS_POINTS, MAX_BITCOIN_CASH_POOL_CUT,
 };
@@ -440,9 +442,11 @@ impl DefaultShareValidator {
     /// `SystemTimeProvider` for timestamp validation.
     ///
     /// No node-local value decides payout validity: the pool signature is
-    /// read from each block's own coinbase, and the PPLNS window is the fixed
-    /// `PPLNS_WINDOW_SHARES` shares below the immature ones (see
-    /// `COINBASE_MATURITY`).
+    /// read from each block's own coinbase, and the PPLNS window below the
+    /// immature shares (see `COINBASE_MATURITY`) is the fixed
+    /// `PPLNS_WINDOW_SHARES` shares on Bitcoin and, on Bitcoin Cash, is sized
+    /// by the difficulty in the share's own bitcoin header (see
+    /// `BCH_PPLNS_WINDOW_BLOCKS`).
     pub fn new(pool_difficulty: PoolDifficulty) -> Self {
         Self::with_time_provider(pool_difficulty, Arc::new(SystemTimeProvider))
     }
@@ -972,11 +976,17 @@ impl DefaultShareValidator {
     /// Validate the bitcoin coinbase against the PPLNS window distribution.
     ///
     /// Computes the expected distribution from the PPLNS window -- the
-    /// `PPLNS_WINDOW_SHARES` shares below the share's parent that are mature
-    /// for this share (see `COINBASE_MATURITY`) -- reconstructs
-    /// the expected coinbase transaction, and verifies that the merkle
-    /// root computed from the reconstructed coinbase and the template
+    /// shares below the share's parent that are mature for this share (see
+    /// `COINBASE_MATURITY`), sized from the difficulty in this share's own
+    /// bitcoin header on Bitcoin Cash (see `BCH_PPLNS_WINDOW_BLOCKS`) --
+    /// reconstructs the expected coinbase transaction, and verifies that the
+    /// merkle root computed from the reconstructed coinbase and the template
     /// merkle branches matches the bitcoin header's merkle root.
+    ///
+    /// The window comes from the same `get_distribution_from_start_hash` the
+    /// notifier calls, and the difficulty from the same
+    /// `bitcoin_block_difficulty`, applied to the bits the notifier's template
+    /// put in this header.
     ///
     /// When prev_share_blockhash is not on the confirmed chain (e.g.
     /// during a candidate chain reorg), walks backward through the
@@ -992,8 +1002,14 @@ impl DefaultShareValidator {
             .write()
             .expect("PPLNS window lock poisoned on write");
 
+        let paying_block_difficulty =
+            bitcoin_block_difficulty(share.header.bitcoin_header.bits, window.network());
         let address_difficulty_map = window
-            .get_distribution_from_start_hash(share.header.prev_share_blockhash, chain_store_handle)
+            .get_distribution_from_start_hash(
+                share.header.prev_share_blockhash,
+                paying_block_difficulty,
+                chain_store_handle,
+            )
             .map_err(|error| match error {
                 // The anchor is below the confirmed entries this node's window
                 // retains, and the window's oldest entry only moves forward
@@ -1509,7 +1525,7 @@ impl ShareValidator for DefaultShareValidator {
                 &all_outpoints,
                 block_height,
                 min_coinbase_root_height,
-                sim_overrides::coinbase_maturity(),
+                sim_overrides::coinbase_maturity(self.chain),
             )
             .map_err(|error| {
                 ValidationError::store_access(format!("Prevout check failed: {error}"))
@@ -1602,7 +1618,7 @@ mockall::mock! {
 mod tests {
     use super::*;
     use crate::accounting::payout::sharechain_pplns::pplns_window::{
-        COINBASE_MATURITY, PPLNS_WINDOW_SHARES,
+        BCH_COINBASE_MATURITY, COINBASE_MATURITY, PPLNS_WINDOW_SHARES,
     };
     use crate::shares::bch_coinbase::BchCoinbase;
     use crate::shares::merge_mining::MergeMiningCommitment;
@@ -3911,6 +3927,56 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_prevouts_uses_bitcoin_cash_maturity() {
+        // A Bitcoin Cash validator checks share coinbase spends against
+        // `BCH_COINBASE_MATURITY` (100 shares, as Satoshi's 100 blocks), the
+        // same depth its PPLNS window waits before paying a share. The `withf`
+        // guard makes the mock match only that maturity.
+        let parent_height = 50u32;
+        let mut chain_store_handle = ChainStoreHandle::default();
+        chain_store_handle
+            .expect_get_block_metadata()
+            .returning(move |_| Ok(metadata_at_height(parent_height)));
+        chain_store_handle
+            .expect_check_prevouts()
+            .withf(
+                |_outpoints, _spending_height, _min_root, coinbase_maturity| {
+                    *coinbase_maturity == BCH_COINBASE_MATURITY
+                },
+            )
+            .returning(
+                |_outpoints, _spending_height, _min_coinbase_root_height, _coinbase_maturity| {
+                    Ok(PrevoutCheck::Accepted)
+                },
+            );
+
+        let spending_tx = bitcoin::Transaction {
+            version: bitcoin::transaction::Version::ONE,
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint::new(bitcoin::Txid::all_zeros(), 0),
+                script_sig: ScriptBuf::new(),
+                sequence: bitcoin::Sequence::MAX,
+                witness: bitcoin::Witness::new(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(10_000),
+                script_pubkey: ScriptBuf::new(),
+            }],
+        };
+
+        let share = TestShareBlockBuilder::new()
+            .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
+            .add_transaction(spending_tx)
+            .build();
+
+        let result = validator()
+            .for_chain(Chain::BitcoinCash)
+            .validate_prevouts(&share, &chain_store_handle);
+        assert!(result.is_ok(), "got: {result:?}");
+    }
+
+    #[test]
     fn test_validate_prevouts_expires_coinbase_roots_below_payout_depth() {
         // An output stays spendable for a full PPLNS window after it matures,
         // so the oldest allowed coinbase root is the spending height less
@@ -4110,11 +4176,12 @@ mod tests {
 
         // Mock PplnsWindow returning matching 60/40 distribution
         let mut mock_window = PplnsWindow::default();
+        mock_window.expect_network().return_const(Network::Bitcoin);
         let addr_a_clone = address_a.clone();
         let addr_b_clone = address_b.clone();
         mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(move |_, _| {
+            .returning(move |_, _, _| {
                 let mut distribution = HashMap::with_capacity(2);
                 distribution.insert(addr_a_clone.clone(), 600u128);
                 distribution.insert(addr_b_clone.clone(), 400u128);
@@ -4180,11 +4247,12 @@ mod tests {
 
         // Mock PplnsWindow returning 60/40 distribution
         let mut mock_window = PplnsWindow::default();
+        mock_window.expect_network().return_const(Network::Bitcoin);
         let addr_a_clone = address_a.clone();
         let addr_b_clone = address_b.clone();
         mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(move |_, _| {
+            .returning(move |_, _, _| {
                 let mut distribution = HashMap::with_capacity(2);
                 distribution.insert(addr_a_clone.clone(), 600u128);
                 distribution.insert(addr_b_clone.clone(), 400u128);
@@ -4215,9 +4283,10 @@ mod tests {
 
         // Mock PplnsWindow returning empty distribution
         let mut mock_window = PplnsWindow::default();
+        mock_window.expect_network().return_const(Network::Bitcoin);
         mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(|_, _| Ok(HashMap::new()));
+            .returning(|_, _, _| Ok(HashMap::new()));
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
         let error = validator()
@@ -4259,9 +4328,10 @@ mod tests {
         share_block.bitcoin_coinbase = coinbase_tx;
 
         let mut mock_window = PplnsWindow::default();
+        mock_window.expect_network().return_const(Network::Bitcoin);
         mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(|_, _| {
+            .returning(|_, _, _| {
                 Err(WindowError::ReadFailure(
                     "prev_share_blockhash not found in PPLNS window".into(),
                 ))
@@ -4295,9 +4365,10 @@ mod tests {
 
         let anchor = share_block.header.prev_share_blockhash;
         let mut mock_window = PplnsWindow::default();
+        mock_window.expect_network().return_const(Network::Bitcoin);
         mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(move |_, _| {
+            .returning(move |_, _, _| {
                 Err(WindowError::InsufficientEntries {
                     anchor,
                     oldest_cached_height: 5_000,
@@ -4392,10 +4463,11 @@ mod tests {
         share_block.bitcoin_coinbase = coinbase_tx;
 
         let mut mock_window = PplnsWindow::default();
+        mock_window.expect_network().return_const(Network::Bitcoin);
         let addr_a_clone = address_a.clone();
         mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(move |_, _| Ok(HashMap::from([(addr_a_clone.clone(), 1000u128)])));
+            .returning(move |_, _, _| Ok(HashMap::from([(addr_a_clone.clone(), 1000u128)])));
 
         let result = validator().validate_bitcoin_payout(
             &share_block,
@@ -4441,10 +4513,11 @@ mod tests {
         share_block.bitcoin_coinbase = coinbase_tx;
 
         let mut mock_window = PplnsWindow::default();
+        mock_window.expect_network().return_const(Network::Bitcoin);
         let addr_a_clone = address_a.clone();
         mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(move |_, _| Ok(HashMap::from([(addr_a_clone.clone(), 1000u128)])));
+            .returning(move |_, _, _| Ok(HashMap::from([(addr_a_clone.clone(), 1000u128)])));
 
         let result = validator().validate_bitcoin_payout(
             &share_block,
@@ -4492,10 +4565,11 @@ mod tests {
         share_block.bitcoin_coinbase = coinbase_tx;
 
         let mut mock_window = PplnsWindow::default();
+        mock_window.expect_network().return_const(Network::Bitcoin);
         let addr_a_clone = address_a.clone();
         mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(move |_, _| Ok(HashMap::from([(addr_a_clone.clone(), 100u128)])));
+            .returning(move |_, _, _| Ok(HashMap::from([(addr_a_clone.clone(), 100u128)])));
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
         // The reconstructed coinbase will also have 1 sat to address_a,
@@ -4606,12 +4680,13 @@ mod tests {
 
         // Mock PplnsWindow returning 3 miners with difficulties 500, 300, 200
         let mut mock_window = PplnsWindow::default();
+        mock_window.expect_network().return_const(Network::Bitcoin);
         let miner_a_clone = miner_a.clone();
         let miner_b_clone = miner_b.clone();
         let miner_c_clone = miner_c.clone();
         mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(move |_, _| {
+            .returning(move |_, _, _| {
                 let mut distribution = HashMap::with_capacity(3);
                 distribution.insert(miner_a_clone.clone(), 500u128);
                 distribution.insert(miner_b_clone.clone(), 300u128);
@@ -4708,10 +4783,11 @@ mod tests {
 
         // Mock PplnsWindow returning 100% to address_a
         let mut mock_window = PplnsWindow::default();
+        mock_window.expect_network().return_const(Network::Bitcoin);
         let addr_a_clone = address_a.clone();
         mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(move |_, _| Ok(HashMap::from([(addr_a_clone.clone(), 1000u128)])));
+            .returning(move |_, _, _| Ok(HashMap::from([(addr_a_clone.clone(), 1000u128)])));
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
         let validator = DefaultShareValidator::new(PoolDifficulty::default());
@@ -4784,7 +4860,7 @@ mod tests {
         let addr_a_clone = address_a.clone();
         mock_window
             .expect_get_distribution_from_start_hash()
-            .returning(move |_, _| Ok(HashMap::from([(addr_a_clone.clone(), 1000u128)])));
+            .returning(move |_, _, _| Ok(HashMap::from([(addr_a_clone.clone(), 1000u128)])));
         let pplns_window = Arc::new(RwLock::new(mock_window));
 
         let validator =
@@ -4839,7 +4915,7 @@ mod tests {
         window
             .expect_get_distribution_from_start_hash()
             .times(2)
-            .returning(move |_, _| Ok(HashMap::from([(address.clone(), 1000u128)])));
+            .returning(move |_, _, _| Ok(HashMap::from([(address.clone(), 1000u128)])));
         let window = Arc::new(RwLock::new(window));
         let validator = validator().for_chain(Chain::BitcoinCash);
         validator

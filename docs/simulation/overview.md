@@ -58,8 +58,12 @@ or no-ops in production builds (zero overhead). Key overrides:
   be overridden for time-compressed runs.
 - **Genesis anchoring**: `sim_overrides::genesis_timestamp()` and
   `anchor_target()` anchor ASERT at launch time and steady-state difficulty.
-- **PPLNS window**: no override. The window is `PPLNS_WINDOW_SHARES` shares on
-  every network, so the sim pays the same multi-miner window as mainnet.
+- **PPLNS window**: no override. On Bitcoin the window is
+  `PPLNS_WINDOW_SHARES` shares on every network. On Bitcoin Cash it is sized
+  by the paying header's difficulty, but every regtest header is at the
+  proof-of-work limit, which falls back to `PPLNS_WINDOW_SHARES` shares, so
+  the swarm pays the same fixed window either way. The offline
+  `pplns_compare` binary below exercises the sized window.
 - **Coinbase maturity**: `sim_overrides::coinbase_maturity()` returns
   `COINBASE_MATURITY` (6,048) in production and `[sim] coinbase_maturity` in
   sim (`MATURITY_SHARES` in the harness). It governs both payout maturity and
@@ -148,6 +152,28 @@ node because they are not consensus), `DIAL_FANOUT`, `PROFILE`. Convergence
 shows as `distinct tips: 1` (a snapshot may straddle the latest 1–2 heights while
 the frontier propagates). Run release; always `stop-swarm.sh` before relaunching
 (orphans hold ports — `run-swarm.sh` now also clears its RUN_DIR's leftovers).
+
+### Offline PPLNS window comparison
+
+`pplns_compare` is a second binary in `p2poolv2_sim` that needs no node,
+store or bitcoind. For four pool sizes (0.05%, 1%, 10% and 30% of BCH's
+hashrate) and several seeds it draws a share chain at the 10 s target with a
+steady 10% miner, a small 0.1% miner, a 5% miner who mines from day 20 to
+day 40, and the rest of the pool, plus a Bernoulli block find per share. It
+pays every block found after the fixed window has filled through the real
+`PplnsWindow`, under four rules: the fixed `PPLNS_WINDOW_SHARES` window, the
+Bitcoin Cash window at `K` = 2 and at `K` = 3 (the code's value, P2Pool v1's
+`SPREAD`), and `K` = 3 with P2Pool v1's 0.5% finder bonus. It prints window
+length, the work-to-pay delay (maturity skip plus half the window), the
+joining miner's first payout and how long it is paid after leaving, and the
+coefficient of variation (CV) of the miners' daily and weekly income,
+averaged over the seeds. `--maturity` overrides the maturity skip for every
+rule, to measure a shorter one. Uncles are not modelled.
+
+```sh
+cargo run --release -p p2poolv2_sim --features sim --bin pplns_compare -- --seeds 5
+cargo run --release -p p2poolv2_sim --features sim --bin pplns_compare -- --seeds 5 --maturity 360
+```
 
 ### Failure scenarios (Phase 4)
 

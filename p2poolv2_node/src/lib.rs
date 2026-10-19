@@ -322,6 +322,7 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
     let (payout, shared_pplns_window) = build_payout_for_mode(
         stratum_config.mode,
         cloned_stratum_config.network,
+        stratum_config.chain,
         stratum_config.bitcoin_cash_network,
     );
     let api_pplns_window = payout_pplns_window(stratum_config.mode, &shared_pplns_window);

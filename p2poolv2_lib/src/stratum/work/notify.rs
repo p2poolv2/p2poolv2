@@ -6,6 +6,7 @@ use super::block_template::BlockTemplate;
 use super::error::WorkError;
 use crate::accounting::OutputPair;
 use crate::accounting::payout::payout_distribution::PayoutDistribution;
+use crate::accounting::payout::sharechain_pplns::pplns_window::bitcoin_block_difficulty;
 use crate::config::StratumConfig;
 use crate::pool_difficulty;
 #[cfg(test)]
@@ -35,8 +36,12 @@ pub(crate) struct NotifyContext {
 /// Build the output distribution for the coinbase transaction using
 /// payout accounting in NotifyContext.
 ///
-/// The template's bitcoin difficulty is passed to the payout, where only
-/// Hydrapool uses it; the share chain window is `PPLNS_WINDOW_SHARES` deep.
+/// The template's bitcoin difficulty is passed to the payout. Hydrapool uses
+/// it as its window target. The share chain uses it on Bitcoin Cash to size
+/// the window, which is why it must come from the template's bits: they are
+/// the bits the share's header carries, so a validator reading them from the
+/// header sizes the same window. On Bitcoin the share chain window is
+/// `PPLNS_WINDOW_SHARES` deep and ignores it.
 ///
 /// Returns `Err` if the payout distribution cannot be resolved.
 fn build_output_distribution(
@@ -47,8 +52,7 @@ fn build_output_distribution(
     let total_amount = bitcoin::Amount::from_sat(template.coinbasevalue);
 
     let compact_target = bitcoin::pow::CompactTarget::from_unprefixed_hex(&template.bits).unwrap();
-    let bitcoin_difficulty =
-        bitcoin::Target::from_compact(compact_target).difficulty(context.config.network);
+    let bitcoin_difficulty = bitcoin_block_difficulty(compact_target, context.config.network);
 
     context
         .payout

@@ -104,11 +104,19 @@ fn bench_get_distribution_from_start_hash(criterion: &mut Criterion) {
     // populate_for_benchmark pushes newest-to-oldest, so index 0 is the tip.
     let tip = blockhash_from_index(0);
 
+    // The window is the fixed Bitcoin one, which does not read the paying
+    // block's difficulty.
+    let paying_block_difficulty = 1;
+
     criterion.bench_function("get_distribution_from_start_hash_full_window", |bencher| {
         bencher.iter(|| {
             black_box(
                 window
-                    .get_distribution_from_start_hash(tip, &chain_store_handle)
+                    .get_distribution_from_start_hash(
+                        tip,
+                        paying_block_difficulty,
+                        &chain_store_handle,
+                    )
                     .expect("tip should be in window"),
             );
         });
