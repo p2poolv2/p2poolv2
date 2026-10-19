@@ -59,6 +59,9 @@ and existing share chain stores must be cleared.
 - The P2P message size limit drops from 5 MB to 1 MB.
 - The Rust toolchain is pinned to 1.99.0 for CI, development and the Docker
   build.
+- Genesis shares are regenerated for every network and now load from raw
+  `.dat` files. The genesis hash is part of the libp2p protocol string, so
+  v0.16.0 nodes do not connect to nodes running earlier versions.
 - The `p2poolv2_address` crate is renamed to `p2poolv2_wallet`.
 - The mining base is now the highest-work valid block.
 - The debug log file is truncated on restart, keeping its latest entries.
