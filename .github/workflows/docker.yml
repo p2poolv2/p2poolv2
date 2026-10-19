@@ -124,7 +124,22 @@ jobs:
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
+      # Docker Hub is optional: a fork without DOCKERHUB_USERNAME and
+      # DOCKERHUB_TOKEN publishes to GitHub Packages (ghcr.io) only.
+      - name: Check for Docker Hub credentials
+        id: dockerhub
+        env:
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [[ -n "$DOCKERHUB_USERNAME" && -n "$DOCKERHUB_TOKEN" ]]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        if: steps.dockerhub.outputs.present == 'true'
         with:
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -155,7 +170,10 @@ jobs:
           IMAGE_SHA: ${{ env.IMAGE_TAG }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
-          CLEANUP_TEMP_TAGS: ${{ vars.CLEANUP_TEMP_TAGS || 'true' }}
+          DOCKERHUB_ENABLED: ${{ steps.dockerhub.outputs.present }}
+          # Without Docker Hub the GHCR manifest still points at the per-arch
+          # images, so their temp tags must stay.
+          CLEANUP_TEMP_TAGS: ${{ steps.dockerhub.outputs.present == 'true' && (vars.CLEANUP_TEMP_TAGS || 'true') || 'false' }}
 
       - name: Cleanup temp tags
         if: success() || failure()
@@ -164,4 +182,4 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
           IMAGE_SHA: ${{ env.IMAGE_TAG }}
-          CLEANUP_TEMP_TAGS: ${{ vars.CLEANUP_TEMP_TAGS || 'true' }}
+          CLEANUP_TEMP_TAGS: ${{ steps.dockerhub.outputs.present == 'true' && (vars.CLEANUP_TEMP_TAGS || 'true') || 'false' }}
