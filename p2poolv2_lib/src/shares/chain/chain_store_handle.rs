@@ -853,10 +853,13 @@ impl ChainStoreHandle {
 
     /// Prune block bodies below the prune target when due.
     ///
-    /// `prune_range` decides whether a run is due and over which heights.
-    /// Only running while the node is current keeps the confirmed tip far
-    /// above the prune target, which deleting candidate index entries
-    /// requires, and stops a stale or withheld chain from moving the target.
+    /// `get_range_to_prune` decides whether a prunning run is due and
+    /// over which heights. Range can be up to `Store::prune_target`,
+    /// which follows the confirmed tip. Deletion never reaches
+    /// heights the confirmed chain has not got to, which is required
+    /// when deleting candidate index entries. Allowing runs only
+    /// while the node is current stops a stale or withheld chain from
+    /// pruning.
     ///
     /// `next_prune_start` holds where the previous run stopped. It starts empty
     /// and is derived from the store on the first run, so nothing is persisted.
@@ -869,7 +872,7 @@ impl ChainStoreHandle {
     ) -> Result<(), StoreError> {
         let Some(range) = get_range_to_prune(
             self.is_current(),
-            self.get_candidate_tip_height()?,
+            self.store_handle.store().prune_target()?,
             *next_prune_start,
             |prune_target| self.find_prune_start(prune_target),
         )?

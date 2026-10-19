@@ -19,7 +19,7 @@ use tracing::debug;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use super::{Chain, Height, TopResult, height_to_key_with_suffix};
-use crate::store::prune_blocks::{prune_height_for_tip, prune_target_for_tip};
+use crate::store::prune_blocks::prune_height_for_tip;
 
 const CANDIDATE_SUFFIX: &str = ":c";
 const TOP_CANDIDATE_KEY: &str = "meta:top_candidate_height";
@@ -67,7 +67,7 @@ impl Store {
     ///
     /// Used by `reorg_candidate` which computes the correct final height
     /// locally instead of reading stale DB state within a single WriteBatch.
-    fn set_top_candidate_height(&self, height: Height, batch: &mut rocksdb::WriteBatch) {
+    pub(crate) fn set_top_candidate_height(&self, height: Height, batch: &mut rocksdb::WriteBatch) {
         let block_height_cf = self.db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
         let serialized_height = consensus::serialize(&height);
         batch.put_cf(
@@ -550,7 +550,8 @@ impl Store {
     }
 
     /// Whether the reorg branch ending at `blockhash` forks from the candidate
-    /// or confirmed chain below the prune target of `top_candidate`.
+    /// or confirmed chain below the prune target (`Store::prune_target`, from
+    /// the confirmed tip).
     ///
     /// Bodies below the prune target are deleted, so the confirmed chain can
     /// never reorg onto such a branch: `reorg_confirmed` needs the fork
@@ -558,17 +559,13 @@ impl Store {
     /// into a clean refusal, a reorg depth limit. Following such a branch
     /// would take out-working the whole pool for about `PRUNE_DEPTH` blocks.
     ///
-    /// Returns false when there is no candidate tip, when the tip is too low
-    /// for any pruning, or when the branch does not reach either chain.
+    /// Returns false when the confirmed tip is too low for any pruning (or
+    /// absent), or when the branch does not reach either chain.
     pub(super) fn reorg_branch_forks_below_prune_target(
         &self,
         blockhash: &BlockHash,
-        top_candidate: Option<&TopResult>,
     ) -> Result<bool, StoreError> {
-        let Some(top) = top_candidate else {
-            return Ok(false);
-        };
-        let prune_target = prune_target_for_tip(top.height);
+        let prune_target = self.prune_target()?;
         if prune_target == 0 {
             return Ok(false);
         }
@@ -2626,15 +2623,13 @@ mod tests {
             .nonce(0xe9695799)
             .build();
         store.store_with_valid_metadata(&fork);
-        let top_candidate = TopResult {
-            hash: share_2.block_hash(),
-            height: (PRUNE_DEPTH + PRUNE_INTERVAL) as u32 + 3,
-            work: Work::from_be_bytes([0u8; 32]),
-        };
+        let mut batch = Store::get_write_batch();
+        store.set_top_confirmed_height((PRUNE_DEPTH + PRUNE_INTERVAL) as u32 + 3, &mut batch);
+        store.commit_batch(batch).unwrap();
 
         assert!(
             store
-                .reorg_branch_forks_below_prune_target(&fork.block_hash(), Some(&top_candidate))
+                .reorg_branch_forks_below_prune_target(&fork.block_hash())
                 .unwrap()
         );
     }
@@ -2664,15 +2659,13 @@ mod tests {
             .nonce(0xe9695799)
             .build();
         store.store_with_valid_metadata(&fork);
-        let top_candidate = TopResult {
-            hash: share_2.block_hash(),
-            height: (PRUNE_DEPTH + PRUNE_INTERVAL) as u32 + 2,
-            work: Work::from_be_bytes([0u8; 32]),
-        };
+        let mut batch = Store::get_write_batch();
+        store.set_top_confirmed_height((PRUNE_DEPTH + PRUNE_INTERVAL) as u32 + 2, &mut batch);
+        store.commit_batch(batch).unwrap();
 
         assert!(
             !store
-                .reorg_branch_forks_below_prune_target(&fork.block_hash(), Some(&top_candidate))
+                .reorg_branch_forks_below_prune_target(&fork.block_hash())
                 .unwrap()
         );
     }
@@ -2701,22 +2694,57 @@ mod tests {
             .nonce(0xe9695799)
             .build();
         store.store_with_valid_metadata(&fork);
-        let top_candidate = TopResult {
-            hash: share_2.block_hash(),
-            height: (PRUNE_DEPTH + PRUNE_INTERVAL) as u32 + 1,
-            work: Work::from_be_bytes([0u8; 32]),
-        };
+        let mut batch = Store::get_write_batch();
+        store.set_top_confirmed_height((PRUNE_DEPTH + PRUNE_INTERVAL) as u32 + 1, &mut batch);
+        store.commit_batch(batch).unwrap();
 
         assert!(
             !store
-                .reorg_branch_forks_below_prune_target(&fork.block_hash(), Some(&top_candidate))
+                .reorg_branch_forks_below_prune_target(&fork.block_hash())
                 .unwrap()
         );
     }
 
-    /// With a candidate tip too low for any pruning, no reorg is refused.
+    /// A branch forking above the confirmed-based target still has every body
+    /// it needs, so it is followed even when the candidate tip runs far ahead.
     #[test]
-    fn test_reorg_branch_with_tip_below_prune_depth_is_followed() {
+    fn test_reorg_branch_forking_above_confirmed_target_is_followed_when_candidate_runs_ahead() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+        let share_1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        store.push_to_candidate_chain(&share_1).unwrap();
+        let share_2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_1.block_hash().to_string())
+            .nonce(0xe9695793)
+            .build();
+        store.push_to_candidate_chain(&share_2).unwrap();
+        let fork = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_2.block_hash().to_string())
+            .nonce(0xe9695799)
+            .build();
+        store.store_with_valid_metadata(&fork);
+        let mut batch = Store::get_write_batch();
+        store.set_top_confirmed_height((PRUNE_DEPTH + PRUNE_INTERVAL) as u32 + 2, &mut batch);
+        store.set_top_candidate_height((PRUNE_DEPTH + PRUNE_INTERVAL) as u32 + 100, &mut batch);
+        store.commit_batch(batch).unwrap();
+
+        assert!(
+            !store
+                .reorg_branch_forks_below_prune_target(&fork.block_hash())
+                .unwrap()
+        );
+    }
+
+    /// With a confirmed tip too low for any pruning, no reorg is refused.
+    #[test]
+    fn test_reorg_branch_with_confirmed_tip_below_prune_depth_is_followed() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
         let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
@@ -2733,11 +2761,10 @@ mod tests {
             .nonce(0xe9695799)
             .build();
         store.store_with_valid_metadata(&fork);
-        let top_candidate = store.get_top_candidate().unwrap();
 
         assert!(
             !store
-                .reorg_branch_forks_below_prune_target(&fork.block_hash(), Some(&top_candidate))
+                .reorg_branch_forks_below_prune_target(&fork.block_hash())
                 .unwrap()
         );
     }

@@ -85,7 +85,7 @@ impl Store {
             }
             // Refuse a reorg forking below the prune target: its fork point's
             // body is deleted, so it could never be confirmed.
-            if self.reorg_branch_forks_below_prune_target(&blockhash, top_candidate.as_ref())? {
+            if self.reorg_branch_forks_below_prune_target(&blockhash)? {
                 info!(
                     "Refusing candidate reorg to {blockhash}: branch forks below the prune target"
                 );
