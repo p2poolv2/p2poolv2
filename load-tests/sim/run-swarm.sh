@@ -36,6 +36,11 @@
 #   LATE_MINER     node index launched with its emitter off (default unset).
 #                  It syncs but mines nothing until failures.sh late-miner
 #                  restarts it with the emitter on
+#   FORK_GROUP_FROM  split the swarm into two groups that never connect
+#                  (default unset). Nodes at this index and above form the
+#                  minority group and dial only each other, so the share chain
+#                  forks at launch. Used by failures.sh deep-fork-refused and
+#                  shallow-fork-reorged
 #   PROFILE        cargo profile: release | debug      (default release)
 #
 # NOTE: release is the default on purpose. libp2p-request-response has a
@@ -78,6 +83,7 @@ LATENCY_MS="${LATENCY_MS:-0}"
 # preserved; LATENCY_MS is thus given in 10s-interval terms.
 IDEAL_BLOCK_TIME="${IDEAL_BLOCK_TIME:-10}"
 LATE_MINER="${LATE_MINER:-}"
+FORK_GROUP_FROM="${FORK_GROUP_FROM:-}"
 LATENCY_MS=$(awk -v l="$LATENCY_MS" -v t="$IDEAL_BLOCK_TIME" 'BEGIN{printf "%.0f", l*t/10}')
 LATENCY_DIST="${LATENCY_DIST:-spread}"
 DIST_SEED="${DIST_SEED:-42}"
@@ -211,11 +217,17 @@ for i in $(seq 0 $((N - 1))); do
   node_pool_signature="${POOL_SIGNATURE_PREFIX}$i"
 
   # Topology: each node dials up to DIAL_FANOUT earlier nodes (chain + chords),
-  # which yields a single connected component. Node 0 dials nobody.
+  # which yields a single connected component. Node 0 dials nobody. With
+  # FORK_GROUP_FROM set, a node in the minority group dials only earlier nodes
+  # of its own group, so the two groups form separate components.
+  group_start=0
+  if [ -n "$FORK_GROUP_FROM" ] && [ "$i" -ge "$FORK_GROUP_FROM" ]; then
+    group_start="$FORK_GROUP_FROM"
+  fi
   dial=""
   for k in $(seq 1 "$DIAL_FANOUT"); do
     j=$((i - k))
-    if [ "$j" -ge 0 ]; then
+    if [ "$j" -ge "$group_start" ]; then
       peer_port=$((BASE_P2P + j))
       if [ -n "$dial" ]; then dial="$dial, "; fi
       dial="$dial\"/ip4/127.0.0.1/tcp/$peer_port\""

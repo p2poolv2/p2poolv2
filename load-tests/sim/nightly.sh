@@ -18,7 +18,8 @@
 #   SCENARIO                   failure scenario to inject    (default clean)
 #                              clean | restart-fast | restart-delayed |
 #                              partition | all | late-miner (needs LATE_MINER)
-#                              | pruned-join
+#                              | pruned-join | deep-fork-refused |
+#                              shallow-fork-reorged (both need FORK_GROUP_FROM)
 #   NODE_COUNT                 number of sim nodes           (default 20)
 #   CONVERGENCE_WAIT_SECONDS   seconds to settle after the
 #                              scenario, before the checks   (default 60)
@@ -54,6 +55,11 @@ Scenarios (see load-tests/sim/failures.sh --help for the details):
                     shares are mature (needs LATE_MINER)
   pruned-join       a wiped node syncs from genesis off peers that have
                     pruned block bodies (run time-compressed)
+  deep-fork-refused a minority group forked at genesis refuses to reorg onto
+                    the heavier majority once its fork point is below the
+                    prune target (needs FORK_GROUP_FROM, time-compressed)
+  shallow-fork-reorged  control: the same minority reconnects before the
+                    prune target and reorgs onto the majority
 
 Examples:
   ./load-tests/sim/nightly.sh                              # 20 nodes, 60s, no failures
@@ -64,6 +70,8 @@ Examples:
     ./load-tests/sim/nightly.sh late-miner                 # payout maturity
   IDEAL_BLOCK_TIME=1 SHARES_PER_BLOCK=20 \
     ./load-tests/sim/nightly.sh pruned-join                # fresh node off pruned peers
+  IDEAL_BLOCK_TIME=1 SHARES_PER_BLOCK=20 NODE_COUNT=6 FORK_GROUP_FROM=4 HASHRATE=1e13 \
+    ./load-tests/sim/nightly.sh deep-fork-refused          # reorg depth limit
 
 Env vars (nightly-specific):
   SCENARIO                   failure scenario to inject    (default clean)
@@ -127,8 +135,9 @@ FAILURE_OUTPUT=""
 # rather than after bitcoind and the swarm have been brought up.
 case "$SCENARIO" in
   clean|restart-fast|restart-delayed|partition|all|late-miner|pruned-join) ;;
+  deep-fork-refused|shallow-fork-reorged) ;;
   *)
-    echo "ERROR: unknown scenario '$SCENARIO' (expected clean, restart-fast, restart-delayed, partition, all, late-miner or pruned-join)" >&2
+    echo "ERROR: unknown scenario '$SCENARIO' (expected clean, restart-fast, restart-delayed, partition, all, late-miner, pruned-join, deep-fork-refused or shallow-fork-reorged)" >&2
     exit 2
     ;;
 esac
@@ -546,6 +555,14 @@ check_pruned_join() {
   [ "$JOIN_VERDICT" = "PASS" ]
 }
 
+# deep-fork-refused and shallow-fork-reorged only: the verdict failures.sh
+# recorded. Other scenarios skip it.
+check_fork_verdict() {
+  FORK_VERDICT=$(echo "$FAILURE_OUTPUT" | sed -nE 's/^fork verdict: (.*)$/\1/p')
+  FORK_VERDICT="${FORK_VERDICT:-missing}"
+  [ "$FORK_VERDICT" = "PASS" ]
+}
+
 check_uncle_rate() {
   UNCLE_RATE=$(echo "$METRICS_OUTPUT" \
     | grep -oE "uncle rate \(node 0\): [0-9.]+" \
@@ -563,8 +580,14 @@ evaluate_results() {
     failed=1
   fi
 
+  # deep-fork-refused ends with two chains by design: the minority refuses the
+  # majority's deep fork. Its own verdict compares the two groups instead.
   local converged_result="PASS"
-  if ! check_chain_converged; then
+  if [ "$SCENARIO" = "deep-fork-refused" ]; then
+    converged_result="SKIP"
+    DISTINCT_HASHES="n/a"
+    WITHIN2="n/a"
+  elif ! check_chain_converged; then
     converged_result="FAIL"
     failed=1
   fi
@@ -623,6 +646,15 @@ evaluate_results() {
     fi
   fi
 
+  local fork_result="SKIP"
+  if [ "$SCENARIO" = "deep-fork-refused" ] || [ "$SCENARIO" = "shallow-fork-reorged" ]; then
+    fork_result="PASS"
+    if ! check_fork_verdict; then
+      fork_result="FAIL"
+      failed=1
+    fi
+  fi
+
   echo "=== NIGHTLY SIM RESULTS (scenario: $SCENARIO) ==="
   printf "  nodes alive:        %-4s  (%s/%s)\n" \
     "$alive_result" "$ALIVE_COUNT" "$ALIVE_TOTAL"
@@ -644,6 +676,8 @@ evaluate_results() {
     "$maturity_result" "${MATURITY_VERDICT:-late-miner only}"
   printf "  pruned join:        %-4s  (%s)\n" \
     "$join_result" "${JOIN_VERDICT:-pruned-join only}"
+  printf "  fork depth limit:   %-4s  (%s)\n" \
+    "$fork_result" "${FORK_VERDICT:-fork scenarios only}"
 
   if [ "$failed" -eq 0 ]; then
     echo "RESULT: PASS"
