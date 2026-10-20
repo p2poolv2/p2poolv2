@@ -15,6 +15,7 @@ pub mod signal;
 
 use p2poolv2_api::start_api_server;
 use p2poolv2_lib::accounting::payout::build_payout_for_mode;
+use p2poolv2_lib::accounting::payout::simple_pplns::share_worker::PplnsShareWorker;
 use p2poolv2_lib::accounting::stats::metrics;
 use p2poolv2_lib::config::Config;
 use p2poolv2_lib::node::actor::NodeHandle;
@@ -44,6 +45,9 @@ const GBT_POLL_INTERVAL: u64 = 10;
 
 /// Maximum number of pending shares from all clients connected to stratum server
 const STRATUM_SHARES_BUFFER_SIZE: usize = 1000;
+
+/// Maximum number of pending hydrapool PPLNS shares waiting to be stored
+const PPLNS_SHARES_BUFFER_SIZE: usize = 1000;
 
 /// 100% donation in bips, skip address validation
 const FULL_DONATION_BIPS: u16 = 10_000;
@@ -281,6 +285,21 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
     });
 
     let (emissions_tx, emissions_rx) = mpsc::channel::<Emission>(STRATUM_SHARES_BUFFER_SIZE);
+
+    // Hydrapool PPLNS shares are stored by their own worker, so a stratum
+    // connection only enqueues a share and returns to the miner. The worker
+    // stops once the stratum server drops its senders on shutdown.
+    let (pplns_shares_tx, pplns_shares_rx) = mpsc::channel(PPLNS_SHARES_BUFFER_SIZE);
+    let pplns_share_worker = PplnsShareWorker::new(pplns_shares_rx, chain_store_handle.clone());
+    let exit_sender_pplns = exit_sender.clone();
+    let exit_receiver_pplns = exit_sender.subscribe();
+    tokio::spawn(async move {
+        pplns_share_worker.run().await;
+        if *exit_receiver_pplns.borrow() == ShutdownReason::None {
+            error!("PPLNS share worker stopped unexpectedly");
+            let _ = exit_sender_pplns.send(ShutdownReason::Error);
+        }
+    });
     let emissions_tx_for_handles = emissions_tx.clone();
     let template_rx_for_handles = template_rx.clone();
 
@@ -304,6 +323,7 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
             .shutdown_rx(stratum_shutdown_rx)
             .connections_handle(connections_handle.clone())
             .emissions_tx(emissions_tx)
+            .pplns_shares_tx(pplns_shares_tx)
             .hostname(stratum_config.hostname)
             .port(stratum_config.port)
             .start_difficulty(stratum_config.start_difficulty)

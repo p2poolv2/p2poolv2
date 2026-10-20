@@ -46,6 +46,7 @@ async fn test_stratum_server_subscribe() {
     mock_method(&mock_server, "getblocktemplate", params, template).await;
 
     let (share_block_tx, _share_block_rx) = tokio::sync::mpsc::channel(10);
+    let (pplns_shares_tx, _pplns_shares_rx) = tokio::sync::mpsc::channel(10);
     let stats_dir = tempfile::tempdir().unwrap();
     let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
         .await
@@ -66,6 +67,7 @@ async fn test_stratum_server_subscribe() {
         .shutdown_rx(shutdown_rx)
         .connections_handle(connections_handle)
         .emissions_tx(share_block_tx)
+        .pplns_shares_tx(pplns_shares_tx)
         .hostname("127.0.0.1".to_string())
         .port(9999)
         .start_difficulty(1)

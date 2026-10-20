@@ -6,6 +6,7 @@ use bitcoin::consensus::{Decodable, Encodable};
 use serde::{Deserialize, Serialize};
 
 pub mod payout;
+pub mod share_worker;
 
 /// PPLNS share representation
 ///
