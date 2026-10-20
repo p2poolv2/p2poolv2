@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.16.1] - 2026-10-20
+
+This release changes the testnet4 genesis share. Testnet4 needs a chain reset,
+and existing testnet4 share chain stores must be cleared.
+
+### Fixed
+
+- The testnet4 genesis timestamp moves from 2026-09-06 13:30 UTC to
+  2026-10-20 05:00 UTC. ASERT measures elapsed time from the genesis
+  timestamp, so the six week gap before the v0.16.0 chain started held the
+  share target at the easiest allowed value. The genesis hash changes, so
+  v0.16.1 testnet4 nodes do not connect to v0.16.0 testnet4 nodes.
+
 ## [v0.16.0] - 2026-10-19
 
 This release changes consensus and the store format. It needs a chain reset,
@@ -1237,7 +1250,8 @@ and existing share chain stores must be cleared.
 
 We used tags like hydrapool.v0.x.0 and we didn't keep a changelog.
 
-[Unreleased]: https://github.com/p2poolv2/p2poolv2/compare/v0.16.0...HEAD
+[Unreleased]: https://github.com/p2poolv2/p2poolv2/compare/v0.16.1...HEAD
+[v0.16.1]: https://github.com/p2poolv2/p2poolv2/compare/v0.16.0...v0.16.1
 [v0.16.0]: https://github.com/p2poolv2/p2poolv2/compare/v0.15.3...v0.16.0
 [v0.15.3]: https://github.com/p2poolv2/p2poolv2/compare/v0.15.2...v0.15.3
 [v0.15.2]: https://github.com/p2poolv2/p2poolv2/compare/v0.15.1...v0.15.2
