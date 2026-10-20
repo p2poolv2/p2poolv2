@@ -41,7 +41,7 @@ const TESTNET4_GENESIS_DATA: GenesisData = GenesisData {
     public_key: "02ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d",
     bitcoin_block: include_bytes!("testnet4.dat"),
     bitcoin_height: 157012,
-    timestamp: 1788701400, // 09-06-2026T1330
+    timestamp: 1792472400, // 10-20-2026T0500
 };
 
 // Mainnet block hash 000000000000000000006fa29653a523d531657ad20d6f946d0fef88c97cd935,
