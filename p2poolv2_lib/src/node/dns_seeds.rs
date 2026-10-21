@@ -2,7 +2,9 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Built-in DNS seeds used to find the first peers on startup.
+//! Built-in DNS seeds used to find the first peers when a node has none.
+//! The node queries them once: at startup without dial_peers, or after
+//! dial_peers had time to connect and none did.
 //!
 //! Like Bitcoin's chainparams, each network compiles in a list of seed
 //! hostnames and the P2P port their nodes listen on. A seed's A/AAAA records
