@@ -7,7 +7,7 @@
     <link rel="icon" type="image/svg+xml" href="/static/logo-circle.svg" />
     <link rel="stylesheet" href="/static/pico.min.css" />
     <link rel="stylesheet" href="/static/dashboard.css?v=36" />
-    <script defer src="/static/dashboard.js?v=43"></script>
+    <script defer src="/static/dashboard.js?v=45"></script>
     <script defer src="/static/alpine.min.js"></script>
   </head>
   <body
@@ -269,7 +269,7 @@
             Historical
             <span
               class="panel-note"
-              title="Local hashrate is span-averaged (cumulative share work over a lookback window, not instantaneous) and clamped at 3x the mean so bursts don't dominate. Pool and Network are plotted as reported."
+              title="Local is the trailing 1h accepted-work window (same as the Local KPI); Pool is 1h sharechain work / 3600s (same as P2POOL); Network is plotted as reported."
               x-text="chartRangeNote()"
             ></span>
             <span class="range-btns">
@@ -301,7 +301,7 @@
               class="legend-chip"
               :class="legendOn.local ? '' : 'off'"
               @click="toggleLegend('local')"
-              title="Local hashrate: recent accepted share work at this node (5-min span, see smoothed note)"
+              title="Local hashrate: trailing 1h accepted share work at this node (same window as the Local KPI)"
             >
               <span class="legend-dot" style="background: #22d3ee"></span>Local
             </button>
@@ -309,7 +309,7 @@
               class="legend-chip"
               :class="legendOn.pool ? '' : 'off'"
               @click="toggleLegend('pool')"
-              title="Pool hashrate: sharechain hashrate over the last hour of shares (hover the P2POOL hashrate for the window)"
+              title="Pool hashrate: accepted sharechain work in the last hour divided by 3600s (hover the P2POOL hashrate for the window)"
             >
               <span class="legend-dot" style="background: #008de4"></span>Pool
             </button>

@@ -778,7 +778,6 @@ function dashv1() {
 
     updatePoolSeries() {
       const hr = this.chainHashrate();
-      if (!(hr > 0)) return;
       const now = Date.now() / 1000;
       const last = this.poolSeries.length
         ? this.poolSeries[this.poolSeries.length - 1]
@@ -1248,7 +1247,6 @@ function dashv1() {
         if (shares[i].timestamp < cutoff) break;
         out.push(shares[i]);
       }
-      if (out.length < 2) return shares;
       return out;
     },
 
@@ -1261,11 +1259,7 @@ function dashv1() {
         if (!isFinite(bits) || bits <= 0) continue;
         work += this.difficultyFromBits(bits >>> 0) * 4294967296;
       }
-      const newest = shares[0].timestamp;
-      const oldest = shares[shares.length - 1].timestamp;
-      const span = newest - oldest;
-      if (!(span > 0) || work <= 0) return 0;
-      return work / span;
+      return work / 3600;
     },
 
     remoteHashrate() {
@@ -1401,48 +1395,28 @@ function dashv1() {
           : 24 * 3600;
     },
 
-    localSpanSecs() {
-      return this.chartRange === "1h"
-        ? 300
-        : this.chartRange === "6h"
-          ? 900
-          : 1800;
-    },
-
-    localRateAt(hs, i, span) {
-      const target = hs[i].t - span;
+    // Trailing-1h rate ending at hs[i]: same window/math as poolHashrate()
+    // so the graph Local line matches the Local KPI. When the series does
+    // not reach back a full hour, falls back to the average since hs[0].
+    localRateAt(hs, i) {
+      if (i === 0) return null;
+      const cutoff = hs[i].t - 3600;
       let base = null;
-      for (let j = i - 1; j >= 0; j--) {
-        if (hs[j].t <= target) {
+      for (let j = 0; j < i; j++) {
+        if (hs[j].t >= cutoff) {
           base = hs[j];
           break;
         }
       }
-      if (!base) {
-        if (i === 0) return null;
-        base = hs[i - 1];
-      }
+      if (!base) base = hs[0];
       const dt = hs[i].t - base.t;
       if (!(dt > 0)) return null;
-      const rate = ((hs[i].diff - base.diff) * 4294967296) / dt;
-      if (hs[i].diff !== base.diff) return rate;
-      // Flat span window (no share in span): extend back to the nearest
-      // earlier sample with strictly less work instead of reporting 0.
-      for (let j = i - 1; j >= 0; j--) {
-        if (hs[j].diff < hs[i].diff) {
-          const extDt = hs[i].t - hs[j].t;
-          if (extDt > 0) {
-            return ((hs[i].diff - hs[j].diff) * 4294967296) / extDt;
-          }
-          break;
-        }
-      }
-      return rate;
+      const dd = hs[i].diff - base.diff;
+      return dd > 0 ? (dd * 4294967296) / dt : 0;
     },
 
     chartSamples() {
       const windowSecs = this.chartWindowSecs();
-      const span = this.localSpanSecs();
       const now = Date.now() / 1000;
       const hs = this.hsSeries;
       const idxs = [];
@@ -1452,29 +1426,16 @@ function dashv1() {
       if (idxs.length < 2) return [];
       const pts = [];
       for (let k = 0; k < idxs.length; k++) {
-        const hr = this.localRateAt(hs, idxs[k], span);
+        const hr = this.localRateAt(hs, idxs[k]);
         if (hr === null) continue;
         pts.push({ t: hs[idxs[k]].t, hs: hr });
       }
       if (pts.length < 2) return [];
-      const max = Math.max.apply(
-        null,
-        pts.map(function (p) {
-          return p.hs;
-        }),
-      );
-      if (max <= 0) return pts;
-      let sum = 0;
-      for (let i = 0; i < pts.length; i++) sum += pts[i].hs;
-      const mean = sum / pts.length;
-      for (let i = 0; i < pts.length; i++) {
-        if (pts[i].hs > mean * 3) pts[i].hs = mean * 3;
-      }
       return pts;
     },
 
     chartRangeNote() {
-      return "smoothed";
+      return "1h window";
     },
 
     rawMaxOf(samples) {
@@ -2070,7 +2031,7 @@ function dashv1() {
         }
       }
       if (bestIdx < 0) return null;
-      return this.localRateAt(s, bestIdx, this.localSpanSecs());
+      return this.localRateAt(s, bestIdx);
     },
 
     hoverTipHtml() {
