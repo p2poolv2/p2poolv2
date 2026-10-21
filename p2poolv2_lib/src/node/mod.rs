@@ -234,18 +234,18 @@ impl Node {
                     .into());
                 }
             }
+        }
 
-            for peer_addr in &config.network.dial_peers {
-                match peer_addr.parse::<Multiaddr>() {
-                    Ok(remote) => {
-                        if let Err(e) = swarm.dial(remote) {
-                            debug!("Failed to dial {}: {}", peer_addr, e);
-                        } else {
-                            info!("Dialed {}", peer_addr);
-                        }
+        for peer_addr in &config.network.dial_peers {
+            match peer_addr.parse::<Multiaddr>() {
+                Ok(remote) => {
+                    if let Err(e) = swarm.dial(remote) {
+                        debug!("Failed to dial {}: {}", peer_addr, e);
+                    } else {
+                        info!("Dialed {}", peer_addr);
                     }
-                    Err(e) => debug!("Invalid multiaddr {}: {}", peer_addr, e),
                 }
+                Err(e) => debug!("Invalid multiaddr {}: {}", peer_addr, e),
             }
         }
 
@@ -915,6 +915,22 @@ mod tests {
             "Expected external address {expected} not found in {external_addrs:?}"
         );
         assert!(node.external_address_confirmed);
+    }
+
+    /// A node that does not listen still dials its configured peers.
+    #[tokio::test]
+    async fn test_dial_peers_are_dialed_without_listen_address() {
+        let mut config = build_test_config("", None);
+        config.network.dial_peers = vec!["/ip4/127.0.0.1/tcp/65535".to_string()];
+        let node = build_test_node(config);
+
+        assert_eq!(
+            node.swarm
+                .network_info()
+                .connection_counters()
+                .num_pending_outgoing(),
+            1
+        );
     }
 
     #[tokio::test]
