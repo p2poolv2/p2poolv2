@@ -133,10 +133,6 @@ impl SimEmitter {
                 miner_address: &self.miner_address,
                 share_address: &self.share_address,
                 tracker: &self.tracker,
-                user_id: 0,
-                difficulty: difficulty.max(1.0) as u64,
-                btcaddress: self.miner_address.to_string(),
-                workername: "sim".to_string(),
                 enonce1_hex: &enonce1_hex,
                 enonce2_hex: &enonce2_hex,
                 nonce,
@@ -149,21 +145,12 @@ impl SimEmitter {
                     let is_block = is_block_find(p_block, &mut rng);
                     let header = built.emission.header;
                     let template = built.emission.blocktemplate.clone();
-                    let prev_share_blockhash = built
-                        .emission
-                        .share_commitment
-                        .as_ref()
-                        .map(|commitment| commitment.prev_share_blockhash);
-                    let block_find = match (is_block, prev_share_blockhash) {
-                        (true, Some(prev_share_blockhash)) => {
-                            Some((built.coinbase.clone(), prev_share_blockhash))
-                        }
-                        (true, None) => {
-                            warn!("sim block-find skipped: share has no commitment to anchor on");
-                            None
-                        }
-                        (false, _) => None,
-                    };
+                    let block_find = is_block.then(|| {
+                        (
+                            built.coinbase.clone(),
+                            built.emission.share_commitment.prev_share_blockhash,
+                        )
+                    });
 
                     if self.emissions_tx.send(built.emission).await.is_err() {
                         info!("Sim emitter: emissions channel closed, stopping");

@@ -13,7 +13,6 @@
 //! header merkle root matches what the receive-side `validate_bitcoin_payout`
 //! reconstructs. See `docs/simulation/load-test-plan.md`.
 
-use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::address::Address as P2PoolAddress;
 use crate::shares::coinbase_proof::CoinbaseProof;
 use crate::stratum::emission::Emission;
@@ -55,14 +54,6 @@ pub struct SimShareParams<'a> {
     pub share_address: &'a P2PoolAddress,
     /// Job tracker the per-miner job is inserted into.
     pub tracker: &'a JobTracker,
-    /// PPLNS user id (accounting only).
-    pub user_id: u64,
-    /// Share difficulty for PPLNS accounting (diff-1 relative).
-    pub difficulty: u64,
-    /// Payout address string for PPLNS accounting.
-    pub btcaddress: String,
-    /// Worker name for PPLNS accounting.
-    pub workername: String,
     /// Pool-assigned extranonce1 (4 bytes) as hex (8 chars).
     pub enonce1_hex: &'a str,
     /// Miner extranonce2 (8 bytes) as hex (16 chars).
@@ -123,29 +114,18 @@ pub fn build_sim_emission(params: SimShareParams<'_>) -> Result<BuiltShare, SimS
         nonce: params.nonce,
     };
 
-    let pplns = SimplePplnsShare::new(
-        params.user_id,
-        params.difficulty,
-        params.btcaddress,
-        params.workername,
-        params.ntime as u64,
-        format!("{job_id:016x}"),
-        params.enonce2_hex.to_string(),
-        format!("{:08x}", params.nonce),
-    );
-
-    let coinbase_proof = job
+    let share_commitment = job
         .share_commitment
-        .as_ref()
-        .map(|commitment| CoinbaseProof::from_coinbase(&coinbase, commitment.share_witness_root))
-        .transpose()
-        .map_err(|e| SimShareError(format!("build coinbase proof: {e}")))?;
+        .clone()
+        .ok_or_else(|| SimShareError("job has no share commitment".into()))?;
+    let coinbase_proof =
+        CoinbaseProof::from_coinbase(&coinbase, share_commitment.share_witness_root)
+            .map_err(|e| SimShareError(format!("build coinbase proof: {e}")))?;
 
     let emission = Emission {
-        pplns,
         header,
         blocktemplate: job.blocktemplate.clone(),
-        share_commitment: job.share_commitment.clone(),
+        share_commitment,
         template_merkle_branches: job.template_merkle_branches.clone(),
         bitcoin_coinbase: coinbase.clone(),
         coinbase_proof,
@@ -221,10 +201,6 @@ mod tests {
             miner_address: &address,
             share_address: &make_test_share_address(1, bitcoin::Network::Regtest),
             tracker: &tracker,
-            user_id: 1,
-            difficulty: 1,
-            btcaddress: address.to_string(),
-            workername: "sim".to_string(),
             enonce1_hex: "deadbeef",
             enonce2_hex: "0000000000000001",
             nonce: 0x12345678,
@@ -240,8 +216,7 @@ mod tests {
             .returning(|_| Ok(None));
         let share_block = handle_stratum_share(emission, &store)
             .await
-            .expect("handle ok")
-            .expect("p2p share block");
+            .expect("handle ok");
 
         // Reconstruct the bitcoin coinbase exactly as validate_bitcoin_payout does.
         let commitment_hash = ShareCommitment::from_share_block(&share_block).hash();
@@ -285,10 +260,6 @@ mod tests {
             miner_address: &address,
             share_address: &make_test_share_address(1, bitcoin::Network::Regtest),
             tracker: &tracker,
-            user_id: 7,
-            difficulty: 5,
-            btcaddress: address.to_string(),
-            workername: "sim".to_string(),
             enonce1_hex: "aabbccdd",
             enonce2_hex: "1122334455667788",
             nonce: 42,
@@ -297,7 +268,7 @@ mod tests {
         .expect("build emission")
         .emission;
 
-        let commitment = emission.share_commitment.expect("commitment present");
+        let commitment = emission.share_commitment;
         assert_eq!(commitment.miner_bitcoin_address, address);
         let fields =
             parse_bitcoin_coinbase_fields(&emission.bitcoin_coinbase).expect("parse coinbase");

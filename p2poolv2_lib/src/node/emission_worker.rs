@@ -51,7 +51,7 @@ impl EmissionWorker {
             debug!("Processing emission");
             // Pass a reference to chain store handle to avoid clones on each loop
             match handle_stratum_share(emission, &self.chain_store_handle).await {
-                Ok(Some(share_block)) => {
+                Ok(share_block) => {
                     // Send the block directly to the validation worker,
                     // avoiding a redundant store read. The validation worker
                     // will emit OrganiseEvent::Block and broadcast to peers
@@ -63,9 +63,6 @@ impl EmissionWorker {
                     {
                         error!("Failed to send block to validation worker: {e}");
                     }
-                }
-                Ok(None) => {
-                    // PPLNS-only share (p2p disabled), no broadcast needed
                 }
                 Err(e) => {
                     error!("Error processing emission: {e}");
@@ -79,7 +76,6 @@ impl EmissionWorker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::accounting::payout::simple_pplns::SimplePplnsShare;
     use crate::node::validation_worker::create_validation_channel;
     use crate::shares::coinbase_proof::CoinbaseProof;
     use crate::store::writer::StoreError;
@@ -120,50 +116,7 @@ mod tests {
         }
     }
 
-    fn create_test_emission_without_commitment() -> Emission {
-        let pplns = SimplePplnsShare {
-            user_id: 1,
-            difficulty: 1000,
-            btcaddress: Some("tb1qtest".to_string()),
-            workername: Some("worker1".to_string()),
-            n_time: 1700000000,
-            job_id: "test_job_1".to_string(),
-            extranonce2: "00000001".to_string(),
-            nonce: "12345".to_string(),
-        };
-
-        let bitcoin_header = Header {
-            version: bitcoin::block::Version::TWO,
-            prev_blockhash: BlockHash::all_zeros(),
-            merkle_root: bitcoin::TxMerkleNode::all_zeros(),
-            time: 1700000000,
-            bits: CompactTarget::from_consensus(0x1b4188f5),
-            nonce: 12345,
-        };
-
-        Emission {
-            pplns,
-            header: bitcoin_header,
-            blocktemplate: Arc::new(create_test_blocktemplate()),
-            share_commitment: None,
-            template_merkle_branches: vec![],
-            bitcoin_coinbase: test_coinbase_transaction(1),
-            coinbase_proof: None,
-        }
-    }
-
     fn create_test_emission_with_commitment() -> Emission {
-        let pplns = SimplePplnsShare {
-            user_id: 1,
-            difficulty: 1000,
-            btcaddress: Some("tb1qtest".to_string()),
-            workername: Some("worker1".to_string()),
-            n_time: 1700000000,
-            job_id: "test_job_1".to_string(),
-            extranonce2: "00000001".to_string(),
-            nonce: "12345".to_string(),
-        };
-
         let bitcoin_header = Header {
             version: bitcoin::block::Version::TWO,
             prev_blockhash: BlockHash::all_zeros(),
@@ -176,13 +129,12 @@ mod tests {
         let commitment = create_test_commitment();
 
         Emission {
-            pplns,
             header: bitcoin_header,
             blocktemplate: Arc::new(create_test_blocktemplate()),
-            share_commitment: Some(commitment),
+            share_commitment: commitment,
             template_merkle_branches: vec![],
             bitcoin_coinbase: test_coinbase_transaction(1),
-            coinbase_proof: Some(CoinbaseProof::default()),
+            coinbase_proof: CoinbaseProof::default(),
         }
     }
 
@@ -219,57 +171,34 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_run_without_commitment_sends_nothing() {
-        let (emissions_tx, emissions_rx) = mpsc::channel::<Emission>(10);
-        let (validation_tx, mut validation_rx) = create_validation_channel();
-
-        let mut mock_chain_store = ChainStoreHandle::default();
-        mock_chain_store
-            .expect_add_pplns_share()
-            .returning(|_| Ok(()));
-
-        let worker = EmissionWorker::new(emissions_rx, mock_chain_store, validation_tx);
-        let worker_handle = tokio::spawn(worker.run());
-
-        emissions_tx
-            .send(create_test_emission_without_commitment())
-            .await
-            .unwrap();
-        drop(emissions_tx);
-
-        worker_handle.await.unwrap();
-
-        assert!(
-            validation_rx.try_recv().is_err(),
-            "No ValidationEvent expected for PPLNS-only share"
-        );
-    }
-
-    #[tokio::test]
     async fn test_run_continues_after_handle_error() {
         let (emissions_tx, emissions_rx) = mpsc::channel::<Emission>(10);
         let (validation_tx, mut validation_rx) = create_validation_channel();
 
         let mut mock_chain_store = ChainStoreHandle::default();
         // First call fails, second call succeeds
-        mock_chain_store
-            .expect_add_pplns_share()
-            .times(1)
-            .returning(|_| Err(StoreError::ChannelClosed));
+        let mut store_calls = 0;
         mock_chain_store
             .expect_add_share_block_and_organise_header()
-            .times(1)
-            .returning(|_| Ok(None));
+            .times(2)
+            .returning(move |_| {
+                store_calls += 1;
+                if store_calls == 1 {
+                    Err(StoreError::ChannelClosed)
+                } else {
+                    Ok(None)
+                }
+            });
 
         let worker = EmissionWorker::new(emissions_rx, mock_chain_store, validation_tx);
         let worker_handle = tokio::spawn(worker.run());
 
-        // First emission: error path (no commitment, store fails)
+        // First emission: error path (store fails)
         emissions_tx
-            .send(create_test_emission_without_commitment())
+            .send(create_test_emission_with_commitment())
             .await
             .unwrap();
-        // Second emission: success path (with commitment, store succeeds)
+        // Second emission: success path (store succeeds)
         emissions_tx
             .send(create_test_emission_with_commitment())
             .await
