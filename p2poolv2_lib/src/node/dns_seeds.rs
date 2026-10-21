@@ -24,6 +24,10 @@ use tracing::{debug, info, warn};
 /// Timeout for a single seed hostname lookup.
 const DNS_SEED_LOOKUP_TIMEOUT_SECS: u64 = 10;
 
+/// Time configured dial_peers get to connect before falling back to DNS
+/// seeds.
+const DNS_SEED_FALLBACK_DELAY_SECS: u64 = 10;
+
 /// Maximum number of addresses taken from one seed, so a single seed
 /// operator cannot fill every outbound connection slot.
 const MAX_ADDRESSES_PER_SEED: usize = 16;
@@ -54,6 +58,18 @@ pub(crate) fn dns_seeds_for_network(network: bitcoin::Network) -> Option<DnsSeed
             port: TESTNET4_P2P_PORT,
         }),
         _ => None,
+    }
+}
+
+/// How long to wait before querying DNS seeds. Without dial_peers the seeds
+/// are the only way to find the network, so they are queried at once.
+/// Otherwise dial_peers get DNS_SEED_FALLBACK_DELAY_SECS to connect and the
+/// seeds are only a fallback, as in Bitcoin Core.
+pub(crate) fn dns_seed_delay(dial_peers_configured: bool) -> Duration {
+    if dial_peers_configured {
+        Duration::from_secs(DNS_SEED_FALLBACK_DELAY_SECS)
+    } else {
+        Duration::ZERO
     }
 }
 
@@ -175,6 +191,19 @@ mod tests {
         assert_eq!(
             seed_dial_addresses(resolved.into_iter(), 2),
             vec![first, second]
+        );
+    }
+
+    #[test]
+    fn dns_seed_delay_is_zero_without_dial_peers() {
+        assert_eq!(dns_seed_delay(false), Duration::ZERO);
+    }
+
+    #[test]
+    fn dns_seed_delay_waits_for_dial_peers() {
+        assert_eq!(
+            dns_seed_delay(true),
+            Duration::from_secs(DNS_SEED_FALLBACK_DELAY_SECS)
         );
     }
 
