@@ -349,9 +349,10 @@ pub struct NetworkConfig {
     /// Format: Multiaddr string, e.g. "/ip4/203.0.113.1/tcp/6884"
     #[serde(default)]
     pub external_address: Option<String>,
-    /// Resolve the network's built-in DNS seeds at startup and dial the
-    /// returned addresses. Defaults to true; set false to rely only on
-    /// dial_peers.
+    // Fall back to the built-in DNS seeds for this network when no peer is
+    // connected. Seeds are queried at startup without dial_peers, or 10s
+    // after startup when dial_peers are set but none connected. Set false
+    // to rely only on dial_peers.
     #[serde(default = "default_dns_seed")]
     pub dns_seed: bool,
 }
