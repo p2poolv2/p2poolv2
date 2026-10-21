@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.16.2] - 2026-10-21
+
+### Added
+
+- Built-in DNS seeds, compiled in per network like Bitcoin's chainparams.
+  Testnet4 uses `seed.testnet4.p2poolv2.org`. Seeds are a fallback only: they
+  are queried at startup when no `dial_peers` are configured, or 10s after
+  startup when `dial_peers` are set but none connected. At most 16 addresses
+  are taken from one seed. The new `network.dns_seed` option (default `true`)
+  turns them off.
+
+### Changed
+
+- `network.dial_peers` is now optional and defaults to empty, so a node can
+  find its peers through the DNS seeds alone.
+- A node without a `listen_address` now still dials its `dial_peers`.
+
+### Fixed
+
+- In Hydrapool mode, a PPLNS share is stored only when its hash meets
+  the session difficulty it is credited at. Since share chain
+  emissions were added, shares below the session difficulty were
+  stored and credited at the full session difficulty. Hydrapool shares
+  now go to a dedicated PPLNS share worker and are never emitted to
+  the share chain.
+
+### Security
+
+- Updated `rustls-webpki` to 0.103.16.
+
 ## [v0.16.1] - 2026-10-20
 
 This release changes the testnet4 genesis share. Testnet4 needs a chain reset,
@@ -1250,7 +1280,8 @@ and existing share chain stores must be cleared.
 
 We used tags like hydrapool.v0.x.0 and we didn't keep a changelog.
 
-[Unreleased]: https://github.com/p2poolv2/p2poolv2/compare/v0.16.1...HEAD
+[Unreleased]: https://github.com/p2poolv2/p2poolv2/compare/v0.16.2...HEAD
+[v0.16.2]: https://github.com/p2poolv2/p2poolv2/compare/v0.16.1...v0.16.2
 [v0.16.1]: https://github.com/p2poolv2/p2poolv2/compare/v0.16.0...v0.16.1
 [v0.16.0]: https://github.com/p2poolv2/p2poolv2/compare/v0.15.3...v0.16.0
 [v0.15.3]: https://github.com/p2poolv2/p2poolv2/compare/v0.15.2...v0.15.3
