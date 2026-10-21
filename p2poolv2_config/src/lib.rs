@@ -349,6 +349,15 @@ pub struct NetworkConfig {
     /// Format: Multiaddr string, e.g. "/ip4/203.0.113.1/tcp/6884"
     #[serde(default)]
     pub external_address: Option<String>,
+    /// Resolve the network's built-in DNS seeds at startup and dial the
+    /// returned addresses. Defaults to true; set false to rely only on
+    /// dial_peers.
+    #[serde(default = "default_dns_seed")]
+    pub dns_seed: bool,
+}
+
+fn default_dns_seed() -> bool {
+    true
 }
 
 impl Default for NetworkConfig {
@@ -375,6 +384,7 @@ impl Default for NetworkConfig {
             dial_timeout_secs: 30,
             blocked_ips: vec![],
             external_address: None,
+            dns_seed: true,
         }
     }
 }
@@ -855,6 +865,21 @@ mod tests {
                 assert_eq!(config.network.listen_address, "/ip4/10.0.0.1/tcp/6884");
             },
         );
+    }
+
+    /// DNS seeds are on unless the operator turns them off.
+    #[test]
+    fn dns_seed_defaults_to_true_when_absent() {
+        let config = Config::load("../config.sample.toml").unwrap();
+        assert!(config.network.dns_seed);
+    }
+
+    #[test]
+    fn env_override_disables_dns_seed() {
+        with_var("P2POOL_NETWORK__DNS_SEED", Some("false"), || {
+            let config = Config::load("../config.sample.toml").unwrap();
+            assert!(!config.network.dns_seed);
+        });
     }
 
     /// A single-underscore key no longer resolves, so an operator carrying the

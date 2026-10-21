@@ -641,6 +641,11 @@ impl NodeActor {
                     debug!("Disconnected peer: {peer_id}");
                 }
             }
+            // Event sent from dns seed resolution
+            SwarmSend::Dial(address) => match self.node.swarm.dial(address.clone()) {
+                Ok(_) => info!("Dialed {address}"),
+                Err(error) => debug!("Failed to dial {address}: {error}"),
+            },
         }
     }
 
