@@ -115,6 +115,10 @@ fn build_router(app_state: Arc<AppState>, app_config: AppConfig) -> Router {
         .route("/share", get(endpoints::share::share))
         .route("/dag", get(endpoints::dag::dag))
         .route("/miner", get(endpoints::miner::miner))
+        .route(
+            "/jd_prepare",
+            post(endpoints::jd_prepare::prepare).layer(axum::extract::DefaultBodyLimit::max(8192)),
+        )
         .route("/transaction", get(endpoints::transaction::transaction))
         .route(
             "/share_headers",
