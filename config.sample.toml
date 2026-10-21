@@ -1,11 +1,13 @@
 [network]
 listen_address = "/ip4/127.0.0.1/tcp/6884"
-dial_peers = []
+# Peers to dial at startup and keep reconnecting to. Optional: leave it
+# out to find peers through the DNS seeds alone.
+# dial_peers = ["/ip4/203.0.113.1/tcp/6884"]
 # Fall back to the built-in DNS seeds for this network when no peer is
 # connected. Seeds are queried at startup without dial_peers, or 10s
 # after startup when dial_peers are set but none connected. Set false
 # to rely only on dial_peers.
-dns_seed = true
+# dns_seed = true
 max_pending_incoming = 10
 max_pending_outgoing = 10
 max_established_incoming = 50

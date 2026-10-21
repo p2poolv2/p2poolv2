@@ -327,6 +327,9 @@ where
 #[derive(Debug, Deserialize, Clone)]
 pub struct NetworkConfig {
     pub listen_address: String,
+    /// Peers to dial at startup and reconnect to with backoff. Optional;
+    /// when absent the node finds peers through DNS seeds alone.
+    #[serde(default)]
     pub dial_peers: Vec<String>,
     pub max_pending_incoming: u32,
     pub max_pending_outgoing: u32,
@@ -866,6 +869,14 @@ mod tests {
                 assert_eq!(config.network.listen_address, "/ip4/10.0.0.1/tcp/6884");
             },
         );
+    }
+
+    /// dial_peers is optional, so it can be commented out of the config and
+    /// the node relies on DNS seeds alone.
+    #[test]
+    fn dial_peers_defaults_to_empty_when_absent() {
+        let config = Config::load("../config.sample.toml").unwrap();
+        assert!(config.network.dial_peers.is_empty());
     }
 
     /// DNS seeds are on unless the operator turns them off.
