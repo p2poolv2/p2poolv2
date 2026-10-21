@@ -203,21 +203,30 @@ outside the worker, by the direct `organise_header` calls described above.
 - Receives `Emission` from stratum server via `EmissionReceiver`
 - Calls `handle_stratum_share()` which builds the share, stores it, and
   organises its header onto the candidate chain
-- On success with `Some(ShareBlock)`: sends
+- On success: sends
   `ValidationEvent::ValidateShareBlock(share_block)` straight to the
   ValidationWorker (avoiding a redundant store read). The ValidationWorker
   emits `OrganiseEvent::Block` for confirmed promotion and broadcasts to peers
   after validation succeeds, and `OrganiseEvent::InvalidBlock` when validation
   fails with `FailureKind::Consensus`.
-- On success with `None`: solo mode, no broadcast or organisation needed
 
 ### handle_stratum_share (`shares/handle_stratum_share.rs`)
-- Async function that processes emissions
-- P2P mode (share commitment present): builds `ShareBlock`, persists it and
-  organises its header onto the candidate chain in one atomic write via
-  `ChainStoreHandle::add_share_block_and_organise_header()`, and returns
-  `Some(ShareBlock)`
-- Solo mode (no commitment): stores PPLNS share via `ChainStoreHandle::add_pplns_share()`, returns `None`
+- Async function that processes emissions. An `Emission` always carries a
+  share commitment and its coinbase proof; only P2Poolv2 mode emits.
+- Builds `ShareBlock`, persists it and organises its header onto the
+  candidate chain in one atomic write via
+  `ChainStoreHandle::add_share_block_and_organise_header()`, and returns the
+  `ShareBlock`
+
+### PplnsShareWorker (`accounting/payout/simple_pplns/share_worker.rs`)
+- Hydrapool mode only; hydrapool shares never become an `Emission`
+- Spawned by `build_node`, independent of NodeActor
+- `handle_submit` queues a `SimplePplnsShare` only when its hash meets the
+  session difficulty it is credited at; `ignore_difficulty` does not bypass
+  this
+- Stores each share via `ChainStoreHandle::add_pplns_share()`; a failed write
+  is logged and the worker continues
+- Stops when the stratum server drops its senders on shutdown
 
 Locally-mined blocks are not validated or marked `BlockValid` here. Like peer
 blocks, they are enqueued for validation (see EmissionWorker), and the organise
@@ -294,7 +303,8 @@ witness root bound, it follows from the header. See
 
 | Channel | Type | Capacity | Purpose |
 |---------|------|----------|---------|
-| emissions_rx | tokio mpsc | 100 | Stratum server -> EmissionWorker |
+| emissions_rx | tokio mpsc | 1000 | Stratum server -> EmissionWorker (P2Poolv2 mode) |
+| pplns_shares_rx | tokio mpsc | 1000 | Stratum server -> PplnsShareWorker (Hydrapool mode) |
 | validation_tx/rx | tokio mpsc | 8192 | Share handlers -> ValidationWorker |
 | organise_tx/rx | tokio mpsc | 512 | ValidationWorker/EmissionWorker -> OrganiseWorker |
 | swarm_tx/rx | tokio mpsc | 100 | ValidationWorker/EmissionWorker -> NodeActor |

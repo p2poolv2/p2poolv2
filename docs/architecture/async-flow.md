@@ -69,7 +69,10 @@ except the per-peer services and the StoreWriter thread:
 - **ValidationWorker** -- context-free validation, one spawned task per block,
   concurrency capped by a semaphore sized to the CPU count.
 - **OrganiseWorker** -- serial candidate-to-confirmed promotion.
-- **EmissionWorker** -- turns stratum shares into share blocks.
+- **EmissionWorker** -- turns stratum shares into share blocks (P2Poolv2
+  mode).
+- **PplnsShareWorker** -- stores hydrapool PPLNS shares that met their session
+  difficulty; spawned by `build_node`, outside the actor.
 - **StoreWriter** -- serializes all RocksDB writes on a `spawn_blocking` thread.
 
 Every channel is bounded, and every edge has an explicit policy:
@@ -84,6 +87,7 @@ Every channel is bounded, and every edge has an explicit policy:
 | BlockReceiver -> ValidationWorker | 8192 | awaited send |
 | BlockReceiver -> BlockFetcher | 8192 | awaited send |
 | EmissionWorker -> ValidationWorker | 8192 | awaited send |
+| Stratum connection -> PplnsShareWorker | 1000 | awaited send (enqueue only) |
 | ValidationWorker -> OrganiseWorker | 512 | awaited send, holding the validation permit |
 | OrganiseWorker -> ValidationWorker (stranded re-drive, startup seed) | 8192 | `try_send`; skip (next arrival re-drives) |
 

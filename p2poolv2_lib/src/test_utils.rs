@@ -64,12 +64,24 @@ use crate::stratum::work::block_template::BlockTemplate;
 #[cfg(any(test, feature = "test-utils"))]
 use crate::stratum::work::coinbase::build_bitcoin_coinbase_transaction;
 #[cfg(test)]
+use crate::stratum::work::difficulty::validate::validate_bitcoin_difficulty;
+#[cfg(test)]
 use crate::stratum::work::gbt::build_merkle_branches_for_template;
+#[cfg(test)]
+use crate::stratum::work::prepared_notify::{
+    PreparedNotifyParamsBuilder, build_notify_from_prepared,
+};
+#[cfg(test)]
+use crate::stratum::work::tracker::JobTracker;
 #[cfg(any(test, feature = "test-utils"))]
 use bitcoin::TxMerkleNode;
 #[cfg(any(test, feature = "test-utils"))]
 use bitcoin::script::PushBytesBuf;
 use bitcoin::secp256k1::Secp256k1;
+#[cfg(test)]
+use bitcoin::{Amount, Target};
+#[cfg(test)]
+use p2poolv2_config::DEFAULT_VERSION_MASK;
 #[cfg(test)]
 use rand::{RngExt, rng};
 
@@ -435,6 +447,71 @@ pub fn random_hex_string(length: usize, leading_zeroes: usize) -> String {
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect()
+}
+
+/// Pool target of the job inserted by `build_pool_job_submit`: the regtest
+/// maximum, so a share meets it within a few nonces.
+#[cfg(test)]
+pub const EASY_POOL_BITS: u32 = 0x207fffff;
+
+/// Insert a job built by the pool's own notify path into `tracker` and return
+/// a submit message for it whose share hash meets the job's pool target.
+///
+/// Captured stratum fixtures cannot produce a `CoinbaseProof`, because only a
+/// coinbase built by this pool ends with a block-aligned commitment tail, so
+/// tests of the share chain emission path use this instead. The job is built
+/// from the regtest one-txn GBT fixture, pays `create_test_commitment`'s miner
+/// bitcoin address, and has pool target `EASY_POOL_BITS`. Extranonce2 and
+/// ntime are fixed; the nonce is ground until the share meets the pool target.
+/// `enonce1_hex` must be the submitting session's extranonce1.
+#[cfg(test)]
+pub fn build_pool_job_submit(tracker: &JobTracker, enonce1_hex: &str) -> SimpleRequest<'static> {
+    let template: BlockTemplate = serde_json::from_str(include_str!(
+        "../../p2poolv2_tests/test_data/gbt/regtest/ckpool/one-txn/gbt.json"
+    ))
+    .unwrap();
+    let template = Arc::new(template);
+    let miner_bitcoin_address = create_test_commitment().miner_bitcoin_address;
+    let output_distribution = vec![OutputPair {
+        address: miner_bitcoin_address.clone(),
+        amount: Amount::from_sat(template.coinbasevalue),
+    }];
+    let pool_bits = CompactTarget::from_consensus(EASY_POOL_BITS);
+    let ntime_hex = format!("{:08x}", template.curtime);
+    let prepared =
+        PreparedNotifyParamsBuilder::new(template, output_distribution, b"test_pool", false)
+            .bits(pool_bits)
+            .build()
+            .unwrap();
+    build_notify_from_prepared(
+        &prepared,
+        Some(&miner_bitcoin_address),
+        Some(&make_test_share_address(1, bitcoin::Network::Signet)),
+        tracker,
+    )
+    .unwrap();
+
+    let job_id = tracker.get_latest_job_id();
+    let job = tracker.get_job(job_id).unwrap();
+    let job_id_hex = format!("{:016x}", job_id.0);
+    let pool_target = Target::from_compact(pool_bits);
+
+    (0u32..)
+        .map(|nonce| {
+            SimpleRequest::new_submit(
+                4,
+                "worker".to_string(),
+                job_id_hex.clone(),
+                "0000000000000001".to_string(),
+                ntime_hex.clone(),
+                format!("{nonce:08x}"),
+            )
+        })
+        .find(|submit| {
+            validate_bitcoin_difficulty(&job, submit, enonce1_hex, DEFAULT_VERSION_MASK)
+                .is_ok_and(|result| pool_target.is_met_by(result.header.block_hash()))
+        })
+        .unwrap()
 }
 
 #[cfg(test)]
