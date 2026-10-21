@@ -5,6 +5,7 @@
 mod address_filter;
 pub mod behaviour;
 pub mod connection_tracker;
+mod dns_seeds;
 pub mod emission_worker;
 pub mod organise_worker;
 pub mod p2p_health;
@@ -88,6 +89,9 @@ pub enum SwarmSend<C> {
     /// subsequent broadcasts of the same block are suppressed.
     BroadcastBlock(ShareBlock),
     Disconnect(PeerId),
+    /// Dial an address once, without reconnect tracking. Used for
+    /// addresses returned by DNS seeds.
+    Dial(Multiaddr),
 }
 
 use connection_tracker::{ConnectionAction, ConnectionTracker, PING_FAILURE_THRESHOLD};
@@ -246,6 +250,12 @@ impl Node {
         }
 
         let (swarm_tx, swarm_rx) = mpsc::channel(100);
+
+        if config.network.dns_seed
+            && let Some(seeds) = dns_seeds::dns_seeds_for_network(config.stratum.network)
+        {
+            dns_seeds::spawn_dns_seed_dials(seeds, swarm_tx.clone());
+        }
 
         let request_response_handler = RequestResponseHandler::new(
             config.network.clone(),
@@ -719,6 +729,7 @@ mod tests {
             dial_timeout_secs: 2,
             blocked_ips: vec![],
             external_address: None,
+            dns_seed: false,
         };
         network_config.dial_peers = vec![unreachable_peer];
         network_config.dial_timeout_secs = 2;
@@ -837,6 +848,7 @@ mod tests {
                 dial_timeout_secs: 2,
                 blocked_ips: vec![],
                 external_address,
+                dns_seed: false,
             },
             bitcoinrpc: BitcoinRpcConfig {
                 url: "http://localhost:8332".to_string(),

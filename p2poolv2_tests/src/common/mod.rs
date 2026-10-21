@@ -30,6 +30,7 @@ pub fn default_test_config() -> Config {
             dial_timeout_secs: 30,
             blocked_ips: vec![],
             external_address: None,
+            dns_seed: false,
         },
         bitcoinrpc: BitcoinRpcConfig {
             url: "http://localhost:8332".to_string(),
