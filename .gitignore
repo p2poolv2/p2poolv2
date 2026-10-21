@@ -40,3 +40,7 @@ ansible/inventory/group_vars/all/vault.yml
 perf.data
 # matplotlib venv for sim plotting
 load-tests/sim/.venv/
+
+# Local node run logs
+node-start.log
+node-start.log.prev

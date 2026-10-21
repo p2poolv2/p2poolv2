@@ -3,306 +3,497 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>P2Poolv2 Dashboard</title>
-    <link rel="icon" type="image/png" href="/static/favicon.png" />
+    <title>P2Pool v2 - BCH chipnet</title>
+    <link rel="icon" type="image/svg+xml" href="/static/logo-circle.svg" />
     <link rel="stylesheet" href="/static/pico.min.css" />
+    <link rel="stylesheet" href="/static/dashboard.css?v=36" />
+    <script defer src="/static/dashboard.js?v=43"></script>
     <script defer src="/static/alpine.min.js"></script>
-    <style>
-      .nav-links {
-        display: flex;
-        gap: 0;
-      }
-      .nav-menu-toggle {
-        display: none;
-        background: none;
-        border: none;
-        font-size: 1.5rem;
-        cursor: pointer;
-        padding: 0.25rem 0.5rem;
-        color: var(--pico-color);
-      }
-      .nav-dropdown {
-        display: none;
-        position: absolute;
-        right: 0;
-        top: 100%;
-        background: var(--pico-card-background-color);
-        border: 1px solid var(--pico-muted-border-color);
-        border-radius: var(--pico-border-radius);
-        padding: 0.5rem 0;
-        z-index: 10;
-        min-width: 10rem;
-      }
-      .nav-dropdown.open {
-        display: block;
-      }
-      .nav-dropdown a {
-        display: block;
-        padding: 0.5rem 1rem;
-      }
-      .nav-menu-wrapper {
-        display: none;
-      }
-      @media (max-width: 576px) {
-        .nav-links {
-          display: none;
-        }
-        .nav-menu-wrapper {
-          display: flex;
-        }
-        .nav-menu-toggle {
-          display: block;
-        }
-      }
-    </style>
   </head>
-  <body>
-    <main
-      class="container"
-      x-data="dashboard()"
-      @keydown.escape.window="selectedShare = null; selectedUncle = null"
-    >
-      <!-- Loading state while checking auth -->
-      <template x-if="checking">
-        <p aria-busy="true">Connecting to P2Poolv2...</p>
-      </template>
+  <body
+    x-data="dashv1()"
+    x-init="init()"
+    @keydown.escape.window="selectedShare = null; selectedUncle = null; selectedBlock = null"
+  >
+    <header class="site-header" x-cloak x-show="authenticated">
+      <nav>
+        <ul class="brand">
+          <li>
+            <a
+              href="https://bitcoincash.org"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <img src="/static/logo-horizontal-wt.svg" alt="Bitcoin Cash" />
+            </a>
+            <span class="brand-meta">
+              <a
+                class="wordmark-link"
+                href="https://github.com/CyberAshven/BitcoinCash-p2poolv2"
+                target="_blank"
+                rel="noopener noreferrer"
+                ><span class="wordmark"
+                  >P2Pool<span class="accent">v2</span></span
+                ></a
+              >
+              <span class="chain-badge">chipnet</span>
+            </span>
+          </li>
+        </ul>
+        <ul class="tabs">
+          <li>
+            <a
+              href="#/"
+              role="button"
+              class="outline header-btn"
+              :class="route.name === 'home' ? 'active-nav' : ''"
+              x-text="'Dashboard'"
+            ></a>
+          </li>
+          <li>
+            <a
+              href="#/blocks"
+              role="button"
+              class="outline header-btn"
+              :class="route.name === 'blocks' ? 'active-nav' : ''"
+              x-text="'Blocks'"
+            ></a>
+          </li>
+          <li>
+            <a
+              href="#/miners"
+              role="button"
+              class="outline header-btn"
+              :class="route.name === 'miners' || route.name === 'miner' ? 'active-nav' : ''"
+              x-text="'Miners'"
+            ></a>
+          </li>
+          <li>
+            <a
+              href="#/help"
+              role="button"
+              class="outline header-btn"
+              :class="route.name === 'help' ? 'active-nav' : ''"
+              x-text="'Help'"
+            ></a>
+          </li>
+        </ul>
+        <ul class="header-right">
+          <li>
+            <span
+              class="status-dot"
+              :class="pollError ? 'err' : 'ok'"
+              :title="pollError || 'Polling'"
+            ></span>
+          </li>
+          <li x-text="lastUpdated ? 'Updated ' + fmtClock(lastUpdated) : ''"></li>
+          <li>
+            <button
+              class="outline header-btn refresh-main"
+              @click="manualRefresh()"
+              x-text="refreshLabel()"
+            ></button>
+          </li>
+          <li>
+            <button
+              class="outline header-btn pause-btn"
+              :class="autoRefresh ? 'auto-on' : 'auto-paused'"
+              @click="toggleAutoRefresh()"
+              :title="
+                autoRefresh ? 'Pause auto-refresh' : 'Resume auto-refresh'
+              "
+            >
+              <svg x-show="autoRefresh" viewBox="0 0 16 16">
+                <rect x="3" y="2" width="4" height="12" />
+                <rect x="9" y="2" width="4" height="12" />
+              </svg>
+              <svg x-show="!autoRefresh" viewBox="0 0 16 16">
+                <path d="M4 2 L13 8 L4 14 Z" />
+              </svg>
+            </button>
+          </li>
+          <li>
+            <a
+              role="button"
+              class="outline header-btn"
+              @click="logout()"
+              >Sign out</a
+            >
+          </li>
+        </ul>
+      </nav>
+    </header>
 
-      <!-- Login dialog -->
-      <template x-if="!authenticated && !checking">
-        <article>
-          <header>
-            <h2>P2Poolv2 - Login</h2>
-          </header>
-          <form @submit.prevent="login">
-            <template x-if="error">
-              <p
-                role="alert"
-                style="color: var(--pico-del-color)"
-                x-text="error"
-              ></p>
-            </template>
-            <label>
-              Username
-              <input type="text" x-model="username" required autofocus />
-            </label>
-            <label>
-              Password
-              <input type="password" x-model="password" required />
-            </label>
-            <button type="submit" :aria-busy="loading">Login</button>
+    <main class="container">
+      <div class="toast" x-cloak x-show="pollError && authenticated" x-text="pollError"></div>
+
+      <div class="login-wrap" x-cloak x-show="!authenticated">
+        <div class="login-card">
+          <img src="/static/logo-circle.svg" alt="Bitcoin Cash" />
+          <h1>P2Pool<span class="accent">v2</span></h1>
+          <p class="subtitle">Bitcoin Cash chipnet pool dashboard</p>
+          <form @submit.prevent="login()">
+            <input
+              type="text"
+              name="username"
+              placeholder="API username"
+              autocomplete="username"
+              x-model="auth.user"
+              required
+            />
+            <input
+              type="password"
+              name="password"
+              placeholder="API password"
+              autocomplete="current-password"
+              x-model="auth.pass"
+              required
+            />
+            <button class="btn-primary" style="width: 100%" :disabled="auth.busy">
+              <span x-show="!auth.busy">Sign in</span>
+              <span x-show="auth.busy">Checking...</span>
+            </button>
+            <p class="login-error" x-show="auth.error" x-text="auth.error"></p>
           </form>
-        </article>
-      </template>
-
-      <!-- Dashboard -->
-      <template x-if="authenticated && !checking">
-        <div>
-          <nav>
-            <ul>
-              <li>
-                <img
-                  src="/static/p2poolv2-logo.png"
-                  alt="P2Poolv2 Dashboard"
-                  style="height: 2.5rem"
-                />
-              </li>
-            </ul>
-            <ul class="nav-links">
-              <li>
-                <a href="https://grafana.p2poolv2.org" target="_blank"
-                  >Node's Grafana Dashboard</a
-                >
-              </li>
-              <li>
-                <a href="#" @click.prevent="logout" x-show="credentials !== ''"
-                  >Logout</a
-                >
-              </li>
-            </ul>
-            <ul class="nav-menu-wrapper">
-              <li style="position: relative">
-                <button
-                  class="nav-menu-toggle"
-                  @click="menuOpen = !menuOpen"
-                  @click.outside="menuOpen = false"
-                  aria-label="Menu"
-                >
-                  &#9776;
-                </button>
-                <div class="nav-dropdown" :class="menuOpen ? 'open' : ''">
-                  <a href="https://p2poolv2.org" target="_blank"
-                    >Mine on P2Poolv2</a
-                  >
-                  <a
-                    href="#"
-                    @click.prevent="logout; menuOpen = false"
-                    x-show="credentials !== ''"
-                    >Logout</a
-                  >
-                </div>
-              </li>
-            </ul>
-          </nav>
-          <small
-            style="display: block; margin-top: -1rem; margin-bottom: 1.5rem"
-            ><em>Replace pool operators with miners</em></small
-          >
-
-          <article>
-            <header>
-              <h3>Chain Info</h3>
-            </header>
-
-            <template x-if="chainError">
-              <p
-                role="alert"
-                style="color: var(--pico-del-color)"
-                x-text="chainError"
-              ></p>
-            </template>
-
-            <template x-if="chainInfo">
-              <div class="overflow-auto">
-                <table>
-                  <tbody>
-                    <tr>
-                      <th scope="row">Genesis Blockhash</th>
-                      <td>
-                        <code
-                          x-text="chainInfo.genesis_blockhash || 'N/A'"
-                        ></code>
-                      </td>
-                    </tr>
-                    <tr>
-                      <th scope="row">Chain Tip Height</th>
-                      <td
-                        x-text="chainInfo.chain_tip_height != null ? chainInfo.chain_tip_height : 'N/A'"
-                      ></td>
-                    </tr>
-                    <tr>
-                      <th scope="row">Total Work</th>
-                      <td>
-                        <code x-text="chainInfo.total_work || 'N/A'"></code>
-                      </td>
-                    </tr>
-                    <tr>
-                      <th scope="row">Chain Tip Blockhash</th>
-                      <td>
-                        <code
-                          x-text="chainInfo.chain_tip_blockhash || 'N/A'"
-                        ></code>
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            </template>
-          </article>
-
-          <article>
-            <header>
-              <h3>Shares</h3>
-            </header>
-
-            <template x-if="sharesError">
-              <p
-                role="alert"
-                style="color: var(--pico-del-color)"
-                x-text="sharesError"
-              ></p>
-            </template>
-
-            <template x-if="shares.length > 0">
-              <div class="overflow-auto">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Height</th>
-                      <th>Blockhash</th>
-                      <th>Bitcoin Address</th>
-                      <th>Share Chain Address</th>
-                      <th>Difficulty</th>
-                      <th>Time</th>
-                      <th>Uncles</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <template
-                      x-for="row in pagedShares"
-                      :key="(row.isUncle ? 'uncle-' : 'share-') + row.share.blockhash"
-                    >
-                      <tr
-                        style="cursor: pointer"
-                        :style="row.isUncle ? 'opacity: 0.55;' : ''"
-                        @click="row.isUncle ? selectUncle(row.share) : selectShare(row.share)"
-                      >
-                        <td
-                          x-text="row.share.height != null ? row.share.height : ''"
-                        ></td>
-                        <td>
-                          <code x-text="formatHash(row.share.blockhash)"></code>
-                        </td>
-                        <td>
-                          <code
-                            x-text="formatAddress(row.share.miner_bitcoin_address)"
-                          ></code>
-                        </td>
-                        <td>
-                          <code
-                            x-text="formatAddress(row.share.miner_address)"
-                          ></code>
-                        </td>
-                        <td
-                          x-text="row.share.bits ? difficultyFromBits(row.share.bits) : ''"
-                        ></td>
-                        <td x-text="formatTimestamp(row.share.timestamp)"></td>
-                        <td
-                          x-text="row.isUncle ? 'uncle' : row.share.uncles.length"
-                        ></td>
-                      </tr>
-                    </template>
-                  </tbody>
-                </table>
-                <nav>
-                  <ul>
-                    <li>
-                      <button
-                        class="outline"
-                        @click="previousSharesPage"
-                        :disabled="sharesPage === 0"
-                      >
-                        Previous
-                      </button>
-                    </li>
-                  </ul>
-                  <ul>
-                    <li>
-                      <span
-                        x-text="(sharesPage + 1) + ' / ' + totalSharesPages"
-                      ></span>
-                    </li>
-                  </ul>
-                  <ul>
-                    <li>
-                      <button
-                        class="outline"
-                        @click="nextSharesPage"
-                        :disabled="sharesPage >= totalSharesPages - 1"
-                      >
-                        Next
-                      </button>
-                    </li>
-                  </ul>
-                </nav>
-              </div>
-            </template>
-
-            <template x-if="shares.length === 0 && !sharesError">
-              <p>No shares found.</p>
-            </template>
-          </article>
+          <p class="hint">
+            Uses the node API credentials (auth_user / auth password from
+            gen-auth). Not your miner payout address.
+          </p>
         </div>
-      </template>
+      </div>
+
+      <div x-cloak x-show="authenticated && route.name === 'home'">
+        <div class="kpi-grid">
+          <div class="kpi-card">
+            <p class="kpi-label">Local hashrate (node)</p>
+            <p
+              class="kpi-value kpi-value-local"
+              :title="poolHashrate() > 0 ? localWindowHint() : ''"
+            >
+              <span x-text="poolHashrate() > 0 ? fmtHashrate(poolHashrate()) : '-'"></span>
+            </p>
+            <p class="kpi-sub kpi-sub-heading">P2POOL</p>
+            <p
+              class="kpi-p2pool-value"
+              :title="chainHashrate() > 0 ? chainWindowHint() : ''"
+              x-text="chainHashrate() > 0 ? fmtHashrate(chainHashrate()) : '-'"
+            ></p>
+            <p
+              class="kpi-sub"
+              x-show="remoteHashrate() > 0"
+              title="The part of the pool not mining on this node"
+              >Remote: <span x-text="fmtHashrate(remoteHashrate())"></span
+            ></p>
+          </div>
+          <div class="kpi-card">
+            <p class="kpi-label">Net hashrate (bch)</p>
+            <p class="kpi-value kpi-value-net" x-text="fmtHashrate(netHashrate())"></p>
+            <p class="kpi-sub"
+              >Difficulty:
+              <span x-text="fmtDiff(metricNum('network_difficulty'))"></span
+            ></p>
+            <p class="kpi-sub">Est. from difficulty (10-min blocks)</p>
+          </div>
+          <div class="kpi-card">
+            <p class="kpi-label">Shares (stratum)</p>
+            <p class="kpi-value" x-text="fmtInt(metricNum('shares_accepted_total'))"></p>
+            <p class="kpi-sub"
+              >Rejected:
+              <span
+                class="badge-warn"
+                x-text="fmtInt(metricNum('shares_rejected_total'))"
+              ></span
+            ></p>
+            <p class="kpi-sub"
+              >Efficiency:
+              <span x-text="shareEfficiencyPct().toFixed(2) + '%'"></span
+            ></p>
+            <p class="kpi-sub"
+              >Best:
+              <span x-text="fmtDiff(metricNum('best_share'))"></span
+            ></p>
+            <p class="kpi-sub"
+              >All time best:
+              <span x-text="fmtDiff(metricNum('best_share_ever'))"></span
+            ></p>
+          </div>
+          <div class="kpi-card">
+            <p class="kpi-label">Blocks found (bch)</p>
+            <p class="kpi-value kpi-value-green" x-text="fmtInt(metricNum('bitcoin_blocks_found_total'))"></p>
+            <p class="kpi-sub"
+              >Effort:
+              <span x-text="blockEffortPct().toFixed(2) + '%'"></span
+            ></p>
+            <p class="kpi-sub"
+              >Time to block:
+              <span
+                x-text="timeToBlockSecs() > 0 ? fmtDuration(timeToBlockSecs()) : '-'"
+              ></span
+            ></p>
+            <p class="kpi-sub" x-text="lastBlockSubtitle()"></p>
+            <p class="kpi-sub"
+              >Uptime:
+              <span x-text="fmtUptime(uptimeSeconds())"></span
+            ></p>
+          </div>
+          <div class="kpi-card">
+            <p class="kpi-label">P2P peers</p>
+            <p class="kpi-value" x-text="fmtInt(metricNum('p2p_connected_peers'))"></p>
+            <p class="kpi-sub"
+              >Connections total:
+              <span x-text="fmtInt(metricNum('p2p_connections_total'))"></span
+            ></p>
+            <p class="kpi-sub"
+              >Failures in/out/ping:
+              <span x-text="fmtInt(metricNum('p2p_inbound_failures_total'))"></span>
+              / <span x-text="fmtInt(metricNum('p2p_outbound_failures_total'))"></span>
+              / <span x-text="fmtInt(metricNum('p2p_ping_failures_total'))"></span
+            ></p>
+            <p class="kpi-sub"
+              >Unresponsive closed:
+              <span
+                x-text="fmtInt(metricNum('p2p_connections_closed_unresponsive_total'))"
+              ></span
+            ></p>
+            <p class="kpi-sub"
+              >Queue depth:
+              <span x-text="fmtInt(metricNum('p2p_response_queue_depth'))"></span>,
+              dropped:
+              <span x-text="fmtInt(metricNum('p2p_responses_dropped_total'))"></span
+            ></p>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2>
+            Historical
+            <span
+              class="panel-note"
+              title="Local hashrate is span-averaged (cumulative share work over a lookback window, not instantaneous) and clamped at 3x the mean so bursts don't dominate. Pool and Network are plotted as reported."
+              x-text="chartRangeNote()"
+            ></span>
+            <span class="range-btns">
+              <button
+                class="range-btn"
+                :class="chartRange === '1h' ? 'active' : ''"
+                @click="chartRange = '1h'"
+              >
+                1H
+              </button>
+              <button
+                class="range-btn"
+                :class="chartRange === '6h' ? 'active' : ''"
+                @click="chartRange = '6h'"
+              >
+                6H
+              </button>
+              <button
+                class="range-btn"
+                :class="chartRange === '24h' ? 'active' : ''"
+                @click="chartRange = '24h'"
+              >
+                24H
+              </button>
+            </span>
+          </h2>
+          <div class="legend-chips">
+            <button
+              class="legend-chip"
+              :class="legendOn.local ? '' : 'off'"
+              @click="toggleLegend('local')"
+              title="Local hashrate: recent accepted share work at this node (5-min span, see smoothed note)"
+            >
+              <span class="legend-dot" style="background: #22d3ee"></span>Local
+            </button>
+            <button
+              class="legend-chip"
+              :class="legendOn.pool ? '' : 'off'"
+              @click="toggleLegend('pool')"
+              title="Pool hashrate: sharechain hashrate over the last hour of shares (hover the P2POOL hashrate for the window)"
+            >
+              <span class="legend-dot" style="background: #008de4"></span>Pool
+            </button>
+            <button
+              class="legend-chip"
+              :class="legendOn.diff ? '' : 'off'"
+              @click="toggleLegend('diff')"
+              title="Share difficulty"
+            >
+              <span class="legend-dot" style="background: #ffffff"></span>Share Diff
+            </button>
+            <button
+              class="legend-chip"
+              :class="legendOn.shares ? '' : 'off'"
+              @click="toggleLegend('shares')"
+              title="Accepted shares"
+            >
+              <span class="legend-dot" style="background: #ffffff"></span>Shares
+            </button>
+            <button
+              class="legend-chip"
+              :class="legendOn.net ? '' : 'off'"
+              @click="toggleLegend('net')"
+              title="Network hashrate"
+            >
+              <span class="legend-dot" style="background: #8b5cf6"></span>Net
+            </button>
+            <button
+              class="legend-chip"
+              :class="legendOn.netdiff ? '' : 'off'"
+              @click="toggleLegend('netdiff')"
+              title="Network Difficulty"
+            >
+              <span class="legend-dot" style="background: #0ac18e"></span>Net Diff
+            </button>
+            <button
+              class="legend-chip"
+              :class="legendOn.blocks ? '' : 'off'"
+              @click="toggleLegend('blocks')"
+              title="Blocks found"
+            >
+              <span class="legend-dot" style="background: #0ac18e"></span>Blocks
+            </button>
+            <button
+              class="legend-chip"
+              :class="legendOn.miners ? '' : 'off'"
+              @click="toggleLegend('miners')"
+              title="Connected miners"
+            >
+              <span class="legend-dot" style="background: #f59e0b"></span>Miners:
+              <span x-text="fmtInt(connectedCount())"></span>
+            </button>
+            <button
+              class="legend-chip legend-reset"
+              @click="resetLegend()"
+              title="Reset legend chips to defaults"
+            >
+              Reset
+            </button>
+          </div>
+          <div
+            class="chart-wrap"
+            @mousemove="chartHoverMove($event)"
+            @mouseleave="chartHoverLeave()"
+            @touchstart.prevent="chartHoverMove($event)"
+            @touchmove.prevent="chartHoverMove($event)"
+            @touchend="touchEndHover($event)"
+          >
+            <div
+              class="chart-empty"
+              x-show="hashChartVisibleCount() < 1"
+              x-text="hashEmptyNote()"
+            ></div>
+            <svg
+              viewBox="0 0 600 170"
+              preserveAspectRatio="none"
+              x-show="hashChartVisibleCount() >= 1"
+            >
+              <line x1="48" y1="8" x2="600" y2="8" stroke="#3a3d40" stroke-width="1" vector-effect="non-scaling-stroke" />
+              <line x1="48" y1="83" x2="600" y2="83" stroke="#3a3d40" stroke-width="1" stroke-dasharray="4 4" vector-effect="non-scaling-stroke" />
+              <line x1="48" y1="158" x2="600" y2="158" stroke="#3a3d40" stroke-width="1" vector-effect="non-scaling-stroke" />
+              <g x-html="tickGridHtml()"></g>
+              <path :d="areaLocal()" fill="rgba(34,211,238,0.14)" x-show="legendOn.local && chartSamples().length >= 2" />
+              <path :d="areaPool()" fill="rgba(0,141,228,0.12)" x-show="legendOn.pool && poolSamples().length >= 2" />
+              <path :d="areaNet()" fill="rgba(139,92,246,0.12)" x-show="legendOn.net && netSamples().length >= 2" />
+              <path :d="lineLocal()" fill="none" stroke="#22d3ee" stroke-width="2" vector-effect="non-scaling-stroke" x-show="legendOn.local && chartSamples().length >= 2" />
+              <path :d="linePool()" fill="none" stroke="#008de4" stroke-width="2" vector-effect="non-scaling-stroke" x-show="legendOn.pool && poolSamples().length >= 2" />
+              <path :d="lineNet()" fill="none" stroke="#8b5cf6" stroke-width="2" vector-effect="non-scaling-stroke" x-show="legendOn.net && netSamples().length >= 2" />
+              <path :d="mchartLine()" fill="none" stroke="#f59e0b" stroke-dasharray="2 3" stroke-width="1.5" vector-effect="non-scaling-stroke" x-show="legendOn.miners && mchartSamples().length >= 2" />
+              <path :d="lineDiff()" fill="none" stroke="#ffffff" stroke-width="1.5" vector-effect="non-scaling-stroke" x-show="legendOn.diff && diffSamples().length >= 2" />
+              <path :d="lineNetDiff()" fill="none" stroke="#0ac18e" stroke-width="1.5" vector-effect="non-scaling-stroke" x-show="legendOn.netdiff && netDiffSamples().length >= 2" />
+              <g x-html="blockDots()" @click="blockDotClick($event)"></g>
+              <g x-html="tracerDots()"></g>
+              <g x-html="shareDots()" @click="shareDotClick($event)"></g>
+              <text class="chart-axis" x="4" y="14" x-text="fmtHashrate(combinedMax())"></text>
+              <text class="chart-axis chart-axis-right" x="596" y="14" x-show="legendOn.diff" x-text="fmtDiff(diffMaxOf())"></text>
+              <text class="chart-axis chart-axis-right chart-axis-netdiff" x="596" y="26" x-show="legendOn.netdiff" x-text="fmtDiff(netDiffMaxOf())"></text>
+              <text class="chart-axis" x="4" y="155" x-text="fmtHashrate(0)"></text>
+              <text class="chart-axis" x="540" y="168" x-text="chartNowLabel()"></text>
+              <text class="chart-axis" x="4" y="168" x-text="chartStartLabel()"></text>
+              <g x-html="tickLabelsHtml()"></g>
+            </svg>
+            <div
+              class="chart-tip"
+              x-show="hoverT !== null"
+              :style="hoverStyle()"
+              x-html="hoverTipHtml()"
+            ></div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <h2>
+            Recent shares
+            <span class="panel-note"
+              ><span x-text="sharesNote()"></span> |
+              <span
+                class="mono"
+                x-show="chainInfo && chainInfo.total_work"
+                :title="chainInfo && chainInfo.total_work ? chainInfo.total_work : ''"
+                x-text="'Total work ' + fmtWork(chainInfo && chainInfo.total_work)"
+              ></span>
+              <span x-show="chainInfo && chainInfo.total_work"> | </span>
+              <span x-text="wsConnected ? 'live' : 'polling'"></span
+            ></span>
+          </h2>
+          <div class="table-wrap">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Height</th>
+                  <th>Share hash</th>
+                  <th>Type</th>
+                  <th>Miner (payout)</th>
+                  <th>Share owner</th>
+                  <th>Time</th>
+                  <th>Difficulty</th>
+                </tr>
+              </thead>
+              <tbody>
+                <template x-for="row in pagedShares" :key="(row.isUncle ? 'uncle-' : 'share-') + row.share.blockhash">
+                  <tr
+                    style="cursor: pointer"
+                    :style="row.isUncle ? 'opacity: 0.55;' : ''"
+                    @click="row.isUncle ? selectUncle(row.share) : selectShare(row.share)"
+                  >
+                    <td x-text="row.share.height"></td>
+                    <td class="mono" x-text="fmtHash(row.share.blockhash)"></td>
+                    <td x-text="row.isUncle ? 'uncle' : 'share'"></td>
+                    <td class="mono" x-text="fmtAddr(row.share.miner_bitcoin_address)"></td>
+                    <td class="mono" x-text="fmtAddr(row.share.miner_address)"></td>
+                    <td x-text="fmtTimeAgo(row.share.timestamp)"></td>
+                    <td x-text="row.share.bits ? fmtDiff(difficultyFromBits(row.share.bits)) : '-'"></td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+          <nav class="more-row" x-show="shares.length > 0" style="justify-content: center; gap: 1rem">
+            <button
+              class="outline more-btn"
+              @click="previousSharesPage()"
+              :disabled="sharesPage === 0"
+            >
+              Previous
+            </button>
+            <span
+              style="align-self: center; font-size: 0.78rem; color: var(--pico-muted-color)"
+              x-text="(sharesPage + 1) + ' / ' + totalSharesPages"
+            ></span>
+            <button
+              class="outline more-btn"
+              @click="nextSharesPage()"
+              :disabled="sharesPage >= totalSharesPages - 1"
+            >
+              Next
+            </button>
+          </nav>
+          <p class="empty-state" x-show="shares.length === 0">
+            No shares yet. Point a miner at
+            <span class="mono" x-text="stratumTarget()"></span> to get started.
+          </p>
+        </div>
+      </div>
 
       <!-- Share detail modal -->
       <dialog :open="selectedShare !== null" @click="selectedShare = null">
@@ -315,7 +506,8 @@
             ></button>
             <h3>Share Details</h3>
           </header>
-          <table>
+          <div class="table-x">
+          <table class="table">
             <tbody>
               <tr>
                 <th scope="row">Height</th>
@@ -360,14 +552,14 @@
               <tr>
                 <th scope="row">Time</th>
                 <td
-                  x-text="selectedShare ? formatTimestamp(selectedShare.timestamp) : ''"
+                  x-text="selectedShare ? fmtStamp(selectedShare.timestamp) : ''"
                 ></td>
               </tr>
               <tr>
                 <th scope="row">Bits</th>
                 <td>
                   <code
-                    x-text="selectedShare ? selectedShare.bits + ' (Difficulty: ' + difficultyFromBits(selectedShare.bits) + ')' : ''"
+                    x-text="selectedShare ? selectedShare.bits + ' (Difficulty: ' + fmtDiff(difficultyFromBits(selectedShare.bits)) + ')' : ''"
                   ></code>
                 </td>
               </tr>
@@ -379,6 +571,7 @@
               </tr>
             </tbody>
           </table>
+          </div>
 
           <template x-if="selectedShare && selectedShare.uncles.length > 0">
             <div>
@@ -387,7 +580,8 @@
                 x-for="uncle in selectedShare.uncles"
                 :key="uncle.blockhash"
               >
-                <table>
+                <div class="table-x">
+                <table class="table">
                   <tbody>
                     <tr>
                       <th scope="row">Blockhash</th>
@@ -428,7 +622,7 @@
                     <tr>
                       <th scope="row">Time</th>
                       <td
-                        x-text="uncle.timestamp ? formatTimestamp(uncle.timestamp) : 'N/A'"
+                        x-text="uncle.timestamp ? fmtStamp(uncle.timestamp) : 'N/A'"
                       ></td>
                     </tr>
                     <tr>
@@ -439,6 +633,7 @@
                     </tr>
                   </tbody>
                 </table>
+                </div>
               </template>
             </div>
           </template>
@@ -459,7 +654,8 @@
             ></button>
             <h3>Uncle Details</h3>
           </header>
-          <table>
+          <div class="table-x">
+          <table class="table">
             <tbody>
               <tr>
                 <th scope="row">Height</th>
@@ -506,18 +702,471 @@
               <tr>
                 <th scope="row">Time</th>
                 <td
-                  x-text="selectedUncle && selectedUncle.timestamp ? formatTimestamp(selectedUncle.timestamp) : 'N/A'"
+                  x-text="selectedUncle && selectedUncle.timestamp ? fmtStamp(selectedUncle.timestamp) : 'N/A'"
                 ></td>
               </tr>
             </tbody>
           </table>
+          </div>
           <footer>
             <button @click="selectedUncle = null">Close</button>
           </footer>
         </article>
       </dialog>
+
+      <!-- Block detail modal -->
+      <dialog :open="selectedBlock !== null" @click="selectedBlock = null">
+        <article x-show="selectedBlock" @click.stop>
+          <header>
+            <button
+              aria-label="Close"
+              rel="prev"
+              @click="selectedBlock = null"
+            ></button>
+            <h3>Block Details</h3>
+          </header>
+          <div class="table-x">
+          <table class="table">
+            <tbody>
+              <tr>
+                <th scope="row">Height</th>
+                <td x-text="selectedBlock ? selectedBlock.height : ''"></td>
+              </tr>
+              <tr>
+                <th scope="row">Block hash</th>
+                <td>
+                  <code
+                    style="word-break: break-all"
+                    x-text="selectedBlock ? selectedBlock.hash : ''"
+                  ></code>
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">Miner (cashaddr)</th>
+                <td>
+                  <a
+                    class="addr"
+                    :href="selectedBlock ? '#/miner/' + selectedBlock.miner : ''"
+                    x-text="selectedBlock ? selectedBlock.miner : ''"
+                  ></a>
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">Miner (base58)</th>
+                <td>
+                  <code
+                    class="mono"
+                    :title="selectedBlock ? selectedBlock.legacy : ''"
+                    x-text="selectedBlock ? selectedBlock.legacy : ''"
+                  ></code>
+                </td>
+              </tr>
+              <tr>
+                <th scope="row">Network</th>
+                <td x-text="selectedBlock ? selectedBlock.network : ''"></td>
+              </tr>
+              <tr>
+                <th scope="row">Found</th>
+                <td
+                  x-text="selectedBlock ? fmtStamp(selectedBlock.time) + ' (' + fmtTimeAgo(selectedBlock.time) + ')' : ''"
+                ></td>
+              </tr>
+            </tbody>
+          </table>
+          </div>
+          <footer>
+            <button @click="selectedBlock = null">Close</button>
+          </footer>
+        </article>
+      </dialog>
+
+      <div x-cloak x-show="authenticated && route.name === 'blocks'">
+        <div class="panel">
+          <h2>
+            Found blocks
+            <span class="panel-note"
+              ><span x-text="fmtInt(metricNum('bitcoin_blocks_found_total'))"></span>
+              | last:
+              <span x-text="lastBlockSubtitle() || 'none yet'"></span>
+            ></span>
+          </h2>
+          <div class="table-wrap">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Height</th>
+                  <th>Block hash</th>
+                  <th>miner - cashaddr</th>
+                  <th>miner - base58</th>
+                  <th>Network</th>
+                  <th>Found</th>
+                </tr>
+              </thead>
+              <tbody>
+                <template x-for="b in blockList()" :key="b.hash">
+                  <tr>
+                    <td x-text="b.height"></td>
+                    <td class="mono" x-text="fmtHash(b.hash)"></td>
+                    <td>
+                      <a
+                        class="addr"
+                        :href="'#/miner/' + b.miner"
+                        x-text="fmtAddr(b.miner)"
+                      ></a>
+                    </td>
+                    <td class="mono" :title="b.legacy" x-text="fmtAddr(b.legacy)"></td>
+                    <td x-text="b.network"></td>
+                    <td :title="new Date(b.time * 1000).toLocaleString()" x-text="fmtTimeAgo(b.time)"></td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+          <p class="empty-state" x-show="blockList().length === 0">
+            No Bitcoin Cash blocks found by this pool yet. Keep mining.
+          </p>
+        </div>
+      </div>
+
+      <div x-cloak x-show="authenticated && route.name === 'miners'">
+        <div class="panel">
+          <h2>
+            Miners leaderboard
+            <span class="panel-note"
+              >share work = accepted difficulty in the current window (the
+              newest share is counted), resets when a new share is found, click
+              + for workers</span
+            >
+          </h2>
+          <div class="grid-table miners-grid">
+            <div class="grid-head">
+              <span>#</span>
+              <span>Payout address</span>
+              <span>Hashrate</span>
+              <span title="Accepted difficulty in the current window; the newest share counts toward it, and the window resets when a new share is found"
+                >Share work</span
+              >
+              <span>Pool share</span>
+              <span>Est. time/share</span>
+              <span>Last seen</span>
+              <span></span>
+            </div>
+            <template x-for="(m, i) in minerList()" :key="m.address">
+              <div>
+                <div class="grid-row">
+                  <span x-text="i + 1"></span>
+                  <a class="addr" :href="'#/miner/' + m.address" x-text="m.address"></a>
+                  <span
+                    x-text="minerHashrate(m.address) > 0 ? fmtHashrate(minerHashrate(m.address)) : '-'"
+                  ></span>
+                  <span x-text="fmtInt(m.shares)"></span>
+                  <span x-text="m.pct.toFixed(1) + '%'"></span>
+                  <span
+                    x-text="minerTimeToShareSecs(m.address) > 0 ? fmtDuration(minerTimeToShareSecs(m.address)) : '-'"
+                  ></span>
+                  <span
+                    x-text="minerLastSeen(m.address) ? fmtTimeAgo(minerLastSeen(m.address)) : '-'"
+                  ></span>
+                  <button
+                    class="row-toggle"
+                    @click="toggleMiner(m.address)"
+                    x-text="expanded[m.address] ? '-' : '+'"
+                    :title="expanded[m.address] ? 'Hide workers' : 'Show workers'"
+                  ></button>
+                </div>
+                <template x-if="expanded[m.address]">
+                  <div class="worker-list">
+                    <template x-for="w in minerWorkers(m.address)" :key="m.address + '|' + w.name">
+                      <div class="grid-row worker">
+                        <span></span>
+                        <span class="mono" x-text="w.name"></span>
+                        <span></span>
+                        <span x-text="fmtInt(w.shares)"></span>
+                        <span></span>
+                        <span x-text="'best ' + fmtDiff(w.best)"></span>
+                        <span x-text="w.lastShare ? fmtTimeAgo(w.lastShare) : '-'"></span>
+                        <span></span>
+                      </div>
+                    </template>
+                    <p
+                      class="worker-empty"
+                      x-show="minerWorkers(m.address).length === 0"
+                    >
+                      No worker-level stats for this address.
+                    </p>
+                  </div>
+                </template>
+              </div>
+            </template>
+          </div>
+          <p class="empty-state" x-show="minerList().length === 0">
+            No miners have submitted shares yet.
+          </p>
+        </div>
+      </div>
+
+      <div x-cloak x-show="authenticated && route.name === 'miner'">
+        <div class="panel">
+          <h2>Miner lookup</h2>
+          <div class="search-row">
+            <div class="grow">
+              <label for="miner-addr">Payout or share address</label>
+              <input
+                id="miner-addr"
+                type="text"
+                placeholder="bchtest:... or tp2pool:..."
+                x-model="minerQuery"
+                @keyup.enter="loadMiner()"
+              />
+            </div>
+            <button class="btn-primary" @click="loadMiner()" :disabled="minerLoading">
+              <span x-show="!minerLoading">Look up</span>
+              <span x-show="minerLoading">Loading...</span>
+            </button>
+          </div>
+          <p class="login-error miner-error" x-text="minerError"></p>
+        </div>
+
+        <div class="panel" x-show="miner">
+          <h2>
+            Miner
+            <span class="panel-note"
+              ><span class="mono" x-text="miner ? miner.address : ''"></span>
+              (<span x-text="miner ? miner.address_type : ''"></span>)</span
+            >
+          </h2>
+          <div class="stat-list">
+            <div class="stat-item">
+              <div class="k">PPLNS window weight</div>
+              <div class="v green mono" x-text="miner ? fmtBigint(miner.weight) : ''"></div>
+            </div>
+            <div class="stat-item">
+              <div class="k">Shares in window</div>
+              <div class="v" x-text="miner ? fmtInt(miner.window.share_count) : ''"></div>
+            </div>
+            <div class="stat-item">
+              <div class="k">Your shares in window</div>
+              <div class="v" x-text="miner ? fmtInt(miner.share_count) : ''"></div>
+            </div>
+            <div class="stat-item">
+              <div class="k">Uncles</div>
+              <div class="v" x-text="miner ? fmtInt(miner.uncle_count) : ''"></div>
+            </div>
+            <div class="stat-item">
+              <div class="k">Share fraction</div>
+              <div class="v" x-text="miner ? fmtPct(miner.share_fraction) : ''"></div>
+            </div>
+            <div class="stat-item">
+              <div class="k">Payout fraction</div>
+              <div class="v" x-text="miner ? fmtPct(miner.payout_fraction) : ''"></div>
+            </div>
+            <div class="stat-item">
+              <div class="k">Window span</div>
+              <div class="v"
+                x-text="miner ? fmtInt(miner.window.oldest_height) + ' - ' + fmtInt(miner.window.newest_height) : ''"
+              ></div>
+            </div>
+            <div class="stat-item">
+              <div class="k">Anchor share</div>
+              <div class="v mono" x-text="miner ? fmtHash(miner.anchor) : ''"></div>
+            </div>
+          </div>
+
+          <h2 style="margin-top: 1.2rem">Recent shares</h2>
+          <div class="table-x">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Height</th>
+                <th>Share hash</th>
+                <th>Time</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="s in (miner ? minerShares.slice(0, 15) : [])" :key="s.blockhash">
+                <tr>
+                  <td x-text="s.height"></td>
+                  <td class="mono" x-text="fmtHash(s.blockhash)"></td>
+                  <td x-text="fmtTimeAgo(s.timestamp)"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+          </div>
+          <p class="empty-state" x-show="miner && minerShares.length === 0">
+            No recent shares in the loaded chain window.
+          </p>
+        </div>
+      </div>
+
+      <div x-cloak x-show="authenticated && route.name === 'help'">
+        <div class="panel help-section">
+          <h3>Connect a miner</h3>
+          <ul>
+            <li>
+              Stratum URL: <code x-text="stratumTarget()"></code>
+            </li>
+            <li>
+              Username: <code>&lt;payout address&gt;.&lt;worker name&gt;</code>, for
+              example <code x-text="exampleUsername()"></code>
+            </li>
+            <li>
+              Password: <code>x,p2p=&lt;share address&gt;</code>, for example
+              <code x-text="examplePassword()"></code>
+            </li>
+            <li>
+              This node does not set a pool-wide miner_address, so every miner must
+              send <code>p2p=</code> in its password with a share-chain address it
+              controls (tp2pool / p2pool / rp2pool cashaddr).
+            </li>
+            <li>
+              To generate a share address: take a <code>bchtest:</code> P2PKH
+              cashaddr from your wallet and run
+              <code>p2poolv2_cli bch-share-address --network chipnet &lt;bchtest:P2PKH address&gt;</code>
+              and it prints the same key under the <code>tp2pool:</code> share prefix.
+            </li>
+            <li>Minimum share difficulty is 1. Version rolling is enabled.</li>
+          </ul>
+        </div>
+        <div class="panel help-section">
+          <h3>Network</h3>
+          <ul>
+            <li>Bitcoin Cash chipnet (not testnet4 - chipnet is BCH's test network)</li>
+            <li>Payout addresses use the <code>bchtest:</code> cashaddr prefix</li>
+            <li>Mini share chain (256x easier than the main share chain)</li>
+            <li>Donation is disabled on this node (donation = 0)</li>
+            <li>
+              Share chain genesis:
+              <code class="mono" x-text="chainInfo ? chainInfo.genesis_blockhash : '...'"></code>
+            </li>
+          </ul>
+        </div>
+        <div class="panel help-section">
+          <h3>Peering</h3>
+          <ul>
+            <li>
+              P2P multiaddr:
+              <code class="mono" x-text="p2pMultiaddr()"></code>
+              (port 6884, open by design, no invite needed)
+            </li>
+            <li>
+              To connect: peer must use chipnet + mini share chain, then set
+              <code>dial_peers = ["&lt;this multiaddr&gt;"]</code> in its
+              <code>[network]</code> config and restart. Their log shows
+              <code>Identified Peer ... /p2pool/test/&lt;genesis&gt;/1.0.0</code>
+              with the same genesis as shown on the Network card; the P2P peers
+              card on the dashboard goes to 1+.
+            </li>
+            <li>
+              NAT or inbound-only peer: give the dashboard operator your
+              multiaddr and this node can dial out instead.
+            </li>
+          </ul>
+        </div>
+        <div class="panel help-section">
+          <h3>API endpoints</h3>
+          <p>
+            All routes require the Basic auth you signed in with; only the
+            blocked-IP routes change node state.
+          </p>
+          <ul>
+            <li><code>GET /health</code> - liveness probe</li>
+            <li
+              ><code>GET /metrics</code> - Prometheus exposition (shares,
+              difficulties, stratum, P2P, workers, storage)</li
+            >
+            <li
+              ><code>GET /chain_info</code> - tip height/blockhash, total
+              work, genesis</li
+            >
+            <li
+              ><code>GET /shares?to=&amp;num=</code> - confirmed shares +
+              uncles for a height range (num &le; 100)</li
+            >
+            <li
+              ><code>GET /candidates?to=&amp;num=</code> - candidate-chain
+              shares + uncles (pre-confirmation)</li
+            >
+            <li
+              ><code>GET /dag?to=&amp;num=</code> - all share headers per
+              height regardless of status (full DAG)</li
+            >
+            <li
+              ><code>GET /share_headers?to=&amp;num=&amp;include_txs=&amp;include_merkle_branches=</code>
+              - raw share headers for tooling</li
+            >
+            <li
+              ><code>GET /share?blockhash=</code> or <code>?height=</code> -
+              single-share lookup (validation state, chain position)</li
+            >
+            <li
+              ><code>GET /miner?address=&amp;limit=</code> - PPLNS window for
+              a payout or share address (weight, fractions, anchor)</li
+            >
+            <li
+              ><code>GET /transaction?txid=&amp;raw=</code> - pool transaction
+              (e.g. coinbase) lookup</li
+            >
+            <li><code>GET /peers</code> - connected libp2p peers (multiaddrs, protocol)</li>
+            <li
+              ><code>GET /pplns_shares?limit=&amp;start_time=&amp;end_time=</code>
+              - flat recent PPLNS share list</li
+            >
+            <li
+              ><code>GET /blocked_ips</code> - list blocked peer IPs;
+              <code>POST</code> block, <code>DELETE</code> unblock
+              (mutating)</li
+            >
+            <li>
+              <code>GET /ws?token=&lt;base64 user:pass&gt;</code> - live
+              events; subscribe with
+              <code>{"action":"subscribe","topic":"shares"|"peers"}</code>
+            </li>
+          </ul>
+        </div>
+        <div class="panel help-section">
+          <h3>Community</h3>
+          <ul>
+            <li>
+              <img class="help-icon" src="/static/matrix.svg" alt="" />
+              <a
+                href="https://matrix.to/#/#bitcoincashmining:matrix.org"
+                target="_blank"
+                rel="noopener noreferrer"
+                >#bitcoincashmining:matrix.org on Matrix</a
+              >
+              - BCH mining chatroom (opens in a new tab)
+            </li>
+          </ul>
+        </div>
+        <div class="panel help-section">
+          <h3>Dashboard data</h3>
+          <p>
+            This page reads the node's existing API: /metrics, /chain_info,
+            /shares and /miner. Found-block and miner stats come from the
+            Prometheus exposition served at /metrics and are polled every 15
+            seconds. New shares stream in live over the WebSocket at /ws, with
+            the 15-second share poll kept as a fallback when the socket is
+            down. API endpoints require the Basic auth you signed in with;
+            sign-out only clears this page's session.
+          </p>
+        </div>
+      </div>
     </main>
 
-    <script src="/static/dashboard.js"></script>
+    <footer class="site-footer" x-cloak x-show="authenticated">
+      <div class="inner">
+        <span>P2Pool v2 - Bitcoin Cash chipnet - mini share chain</span>
+        <span x-text="footerStatus()"></span>
+        <span
+          ><a
+            href="http://p2pool.realbitcoin.cash:9348/"
+            target="_blank"
+            rel="noopener noreferrer"
+            >Looking for P2Pool v1?</a
+          ></span
+        >
+      </div>
+    </footer>
   </body>
 </html>
