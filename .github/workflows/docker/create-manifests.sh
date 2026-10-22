@@ -18,15 +18,21 @@ docker buildx imagetools create \
   "${SRC_TAG}-amd64" \
   "${SRC_TAG}-arm64"
 
-echo "=== 2/5 Docker Hub: copy multi-arch manifest (self-contained) ==="
-docker buildx imagetools create -t "${DH_TAG}" "${SRC_TAG}"
+if [[ "${DOCKERHUB_ENABLED:-true}" == "true" ]]; then
+  echo "=== 2/5 Docker Hub: copy multi-arch manifest (self-contained) ==="
+  docker buildx imagetools create -t "${DH_TAG}" "${SRC_TAG}"
 
-echo "=== 3/5 Cleanup: delete per-arch temp tags from GHCR ==="
-# Requires GITHUB_TOKEN env
-.github/workflows/docker/cleanup-temp-tags.sh
+  echo "=== 3/5 Cleanup: delete per-arch temp tags from GHCR ==="
+  # Requires GITHUB_TOKEN env
+  .github/workflows/docker/cleanup-temp-tags.sh
 
-echo "=== 4/5 GHCR: copy back from Docker Hub (self-contained) ==="
-docker buildx imagetools create -t "${SRC_TAG}" "${DH_TAG}"
+  echo "=== 4/5 GHCR: copy back from Docker Hub (self-contained) ==="
+  docker buildx imagetools create -t "${SRC_TAG}" "${DH_TAG}"
+else
+  # No Docker Hub: the GHCR manifest keeps pointing at the per-arch images,
+  # so their temp tags stay.
+  echo "=== 2-4/5 skipped: no Docker Hub credentials, publishing to GHCR only ==="
+fi
 
 echo "=== 5/5 Tag version + latest on both registries ==="
 for tag in ${TAGS_GHCR}; do
@@ -34,8 +40,10 @@ for tag in ${TAGS_GHCR}; do
   echo "  GHCR: ${tag}"
   docker buildx imagetools create -t "${tag}" "${SRC_TAG}"
 done
-for tag in ${TAGS_DH}; do
-  [[ "${tag}" == "${DH_TAG}" ]] && continue
-  echo "  Docker Hub: ${tag}"
-  docker buildx imagetools create -t "${tag}" "${DH_TAG}"
-done
+if [[ "${DOCKERHUB_ENABLED:-true}" == "true" ]]; then
+  for tag in ${TAGS_DH}; do
+    [[ "${tag}" == "${DH_TAG}" ]] && continue
+    echo "  Docker Hub: ${tag}"
+    docker buildx imagetools create -t "${tag}" "${DH_TAG}"
+  done
+fi

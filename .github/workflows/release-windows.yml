@@ -1,0 +1,78 @@
+name: Release Windows
+
+# dist builds the Linux and macOS archives; this builds the Windows one from
+# the same tag and puts it on the same GitHub release. Moving a pre-release's
+# tag rebuilds it, and --clobber replaces the previous Windows files.
+
+permissions: {}
+
+on:
+  push:
+    tags:
+      - '**[0-9]+.[0-9]+.[0-9]+*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to rebuild the Windows archive for (e.g. v0.0.1-alpha)"
+        required: true
+        type: string
+
+jobs:
+  windows:
+    name: Build and upload x86_64-pc-windows-msvc
+    runs-on: windows-2022
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          persist-credentials: false
+
+      # rocksdb's bindgen needs libclang and its resource directory, and
+      # bitcoinconsensus needs secp256k1 built static with ElligatorSwift.
+      - name: Build
+        shell: pwsh
+        run: |
+          $llvm = 'C:\Program Files\LLVM'
+          $resource = (Get-ChildItem "$llvm\lib\clang" -Directory | Sort-Object { [int]($_.Name -replace '\D.*$', '') } -Descending | Select-Object -First 1).FullName
+          $env:LIBCLANG_PATH = "$llvm\bin"
+          $env:BINDGEN_EXTRA_CLANG_ARGS = "-resource-dir=`"$resource`""
+          $env:CFLAGS = '-DSECP256K1_STATIC -DENABLE_MODULE_ELLSWIFT'
+          $env:CXXFLAGS = '-DSECP256K1_STATIC'
+          cargo build --release --locked --bins
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          .\target\release\p2poolv2.exe --version
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $version = $env:RELEASE_TAG.TrimStart('v')
+          $dir = "p2poolv2-$version-x86_64-pc-windows-msvc"
+          New-Item -ItemType Directory $dir | Out-Null
+          Copy-Item target\release\p2poolv2.exe, target\release\p2poolv2_cli.exe, config.sample.toml, docs\bch-quickstart.md $dir
+          $zip = 'p2poolv2_node-x86_64-pc-windows-msvc.zip'
+          Compress-Archive -Path $dir -DestinationPath $zip
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          [IO.File]::WriteAllText("$PWD\$zip.sha256", "$hash  $zip`n")
+          Get-Content "$zip.sha256"
+
+      # On a new tag dist creates the release, possibly after this job is
+      # done building, so wait for it.
+      - name: Upload to the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $found = $false
+          for ($i = 0; $i -lt 90; $i++) {
+            gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY *> $null
+            if ($LASTEXITCODE -eq 0) { $found = $true; break }
+            Start-Sleep -Seconds 30
+          }
+          if (-not $found) { throw "Release $env:RELEASE_TAG was not found" }
+          gh release upload $env:RELEASE_TAG p2poolv2_node-x86_64-pc-windows-msvc.zip p2poolv2_node-x86_64-pc-windows-msvc.zip.sha256 --clobber --repo $env:GITHUB_REPOSITORY
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
