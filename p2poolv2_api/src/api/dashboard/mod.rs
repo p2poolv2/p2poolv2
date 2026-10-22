@@ -486,7 +486,7 @@ mod tests {
         // A bad address is the handler's 400, not the login's 401.
         let (status, _, _) = get_with(&state, "/miner?address=not-an-address", public()).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
-        for own_route in ["/metrics", "/peers", "/blocked_ips"] {
+        for own_route in ["/metrics", "/peers", "/blocked_ips", "/jd_prepare"] {
             let (status, _, headers) = get_with(&state, own_route, public()).await;
             assert_eq!(status, StatusCode::UNAUTHORIZED, "{own_route}");
             assert!(headers.contains_key(header::WWW_AUTHENTICATE));

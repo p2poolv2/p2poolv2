@@ -206,9 +206,9 @@ with `cors_allowed = true`. The built-in dashboard stays at `/dashboard`.
 By default everything the API serves asks for the `auth_user` login when one
 is set. For a public node, set `public_dashboard = true`: the dashboard, the
 `web_root` frontend and the read-only share chain routes they read open to
-anyone, while `/metrics`, `/peers` and `/blocked_ips` keep the login. The
-share chain is public data that every peer already has. Put a reverse proxy
-with rate limits in front of a node you open to the internet.
+anyone, while `/metrics`, `/peers`, `/blocked_ips` and `/jd_prepare` keep the
+login. The share chain is public data that every peer already has. Put a
+reverse proxy with rate limits in front of a node you open to the internet.
 
 === Grafana dashboards
 

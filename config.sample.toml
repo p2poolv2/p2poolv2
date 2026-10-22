@@ -160,8 +160,8 @@ port = 46884
 # cors_allowed = false
 # Show the dashboard (/dashboard), the web_root frontend and the read-only
 # share chain routes they read to anyone who can reach this port, for a
-# public node. /metrics, /peers and /blocked_ips keep requiring auth_user.
-# Default false: everything asks for the API login.
+# public node. /metrics, /peers, /blocked_ips and /jd_prepare keep requiring
+# auth_user. Default false: everything asks for the API login.
 # public_dashboard = false
 # Serve a self-hosted frontend: a folder with its build (index.html plus its
 # files, from TypeScript, Rust/WASM or anything that builds to static files).

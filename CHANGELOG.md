@@ -21,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it reads. Without one, `/` leads to the dashboard.
 - `[api] public_dashboard` opens the dashboard, the `web_root` frontend and
   the read-only share chain routes to anyone for a public node, while
-  `/metrics`, `/peers` and `/blocked_ips` keep the API login.
+  `/metrics`, `/peers`, `/blocked_ips` and `/jd_prepare` keep the API login.
 - Bitcoin Cash: `stratum.chain = "bitcoin-cash"` with `bitcoin_cash_network`
   mines from BCHN templates, pays CashAddr scripts, records P2PKH share owners
   and starts from a main or mini Bitcoin Cash genesis. See `docs/bch-plan.md`
