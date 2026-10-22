@@ -38,7 +38,7 @@ The playbook deploys one or more P2Poolv2 instances to a host. Each instance get
 
 Two roles:
 
-*p2poolv2*:: Installs the p2poolv2 binary and CLI using the official installer script (auto-detects architecture), deploys the dashboard static files, templates the TOML config, and manages the systemd service.
+*p2poolv2*:: Installs the p2poolv2 binary and CLI using the official installer script (auto-detects architecture), templates the TOML config, and manages the systemd service.
 
 *nginx_p2poolv2*:: Installs nginx as a reverse proxy in front of the API with rate limiting, WebSocket support, and Let's Encrypt certificates via certbot. Optionally proxies Grafana.
 

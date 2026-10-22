@@ -160,30 +160,55 @@ NOTE: A taproot address is not a share chain address. `tb1p...` and
 `sp2pool1p...` encode the same 32 bytes, but the prefix is covered by the
 checksum, so neither parser accepts the other's form.
 
-=== Enable Dashboard
+=== Dashboard
 
-P2Poolv2 includes a web dashboard for monitoring your node. The static
-assets are distributed as a separate `dashboard.tar.gz` archive.
+Every node serves a web dashboard at
+`http://<your api hostname>:<your api port>/dashboard`. Nothing needs
+installing or configuring: the node renders it in Rust, and the pages carry
+no scripts.
 
-. Download and extract the dashboard assets:
-+
-[,shell]
+* *Overview*: pool, node and network hashrate, the share chain height, a
+  one-day hashrate chart, the blocks the pool found and the newest shares.
+  It refreshes every 30 seconds.
+* *Miner*: `/dashboard/miner?address=...` takes a payout or share chain
+  address. It shows the address's share of the next block's payout, its
+  shares in the PPLNS window and its recent hashrate.
+* *Share*: `/dashboard/share/<hash>` shows a share and its Bitcoin Cash
+  header.
+
+The node keeps the dashboard's hashrate history in memory, one sample a
+minute for a day, and starts it afresh on restart. With `auth_user` set in
+`[api]`, the dashboard asks for the same credentials as the API through the
+browser's own login prompt. Opening the API's root (`/`) leads to the
+dashboard.
+
+==== Your own frontend
+
+A node can also serve a frontend you build yourself, in TypeScript, in Rust
+compiled to WebAssembly, or in anything else that builds to static files.
+Point `web_root` in `[api]` at the folder with the build:
+
+[,toml]
 ----
-curl --proto '=https' --tlsv1.2 -LsSf -o dashboard.tar.gz https://github.com/p2poolv2/p2poolv2/releases/latest/download/dashboard.tar.gz
-tar xzf dashboard.tar.gz
+[api]
+web_root = "/srv/p2pool-frontend"
 ----
 
-. Set the `P2POOL_STATIC_DIR` environment variable to point to the extracted directory:
-+
-[,shell]
-----
-export P2POOL_STATIC_DIR=/path/to/static
-----
+The node serves that folder for every path the API does not use, with its
+`index.html` for paths the folder lacks, so the frontend's own routing
+works. The frontend reads the same JSON API (`/chain_info`, `/shares`,
+`/share`, `/miner`, `/pplns_shares` and the rest) from the same origin, so
+it needs no CORS. A frontend hosted somewhere else can read a node's API
+with `cors_allowed = true`. The built-in dashboard stays at `/dashboard`.
 
-. Access the dashboard at `http://<your api hostname>:<your api port>/dashboard`
+==== Own node or public node
 
-If `P2POOL_STATIC_DIR` is not set, the dashboard is not available when
-running from a release binary.
+By default everything the API serves asks for the `auth_user` login when one
+is set. For a public node, set `public_dashboard = true`: the dashboard, the
+`web_root` frontend and the read-only share chain routes they read open to
+anyone, while `/metrics`, `/peers` and `/blocked_ips` keep the login. The
+share chain is public data that every peer already has. Put a reverse proxy
+with rate limits in front of a node you open to the internet.
 
 === Grafana dashboards
 

@@ -26,9 +26,6 @@ RuntimeDirectoryMode=0750
 # StateDirectory/p2p2oolv2/<instance>
 WorkingDirectory=%S/p2poolv2/%i
 
-# We installed bin in /opt/p2poolv2/bin, and static dashboard files here
-Environment=P2POOL_STATIC_DIR=/opt/p2poolv2/share/static
-
 # The ConfigDirectory is left at default /etc
 ExecStart=/opt/p2poolv2/bin/p2poolv2 --config /etc/p2poolv2/config-%i.toml
 

@@ -232,6 +232,16 @@ pub(crate) async fn miner(
             "limit must be between 1 and {MAX_NUM_SHARES_IN_RESPONSE}, got {limit}"
         )));
     }
+    Ok(Json(miner_report(&state, address, limit as usize).await?))
+}
+
+/// What `/miner` answers for `address`, listing at most `limit` shares.
+/// Shared with the dashboard's miner page, so both read the same snapshot.
+pub(crate) async fn miner_report(
+    state: &AppState,
+    address: &str,
+    limit: usize,
+) -> Result<MinerResponse, ApiError> {
     let miner = parse_miner(address, &state.app_config)?;
 
     let window_source = state.pplns_window.as_ref().ok_or_else(|| {
@@ -250,13 +260,13 @@ pub(crate) async fn miner(
         .credits_at(anchor, &state.chain_store_handle)
         .await?;
 
-    Ok(Json(build_response(
+    Ok(build_response(
         &miner,
         anchor,
         &window_credits,
-        limit as usize,
+        limit,
         &state.app_config,
-    )))
+    ))
 }
 
 /// Read `address` as either of the two addresses a share header carries,

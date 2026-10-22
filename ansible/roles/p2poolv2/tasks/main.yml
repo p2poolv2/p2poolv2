@@ -25,7 +25,6 @@
     mode: "0755"
   loop:
     - "{{ p2poolv2_bin_dir }}"
-    - "{{ p2poolv2_static_dir }}"
 
 - name: Create config directory
   ansible.builtin.file:
@@ -88,24 +87,6 @@
     p2poolv2_installed_version.rc != 0 or
     p2poolv2_version not in p2poolv2_installed_version.stdout
   register: p2poolv2_binary_changed
-
-# --- Download and install dashboard ---
-
-- name: Download dashboard archive
-  ansible.builtin.get_url:
-    url: "{{ p2poolv2_release_url }}/dashboard.tar.gz"
-    dest: "/tmp/p2poolv2-dashboard-{{ p2poolv2_version }}.tar.gz"
-    mode: "0644"
-  register: dashboard_download
-
-- name: Extract dashboard to static directory
-  ansible.builtin.unarchive:
-    src: "/tmp/p2poolv2-dashboard-{{ p2poolv2_version }}.tar.gz"
-    dest: "{{ p2poolv2_static_dir }}"
-    remote_src: true
-    owner: root
-    group: "{{ p2poolv2_group }}"
-  when: dashboard_download.changed and not ansible_check_mode
 
 # --- Deploy configuration ---
 

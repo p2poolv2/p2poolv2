@@ -28,7 +28,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
 subtle = "2"
-tower-http = { version = "0.7", features = ["fs", "cors"] }
+tower-http = { version = "0.7", features = ["cors", "fs"] }
+maud = "0.27"
 
 [dev-dependencies]
 p2poolv2_lib = { workspace = true, features = ["test-utils"] }

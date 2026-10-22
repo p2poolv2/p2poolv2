@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+use crate::api::dashboard;
 use crate::api::endpoints;
 use crate::api::endpoints::miner::MinerWindowSource;
 use crate::api::error::ApiError;
@@ -9,9 +10,9 @@ use crate::api::{auth::auth_middleware, websocket::websocket_handler};
 use axum::{
     Extension, Json, Router,
     extract::{FromRef, Query, Request, State},
-    http::StatusCode,
+    http::{HeaderValue, StatusCode, header},
     middleware::{self, Next},
-    response::Response,
+    response::{Redirect, Response},
     routing::{delete, get, post},
 };
 use chrono::DateTime;
@@ -72,6 +73,19 @@ impl FromRef<AppState> for AppConfig {
     }
 }
 
+/// What the API serves browsers besides the JSON routes.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct WebOptions {
+    /// Serve the dashboard, the `web_root` frontend and the read-only share
+    /// chain routes they read without a login. The node's own routes keep
+    /// their authentication.
+    pub(crate) public: bool,
+    /// A folder holding a self-hosted frontend's build, served for every
+    /// path no API route takes. Paths it lacks get its `index.html`, so a
+    /// frontend's own routing works.
+    pub(crate) web_root: Option<PathBuf>,
+}
+
 #[derive(Deserialize)]
 pub struct PplnsQuery {
     limit: Option<u32>,
@@ -81,7 +95,41 @@ pub struct PplnsQuery {
 
 /// Build the axum router with REST routes (protected by auth middleware)
 /// and the WebSocket route (which handles its own auth via query param).
+///
+/// The dashboard gets an empty history no sampler fills; the API server
+/// uses [`build_router_with_history`] with a sampled one.
+#[cfg_attr(not(test), allow(dead_code))]
 fn build_router(app_state: Arc<AppState>, app_config: AppConfig) -> Router {
+    build_router_with_history(
+        app_state,
+        app_config,
+        Arc::new(dashboard::history::HashrateHistory::default()),
+        WebOptions::default(),
+    )
+}
+
+/// Add a Basic challenge to a 401, so a browser opening a protected page
+/// such as the dashboard shows its own login prompt.
+async fn add_basic_challenge(mut response: Response) -> Response {
+    if response.status() == StatusCode::UNAUTHORIZED
+        && !response.headers().contains_key(header::WWW_AUTHENTICATE)
+    {
+        response.headers_mut().insert(
+            header::WWW_AUTHENTICATE,
+            HeaderValue::from_static("Basic realm=\"P2Pool\", charset=\"UTF-8\""),
+        );
+    }
+    response
+}
+
+/// [`build_router`] with the dashboard reading `history` and the browser
+/// side set by `web`.
+pub(crate) fn build_router_with_history(
+    app_state: Arc<AppState>,
+    app_config: AppConfig,
+    history: Arc<dashboard::history::HashrateHistory>,
+    web: WebOptions,
+) -> Router {
     async fn log_req(req: Request, next: Next) -> Result<Response, StatusCode> {
         let method = req.method().clone();
         let uri = req.uri().clone();
@@ -104,11 +152,10 @@ fn build_router(app_state: Arc<AppState>, app_config: AppConfig) -> Router {
         Ok(res)
     }
 
-    let authenticated_routes = Router::new()
+    // Share chain data and the pages built on it: what a public node opens.
+    let share_chain_routes = Router::new()
         .route("/health", get(health_check))
-        .route("/metrics", get(metrics))
         .route("/pplns_shares", get(pplns_shares))
-        .route("/peers", get(peers))
         .route("/chain_info", get(endpoints::chain_info::chain_info))
         .route("/shares", get(endpoints::shares::shares))
         .route("/candidates", get(endpoints::candidates::candidates))
@@ -120,28 +167,38 @@ fn build_router(app_state: Arc<AppState>, app_config: AppConfig) -> Router {
             "/share_headers",
             get(endpoints::share_headers::share_headers),
         )
+        .merge(dashboard::router(app_state.clone(), history));
+    let share_chain_routes = match web.web_root {
+        Some(web_root) => {
+            let index = ServeFile::new(web_root.join("index.html"));
+            share_chain_routes.fallback_service(ServeDir::new(web_root).fallback(index))
+        }
+        None => share_chain_routes.route("/", get(|| async { Redirect::to("/dashboard") })),
+    };
+
+    // The node's own state and controls, always behind the login.
+    let mut authenticated_routes = Router::new()
+        .route("/metrics", get(metrics))
+        .route("/peers", get(peers))
         .route("/blocked_ips", get(get_blocked_ips))
         .route("/blocked_ips", post(block_ip))
-        .route("/blocked_ips", delete(unblock_ip))
+        .route("/blocked_ips", delete(unblock_ip));
+
+    // Routes that handle their own auth: the WebSocket validates credentials
+    // via query param in its handler. A public node's share chain routes
+    // join them.
+    let mut unauthenticated_routes = Router::new().route("/ws", get(websocket_handler));
+    if web.public {
+        unauthenticated_routes = unauthenticated_routes.merge(share_chain_routes);
+    } else {
+        authenticated_routes = authenticated_routes.merge(share_chain_routes);
+    }
+    let authenticated_routes = authenticated_routes
         .layer(middleware::from_fn_with_state(
             app_state.clone(),
             auth_middleware,
-        ));
-
-    // Routes that handle their own auth or need none.
-    // WebSocket validates credentials via query param in its handler.
-    // Dashboard and static assets are served from disk via tower-http.
-    let static_dir = std::env::var("P2POOL_STATIC_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("static"));
-
-    let unauthenticated_routes = Router::new()
-        .route("/ws", get(websocket_handler))
-        .route_service(
-            "/dashboard",
-            ServeFile::new(static_dir.join("dashboard.html")),
-        )
-        .nest_service("/static", ServeDir::new(&static_dir));
+        ))
+        .layer(middleware::map_response(add_basic_challenge));
 
     let mut router = authenticated_routes
         .merge(unauthenticated_routes)
@@ -195,7 +252,28 @@ pub async fn start_api_server(
         std::net::IpAddr::V4(config.hostname.parse().unwrap()),
         config.port,
     );
-    let app = build_router(app_state, app_config);
+    // The dashboard's history, filled once a minute. The sampler holds it
+    // weakly and is aborted when the server stops, so neither outlives it.
+    let history = Arc::new(dashboard::history::HashrateHistory::default());
+    let sampler = tokio::spawn(dashboard::history::run_sampler(
+        app_state.clone(),
+        Arc::downgrade(&history),
+    ));
+    let web = WebOptions {
+        public: config.public_dashboard,
+        web_root: config.web_root.as_ref().map(PathBuf::from),
+    };
+    if let Some(web_root) = &web.web_root {
+        if web_root.join("index.html").is_file() {
+            info!("Serving the frontend in {}", web_root.display());
+        } else {
+            warn!(
+                "web_root {} has no index.html; paths outside the API will be 404",
+                web_root.display()
+            );
+        }
+    }
+    let app = build_router_with_history(app_state, app_config, history, web);
 
     let listener = match tokio::net::TcpListener::bind(addr).await {
         Ok(listener) => listener,
@@ -209,13 +287,15 @@ pub async fn start_api_server(
     );
 
     tokio::spawn(async move {
-        axum::serve(listener, app)
+        let result = axum::serve(listener, app)
             .with_graceful_shutdown(async move {
                 let _ = shutdown_rx.await;
                 info!("API server shutdown signal received");
             })
             .await
-            .map_err(|e| ApiError::ServerError(e.to_string()))?;
+            .map_err(|e| ApiError::ServerError(e.to_string()));
+        sampler.abort();
+        result?;
 
         info!("API server stopped");
         Ok::<(), ApiError>(())

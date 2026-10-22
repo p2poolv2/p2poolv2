@@ -51,6 +51,8 @@ mod tests {
             auth_token: None,
             auth_password: None,
             cors_allowed: false,
+            public_dashboard: false,
+            web_root: None,
         }
     }
 
