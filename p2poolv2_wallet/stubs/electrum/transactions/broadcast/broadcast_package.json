@@ -1,0 +1,247 @@
+{
+  "stub_schema": 3,
+  "method": "blockchain.transaction.broadcast_package",
+  "implementation": {
+    "repository": "https://github.com/romanz/electrs",
+    "commit": "6039cadc575866612b1091a76813cfda4f32ef2f",
+    "package_version": "0.12.0",
+    "protocol_version": "1.4",
+    "source": "https://github.com/romanz/electrs/blob/6039cadc575866612b1091a76813cfda4f32ef2f/src/electrum.rs"
+  },
+  "rust_definition": {
+    "dispatch_variant": "TransactionBroadcastPackage",
+    "handler": "Rpc::transaction_broadcast_package",
+    "signature": "fn transaction_broadcast_package(&self, args: &BroadcastArgs) -> Result<Value>",
+    "source": "https://github.com/romanz/electrs/blob/6039cadc575866612b1091a76813cfda4f32ef2f/src/electrum.rs#L395"
+  },
+  "parameters": {
+    "names": [
+      "txs",
+      "verbose"
+    ],
+    "positional_variants": [
+      [
+        "Vec<String>"
+      ],
+      [
+        "Vec<String>",
+        "bool"
+      ]
+    ],
+    "validation": "Invalid parameter counts or types return -32602 (invalid params)."
+  },
+  "examples": [
+    {
+      "id": "example_01",
+      "scenario": "default_summary",
+      "kind": "synthetic",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "blockchain.transaction.broadcast_package",
+        "params": [
+          [
+            "010000000001018b83ea8e743f46a8a228728e473fb655017f50ed4352fd2b591fdba48304c27c01000000000000000001116200000000000016001414be1326745fa6bb1779eb893194912c2624aa20024730440220569ad7bccc078144376b9812145d61c6102f38a50693c81accc3df798f81c5000220434db507eb49ff112a18d7144ce20cd33e22688c1209d0574c1191c375437a1e012103dc59118ce9e7eacd35726b7983c222aee6ccbde906cb6f77f754d60d112f0fe400000000"
+          ]
+        ]
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "success": true
+        }
+      },
+      "daemon_result": {
+        "package_msg": "success",
+        "tx-results": {
+          "1a082dbd6b0a9694fc47605e4ed2ea9520776ea6d6f39f5f1ed7a687ce924719": {
+            "txid": "6ae546d2c7938a748c56a830d70df071120bf345cb11c8c562629bbf5cec12b6",
+            "vsize": 110,
+            "fees": {
+              "base": 1e-06,
+              "effective-feerate": 9.090909090909091e-06,
+              "effective-includes": [
+                "1a082dbd6b0a9694fc47605e4ed2ea9520776ea6d6f39f5f1ed7a687ce924719"
+              ]
+            }
+          }
+        }
+      },
+      "assumptions": "The mock daemon accepts the package. The 100-satoshi fee is synthetic; previous output data is unavailable."
+    },
+    {
+      "id": "example_02",
+      "scenario": "explicit_summary",
+      "kind": "synthetic",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "blockchain.transaction.broadcast_package",
+        "params": [
+          [
+            "010000000001018b83ea8e743f46a8a228728e473fb655017f50ed4352fd2b591fdba48304c27c01000000000000000001116200000000000016001414be1326745fa6bb1779eb893194912c2624aa20024730440220569ad7bccc078144376b9812145d61c6102f38a50693c81accc3df798f81c5000220434db507eb49ff112a18d7144ce20cd33e22688c1209d0574c1191c375437a1e012103dc59118ce9e7eacd35726b7983c222aee6ccbde906cb6f77f754d60d112f0fe400000000"
+          ],
+          false
+        ]
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "success": true
+        }
+      },
+      "daemon_result": {
+        "package_msg": "success",
+        "tx-results": {
+          "1a082dbd6b0a9694fc47605e4ed2ea9520776ea6d6f39f5f1ed7a687ce924719": {
+            "txid": "6ae546d2c7938a748c56a830d70df071120bf345cb11c8c562629bbf5cec12b6",
+            "vsize": 110,
+            "fees": {
+              "base": 1e-06,
+              "effective-feerate": 9.090909090909091e-06,
+              "effective-includes": [
+                "1a082dbd6b0a9694fc47605e4ed2ea9520776ea6d6f39f5f1ed7a687ce924719"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "example_03",
+      "scenario": "verbose_passthrough",
+      "kind": "synthetic",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "blockchain.transaction.broadcast_package",
+        "params": [
+          [
+            "010000000001018b83ea8e743f46a8a228728e473fb655017f50ed4352fd2b591fdba48304c27c01000000000000000001116200000000000016001414be1326745fa6bb1779eb893194912c2624aa20024730440220569ad7bccc078144376b9812145d61c6102f38a50693c81accc3df798f81c5000220434db507eb49ff112a18d7144ce20cd33e22688c1209d0574c1191c375437a1e012103dc59118ce9e7eacd35726b7983c222aee6ccbde906cb6f77f754d60d112f0fe400000000"
+          ],
+          true
+        ]
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "package_msg": "success",
+          "tx-results": {
+            "1a082dbd6b0a9694fc47605e4ed2ea9520776ea6d6f39f5f1ed7a687ce924719": {
+              "txid": "6ae546d2c7938a748c56a830d70df071120bf345cb11c8c562629bbf5cec12b6",
+              "vsize": 110,
+              "fees": {
+                "base": 1e-06,
+                "effective-feerate": 9.090909090909091e-06,
+                "effective-includes": [
+                  "1a082dbd6b0a9694fc47605e4ed2ea9520776ea6d6f39f5f1ed7a687ce924719"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "daemon_result": {
+        "package_msg": "success",
+        "tx-results": {
+          "1a082dbd6b0a9694fc47605e4ed2ea9520776ea6d6f39f5f1ed7a687ce924719": {
+            "txid": "6ae546d2c7938a748c56a830d70df071120bf345cb11c8c562629bbf5cec12b6",
+            "vsize": 110,
+            "fees": {
+              "base": 1e-06,
+              "effective-feerate": 9.090909090909091e-06,
+              "effective-includes": [
+                "1a082dbd6b0a9694fc47605e4ed2ea9520776ea6d6f39f5f1ed7a687ce924719"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "example_04",
+      "scenario": "transaction_failure",
+      "kind": "synthetic",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "blockchain.transaction.broadcast_package",
+        "params": [
+          [
+            "010000000001018b83ea8e743f46a8a228728e473fb655017f50ed4352fd2b591fdba48304c27c01000000000000000001116200000000000016001414be1326745fa6bb1779eb893194912c2624aa20024730440220569ad7bccc078144376b9812145d61c6102f38a50693c81accc3df798f81c5000220434db507eb49ff112a18d7144ce20cd33e22688c1209d0574c1191c375437a1e012103dc59118ce9e7eacd35726b7983c222aee6ccbde906cb6f77f754d60d112f0fe400000000"
+          ]
+        ]
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "result": {
+          "success": false,
+          "errors": [
+            {
+              "error": "missing-inputs",
+              "txid": "6ae546d2c7938a748c56a830d70df071120bf345cb11c8c562629bbf5cec12b6"
+            }
+          ]
+        }
+      },
+      "daemon_result": {
+        "package_msg": "transaction failed",
+        "tx-results": {
+          "1a082dbd6b0a9694fc47605e4ed2ea9520776ea6d6f39f5f1ed7a687ce924719": {
+            "txid": "6ae546d2c7938a748c56a830d70df071120bf345cb11c8c562629bbf5cec12b6",
+            "error": "missing-inputs"
+          }
+        }
+      }
+    },
+    {
+      "id": "example_05",
+      "scenario": "invalid_outer_type",
+      "kind": "synthetic",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "blockchain.transaction.broadcast_package",
+        "params": [
+          "010000000001018b83ea8e743f46a8a228728e473fb655017f50ed4352fd2b591fdba48304c27c01000000000000000001116200000000000016001414be1326745fa6bb1779eb893194912c2624aa20024730440220569ad7bccc078144376b9812145d61c6102f38a50693c81accc3df798f81c5000220434db507eb49ff112a18d7144ce20cd33e22688c1209d0574c1191c375437a1e012103dc59118ce9e7eacd35726b7983c222aee6ccbde906cb6f77f754d60d112f0fe400000000"
+        ]
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "error": {
+          "code": -32602,
+          "message": "invalid params"
+        }
+      }
+    },
+    {
+      "id": "example_06",
+      "scenario": "invalid_transaction",
+      "kind": "synthetic",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "method": "blockchain.transaction.broadcast_package",
+        "params": [
+          [
+            "00"
+          ]
+        ]
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "error": {
+          "code": 1,
+          "message": "invalid transaction"
+        }
+      }
+    }
+  ],
+  "behavior": "Accepts [txs] or [txs, verbose]. txs contains raw transaction hex strings. verbose defaults to false; true returns submitpackage JSON unchanged."
+}

@@ -1,0 +1,125 @@
+{
+  "stub_schema": 3,
+  "method": "server.version",
+  "implementation": {
+    "repository": "https://github.com/romanz/electrs",
+    "commit": "6039cadc575866612b1091a76813cfda4f32ef2f",
+    "package_version": "0.12.0",
+    "protocol_version": "1.4",
+    "source": "https://github.com/romanz/electrs/blob/6039cadc575866612b1091a76813cfda4f32ef2f/src/electrum.rs"
+  },
+  "rust_definition": {
+    "dispatch_variant": "Version",
+    "handler": "Rpc::version",
+    "signature": "fn version(&self, (client_id, client_version): &(String, VersionRequest)) -> Result<Value>",
+    "source": "https://github.com/romanz/electrs/blob/6039cadc575866612b1091a76813cfda4f32ef2f/src/electrum.rs#L493"
+  },
+  "parameters": {
+    "names": [
+      "client_id",
+      "client_version"
+    ],
+    "positional_variants": [
+      [
+        "String",
+        "String"
+      ],
+      [
+        "String",
+        "[String; 2]"
+      ]
+    ],
+    "validation": "Invalid parameter counts or types return -32602 (invalid params)."
+  },
+  "examples": [
+    {
+      "id": "example_01",
+      "scenario": "exact",
+      "kind": "synthetic",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "server.version",
+        "params": [
+          "p2pool-wallet",
+          "1.4"
+        ]
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": [
+          "electrs/0.12.0",
+          "1.4"
+        ]
+      }
+    },
+    {
+      "id": "example_02",
+      "scenario": "range",
+      "kind": "synthetic",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "server.version",
+        "params": [
+          "p2pool-wallet",
+          [
+            "1.4",
+            "1.4.2"
+          ]
+        ]
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": [
+          "electrs/0.12.0",
+          "1.4"
+        ]
+      }
+    },
+    {
+      "id": "example_03",
+      "scenario": "missing_arguments",
+      "kind": "synthetic",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "server.version",
+        "params": []
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "error": {
+          "code": -32602,
+          "message": "invalid params"
+        }
+      }
+    },
+    {
+      "id": "example_04",
+      "scenario": "unsupported_version",
+      "kind": "synthetic",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "server.version",
+        "params": [
+          "p2pool-wallet",
+          "1.4.2"
+        ]
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "error": {
+          "code": 1,
+          "message": "unsupported request Single(\"1.4.2\") by p2pool-wallet"
+        }
+      }
+    }
+  ],
+  "behavior": "client_id and client_version are required. Returns version 1.4 if it falls within the supplied range."
+}

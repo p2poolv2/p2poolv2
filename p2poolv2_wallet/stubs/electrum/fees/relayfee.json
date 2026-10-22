@@ -1,0 +1,43 @@
+{
+  "stub_schema": 3,
+  "method": "blockchain.relayfee",
+  "implementation": {
+    "repository": "https://github.com/romanz/electrs",
+    "commit": "6039cadc575866612b1091a76813cfda4f32ef2f",
+    "package_version": "0.12.0",
+    "protocol_version": "1.4",
+    "source": "https://github.com/romanz/electrs/blob/6039cadc575866612b1091a76813cfda4f32ef2f/src/electrum.rs"
+  },
+  "rust_definition": {
+    "dispatch_variant": "RelayFee",
+    "handler": "Rpc::relayfee",
+    "signature": "fn relayfee(&self) -> Result<Value>",
+    "source": "https://github.com/romanz/electrs/blob/6039cadc575866612b1091a76813cfda4f32ef2f/src/electrum.rs#L277"
+  },
+  "parameters": {
+    "names": [],
+    "positional_variants": [
+      []
+    ],
+    "validation": "Parameters are ignored."
+  },
+  "examples": [
+    {
+      "id": "example_01",
+      "scenario": "relay_minimum",
+      "kind": "synthetic",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "blockchain.relayfee",
+        "params": []
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": 1e-05
+      },
+      "assumptions": "Mock daemon relay fee, BTC/kB."
+    }
+  ]
+}
