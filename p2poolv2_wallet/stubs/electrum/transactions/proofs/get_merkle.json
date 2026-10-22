@@ -1,0 +1,91 @@
+{
+  "stub_schema": 3,
+  "method": "blockchain.transaction.get_merkle",
+  "implementation": {
+    "repository": "https://github.com/romanz/electrs",
+    "commit": "6039cadc575866612b1091a76813cfda4f32ef2f",
+    "package_version": "0.12.0",
+    "protocol_version": "1.4",
+    "source": "https://github.com/romanz/electrs/blob/6039cadc575866612b1091a76813cfda4f32ef2f/src/electrum.rs"
+  },
+  "rust_definition": {
+    "dispatch_variant": "TransactionGetMerkle",
+    "handler": "Rpc::transaction_get_merkle",
+    "signature": "fn transaction_get_merkle(&self, (txid, height): &(Txid, usize)) -> Result<Value>",
+    "source": "https://github.com/romanz/electrs/blob/6039cadc575866612b1091a76813cfda4f32ef2f/src/electrum.rs#L446"
+  },
+  "parameters": {
+    "names": [
+      "txid",
+      "height"
+    ],
+    "positional_variants": [
+      [
+        "Txid",
+        "usize"
+      ]
+    ],
+    "validation": "Invalid parameter counts or types return -32602 (invalid params)."
+  },
+  "examples": [
+    {
+      "id": "example_01",
+      "scenario": "proof",
+      "kind": "synthetic",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "blockchain.transaction.get_merkle",
+        "params": [
+          "6ae546d2c7938a748c56a830d70df071120bf345cb11c8c562629bbf5cec12b6",
+          972541
+        ]
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "block_height": 972541,
+          "merkle": [
+            "7f99bac7cdcf5fae6b0501bc840ae8b0f56808344b1ffb704575ef2cb4356f7d",
+            "a457b54df8d27ce190588ae2ce7e2508cd494391c392401d6bd499ad045fdddc",
+            "1fa6e0c48e8b13938c2768c8e1d11b77349040c68380d5fd709efe2b1e183044",
+            "c39641de0f9595bc3e170d9fd67850a6b49f004ff9378dab71cd152d04898a4b",
+            "4e7b6f7ff3487d4fb3f2f415991fb74055ce3925d042692cdce654c2fa59bfe0",
+            "6bed30151994793a4da679c472551be78553861c172976dd96858860cd03f359",
+            "a406acdf08d73c0b94e21d64eff01016145ddaf2c5f8b03a633c51fa1ca0bf80",
+            "e33c1cb6af0717d0be7c4adf11daf00332dae64a3a2768780be06ad665bbb985",
+            "e632f377772e6047baf0aa0a0e0623d31dd6fa6bfae9ddfe0296ff63cf50b594",
+            "cbb24846da299b3e8f2d58be614c5e21cc87c6c97a5f00f1c8d094eb0fa717f3",
+            "fce0f4c3e435600bf914f14d5e6b5140c65665342c7bb2c90589cf5a1a1b6c48",
+            "2fcc8283c51ed3dad1aee2fb5c58c732a87a9e48db85b08b905d4ea3158737a5",
+            "f56ea7765ed37de7ab36cab1f550c432d75ed09d417b208f1205c41ce622b152"
+          ],
+          "pos": 25
+        }
+      }
+    },
+    {
+      "id": "example_02",
+      "scenario": "invalid_txid",
+      "kind": "synthetic",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "blockchain.transaction.get_merkle",
+        "params": [
+          "invalid",
+          972541
+        ]
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "error": {
+          "code": -32602,
+          "message": "invalid params"
+        }
+      }
+    }
+  ]
+}

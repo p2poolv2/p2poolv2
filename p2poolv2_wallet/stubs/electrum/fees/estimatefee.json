@@ -1,0 +1,89 @@
+{
+  "stub_schema": 3,
+  "method": "blockchain.estimatefee",
+  "implementation": {
+    "repository": "https://github.com/romanz/electrs",
+    "commit": "6039cadc575866612b1091a76813cfda4f32ef2f",
+    "package_version": "0.12.0",
+    "protocol_version": "1.4",
+    "source": "https://github.com/romanz/electrs/blob/6039cadc575866612b1091a76813cfda4f32ef2f/src/electrum.rs"
+  },
+  "rust_definition": {
+    "dispatch_variant": "EstimateFee",
+    "handler": "Rpc::estimate_fee",
+    "signature": "fn estimate_fee(&self, (nblocks,): (u16,)) -> Result<Value>",
+    "source": "https://github.com/romanz/electrs/blob/6039cadc575866612b1091a76813cfda4f32ef2f/src/electrum.rs#L269"
+  },
+  "parameters": {
+    "names": [
+      "nblocks"
+    ],
+    "positional_variants": [
+      [
+        "u16"
+      ]
+    ],
+    "validation": "Invalid parameter counts or types return -32602 (invalid params)."
+  },
+  "examples": [
+    {
+      "id": "example_01",
+      "scenario": "estimate",
+      "kind": "synthetic",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "blockchain.estimatefee",
+        "params": [
+          6
+        ]
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": 1e-05
+      },
+      "assumptions": "Mock daemon estimate, BTC/kB."
+    },
+    {
+      "id": "example_02",
+      "scenario": "no_estimate",
+      "kind": "synthetic",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "blockchain.estimatefee",
+        "params": [
+          6
+        ]
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": -1
+      }
+    },
+    {
+      "id": "example_03",
+      "scenario": "u16_overflow",
+      "kind": "synthetic",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "blockchain.estimatefee",
+        "params": [
+          65536
+        ]
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "error": {
+          "code": -32602,
+          "message": "invalid params"
+        }
+      }
+    }
+  ],
+  "behavior": "nblocks accepts integers from 0 to 65535, subject to daemon constraints. -1 indicates an unavailable estimate."
+}

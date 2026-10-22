@@ -1,0 +1,102 @@
+{
+  "stub_schema": 3,
+  "method": "blockchain.block.headers",
+  "implementation": {
+    "repository": "https://github.com/romanz/electrs",
+    "commit": "6039cadc575866612b1091a76813cfda4f32ef2f",
+    "package_version": "0.12.0",
+    "protocol_version": "1.4",
+    "source": "https://github.com/romanz/electrs/blob/6039cadc575866612b1091a76813cfda4f32ef2f/src/electrum.rs"
+  },
+  "rust_definition": {
+    "dispatch_variant": "BlockHeaders",
+    "handler": "Rpc::block_headers",
+    "signature": "fn block_headers(&self, (start_height, count): (usize, usize)) -> Result<Value>",
+    "source": "https://github.com/romanz/electrs/blob/6039cadc575866612b1091a76813cfda4f32ef2f/src/electrum.rs#L250"
+  },
+  "parameters": {
+    "names": [
+      "start_height",
+      "count"
+    ],
+    "positional_variants": [
+      [
+        "usize",
+        "usize"
+      ]
+    ],
+    "validation": "Invalid parameter counts or types return -32602 (invalid params)."
+  },
+  "examples": [
+    {
+      "id": "example_01",
+      "scenario": "consecutive_headers",
+      "kind": "synthetic",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "blockchain.block.headers",
+        "params": [
+          972541,
+          2
+        ]
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "count": 2,
+          "hex": "00c008208d8b5d925f4cea6a45c40a02f67c2bd237bfaa41138401000000000000000000e77bec2f271d583084bdec8a9603c4997f2e079d5d31d93fce3634d4e1bf7f2a9835d96a93000217263c6f120000a02e30fb6dacdd43687cb117bdb7449ffd01254be527fbfa01000000000000000000e114ca1d5264eb2528097892b21c464d22d52f180615d28785c50a6108cc3f908536d96a93000217b6668104",
+          "max": 2016
+        }
+      }
+    },
+    {
+      "id": "example_02",
+      "scenario": "extra_checkpoint_parameter",
+      "kind": "synthetic",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "blockchain.block.headers",
+        "params": [
+          972541,
+          2,
+          0
+        ]
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "error": {
+          "code": -32602,
+          "message": "invalid params"
+        }
+      }
+    },
+    {
+      "id": "example_03",
+      "scenario": "zero_count",
+      "kind": "synthetic",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "blockchain.block.headers",
+        "params": [
+          972541,
+          0
+        ]
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "count": 0,
+          "hex": "",
+          "max": 2016
+        }
+      }
+    }
+  ],
+  "behavior": "Accepts exactly two usize arguments. count is capped at 2016. The hex field contains the serialized headers."
+}
