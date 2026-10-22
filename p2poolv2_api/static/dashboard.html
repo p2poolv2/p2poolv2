@@ -7,7 +7,7 @@
     <link rel="icon" type="image/svg+xml" href="/static/logo-circle.svg" />
     <link rel="stylesheet" href="/static/pico.min.css" />
     <link rel="stylesheet" href="/static/dashboard.css?v=36" />
-    <script defer src="/static/dashboard.js?v=45"></script>
+    <script defer src="/static/dashboard.js?v=52"></script>
     <script defer src="/static/alpine.min.js"></script>
   </head>
   <body
@@ -168,15 +168,15 @@
             <p class="kpi-label">Local hashrate (node)</p>
             <p
               class="kpi-value kpi-value-local"
-              :title="poolHashrate() > 0 ? localWindowHint() : ''"
+              :title="localWindowHint()"
             >
-              <span x-text="poolHashrate() > 0 ? fmtHashrate(poolHashrate()) : '-'"></span>
+              <span x-text="fmtHashrate(localHashrate())"></span>
             </p>
             <p class="kpi-sub kpi-sub-heading">P2POOL</p>
             <p
               class="kpi-p2pool-value"
-              :title="chainHashrate() > 0 ? chainWindowHint() : ''"
-              x-text="chainHashrate() > 0 ? fmtHashrate(chainHashrate()) : '-'"
+              :title="chainWindowHint()"
+              x-text="fmtHashrate(chainHashrate())"
             ></p>
             <p
               class="kpi-sub"
@@ -269,7 +269,7 @@
             Historical
             <span
               class="panel-note"
-              title="Local is the trailing 1h accepted-work window (same as the Local KPI); Pool is 1h sharechain work / 3600s (same as P2POOL); Network is plotted as reported."
+              title="Local is the hashrate of this node's accepted stratum shares (session difficulty) counted across this session, with each share's work counted since the previous share; P2POOL is the last 60 sharechain shares (pool difficulty) over their span the same way; both fade gradually (20.8 minute half-life) once shares go idle past their average share time; Network is plotted as reported."
               x-text="chartRangeNote()"
             ></span>
             <span class="range-btns">
@@ -301,7 +301,7 @@
               class="legend-chip"
               :class="legendOn.local ? '' : 'off'"
               @click="toggleLegend('local')"
-              title="Local hashrate: trailing 1h accepted share work at this node (same window as the Local KPI)"
+              title="Local hashrate: this node's accepted stratum shares (session difficulty basis) counted across this session; fades with a 20.8 minute half-life once idle past the average share time (same window as the Local KPI)"
             >
               <span class="legend-dot" style="background: #22d3ee"></span>Local
             </button>
@@ -309,7 +309,7 @@
               class="legend-chip"
               :class="legendOn.pool ? '' : 'off'"
               @click="toggleLegend('pool')"
-              title="Pool hashrate: accepted sharechain work in the last hour divided by 3600s (hover the P2POOL hashrate for the window)"
+              title="Pool hashrate: last 60 sharechain shares over their span, each share's work counted since the previous share; fades with a 20.8 minute half-life once idle past the average share time (hover the P2POOL hashrate for the window)"
             >
               <span class="legend-dot" style="background: #008de4"></span>Pool
             </button>

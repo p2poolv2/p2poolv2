@@ -189,6 +189,12 @@ function cashAddrEncode(prefix, type, hash) {
   return prefix + ":" + body;
 }
 
+// Half-life for the idle-share decay: once a share window goes idle
+// longer than its average share time, the computed rate fades with this
+// half-life instead of dropping straight to zero. Matches the node's
+// decay_time half-life (p2poolv2_lib/src/accounting/calc.rs).
+const STALE_DECAY_HALF_LIFE = 1247;
+
 function dashv1() {
   return {
     auth: { user: "", pass: "", error: "", busy: false },
@@ -203,7 +209,9 @@ function dashv1() {
     minerLoading: false,
     minerError: "",
     minerShares: [],
-    hsSeries: [],
+    localSeries: [],
+    shareEvents: [],
+    prevValidCounters: {},
     minerConnSeries: [],
     poolSeries: [],
     netSeries: [],
@@ -219,7 +227,6 @@ function dashv1() {
     knownAddresses: [],
     knownWorkers: [],
     minerAnchor: null,
-    poolAnchor: null,
     expanded: {},
     autoRefresh: true,
     nextPollSecs: 15,
@@ -237,12 +244,18 @@ function dashv1() {
     touchClearTimer: null,
 
     init() {
-      this.loadHsSeries();
+      this.loadLocalSeries();
+      this.loadShareEvents();
       this.loadMinerConnSeries();
       this.loadPoolSeries();
       this.loadNetSeries();
       this.loadNetDiffSeries();
       this.loadLegendOn();
+      try {
+        localStorage.removeItem("dashv1-hs");
+      } catch (e) {
+        /* storage unavailable: nothing to clean */
+      }
       const saved = sessionStorage.getItem("dashv1-auth");
       if (saved) {
         this.authHeader = saved;
@@ -391,7 +404,9 @@ function dashv1() {
       this.knownAddresses = [];
       this.knownWorkers = [];
       this.minerAnchor = null;
-      this.poolAnchor = null;
+      this.localSeries = [];
+      this.shareEvents = [];
+      this.prevValidCounters = {};
       this.minerConnSeries = [];
       this.poolSeries = [];
       this.netSeries = [];
@@ -399,6 +414,9 @@ function dashv1() {
       this.hoverT = null;
       this.hoverX = 0;
       try {
+        localStorage.removeItem("dashv1-lo");
+        localStorage.removeItem("dashv1-se");
+        localStorage.removeItem("dashv1-hs");
         localStorage.removeItem("dashv1-mc");
         localStorage.removeItem("dashv1-po");
         localStorage.removeItem("dashv1-net");
@@ -469,13 +487,14 @@ function dashv1() {
       ]);
       this.metrics = this.parseMetrics(metricsText);
       this.chainInfo = chainResp;
+      this.recordShareEvents();
       const counters = this.snapshotWork();
       this.updateWorkWindow(counters);
       this.updateAnchors();
-      this.updateHsSeries();
       this.updateMinerConnSeries();
       const views = [this.refreshView()];
       await Promise.all(views);
+      this.updateLocalSeries();
       this.updatePoolSeries();
       this.updateNetSeries();
       this.updateNetDiffSeries();
@@ -537,8 +556,6 @@ function dashv1() {
       if (this.prevWorkTotal !== null && total < this.prevWorkTotal) {
         this.workBaseline = null;
         this.minerAnchor = null;
-        this.poolAnchor = null;
-        this.hsSeries = [];
         this.prevCounters = {};
       }
       this.prevWorkTotal = total;
@@ -571,12 +588,6 @@ function dashv1() {
             this.minerAnchor.byAddress[addrs[i]] = current[addrs[i]];
           }
         }
-      }
-      const diff = this.metricNum("accepted_difficulty_total");
-      if (this.poolAnchor === null) {
-        this.poolAnchor = { t: now, diff: diff };
-      } else if (diff < this.poolAnchor.diff) {
-        this.poolAnchor = { t: now, diff: diff };
       }
     },
 
@@ -692,50 +703,17 @@ function dashv1() {
       return s.length ? s[0].value : 0;
     },
 
-    updateHsSeries() {
-      if (!this.poolAnchor) return;
-      const now = Date.now() / 1000;
-      const diff = this.metricNum("accepted_difficulty_total");
-      if (diff < this.poolAnchor.diff) return;
-      const last = this.hsSeries.length
-        ? this.hsSeries[this.hsSeries.length - 1]
-        : null;
-      if (last && now - last.t < 60) return;
-      this.hsSeries.push({ t: now, diff: diff });
-      if (this.hsSeries.length > 1440) this.hsSeries.shift();
-      this.persistHsSeries();
-    },
-
-    persistHsSeries() {
-      try {
-        localStorage.setItem("dashv1-hs", JSON.stringify(this.hsSeries));
-      } catch (e) {
-        /* storage unavailable or quota: keep in-memory only */
-      }
-    },
-
-    loadHsSeries() {
-      try {
-        const raw = JSON.parse(localStorage.getItem("dashv1-hs") || "[]");
-        if (!Array.isArray(raw)) return;
-        const out = [];
-        for (let i = 0; i < raw.length; i++) {
-          const s = raw[i];
-          if (s && isFinite(s.t) && isFinite(s.diff)) out.push(s);
-        }
-        this.hsSeries = out;
-      } catch (e) {
-        /* corrupted payload: start fresh */
-      }
-    },
-
-    connectedCount() {
+    validMinerSet() {
       const seen = {};
       const series = this.metricSeries("user_shares_valid_total");
       for (let i = 0; i < series.length; i++) {
         seen[series[i].labels.btcaddress || ""] = 1;
       }
-      return Object.keys(seen).length;
+      return seen;
+    },
+
+    connectedCount() {
+      return Object.keys(this.validMinerSet()).length;
     },
 
     updateMinerConnSeries() {
@@ -786,6 +764,41 @@ function dashv1() {
       this.poolSeries.push({ t: now, hr: hr });
       if (this.poolSeries.length > 2880) this.poolSeries.shift();
       this.persistPoolSeries();
+    },
+
+    updateLocalSeries() {
+      const hr = this.localHashrate();
+      const now = Date.now() / 1000;
+      const last = this.localSeries.length
+        ? this.localSeries[this.localSeries.length - 1]
+        : null;
+      if (last && now - last.t < 60) return;
+      this.localSeries.push({ t: now, hr: hr });
+      if (this.localSeries.length > 2880) this.localSeries.shift();
+      this.persistLocalSeries();
+    },
+
+    persistLocalSeries() {
+      try {
+        localStorage.setItem("dashv1-lo", JSON.stringify(this.localSeries));
+      } catch (e) {
+        /* storage unavailable or quota: keep in-memory only */
+      }
+    },
+
+    loadLocalSeries() {
+      try {
+        const raw = JSON.parse(localStorage.getItem("dashv1-lo") || "[]");
+        if (!Array.isArray(raw)) return;
+        const out = [];
+        for (let i = 0; i < raw.length; i++) {
+          const s = raw[i];
+          if (s && isFinite(s.t) && isFinite(s.hr)) out.push({ t: s.t, hr: s.hr });
+        }
+        this.localSeries = out;
+      } catch (e) {
+        /* corrupted payload: start fresh */
+      }
     },
 
     persistPoolSeries() {
@@ -1174,29 +1187,62 @@ function dashv1() {
       this.trackShareTip();
     },
 
-    // Local hashrate over the last hour: accepted-difficulty delta between
-    // hsSeries snapshots inside the window. Matches chainHashrate()'s 1h
-    // window so Local/P2POOL/Remote compare like for like. Falls back to
-    // the lifetime average when fewer than two snapshots fall in the window.
-    poolHashrate() {
+// Hashrate from a window of shares: work done inside the window (each
+    // share's work belongs to the gap since the previous share, so the
+    // oldest share's work predates the window) over the window span. Zero
+    // when fewer than two shares or the span is non-positive. Once idle
+    // longer than the average share time, the rate fades with a 1247
+    // second half-life instead of dropping to zero.
+    shareHashrate(list) {
       const now = Date.now() / 1000;
-      const cutoff = now - 3600;
-      const s = this.hsSeries;
-      let first = -1;
-      for (let i = 0; i < s.length; i++) {
-        if (s[i].t >= cutoff) {
-          first = i;
-          break;
+      if (!list || list.length < 2) return 0;
+      const newest = list[0].t;
+      const oldest = list[list.length - 1].t;
+      const span = newest - oldest;
+      if (!(span > 0)) return 0;
+      let work = 0;
+      for (let i = 0; i < list.length - 1; i++) {
+        work += list[i].work;
+      }
+    // Collapse same-time entries (stale persisted events from an older
+    // build) so zero-width gaps cannot double-count work against a
+    // shorter span; dedupe runs BEFORE the oldest-work loop below.
+      const times = [];
+      const works = [];
+      for (let i = 0; i < list.length; i++) {
+        if (times.length && times[times.length - 1] === list[i].t) {
+          works[works.length - 1] += list[i].work;
+        } else {
+          times.push(list[i].t);
+          works.push(list[i].work);
         }
       }
-      if (first >= 0 && first < s.length - 1) {
-        const a = s[first];
-        const b = s[s.length - 1];
-        const dt = b.t - a.t;
-        const dd = b.diff - a.diff;
-        if (dt > 0) return dd > 0 ? (dd * 4294967296) / dt : 0;
+      const newestT = times[0];
+      const oldestT = times[times.length - 1];
+      const spanT = newestT - oldestT;
+      if (!(spanT > 0)) return 0;
+      let workT = 0;
+      for (let i = 0; i < works.length - 1; i++) {
+        workT += works[i];
       }
-      return this.lifetimeHashrate();
+      const rate = workT / spanT;
+      const idle = now - newestT - spanT / (times.length - 1);
+      if (idle <= 0) return rate;
+      return rate * Math.pow(2, -idle / STALE_DECAY_HALF_LIFE);
+    },
+
+    // Local hashrate: session-difficulty shares accepted from connected
+    // miners on this node (stratum share stream, which can be below the
+    // sharechain target and never reaches /shares); idle windows decay
+    // with a 1247 second half-life.
+    localHashrate() {
+      return this.shareHashrate(this.shareEvents);
+    },
+
+    // Chain hashrate: last 60 sharechain shares (pool difficulty basis);
+    // idle windows decay with a 1247 second half-life.
+    chainHashrate() {
+      return this.shareHashrate(this.chainWindowShares());
     },
 
     lifetimeHashrate() {
@@ -1209,81 +1255,117 @@ function dashv1() {
       return 0;
     },
 
-    // Hover tooltip for the Local KPI: names the exact window behind the
-    // number. 2+ snapshots in the last hour -> span between first/last used;
-    // otherwise the lifetime fallback reports "since start / uptime".
+    // Hover tooltip naming the exact window behind a share-window rate.
+    windowHint(list) {
+      if (!list || list.length < 2) return "";
+      const span = list[0].t - list[list.length - 1].t;
+      if (!(span > 0)) return "";
+      return list.length + "-share window / " + this.fmtDuration(span);
+    },
+
+    // Window hint stays visible even when the rate reads 0, so the hover
+    // still names the window that produced the zero. Shows a collecting
+    // note once the window has enough shares to span.
     localWindowHint() {
-      const hr = this.poolHashrate();
-      if (hr === 0) return "";
+      return this.windowHint(this.shareEvents) || "local window / collecting";
+    },
+
+    // Build the session-difficulty share stream from per-miner counters:
+    // each poll, the sum of every positive delta of user_shares_valid_total
+    // (difficulty accumulated since the previous poll) becomes ONE share
+    // event stamped with this poll's time, so same-poll counter deltas from
+    // multiple addresses never split into zero-width gaps. Counters are
+    // cumulative, so deltas survive reloads from localStorage; the event
+    // time resolution is the 15s poll. Events older than 6 hours are
+    // dropped so a long-idle session resets to empty once the decayed
+    // value has faded out.
+    recordShareEvents() {
       const now = Date.now() / 1000;
-      const cutoff = now - 3600;
-      const s = this.hsSeries;
-      let first = -1;
-      for (let i = 0; i < s.length; i++) {
-        if (s[i].t >= cutoff) {
-          first = i;
-          break;
+      const series = this.metricSeries("user_shares_valid_total");
+      const fresh = {};
+      let batch = 0;
+      for (let i = 0; i < series.length; i++) {
+        const addr = series[i].labels.btcaddress || "";
+        const value = series[i].value;
+        fresh[addr] = value;
+        const prev = this.prevValidCounters[addr];
+        if (prev !== undefined && value > prev) {
+          batch += value - prev;
         }
       }
-      if (first >= 0 && first < s.length - 1) {
-        const span = s[s.length - 1].t - s[first].t;
-        if (span > 0) {
-          return (s.length - first) + "-sample window / " + this.fmtDuration(span);
+      if (batch > 0) {
+        this.shareEvents.unshift({ t: now, work: batch });
+      }
+      this.prevValidCounters = fresh;
+      while (
+        this.shareEvents.length &&
+        now - this.shareEvents[this.shareEvents.length - 1].t > 21600
+      ) {
+        this.shareEvents.pop();
+      }
+      this.persistShareEvents();
+    },
+
+    persistShareEvents() {
+      try {
+        localStorage.setItem("dashv1-se", JSON.stringify(this.shareEvents));
+      } catch (e) {
+        /* storage unavailable or quota: keep in-memory only */
+      }
+    },
+
+    loadShareEvents() {
+      try {
+        const raw = JSON.parse(localStorage.getItem("dashv1-se") || "[]");
+        if (!Array.isArray(raw)) return;
+        const out = [];
+        for (let i = 0; i < raw.length; i++) {
+          const e = raw[i];
+          if (e && isFinite(e.t) && isFinite(e.work) && e.work > 0) {
+            out.push({ t: e.t, work: e.work });
+          }
         }
+        this.shareEvents = out.slice(-60);
+      } catch (e) {
+        /* corrupted payload: start fresh */
       }
-      const start = this.metricNum("start_time_seconds");
-      if (start > 0) {
-        return "since start / " + this.fmtDuration(now - start);
-      }
-      return "";
     },
 
     chainWindowShares() {
       const shares = this.shares;
       if (!shares || !shares.length) return [];
-      const cutoff = Date.now() / 1000 - 3600;
       const out = [];
-      for (let i = 0; i < shares.length; i++) {
-        if (shares[i].timestamp < cutoff) break;
-        out.push(shares[i]);
+      for (let i = 0; i < shares.length && out.length < 60; i++) {
+        const s = shares[i];
+        if (!isFinite(s.timestamp) || !isFinite(s.bits) || s.bits <= 0) continue;
+        out.push({
+          t: s.timestamp,
+          work: this.difficultyFromBits(s.bits >>> 0) * 4294967296,
+        });
       }
       return out;
     },
 
-    chainHashrate() {
-      const shares = this.chainWindowShares();
-      if (!shares || shares.length < 2) return 0;
-      let work = 0;
-      for (let i = 0; i < shares.length; i++) {
-        const bits = shares[i].bits;
-        if (!isFinite(bits) || bits <= 0) continue;
-        work += this.difficultyFromBits(bits >>> 0) * 4294967296;
-      }
-      return work / 3600;
-    },
-
     remoteHashrate() {
       const chain = this.chainHashrate();
-      const local = this.poolHashrate();
+      const local = this.localHashrate();
       return chain > local ? chain - local : 0;
     },
 
     chainWindowNote() {
       const shares = this.chainWindowShares();
       if (!shares || shares.length < 2) return "Share chain: collecting...";
-      const span = shares[0].timestamp - shares[shares.length - 1].timestamp;
+      const span = shares[0].t - shares[shares.length - 1].t;
       return (
         "Share chain, last " + shares.length + " shares / " + this.fmtDuration(span)
       );
     },
 
+    // Window hint stays visible even when the rate reads 0 (stale gate or
+    // idle chain), so the hover still names the window behind the zero.
+    // Shows a collecting note until the chain window has a span.
     chainWindowHint() {
-      const shares = this.chainWindowShares();
-      if (!shares || shares.length < 2) return "";
-      const span = shares[0].timestamp - shares[shares.length - 1].timestamp;
-      return (
-        shares.length + "-share window / " + this.fmtDuration(span)
-      );
+      return this.windowHint(this.chainWindowShares()) || "60-share window / collecting";
     },
 
     blockEffortPct() {
@@ -1395,43 +1477,16 @@ function dashv1() {
           : 24 * 3600;
     },
 
-    // Trailing-1h rate ending at hs[i]: same window/math as poolHashrate()
-    // so the graph Local line matches the Local KPI. When the series does
-    // not reach back a full hour, falls back to the average since hs[0].
-    localRateAt(hs, i) {
-      if (i === 0) return null;
-      const cutoff = hs[i].t - 3600;
-      let base = null;
-      for (let j = 0; j < i; j++) {
-        if (hs[j].t >= cutoff) {
-          base = hs[j];
-          break;
-        }
-      }
-      if (!base) base = hs[0];
-      const dt = hs[i].t - base.t;
-      if (!(dt > 0)) return null;
-      const dd = hs[i].diff - base.diff;
-      return dd > 0 ? (dd * 4294967296) / dt : 0;
-    },
-
     chartSamples() {
       const windowSecs = this.chartWindowSecs();
       const now = Date.now() / 1000;
-      const hs = this.hsSeries;
-      const idxs = [];
-      for (let i = 0; i < hs.length; i++) {
-        if (hs[i].t >= now - windowSecs) idxs.push(i);
+      const out = [];
+      const s = this.localSeries;
+      for (let i = 0; i < s.length; i++) {
+        if (s[i].t >= now - windowSecs) out.push({ t: s[i].t, hs: s[i].hr });
       }
-      if (idxs.length < 2) return [];
-      const pts = [];
-      for (let k = 0; k < idxs.length; k++) {
-        const hr = this.localRateAt(hs, idxs[k]);
-        if (hr === null) continue;
-        pts.push({ t: hs[idxs[k]].t, hs: hr });
-      }
-      if (pts.length < 2) return [];
-      return pts;
+      if (out.length < 2) return [];
+      return out;
     },
 
     chartRangeNote() {
@@ -1497,7 +1552,7 @@ function dashv1() {
         return "All series hidden. Click a legend chip to show one.";
       }
       if (
-        this.hsSeries.length < 2 &&
+        this.localSeries.length < 2 &&
         this.poolSeries.length < 2 &&
         this.netSeries.length < 2
       ) {
@@ -2015,23 +2070,8 @@ function dashv1() {
     },
 
     hoverLocalHr(t) {
-      const s = this.hsSeries;
-      let tol = 90;
-      if (s.length >= 2) {
-        const gap = (s[s.length - 1].t - s[0].t) / (s.length - 1);
-        if (gap * 2 > tol) tol = gap * 2;
-      }
-      let bestIdx = -1;
-      let bestDist = tol;
-      for (let i = 1; i < s.length; i++) {
-        const d = Math.abs(s[i].t - t);
-        if (d < bestDist) {
-          bestDist = d;
-          bestIdx = i;
-        }
-      }
-      if (bestIdx < 0) return null;
-      return this.localRateAt(s, bestIdx);
+      const s = this.nearestSample(this.localSeries, t, 90);
+      return s ? s.hr : null;
     },
 
     hoverTipHtml() {
