@@ -39,7 +39,7 @@ use std::str::FromStr;
 // Imports only needed for internal tests
 #[cfg(any(test, feature = "test-utils"))]
 use crate::accounting::OutputPair;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 use crate::accounting::payout::payout_distribution::build_pplns_outputs;
 #[cfg(test)]
 use crate::accounting::stats::metrics;
@@ -83,7 +83,7 @@ use crate::stratum::session::{EXTRANONCE1_SIZE, EXTRANONCE2_SIZE};
 use crate::stratum::sv2::{Declaration, DeclaredJob, encode_message};
 #[cfg(test)]
 use crate::stratum::sv2::{NoiseTransport, decode_plain_frames};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 use crate::stratum::work::block_template::BlockTemplate;
 #[cfg(test)]
 use crate::stratum::work::block_template::TemplateTransaction;
@@ -95,7 +95,7 @@ use crate::stratum::work::coinbase::{EXTRANONCE_SEPARATOR, build_declared_coinba
 use crate::stratum::work::gbt::build_merkle_branches_for_template;
 #[cfg(test)]
 use crate::stratum::work::gbt::compute_merkle_root_from_branches;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 use crate::stratum::work::prepared_notify::{PreparedNotifyParams, PreparedNotifyParamsBuilder};
 #[cfg(test)]
 use crate::stratum::work::tracker::start_tracker_actor;
@@ -134,7 +134,7 @@ use noise_sv2::{INITIATOR_EXPECTED_HANDSHAKE_MESSAGE_SIZE, Initiator};
 use p2poolv2_wallet::bch_share::BchShareNetwork;
 #[cfg(test)]
 use rand::{RngExt, rng};
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 use std::collections::HashMap;
 #[cfg(test)]
 use std::collections::VecDeque;
@@ -516,7 +516,7 @@ pub fn bch_template_transaction(index: u32) -> TemplateTransaction {
 }
 
 /// A BCH payout snapshot with distinct weights.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 pub fn test_bch_prepared() -> Arc<PreparedNotifyParams> {
     let template: BlockTemplate = serde_json::from_str(include_str!(
         "../../bitcoindrpc/test_data/bchn-regtest-template.json"
@@ -525,8 +525,20 @@ pub fn test_bch_prepared() -> Arc<PreparedNotifyParams> {
     test_bch_prepared_for_template(template)
 }
 
+/// Allocated native token and BCH template for API/interoperability fixtures.
+#[cfg(any(test, feature = "test-utils"))]
+pub fn test_bch_job_token_and_template() -> (Vec<u8>, Arc<BlockTemplate>) {
+    let prepared = test_bch_prepared();
+    (
+        prepared
+            .mining_job_token([0x11; 32], prepared.template().curtime)
+            .unwrap(),
+        Arc::clone(prepared.template()),
+    )
+}
+
 /// Apply the reusable BCH payout snapshot to an externally supplied template.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 pub fn test_bch_prepared_for_template(template: BlockTemplate) -> Arc<PreparedNotifyParams> {
     let first = Address::p2pkh(
         bitcoin::PubkeyHash::from_byte_array([1; 20]),
