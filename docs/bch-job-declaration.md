@@ -2,8 +2,8 @@
 
 This is the BCH direct PPLNS contract carried by the published SV2 Mining
 and Job Declaration messages. A generic client that expects one custodial
-pool payout needs BCH P2Pool support. Independent client interoperability
-has not been verified.
+pool payout needs BCH P2Pool support. Preparation interoperability with Pickaxe has been verified on Chipnet as
+described below; a live independent ASIC share is still a separate test.
 
 An extended mining channel negotiates `REQUIRES_WORK_SELECTION` (bit 1).
 A separate Job Declaration connection selects Full-Template with
@@ -229,3 +229,35 @@ ASIC firmware, chipnet issuance and the final SAFA economic policy remain open.
 The combined branch passed 1,719 default workspace tests (two skipped), 1,727
 all-features tests (one skipped), and all-target Clippy with default and all
 features and warnings denied. Formatting and whitespace checks passed.
+
+## Read-only preparation for an external declarator
+
+`POST /jd_prepare` uses the normal REST API authentication. It accepts at most
+8192 JSON bytes and rejects unknown request fields. Schema version 1 contains
+`token` (hex), `payout` (CashAddr), `share_owner` (the independently specified BCH
+share address), `height`, `nbits` (integer compact bits), `previous_hash` (BCH RPC
+display order), `coinbase_value` (satoshis), `script_prefix` (hex), and `auxiliary`
+(`merkle_root` as 32 byte integers, `tree_size`, `nonce`). It receives no RPC
+credentials, private keys or transaction bytes.
+
+The helper requires the current mining-base anchor and BCH template tip, then
+uses the selected paying block's difficulty to calculate the exact PPLNS
+weights. A single cached snapshot is keyed by anchor and bits. Empty or
+unavailable payout history has no fallback recipient. The existing PPLNS and
+coinbase builders produce the bytes; no payout or consensus rule is changed.
+
+The response contains `version`, `token_hash` (SHA256), `anchor`, `height`,
+`coinbase_value`, `coinbase_prefix`, `coinbase_suffix` and `extranonce_size` (12).
+Malformed requests return 400; unavailable or mismatched snapshots/tips return
+503. The caller retries with a newly allocated token after synchronization.
+This endpoint does not authenticate or consume SV2 tokens. The pool still
+validates its registry token, channel recipient, PPLNS outputs and custom job
+independently through the existing Mining and Job Declaration protocols.
+
+Pickaxe successfully declared Full-Template and Coinbase-only jobs for distinct
+personal and donation share owners on a separate Chipnet node at BCH height
+328754. Both custom jobs in each mode were acknowledged, with zero refusals.
+Full-Template used Start9 BCHN proposal validation. No hash search, share reward
+or found-block broadcast is claimed by this check. The API request regression
+also compares the prepared bytes with the existing core builder and refuses
+changed BCH tips, bits and share-owner networks.
