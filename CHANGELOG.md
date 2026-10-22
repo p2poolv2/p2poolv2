@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The dashboard is rendered in Rust by the node itself: an overview with
+  pool, node and network hashrate, a one-day hashrate chart drawn as SVG,
+  found blocks and recent shares, plus miner (`/dashboard/miner`) and share
+  (`/dashboard/share/<hash>`) pages. Pages carry no scripts and sit behind
+  the API's authentication unless `public_dashboard` is set; the node keeps
+  the hashrate history, one sample a minute for a day. Builds on the
+  dashboard design in PR #8 by CashDragon0.
+- `[api] web_root` serves a self-hosted frontend (TypeScript, Rust/WASM or
+  any static build) for every path the API does not use, beside the JSON API
+  it reads. Without one, `/` leads to the dashboard.
+- `[api] public_dashboard` opens the dashboard, the `web_root` frontend and
+  the read-only share chain routes to anyone for a public node, while
+  `/metrics`, `/peers`, `/blocked_ips` and `/jd_prepare` keep the API login.
 - Bitcoin Cash: `stratum.chain = "bitcoin-cash"` with `bitcoin_cash_network`
   mines from BCHN templates, pays CashAddr scripts, records P2PKH share owners
   and starts from a main or mini Bitcoin Cash genesis. See `docs/bch-plan.md`
@@ -32,6 +45,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   software need not index the chain. It takes a payout address (CashAddr
   with or without prefix on Bitcoin Cash) or a share chain address, and is
   computed by the payout code's own `PplnsWindow`.
+
+### Removed
+
+- The JavaScript dashboard (`p2poolv2_api/static`), its `dashboard.tar.gz`
+  release archive and `P2POOL_STATIC_DIR`. The Docker image, systemd unit
+  and Ansible role no longer install dashboard files.
 
 ### Fixed
 

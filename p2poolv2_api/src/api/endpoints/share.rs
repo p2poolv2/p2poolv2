@@ -65,7 +65,7 @@ pub struct ShareLookupOutput {
 }
 
 /// Build the JSON output for a single share identified by its blockhash.
-fn build_share_output(
+pub(crate) fn build_share_output(
     chain_store_handle: &ChainStoreHandle,
     blockhash: &BlockHash,
     full: bool,

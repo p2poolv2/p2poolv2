@@ -38,9 +38,8 @@ token suitable for the config file.
 - [GET /share](#get-share) -- Look up a share by hash or height
 - [GET /share_headers](#get-share_headers) -- Raw share headers by height range
 - [GET /miner](#get-miner) -- One miner's shares and weight in the PPLNS window
-- [GET /hashrate](#get-hashrate) -- Pool, local and network hashrate with history
+- [GET /hashrate](#get-hashrate) -- Hashrate history as JSON
 - [GET /found_blocks](#get-found_blocks) -- Bitcoin blocks found by the pool
-- [GET /app](#get-app) -- Rust/WASM dashboard, when `P2POOL_WEB_APP_DIR` is set (no auth required)
 - [GET /peers](#get-peers) -- Connected peers
 - [GET /pplns_shares](#get-pplns_shares) -- PPLNS accounting data
 - [WebSocket /ws](#websocket-ws) -- Real-time event subscriptions
@@ -302,27 +301,25 @@ same shape with `"address_type": "share"`, and each share's
 
 ### GET /hashrate
 
-Hashrate in hashes per second over a window ending now, plus a bucketed
-history for charts.
+The node's hashrate history as JSON: the same once-a-minute samples (kept
+for one day) the server-rendered `/dashboard` draws. Values are hashes per
+second, `null` where unknown at that time.
 
 | Parameter | Default | Range | Meaning |
 |---|---|---|---|
-| `window` | 3600 | 60..=86400 | Window in seconds |
-| `buckets` | 60 | 1..=500 | Number of equal history buckets |
+| `window` | 3600 | 60..=86400 | Seconds of history, ending at the newest sample |
 
-- `pool_hashrate`: expected hashes of the confirmed shares and their uncles
-  in the window, divided by the window. Uncles are counted at their nephew's
-  target. Read from the share chain, so the same on every node.
-- `local_hashrate`: this node's accepted stratum difficulty, sampled every
-  30 seconds for up to 24 hours. `null` until two samples exist, and absent
-  from history before the node started.
-- `network_hashrate`: current template difficulty × 2^32 / 600, `null` before
-  the first template.
+- `pool_hashrate`: share chain work of the newest confirmed shares over
+  their time span; the same on every node.
+- `local_hashrate`: this node's accepted stratum difficulty between samples.
+- `network_hashrate`: template difficulty Ã— 2^32 / 600.
+
+The top-level values are the newest sample (read live before the first one).
 
 ```json
-{"window_secs":3600,"bucket_secs":60,"pool_hashrate":4.1e12,"local_hashrate":3.9e12,
- "network_hashrate":5.8e14,"network_difficulty":80807.18,"share_count":1520,
- "history":[{"time":1792672402,"pool_hashrate":4.0e12,"local_hashrate":null}]}
+{"window_secs":3600,"sample_interval_secs":60,"pool_hashrate":7.7e9,"local_hashrate":7.5e9,
+ "network_hashrate":5.8e14,
+ "history":[{"time":1792672402,"pool_hashrate":7.6e9,"local_hashrate":null,"network_hashrate":5.8e14}]}
 ```
 
 ### GET /found_blocks
@@ -334,12 +331,6 @@ exposes as `bitcoin_block_found_time_seconds`.
 [{"bitcoin_height":289001,"bitcoin_blockhash":"0000...","share_blockhash":"47fb...",
   "bitcoin_time":1792675942,"miner_bitcoin_address":"bchtest:qr..."}]
 ```
-
-### GET /app
-
-Serves the `p2poolv2_web` assets from the directory in `P2POOL_WEB_APP_DIR`,
-falling back to `index.html`. Not mounted when the variable is unset. See
-[p2poolv2_web/README.md](../p2poolv2_web/README.md).
 
 ### GET /peers
 

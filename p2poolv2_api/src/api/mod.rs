@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 mod auth;
+pub(crate) mod dashboard;
 pub mod endpoints;
 pub mod error;
 pub mod server;

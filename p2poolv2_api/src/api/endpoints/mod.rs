@@ -7,6 +7,7 @@ pub mod chain_info;
 pub mod dag;
 pub mod found_blocks;
 pub mod hashrate;
+pub mod jd_prepare;
 pub mod miner;
 pub mod share;
 pub mod share_headers;

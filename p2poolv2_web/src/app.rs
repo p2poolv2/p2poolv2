@@ -286,8 +286,7 @@ fn Kpi(label: &'static str, value: Signal<String>) -> impl IntoView {
 #[component]
 fn Overview(recent: RwSignal<Vec<Share>>) -> impl IntoView {
     let window = RwSignal::new(3600_u64);
-    let hashrate =
-        polled::<Hashrate>(move || format!("/hashrate?window={}&buckets=120", window.get()));
+    let hashrate = polled::<Hashrate>(move || format!("/hashrate?window={}", window.get()));
     let chain = polled::<ChainInfo>(|| "/chain_info".into());
     let blocks = polled::<Vec<FoundBlock>>(|| "/found_blocks".into());
 
@@ -314,7 +313,7 @@ fn Overview(recent: RwSignal<Vec<Share>>) -> impl IntoView {
 
     view! {
         <section class="kpis">
-            <Kpi label="Pool hashrate" value=rate(|h| Some(h.pool_hashrate)) />
+            <Kpi label="Pool hashrate" value=rate(|h| h.pool_hashrate) />
             <Kpi label="Local hashrate" value=rate(|h| h.local_hashrate) />
             <Kpi label="Network hashrate" value=rate(|h| h.network_hashrate) />
             <Kpi label="Share chain height" value=height />

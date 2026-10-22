@@ -93,18 +93,15 @@ pub struct ChainInfo {
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct HashratePoint {
     pub time: u64,
-    pub pool_hashrate: f64,
+    pub pool_hashrate: Option<f64>,
     pub local_hashrate: Option<f64>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct Hashrate {
-    pub window_secs: u64,
-    pub pool_hashrate: f64,
+    pub pool_hashrate: Option<f64>,
     pub local_hashrate: Option<f64>,
     pub network_hashrate: Option<f64>,
-    pub network_difficulty: Option<f64>,
-    pub share_count: u64,
     pub history: Vec<HashratePoint>,
 }
 

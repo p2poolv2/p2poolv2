@@ -1,6 +1,6 @@
 [build]
 target = "index.html"
 dist = "dist"
-# Served by the node at /app/. Override for another mount point with
-# `trunk build --release --public-url /`.
-public_url = "/app/"
+# Served from the root of the node's `[api] web_root`. For another mount
+# point build with `--public-url /path/`.
+public_url = "/"

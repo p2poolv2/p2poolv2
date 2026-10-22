@@ -40,5 +40,12 @@ ansible/inventory/group_vars/all/vault.yml
 perf.data
 # matplotlib venv for sim plotting
 load-tests/sim/.venv/
+<<<<<<< HEAD
 /p2poolv2_web/dist
 /p2poolv2_web/dist-dev
+=======
+
+# Local node run logs
+node-start.log
+node-start.log.prev
+>>>>>>> origin/dashboard-rust

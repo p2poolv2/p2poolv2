@@ -54,7 +54,12 @@ pub fn fit(points: &[HashratePoint], range: Option<(f64, f64)>) -> Option<Scale>
     let y_max = points
         .iter()
         .filter(|p| (p.time as f64) >= t0 && (p.time as f64) <= t1)
-        .flat_map(|p| [p.pool_hashrate, p.local_hashrate.unwrap_or(0.0)])
+        .flat_map(|p| {
+            [
+                p.pool_hashrate.unwrap_or(0.0),
+                p.local_hashrate.unwrap_or(0.0),
+            ]
+        })
         .fold(0.0, f64::max);
     Some(Scale {
         t0,
@@ -177,7 +182,7 @@ pub fn HashrateChart(points: Signal<Vec<HashratePoint>>) -> impl IntoView {
             return view! { <p class="muted">"No hashrate history yet."</p> }.into_any();
         };
         let (pool, local, ticks, hovered) = points.with(|p| {
-            let pool = path(p, &scale, |q| Some(q.pool_hashrate));
+            let pool = path(p, &scale, |q| q.pool_hashrate);
             let local = path(p, &scale, |q| q.local_hashrate);
             let ticks: Vec<_> = (0..=4)
                 .map(|i| {
@@ -210,19 +215,23 @@ pub fn HashrateChart(points: Signal<Vec<HashratePoint>>) -> impl IntoView {
         let tooltip = hovered.map(|point| {
             let x = scale.x(point.time as f64);
             let label_x = if x > WIDTH * 0.7 { x - 190.0 } else { x + 8.0 };
+            let pool = point
+                .pool_hashrate
+                .map(format::hashrate)
+                .unwrap_or_else(|| "–".into());
             let local = point
                 .local_hashrate
                 .map(format::hashrate)
                 .unwrap_or_else(|| "–".into());
             view! {
                 <line class="crosshair" x1=x x2=x y1=PAD_TOP y2=HEIGHT - PAD_BOTTOM />
-                <circle class="dot" cx=x cy=scale.y(point.pool_hashrate) r="4" />
+                <circle class="dot" cx=x cy=scale.y(point.pool_hashrate.unwrap_or(0.0)) r="4" />
                 <rect class="tip" x=label_x y=PAD_TOP width="182" height="58" rx="4" />
                 <text class="tip-text" x=label_x + 8.0 y=PAD_TOP + 17.0>
                     {format::utc(point.time)}
                 </text>
                 <text class="tip-text pool" x=label_x + 8.0 y=PAD_TOP + 34.0>
-                    {format!("Pool  {}", format::hashrate(point.pool_hashrate))}
+                    {format!("Pool  {pool}")}
                 </text>
                 <text class="tip-text local" x=label_x + 8.0 y=PAD_TOP + 51.0>
                     {format!("Local {local}")}
@@ -283,7 +292,7 @@ mod tests {
     fn point(time: u64, pool: f64, local: Option<f64>) -> HashratePoint {
         HashratePoint {
             time,
-            pool_hashrate: pool,
+            pool_hashrate: Some(pool),
             local_hashrate: local,
         }
     }

@@ -24,7 +24,7 @@ not the browser:
 
 | Endpoint | Used for |
 |---|---|
-| `/hashrate?window=&buckets=` | KPIs and chart: pool hashrate from share chain work, local hashrate from the node's accepted stratum difficulty, network hashrate from template difficulty |
+| `/hashrate?window=` | KPIs and chart, from the node's once-a-minute hashrate history (the same one `/dashboard` draws): pool from share chain work, local from accepted stratum difficulty, network from template difficulty |
 | `/chain_info` | share chain height |
 | `/shares?num=`, `/ws` (topic `shares`) | recent shares, then live updates |
 | `/found_blocks` | found blocks |
@@ -40,25 +40,27 @@ cd p2poolv2_web
 trunk build --release
 ```
 
-The assets land in `p2poolv2_web/dist`, built for the `/app/` path.
+The assets land in `p2poolv2_web/dist`, built to be served from `/`.
 
 ## Serve from the node
 
-Point the node at the built directory and restart it:
+Point the node's `web_root` at the built directory and restart it:
 
-```bash
-export P2POOL_WEB_APP_DIR=/path/to/p2poolv2_web/dist
+```toml
+[api]
+web_root = "/path/to/p2poolv2_web/dist"
 ```
 
-The app is then at `http://<api hostname>:<api port>/app/`. The assets are
-public; the API calls still need credentials when `[api]` sets `auth_user`
-and `auth_token`. Enter them under **Settings**; the user and API URL are
+The app is then at `http://<api hostname>:<api port>/`; the node serves the
+folder for every path its API does not use. With `public_dashboard = true`
+the app and the share chain routes it reads open without a login. Otherwise
+the API calls need the credentials from `auth_user` and `auth_token`. Enter them under **Settings**; the user and API URL are
 remembered in local storage, the password only for the browser tab.
 
 ## Serve it elsewhere
 
 Any static file server works. Build for its path, for example
-`trunk build --release --public-url /`, and set the node's API URL in
+`trunk build --release --public-url /p2pool/`, and set the node's API URL in
 Settings or with `?api=https://node.example:46884` in the page URL. The node
 must then allow the page's origin: set `cors_allowed = true` under `[api]`.
 

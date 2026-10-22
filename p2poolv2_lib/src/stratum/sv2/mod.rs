@@ -29,6 +29,7 @@ mod custom_job;
 mod live_tests;
 mod mining;
 mod noise;
+pub mod preparation;
 mod server;
 mod session;
 mod template_distribution;

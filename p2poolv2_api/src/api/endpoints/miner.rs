@@ -24,6 +24,7 @@ use axum::{
     Json,
     extract::{Query, State},
 };
+use bitcoin::CompactTarget;
 use bitcoin::{Address, BlockHash, Network};
 use p2poolv2_lib::accounting::payout::sharechain_pplns::PplnsWindow;
 use p2poolv2_lib::accounting::payout::sharechain_pplns::pplns_window::{
@@ -36,6 +37,7 @@ use p2poolv2_lib::config::{BitcoinCashNetwork, Chain, parse_payout_address, pars
 use p2poolv2_lib::shares::chain::chain_store_handle::ChainStoreHandle;
 use p2poolv2_lib::store::writer::StoreError;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use tokio::sync::Mutex;
 
@@ -124,6 +126,13 @@ pub(crate) struct MinerWindowSource {
     /// snapshot is built makes concurrent requests at a new anchor build it
     /// once.
     snapshot: Mutex<Option<(BlockHash, Arc<WindowCredits>)>>,
+    preparation: Mutex<Option<PreparationSnapshot>>,
+}
+
+struct PreparationSnapshot {
+    anchor: BlockHash,
+    bits: u32,
+    weights: Arc<HashMap<Address, u128>>,
 }
 
 impl MinerWindowSource {
@@ -131,13 +140,52 @@ impl MinerWindowSource {
         Self {
             window,
             snapshot: Mutex::new(None),
+            preparation: Mutex::new(None),
         }
+    }
+
+    /// Exact payout weights use the selected paying block's bits, never the
+    /// dashboard's estimate from an older anchor header. Cache one snapshot;
+    /// lock ordering is preparation-cache then window, only on a blocking task.
+    pub(crate) async fn preparation_weights(
+        &self,
+        anchor: BlockHash,
+        bits: u32,
+        chain_store_handle: &ChainStoreHandle,
+    ) -> Result<Arc<HashMap<Address, u128>>, ApiError> {
+        let mut cache = self.preparation.lock().await;
+        if let Some(snapshot) = cache.as_ref()
+            && (snapshot.anchor, snapshot.bits) == (anchor, bits)
+        {
+            return Ok(Arc::clone(&snapshot.weights));
+        }
+        let window = Arc::clone(&self.window);
+        let store = chain_store_handle.clone();
+        let weights = tokio::task::spawn_blocking(move || {
+            let mut window = window
+                .write()
+                .map_err(|_| ApiError::ServiceUnavailable("PPLNS window unavailable".into()))?;
+            let difficulty =
+                bitcoin_block_difficulty(CompactTarget::from_consensus(bits), window.network());
+            window
+                .get_distribution_from_start_hash(anchor, difficulty, &store)
+                .map_err(window_error)
+        })
+        .await
+        .map_err(|_| ApiError::ServiceUnavailable("PPLNS preparation task failed".into()))??;
+        let weights = Arc::new(weights);
+        *cache = Some(PreparationSnapshot {
+            anchor,
+            bits,
+            weights: Arc::clone(&weights),
+        });
+        Ok(weights)
     }
 
     /// Every miner's credits at `anchor`: the snapshot when it is for
     /// `anchor`, otherwise a new one built on a blocking thread, which
     /// replaces it.
-    async fn credits_at(
+    pub(crate) async fn credits_at(
         &self,
         anchor: BlockHash,
         chain_store_handle: &ChainStoreHandle,
@@ -232,6 +280,16 @@ pub(crate) async fn miner(
             "limit must be between 1 and {MAX_NUM_SHARES_IN_RESPONSE}, got {limit}"
         )));
     }
+    Ok(Json(miner_report(&state, address, limit as usize).await?))
+}
+
+/// What `/miner` answers for `address`, listing at most `limit` shares.
+/// Shared with the dashboard's miner page, so both read the same snapshot.
+pub(crate) async fn miner_report(
+    state: &AppState,
+    address: &str,
+    limit: usize,
+) -> Result<MinerResponse, ApiError> {
     let miner = parse_miner(address, &state.app_config)?;
 
     let window_source = state.pplns_window.as_ref().ok_or_else(|| {
@@ -250,13 +308,13 @@ pub(crate) async fn miner(
         .credits_at(anchor, &state.chain_store_handle)
         .await?;
 
-    Ok(Json(build_response(
+    Ok(build_response(
         &miner,
         anchor,
         &window_credits,
-        limit as usize,
+        limit,
         &state.app_config,
-    )))
+    ))
 }
 
 /// Read `address` as either of the two addresses a share header carries,
@@ -429,6 +487,16 @@ mod tests {
         PUBKEY_G, TestShareBlockBuilder, genesis_for_tests, setup_test_chain_store_handle,
     };
 
+    use axum::Json;
+    use bitcoin::hashes::Hash;
+    use bitcoin::script::Builder;
+    use p2poolv2_lib::address::share_owner::ShareOwner as WalletOwner;
+    use p2poolv2_lib::shares::bch_coinbase::BchCoinbase;
+    use p2poolv2_lib::shares::merge_mining::MergeMiningCommitment;
+    use p2poolv2_lib::shares::share_commitment::ShareCommitment;
+    use p2poolv2_lib::stratum::sv2::preparation::prepare_coinbase;
+    use p2poolv2_lib::test_utils::test_bch_job_token_and_template;
+
     /// Hash of the Bitcoin Cash share owner the BCH test genesis names.
     const CASH_SHARE_HASH: [u8; 20] = [0x22; 20];
 
@@ -588,6 +656,112 @@ mod tests {
         assert_eq!(
             response.shares[0].payout_address,
             share.header.miner_bitcoin_address.to_string()
+        );
+    }
+
+    #[tokio::test]
+    async fn preparation_uses_exact_selected_bits_and_refuses_tip_or_identity_changes() {
+        let window = Arc::new(RwLock::new(PplnsWindow::new(Network::Signet)));
+        let (state, _temp_dir) = build_test_state(
+            BitcoinCashNetwork::Chipnet.legacy_network(),
+            Some(BchShareNetwork::Chipnet),
+            Some(window),
+        )
+        .await;
+        let genesis = bitcoin_cash_genesis();
+        state
+            .chain_store_handle
+            .init_or_setup_genesis(genesis.clone())
+            .await
+            .unwrap();
+        update_window(&state);
+        let (mut token, template) = test_bch_job_token_and_template();
+        state.tracker_handle.insert_job(
+            Arc::clone(&template),
+            String::new(),
+            String::new(),
+            None,
+            0,
+            vec![],
+            state.tracker_handle.get_latest_job_id(),
+        );
+        token[33..65].copy_from_slice(genesis.block_hash().as_byte_array());
+        let payout = bitcoin_cash_donation_cashaddr(BitcoinCashNetwork::Chipnet);
+        let owner = BchShareAddress {
+            network: BchShareNetwork::Chipnet,
+            hash: CASH_SHARE_HASH,
+        }
+        .encode();
+        let prefix = Builder::new()
+            .push_int(i64::from(template.height))
+            .into_bytes();
+        let mut body = serde_json::json!({"version":1,"token":hex::encode(&token),"payout":payout,
+            "share_owner":owner,"height":template.height,"nbits":u32::from_str_radix(&template.bits,16).unwrap(),
+            "previous_hash":template.previousblockhash,"coinbase_value":template.coinbasevalue,"script_prefix":hex::encode(&prefix),
+            "auxiliary":{"merkle_root":vec![0u8;32],"tree_size":0,"nonce":0}});
+        let response = super::super::jd_prepare::prepare(
+            State(Arc::clone(&state)),
+            Json(serde_json::from_value(body.clone()).unwrap()),
+        )
+        .await
+        .unwrap();
+        let response = serde_json::to_value(response.0).unwrap();
+        let bits = u32::from_str_radix(&template.bits, 16).unwrap();
+        let weights = state
+            .pplns_window
+            .as_ref()
+            .unwrap()
+            .preparation_weights(genesis.block_hash(), bits, &state.chain_store_handle)
+            .await
+            .unwrap();
+        let commitment = ShareCommitment::from_mining_job_token(
+            &token,
+            genesis.header.miner_bitcoin_address.clone(),
+            WalletOwner::CashP2pkh(CASH_SHARE_HASH),
+        )
+        .unwrap();
+        let expected = prepare_coinbase(
+            &token,
+            commitment,
+            &weights,
+            template.coinbasevalue,
+            template.height,
+            BchCoinbase {
+                prefix,
+                merge_mining: MergeMiningCommitment::reserved(),
+            },
+        )
+        .unwrap();
+        assert_eq!(response["coinbase_prefix"], hex::encode(expected.prefix));
+        assert_eq!(response["coinbase_suffix"], hex::encode(expected.suffix));
+        body["previous_hash"] = serde_json::json!("00".repeat(32));
+        assert!(
+            super::super::jd_prepare::prepare(
+                State(Arc::clone(&state)),
+                Json(serde_json::from_value(body.clone()).unwrap())
+            )
+            .await
+            .is_err()
+        );
+        body["previous_hash"] = serde_json::json!(template.previousblockhash);
+        body["nbits"] = serde_json::json!(bits ^ 1);
+        assert!(
+            super::super::jd_prepare::prepare(
+                State(Arc::clone(&state)),
+                Json(serde_json::from_value(body.clone()).unwrap())
+            )
+            .await
+            .is_err()
+        );
+        body["nbits"] = serde_json::json!(bits);
+        body["share_owner"] = serde_json::json!("p2pool:wrong-network");
+        assert!(
+            super::super::jd_prepare::prepare(
+                State(state),
+                Json(serde_json::from_value(body).unwrap())
+            )
+            .await
+            .is_err()
         );
     }
 
