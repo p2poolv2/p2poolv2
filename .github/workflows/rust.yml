@@ -57,6 +57,40 @@ jobs:
       - name: Run sim-feature tests
         run: cargo nextest run -p p2poolv2_lib --features sim
 
+  web:
+    name: Web dashboard (WASM)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: p2poolv2_web
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: 1.99.0
+          targets: wasm32-unknown-unknown
+
+      # Trunk fetches the wasm-bindgen CLI matching Cargo.lock and wasm-opt.
+      - name: Install trunk
+        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: trunk
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+
+      - name: Clippy for wasm32
+        run: cargo clippy --target wasm32-unknown-unknown -- -D warnings
+
+      - name: Build static assets
+        run: trunk build --release
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: p2poolv2_web
+          path: p2poolv2_web/dist
+
   covenants:
     name: BCH Covenant Tests
     runs-on: ubuntu-latest

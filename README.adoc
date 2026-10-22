@@ -185,6 +185,17 @@ export P2POOL_STATIC_DIR=/path/to/static
 If `P2POOL_STATIC_DIR` is not set, the dashboard is not available when
 running from a release binary.
 
+=== Interactive web dashboard (Rust/WASM)
+
+`p2poolv2_web` is an interactive dashboard written in Rust with Leptos and
+compiled to WebAssembly: live hashrate, a zoomable hashrate chart, live
+shares, found blocks, share details and miner lookup. Build it with
+`trunk build --release` in `p2poolv2_web/`, then set
+`P2POOL_WEB_APP_DIR` to the resulting `dist` directory and open
+`http://<your api hostname>:<your api port>/app/`. See
+link:./p2poolv2_web/README.md[p2poolv2_web/README.md] for building, serving
+it separately and API authentication.
+
 === Grafana dashboards
 
 Prometheus + Grafana dashboards for a P2Poolv2 node's `/metrics`.

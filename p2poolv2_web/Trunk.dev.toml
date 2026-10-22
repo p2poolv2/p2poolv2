@@ -1,0 +1,37 @@
+# Development server: `trunk serve --config Trunk.dev.toml`, then open
+# http://127.0.0.1:8080/. The API paths are proxied to a local node, so the
+# app's default API URL (the page origin) works without enabling CORS.
+# Change the backend port to your node's [api] port.
+[build]
+target = "index.html"
+dist = "dist-dev"
+public_url = "/"
+
+[serve]
+addresses = ["127.0.0.1"]
+port = 8080
+
+[[proxy]]
+backend = "http://127.0.0.1:46884/chain_info"
+
+[[proxy]]
+backend = "http://127.0.0.1:46884/shares"
+
+[[proxy]]
+backend = "http://127.0.0.1:46884/share"
+
+[[proxy]]
+backend = "http://127.0.0.1:46884/miner"
+
+[[proxy]]
+backend = "http://127.0.0.1:46884/hashrate"
+
+[[proxy]]
+backend = "http://127.0.0.1:46884/found_blocks"
+
+[[proxy]]
+backend = "http://127.0.0.1:46884/metrics"
+
+[[proxy]]
+backend = "ws://127.0.0.1:46884/ws"
+ws = true

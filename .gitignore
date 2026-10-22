@@ -40,3 +40,5 @@ ansible/inventory/group_vars/all/vault.yml
 perf.data
 # matplotlib venv for sim plotting
 load-tests/sim/.venv/
+/p2poolv2_web/dist
+/p2poolv2_web/dist-dev

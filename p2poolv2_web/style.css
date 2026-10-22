@@ -1,0 +1,68 @@
+/* The only stylesheet. Light and dark follow the system setting. */
+:root {
+  --bg: #f6f7f9; --card: #fff; --fg: #1b1f24; --muted: #687280; --line: #e3e6ea;
+  --accent: #0a8f5a; --local: #2f6fd6; --error: #c0392b;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #0f1216; --card: #171b21; --fg: #e6e9ed; --muted: #8b95a3; --line: #2a3038;
+          --accent: #2fc283; --local: #6b9cf0; --error: #ff6b5b; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg);
+       font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center;
+         padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--card); }
+header h1 { font-size: 18px; margin: 0 8px 0 0; }
+nav { display: flex; gap: 6px; flex: 1; }
+main { max-width: 1200px; margin: 0 auto; padding: 16px; }
+button { font: inherit; color: var(--fg); background: transparent; border: 1px solid var(--line);
+         border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+button.active, button[type=submit] { background: var(--accent); border-color: var(--accent); color: #fff; }
+input { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line);
+        border-radius: 6px; padding: 5px 8px; min-width: 0; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.status { color: var(--muted); }
+.status.live { color: var(--accent); }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+        padding: 14px 16px; margin-bottom: 16px; overflow-x: auto; }
+.card h2 { font-size: 15px; margin: 0 0 10px; }
+.card-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tabs { display: flex; gap: 4px; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.kpi { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+.kpi-label { color: var(--muted); font-size: 12px; }
+.kpi-value { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 16px; }
+@media (max-width: 520px) { .columns { grid-template-columns: 1fr; } }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { color: var(--muted); font-weight: 500; font-size: 12px; }
+.mono { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12.5px; }
+.muted { color: var(--muted); }
+.error { color: var(--error); }
+.settings { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; max-width: 1200px; margin: 16px auto; }
+.settings label { display: flex; flex-direction: column; gap: 3px; color: var(--muted); font-size: 12px; }
+.settings p { flex-basis: 100%; margin: 0; font-size: 12px; }
+.lookup { display: flex; gap: 8px; margin-bottom: 12px; }
+.lookup input { flex: 1; }
+.fields { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; }
+.fields dt { color: var(--muted); }
+.fields dd { margin: 0; word-break: break-all; }
+.chart { width: 100%; height: auto; display: block; user-select: none; cursor: crosshair; }
+.chart .grid { stroke: var(--line); }
+.chart .axis { fill: var(--muted); font-size: 11px; }
+.chart .line-pool { fill: none; stroke: var(--accent); stroke-width: 2; }
+.chart .line-local { fill: none; stroke: var(--local); stroke-width: 1.5; stroke-dasharray: 4 3; }
+.chart .crosshair { stroke: var(--muted); stroke-dasharray: 2 2; }
+.chart .dot { fill: var(--accent); }
+.chart .selection { fill: var(--accent); opacity: .15; }
+.chart .tip { fill: var(--card); stroke: var(--line); }
+.chart .tip-text { fill: var(--fg); font-size: 12px; }
+.chart .tip-text.pool { fill: var(--accent); }
+.chart .tip-text.local { fill: var(--local); }
+.legend { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin-top: 6px; font-size: 12px; }
+.key::before { content: ""; display: inline-block; width: 14px; height: 3px; margin-right: 5px; vertical-align: middle; }
+.key.pool::before { background: var(--accent); }
+.key.local::before { background: var(--local); }

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use crate::api::endpoints;
+use crate::api::endpoints::hashrate::LocalHashrateSampler;
 use crate::api::endpoints::miner::MinerWindowSource;
 use crate::api::error::ApiError;
 use crate::api::{auth::auth_middleware, websocket::websocket_handler};
@@ -82,6 +83,7 @@ pub struct PplnsQuery {
 /// Build the axum router with REST routes (protected by auth middleware)
 /// and the WebSocket route (which handles its own auth via query param).
 fn build_router(app_state: Arc<AppState>, app_config: AppConfig) -> Router {
+    let local_hashrate_sampler = LocalHashrateSampler::spawn(app_state.metrics_handle.clone());
     async fn log_req(req: Request, next: Next) -> Result<Response, StatusCode> {
         let method = req.method().clone();
         let uri = req.uri().clone();
@@ -115,6 +117,8 @@ fn build_router(app_state: Arc<AppState>, app_config: AppConfig) -> Router {
         .route("/share", get(endpoints::share::share))
         .route("/dag", get(endpoints::dag::dag))
         .route("/miner", get(endpoints::miner::miner))
+        .route("/hashrate", get(endpoints::hashrate::hashrate))
+        .route("/found_blocks", get(endpoints::found_blocks::found_blocks))
         .route("/transaction", get(endpoints::transaction::transaction))
         .route(
             "/share_headers",
@@ -143,6 +147,21 @@ fn build_router(app_state: Arc<AppState>, app_config: AppConfig) -> Router {
         )
         .nest_service("/static", ServeDir::new(&static_dir));
 
+    // Optional Rust/WASM dashboard (p2poolv2_web), served from a directory of
+    // built assets. Unknown paths fall back to index.html for client routing.
+    // The assets are public; the app sends Basic auth to the API itself.
+    let unauthenticated_routes = match std::env::var("P2POOL_WEB_APP_DIR") {
+        Ok(web_dir) => {
+            let web_dir = PathBuf::from(web_dir);
+            let index = web_dir.join("index.html");
+            unauthenticated_routes.nest_service(
+                "/app",
+                ServeDir::new(&web_dir).fallback(ServeFile::new(index)),
+            )
+        }
+        Err(_) => unauthenticated_routes,
+    };
+
     let mut router = authenticated_routes
         .merge(unauthenticated_routes)
         .layer(middleware::from_fn(log_req));
@@ -151,7 +170,10 @@ fn build_router(app_state: Arc<AppState>, app_config: AppConfig) -> Router {
         router = router.layer(CorsLayer::permissive())
     }
 
-    router.layer(Extension(app_config)).with_state(app_state)
+    router
+        .layer(Extension(app_config))
+        .layer(Extension(local_hashrate_sampler))
+        .with_state(app_state)
 }
 
 /// Start the API server and return a shutdown channel and the actual bound port.
@@ -1095,5 +1117,51 @@ mod tests {
             Some(&"*".parse().unwrap()),
             "access-control-allow-origin header should be present"
         );
+    }
+
+    async fn get_body(app: Router, uri: &str) -> (http::StatusCode, serde_json::Value) {
+        use http_body_util::BodyExt;
+        use tower::ServiceExt;
+
+        let request = http::Request::builder()
+            .uri(uri)
+            .body(http_body_util::Empty::<bytes::Bytes>::new())
+            .unwrap();
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        (status, serde_json::from_slice(&bytes).unwrap_or_default())
+    }
+
+    #[tokio::test]
+    async fn test_hashrate_route_returns_bucketed_history() {
+        let (state, _temp_dir) = build_test_state(NodeHandle::new_for_test()).await;
+        let app = build_router(state.clone(), state.app_config.clone());
+
+        let (status, body) = get_body(app, "/hashrate?window=600&buckets=10").await;
+        assert_eq!(status, http::StatusCode::OK);
+        assert_eq!(body["window_secs"], 600);
+        assert_eq!(body["bucket_secs"], 60);
+        assert_eq!(body["history"].as_array().unwrap().len(), 10);
+        assert!(body["pool_hashrate"].as_f64().unwrap() >= 0.0);
+    }
+
+    #[tokio::test]
+    async fn test_hashrate_route_rejects_out_of_range_window() {
+        let (state, _temp_dir) = build_test_state(NodeHandle::new_for_test()).await;
+        let app = build_router(state.clone(), state.app_config.clone());
+
+        let (status, _) = get_body(app, "/hashrate?window=10").await;
+        assert_eq!(status, http::StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_found_blocks_route_returns_json_list() {
+        let (state, _temp_dir) = build_test_state(NodeHandle::new_for_test()).await;
+        let app = build_router(state.clone(), state.app_config.clone());
+
+        let (status, body) = get_body(app, "/found_blocks").await;
+        assert_eq!(status, http::StatusCode::OK);
+        assert!(body.as_array().unwrap().is_empty());
     }
 }
