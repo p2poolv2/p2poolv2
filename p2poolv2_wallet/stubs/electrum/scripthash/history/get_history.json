@@ -1,0 +1,122 @@
+{
+  "stub_schema": 3,
+  "method": "blockchain.scripthash.get_history",
+  "implementation": {
+    "repository": "https://github.com/romanz/electrs",
+    "commit": "6039cadc575866612b1091a76813cfda4f32ef2f",
+    "package_version": "0.12.0",
+    "protocol_version": "1.4",
+    "source": "https://github.com/romanz/electrs/blob/6039cadc575866612b1091a76813cfda4f32ef2f/src/electrum.rs"
+  },
+  "rust_definition": {
+    "dispatch_variant": "ScriptHashGetHistory",
+    "handler": "Rpc::scripthash_get_history",
+    "signature": "fn scripthash_get_history( &self, client: &Client, (scripthash,): &(ScriptHash,), ) -> Result<Value>",
+    "source": "https://github.com/romanz/electrs/blob/6039cadc575866612b1091a76813cfda4f32ef2f/src/electrum.rs#L299"
+  },
+  "parameters": {
+    "names": [
+      "scripthash"
+    ],
+    "positional_variants": [
+      [
+        "ScriptHash"
+      ]
+    ],
+    "validation": "Invalid parameter counts or types return -32602 (invalid params)."
+  },
+  "examples": [
+    {
+      "id": "example_01",
+      "scenario": "confirmed",
+      "kind": "synthetic",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "blockchain.scripthash.get_history",
+        "params": [
+          "a12cf1aa7c74a6e9f54984646526173abed2a9f4a4862dc83eb94e8e8ef5220a"
+        ]
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": [
+          {
+            "tx_hash": "3c03366d125b24d382930cfb02b9d98470d50dde84da67a5aeef93c9081a0627",
+            "height": 100
+          }
+        ]
+      }
+    },
+    {
+      "id": "example_02",
+      "scenario": "pending_spend",
+      "kind": "synthetic",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "blockchain.scripthash.get_history",
+        "params": [
+          "a12cf1aa7c74a6e9f54984646526173abed2a9f4a4862dc83eb94e8e8ef5220a"
+        ]
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": [
+          {
+            "tx_hash": "3c03366d125b24d382930cfb02b9d98470d50dde84da67a5aeef93c9081a0627",
+            "height": 100
+          },
+          {
+            "tx_hash": "8d56c14f19b0bd733f123a6c14ebd70e0f396ef79f2ffe4ab6641a9b1769aadb",
+            "height": 0,
+            "fee": 1000
+          }
+        ]
+      }
+    },
+    {
+      "id": "example_03",
+      "scenario": "unused",
+      "kind": "synthetic",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "blockchain.scripthash.get_history",
+        "params": [
+          "a12cf1aa7c74a6e9f54984646526173abed2a9f4a4862dc83eb94e8e8ef5220a"
+        ]
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": []
+      }
+    },
+    {
+      "id": "example_04",
+      "scenario": "invalid_script_hash",
+      "kind": "synthetic",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "blockchain.scripthash.get_history",
+        "params": [
+          "invalid"
+        ]
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "error": {
+          "code": -32602,
+          "message": "invalid params"
+        }
+      }
+    }
+  ],
+  "behavior": "Confirmed entries precede mempool entries. Mempool entries are sorted by (has_unconfirmed_inputs, txid), have height 0 or -1, and include a fee. Confirmed entries omit the fee.",
+  "serialization_source": "https://github.com/romanz/electrs/blob/6039cadc575866612b1091a76813cfda4f32ef2f/src/status.rs"
+}

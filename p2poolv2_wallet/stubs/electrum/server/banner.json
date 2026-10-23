@@ -1,0 +1,43 @@
+{
+  "stub_schema": 3,
+  "method": "server.banner",
+  "implementation": {
+    "repository": "https://github.com/romanz/electrs",
+    "commit": "6039cadc575866612b1091a76813cfda4f32ef2f",
+    "package_version": "0.12.0",
+    "protocol_version": "1.4",
+    "source": "https://github.com/romanz/electrs/blob/6039cadc575866612b1091a76813cfda4f32ef2f/src/electrum.rs"
+  },
+  "rust_definition": {
+    "dispatch_variant": "Banner",
+    "handler": "Rpc::single_call (inline arm)",
+    "signature": null,
+    "source": "https://github.com/romanz/electrs/blob/6039cadc575866612b1091a76813cfda4f32ef2f/src/electrum.rs#L598"
+  },
+  "parameters": {
+    "names": [],
+    "positional_variants": [
+      []
+    ],
+    "validation": "Parameters are ignored."
+  },
+  "examples": [
+    {
+      "id": "example_01",
+      "scenario": "configured_banner",
+      "kind": "synthetic",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "server.banner",
+        "params": []
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "electrs wallet development stub"
+      },
+      "assumptions": "This string is the configured server_banner."
+    }
+  ]
+}

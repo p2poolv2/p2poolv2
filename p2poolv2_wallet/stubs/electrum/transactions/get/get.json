@@ -1,0 +1,249 @@
+{
+  "stub_schema": 3,
+  "method": "blockchain.transaction.get",
+  "implementation": {
+    "repository": "https://github.com/romanz/electrs",
+    "commit": "6039cadc575866612b1091a76813cfda4f32ef2f",
+    "package_version": "0.12.0",
+    "protocol_version": "1.4",
+    "source": "https://github.com/romanz/electrs/blob/6039cadc575866612b1091a76813cfda4f32ef2f/src/electrum.rs"
+  },
+  "rust_definition": {
+    "dispatch_variant": "TransactionGet",
+    "handler": "Rpc::transaction_get",
+    "signature": "fn transaction_get(&self, args: &TxGetArgs) -> Result<Value>",
+    "source": "https://github.com/romanz/electrs/blob/6039cadc575866612b1091a76813cfda4f32ef2f/src/electrum.rs#L425"
+  },
+  "parameters": {
+    "names": [
+      "txid",
+      "verbose"
+    ],
+    "positional_variants": [
+      [
+        "Txid"
+      ],
+      [
+        "Txid",
+        "bool"
+      ]
+    ],
+    "validation": "Invalid parameter counts or types return -32602 (invalid params)."
+  },
+  "examples": [
+    {
+      "id": "example_01",
+      "scenario": "confirmed",
+      "kind": "synthetic",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "blockchain.transaction.get",
+        "params": [
+          "3c03366d125b24d382930cfb02b9d98470d50dde84da67a5aeef93c9081a0627",
+          false
+        ]
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "02000000010000000000000000000000000000000000000000000000000000000000000000ffffffff020101ffffffff0100e1f5050000000022512079be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f8179800000000"
+      }
+    },
+    {
+      "id": "example_02",
+      "scenario": "pending_spend",
+      "kind": "synthetic",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "blockchain.transaction.get",
+        "params": [
+          "3c03366d125b24d382930cfb02b9d98470d50dde84da67a5aeef93c9081a0627",
+          false
+        ]
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": "02000000010000000000000000000000000000000000000000000000000000000000000000ffffffff020101ffffffff0100e1f5050000000022512079be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f8179800000000"
+      }
+    },
+    {
+      "id": "example_03",
+      "scenario": "pending_spend",
+      "kind": "synthetic",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "blockchain.transaction.get",
+        "params": [
+          "8d56c14f19b0bd733f123a6c14ebd70e0f396ef79f2ffe4ab6641a9b1769aadb",
+          false
+        ]
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": "020000000127061a08c993efaea567da84de0dd57084d9b902fb0c9382d3245b126d36033c0000000000fdffffff0200879303000000002251201111111111111111111111111111111111111111111111111111111111111111185662020000000022512079be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f8179800000000"
+      }
+    },
+    {
+      "id": "example_04",
+      "scenario": "raw_default",
+      "kind": "synthetic",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "blockchain.transaction.get",
+        "params": [
+          "6ae546d2c7938a748c56a830d70df071120bf345cb11c8c562629bbf5cec12b6"
+        ]
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "result": "010000000001018b83ea8e743f46a8a228728e473fb655017f50ed4352fd2b591fdba48304c27c01000000000000000001116200000000000016001414be1326745fa6bb1779eb893194912c2624aa20024730440220569ad7bccc078144376b9812145d61c6102f38a50693c81accc3df798f81c5000220434db507eb49ff112a18d7144ce20cd33e22688c1209d0574c1191c375437a1e012103dc59118ce9e7eacd35726b7983c222aee6ccbde906cb6f77f754d60d112f0fe400000000"
+      }
+    },
+    {
+      "id": "example_05",
+      "scenario": "verbose_forwarding",
+      "kind": "synthetic",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "blockchain.transaction.get",
+        "params": [
+          "6ae546d2c7938a748c56a830d70df071120bf345cb11c8c562629bbf5cec12b6",
+          true
+        ]
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "result": {
+          "txid": "6ae546d2c7938a748c56a830d70df071120bf345cb11c8c562629bbf5cec12b6",
+          "hash": "1a082dbd6b0a9694fc47605e4ed2ea9520776ea6d6f39f5f1ed7a687ce924719",
+          "version": 1,
+          "size": 191,
+          "vsize": 110,
+          "weight": 437,
+          "locktime": 0,
+          "vin": [
+            {
+              "txid": "7cc20483a4db1f592bfd5243ed507f0155b63f478e7228a2a8463f748eea838b",
+              "vout": 1,
+              "scriptSig": {
+                "asm": "",
+                "hex": ""
+              },
+              "sequence": 0,
+              "txinwitness": [
+                "30440220569ad7bccc078144376b9812145d61c6102f38a50693c81accc3df798f81c5000220434db507eb49ff112a18d7144ce20cd33e22688c1209d0574c1191c375437a1e01",
+                "03dc59118ce9e7eacd35726b7983c222aee6ccbde906cb6f77f754d60d112f0fe4"
+              ]
+            }
+          ],
+          "vout": [
+            {
+              "value": 0.00025105,
+              "n": 0,
+              "scriptPubKey": {
+                "asm": "0 14be1326745fa6bb1779eb893194912c2624aa20",
+                "hex": "001414be1326745fa6bb1779eb893194912c2624aa20",
+                "type": "witness_v0_keyhash"
+              }
+            }
+          ],
+          "hex": "010000000001018b83ea8e743f46a8a228728e473fb655017f50ed4352fd2b591fdba48304c27c01000000000000000001116200000000000016001414be1326745fa6bb1779eb893194912c2624aa20024730440220569ad7bccc078144376b9812145d61c6102f38a50693c81accc3df798f81c5000220434db507eb49ff112a18d7144ce20cd33e22688c1209d0574c1191c375437a1e012103dc59118ce9e7eacd35726b7983c222aee6ccbde906cb6f77f754d60d112f0fe400000000"
+        }
+      },
+      "daemon_result": {
+        "txid": "6ae546d2c7938a748c56a830d70df071120bf345cb11c8c562629bbf5cec12b6",
+        "hash": "1a082dbd6b0a9694fc47605e4ed2ea9520776ea6d6f39f5f1ed7a687ce924719",
+        "version": 1,
+        "size": 191,
+        "vsize": 110,
+        "weight": 437,
+        "locktime": 0,
+        "vin": [
+          {
+            "txid": "7cc20483a4db1f592bfd5243ed507f0155b63f478e7228a2a8463f748eea838b",
+            "vout": 1,
+            "scriptSig": {
+              "asm": "",
+              "hex": ""
+            },
+            "sequence": 0,
+            "txinwitness": [
+              "30440220569ad7bccc078144376b9812145d61c6102f38a50693c81accc3df798f81c5000220434db507eb49ff112a18d7144ce20cd33e22688c1209d0574c1191c375437a1e01",
+              "03dc59118ce9e7eacd35726b7983c222aee6ccbde906cb6f77f754d60d112f0fe4"
+            ]
+          }
+        ],
+        "vout": [
+          {
+            "value": 0.00025105,
+            "n": 0,
+            "scriptPubKey": {
+              "asm": "0 14be1326745fa6bb1779eb893194912c2624aa20",
+              "hex": "001414be1326745fa6bb1779eb893194912c2624aa20",
+              "type": "witness_v0_keyhash"
+            }
+          }
+        ],
+        "hex": "010000000001018b83ea8e743f46a8a228728e473fb655017f50ed4352fd2b591fdba48304c27c01000000000000000001116200000000000016001414be1326745fa6bb1779eb893194912c2624aa20024730440220569ad7bccc078144376b9812145d61c6102f38a50693c81accc3df798f81c5000220434db507eb49ff112a18d7144ce20cd33e22688c1209d0574c1191c375437a1e012103dc59118ce9e7eacd35726b7983c222aee6ccbde906cb6f77f754d60d112f0fe400000000"
+      },
+      "assumptions": "Synthetic getrawtransaction result. Fields depend on daemon version and chain state."
+    },
+    {
+      "id": "example_06",
+      "scenario": "invalid_txid",
+      "kind": "synthetic",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "method": "blockchain.transaction.get",
+        "params": [
+          "invalid"
+        ]
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "error": {
+          "code": -32602,
+          "message": "invalid params"
+        }
+      }
+    },
+    {
+      "id": "example_07",
+      "scenario": "daemon_error",
+      "kind": "synthetic",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "blockchain.transaction.get",
+        "params": [
+          "6ae546d2c7938a748c56a830d70df071120bf345cb11c8c562629bbf5cec12b6",
+          true
+        ]
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "error": {
+          "code": 2,
+          "message": "No such mempool or blockchain transaction."
+        }
+      },
+      "daemon_error": {
+        "code": -5,
+        "message": "No such mempool or blockchain transaction."
+      }
+    }
+  ],
+  "behavior": "Accepts [txid] or [txid, verbose]. verbose defaults to false; true returns Bitcoin Core getrawtransaction JSON unchanged."
+}

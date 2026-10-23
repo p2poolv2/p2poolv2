@@ -1,0 +1,55 @@
+{
+  "stub_schema": 3,
+  "method": "server.features",
+  "implementation": {
+    "repository": "https://github.com/romanz/electrs",
+    "commit": "6039cadc575866612b1091a76813cfda4f32ef2f",
+    "package_version": "0.12.0",
+    "protocol_version": "1.4",
+    "source": "https://github.com/romanz/electrs/blob/6039cadc575866612b1091a76813cfda4f32ef2f/src/electrum.rs"
+  },
+  "rust_definition": {
+    "dispatch_variant": "Features",
+    "handler": "Rpc::features",
+    "signature": "fn features(&self) -> Result<Value>",
+    "source": "https://github.com/romanz/electrs/blob/6039cadc575866612b1091a76813cfda4f32ef2f/src/electrum.rs#L502"
+  },
+  "parameters": {
+    "names": [],
+    "positional_variants": [
+      []
+    ],
+    "validation": "Parameters are ignored."
+  },
+  "examples": [
+    {
+      "id": "example_01",
+      "scenario": "configured_server",
+      "kind": "synthetic",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "server.features",
+        "params": []
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "genesis_hash": "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f",
+          "hosts": {
+            "127.0.0.1": {
+              "tcp_port": 50001
+            }
+          },
+          "protocol_max": "1.4",
+          "protocol_min": "1.4",
+          "pruning": null,
+          "server_version": "electrs/0.12.0",
+          "hash_function": "sha256"
+        }
+      },
+      "assumptions": "Mock Bitcoin mainnet index, configured bind address 127.0.0.1:50001."
+    }
+  ]
+}

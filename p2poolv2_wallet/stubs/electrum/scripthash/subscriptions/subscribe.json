@@ -1,0 +1,119 @@
+{
+  "stub_schema": 3,
+  "method": "blockchain.scripthash.subscribe",
+  "implementation": {
+    "repository": "https://github.com/romanz/electrs",
+    "commit": "6039cadc575866612b1091a76813cfda4f32ef2f",
+    "package_version": "0.12.0",
+    "protocol_version": "1.4",
+    "source": "https://github.com/romanz/electrs/blob/6039cadc575866612b1091a76813cfda4f32ef2f/src/electrum.rs"
+  },
+  "rust_definition": {
+    "dispatch_variant": "ScriptHashSubscribe",
+    "handler": "Rpc::scripthash_subscribe",
+    "signature": "fn scripthash_subscribe( &self, client: &mut Client, (scripthash,): &(ScriptHash,), ) -> Result<Value>",
+    "source": "https://github.com/romanz/electrs/blob/6039cadc575866612b1091a76813cfda4f32ef2f/src/electrum.rs#L335"
+  },
+  "parameters": {
+    "names": [
+      "scripthash"
+    ],
+    "positional_variants": [
+      [
+        "ScriptHash"
+      ]
+    ],
+    "validation": "Invalid parameter counts or types return -32602 (invalid params)."
+  },
+  "examples": [
+    {
+      "id": "example_01",
+      "scenario": "confirmed",
+      "kind": "synthetic",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "blockchain.scripthash.subscribe",
+        "params": [
+          "a12cf1aa7c74a6e9f54984646526173abed2a9f4a4862dc83eb94e8e8ef5220a"
+        ]
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "589c12eaa0be1768afa30accb0542ac564eb1826b86306ecba8d57a223a30db3"
+      }
+    },
+    {
+      "id": "example_02",
+      "scenario": "pending_spend",
+      "kind": "synthetic",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "blockchain.scripthash.subscribe",
+        "params": [
+          "a12cf1aa7c74a6e9f54984646526173abed2a9f4a4862dc83eb94e8e8ef5220a"
+        ]
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": "b3d0dcb315280f7e4063c6ef6445d00cdb811bfe276dd90adecac194b1b648e5"
+      }
+    },
+    {
+      "id": "example_03",
+      "scenario": "history_changed",
+      "kind": "synthetic",
+      "notification": {
+        "jsonrpc": "2.0",
+        "method": "blockchain.scripthash.subscribe",
+        "params": [
+          "a12cf1aa7c74a6e9f54984646526173abed2a9f4a4862dc83eb94e8e8ef5220a",
+          "b3d0dcb315280f7e4063c6ef6445d00cdb811bfe276dd90adecac194b1b648e5"
+        ]
+      }
+    },
+    {
+      "id": "example_04",
+      "scenario": "unused",
+      "kind": "synthetic",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "blockchain.scripthash.subscribe",
+        "params": [
+          "a12cf1aa7c74a6e9f54984646526173abed2a9f4a4862dc83eb94e8e8ef5220a"
+        ]
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "result": null
+      }
+    },
+    {
+      "id": "example_05",
+      "scenario": "invalid_script_hash",
+      "kind": "synthetic",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "blockchain.scripthash.subscribe",
+        "params": [
+          "invalid"
+        ]
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "error": {
+          "code": -32602,
+          "message": "invalid params"
+        }
+      }
+    }
+  ],
+  "serialization_source": "https://github.com/romanz/electrs/blob/6039cadc575866612b1091a76813cfda4f32ef2f/src/status.rs"
+}
