@@ -41,3 +41,6 @@ perf.data
 # matplotlib venv for sim plotting
 load-tests/sim/.venv/
 load-tests/sim/__pycache__/
+
+# nix outputs
+/result*
