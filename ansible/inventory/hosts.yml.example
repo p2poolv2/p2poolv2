@@ -4,8 +4,10 @@
 # Copy this file to get started:
 #   cp hosts.yml.example hosts.yml
 #
-# Secrets (RPC passwords, API auth) are in group_vars/all/vault.yml.
+# Secrets (RPC passwords, API auth, Grafana admin) are in group_vars/all/vault.yml.
 # See group_vars/all/vault.yml.example for setup instructions.
+#
+# If sudo on a host needs a password, run the playbook with -K.
 
 all:
   children:
@@ -14,50 +16,80 @@ all:
         your-server.example.com:
           ansible_user: ubuntu
 
-          p2poolv2_version: "0.12.0"
+          p2poolv2_version: "0.16.2"
+          # release: install the GitHub release for p2poolv2_version
+          # source:  build p2poolv2_source_ref on the host
+          p2poolv2_install_method: release
+          # p2poolv2_source_ref: main
           p2poolv2_certbot_email: "you@example.com"
+
+          # Roles enabled on this host
+          p2poolv2_nginx_enabled: true
+          p2poolv2_grafana_enabled: true
+          p2poolv2_ufw_enabled: true
 
           # Nginx -- host-level config
           p2poolv2_domain: your-domain.example.com
           p2poolv2_redirect_domains: []
-          p2poolv2_api_port: 46884
+          p2poolv2_api_port: 46885
           # p2poolv2_api_auth_user: "{{ vault_api_auth_user }}"
           # p2poolv2_api_auth_pass: "{{ vault_api_auth_pass }}"
           # p2poolv2_grafana_domain: grafana.example.com
+          # Site configs in sites-enabled to remove (e.g. ones being replaced)
+          p2poolv2_nginx_remove_sites: []
+
+          # Grafana listen address: 127.0.0.1 behind nginx, 0.0.0.0 for LAN access
+          p2poolv2_grafana_listen_address: "127.0.0.1"
+          # Extra Prometheus scrape targets besides the p2poolv2 instances
+          # p2poolv2_prometheus_extra_targets:
+          #   - job_name: node
+          #     target: "localhost:9100"
 
           p2poolv2_instances:
             # --- Mainnet instance ---
             - instance: main
+              enabled: false
               p2p_listen_address: "/ip4/0.0.0.0/tcp/6884"
-              stratum_port: 3333
+              # external_address: "/ip4/203.0.113.1/tcp/6884"
+              stratum_port: 3334
               start_difficulty: 10000
               minimum_difficulty: 100
               solo_address: "YOUR_MAINNET_ADDRESS"
               bootstrap_address: "YOUR_MAINNET_ADDRESS"
+              miner_address: "YOUR_MAINNET_SHARE_ADDRESS"
               bitcoin_network: main
               bitcoin_rpc_url: "http://127.0.0.1:8332"
               bitcoin_rpc_user: "{{ vault_bitcoin_rpc_user }}"
               bitcoin_rpc_pass: "{{ vault_bitcoin_rpc_pass }}"
               zmq_endpoint: "tcp://127.0.0.1:28332"
-              api_port: 46884
+              api_port: 46886
               # api_auth_user: "{{ vault_api_auth_user }}"
+              # api_auth_pass: "{{ vault_api_auth_pass }}"
               # api_auth_token: "{{ vault_api_auth_token }}"
               pool_signature: "P2Poolv2"
 
             # --- Testnet4 instance ---
             - instance: testnet4
-              p2p_listen_address: "/ip4/0.0.0.0/tcp/6885"
-              stratum_port: 3334
+              p2p_listen_address: "/ip4/0.0.0.0/tcp/46884"
+              # external_address: "/ip4/203.0.113.1/tcp/46884"
+              # dial_peers: ["/ip4/203.0.113.2/tcp/46884"]
+              stratum_port: 3333
               start_difficulty: 125000
               minimum_difficulty: 1000
               solo_address: "YOUR_TESTNET4_ADDRESS"
               bootstrap_address: "YOUR_TESTNET4_ADDRESS"
+              miner_address: "YOUR_TESTNET4_SHARE_ADDRESS"
               bitcoin_network: testnet4
               bitcoin_rpc_url: "http://127.0.0.1:48332"
               bitcoin_rpc_user: "{{ vault_bitcoin_rpc_user }}"
               bitcoin_rpc_pass: "{{ vault_bitcoin_rpc_pass }}"
+              # testnet4 bitcoind needs zmqpubhashblock=tcp://127.0.0.1:28333
               zmq_endpoint: "tcp://127.0.0.1:28333"
+              # api_hostname: "127.0.0.1"
               api_port: 46885
               # api_auth_user: "{{ vault_api_auth_user }}"
+              # api_auth_pass: "{{ vault_api_auth_pass }}"
               # api_auth_token: "{{ vault_api_auth_token }}"
               pool_signature: "P2Poolv2"
+              # wait_for_chain_sync: true
+              # stats_dir: "/var/lib/p2poolv2/testnet4/stats"
