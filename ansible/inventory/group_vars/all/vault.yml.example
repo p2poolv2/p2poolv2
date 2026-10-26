@@ -16,9 +16,14 @@
 # Ansible auto-loads all YAML files in group_vars/all/, so vault.yml
 # variables are available to all hosts without any extra include directives.
 
-# Bitcoin RPC credentials (shared across instances on the same host)
+# Bitcoin RPC credentials (shared across instances on the same host).
+# With several hosts, use one pair per host and reference it from that
+# host's instances in hosts.yml, e.g. vault_minis_bitcoin_rpc_user.
 vault_bitcoin_rpc_user: "your_rpc_user"
 vault_bitcoin_rpc_pass: "your_rpc_password"
+
+# Grafana admin password, set on every host running Grafana
+vault_grafana_admin_password: "your_grafana_admin_password"
 
 # API authentication (optional)
 # Generate the auth_token with: p2poolv2_cli gen-auth <username> <password>
