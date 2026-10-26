@@ -51,7 +51,6 @@ libp2p = { version = "0.56", features = [
     "macros",
     "kad",
     "ping",
-    "secp256k1",
     "request-response",
 ] }
 tokio = { version = "1.0", features = ["rt-multi-thread", "net", "io-util", "sync", "time", "signal", "macros"] }
