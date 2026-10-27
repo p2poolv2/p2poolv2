@@ -15,6 +15,7 @@ publish.workspace = true
 
 [dependencies]
 p2poolv2_lib = { workspace = true }
+bitcoindrpc = { workspace = true }
 bitcoin = { workspace = true }
 axum = { version = "0.8", features = ["ws"] }
 tokio = { workspace = true }
@@ -32,6 +33,7 @@ tower-http = { version = "0.7", features = ["fs", "cors"] }
 
 [dev-dependencies]
 p2poolv2_lib = { workspace = true, features = ["test-utils"] }
+wiremock = { workspace = true }
 tempfile.workspace = true
 test-log = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
