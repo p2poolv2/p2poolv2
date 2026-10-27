@@ -23,7 +23,7 @@
     state: present
     update_cache: true
     cache_valid_time: 3600
-  when: ansible_os_family == "Debian"
+  when: ansible_facts['os_family'] == "Debian"
 
 - name: Install build dependencies (Arch)
   community.general.pacman:
@@ -42,7 +42,7 @@
       - zlib
       - zstd
     state: present
-  when: ansible_os_family == "Archlinux"
+  when: ansible_facts['os_family'] == "Archlinux"
 
 - name: Create build user
   ansible.builtin.user:
@@ -93,7 +93,7 @@
     cmd: "{{ p2poolv2_build_home }}/.cargo/bin/cargo build --release --locked --bin p2poolv2 --bin p2poolv2_cli"
     chdir: "{{ p2poolv2_build_home }}/src"
   environment:
-    PATH: "{{ p2poolv2_build_home }}/.cargo/bin:{{ ansible_env.PATH }}"
+    PATH: "{{ p2poolv2_build_home }}/.cargo/bin:{{ ansible_facts['env']['PATH'] }}"
   become_user: "{{ p2poolv2_build_user }}"
   async: 3600
   poll: 30

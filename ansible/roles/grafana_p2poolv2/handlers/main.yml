@@ -1,4 +1,7 @@
 ---
+# In check mode the packages are not really installed, so on a host without
+# them the services do not exist yet; errors are ignored only then.
+
 - name: reload systemd
   ansible.builtin.systemd:
     daemon_reload: true
@@ -7,8 +10,10 @@
   ansible.builtin.systemd:
     name: prometheus
     state: restarted
+  ignore_errors: "{{ ansible_check_mode }}"
 
 - name: restart grafana
   ansible.builtin.systemd:
     name: "{{ p2poolv2_grafana_service }}"
     state: restarted
+  ignore_errors: "{{ ansible_check_mode }}"

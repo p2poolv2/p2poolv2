@@ -185,7 +185,7 @@ p2poolv2_cli gen-auth <username> <password>
 
 Store the username, password, and resulting token in the vault. The nginx basic auth header and the Prometheus scrape credentials are derived from the username and password, so the token must be generated from the same pair.
 
-With several hosts, give each host its own bitcoind RPC credentials (e.g. `vault_minis_bitcoin_rpc_user`) and reference them from that host's instances in `hosts.yml`.
+With several hosts, give each host its own bitcoind RPC credentials in a per-host vault, `inventory/host_vars/<host>/vault.yml`, using the same key names (`vault_bitcoin_rpc_user`, `vault_bitcoin_rpc_pass`). Ansible loads a host's `host_vars` only for that host. Keep these keys out of `group_vars/all/vault.yml` so a missing host vault fails the run instead of silently using another host's credentials. Shared secrets (API auth, Grafana admin password) stay in `group_vars/all/vault.yml`. The `host_vars/` directory is gitignored.
 
 == Prerequisites
 

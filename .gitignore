@@ -32,6 +32,7 @@ spec/**/states
 # Ansible inventory and vault (contain hostnames, credentials)
 ansible/inventory/hosts.yml
 ansible/inventory/group_vars/all/vault.yml
+ansible/inventory/host_vars/
 
 # Editors
 .zed/
