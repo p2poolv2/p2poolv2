@@ -1,0 +1,32 @@
+name: Fuzz
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  fuzz-smoke-test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        fuzz_target: [wire_message_decode]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin
+            p2poolv2_lib/fuzz/target
+          key: fuzz-${{ matrix.fuzz_target }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Smoke test fuzz target (60s)
+        working-directory: p2poolv2_lib
+        run: cargo fuzz run ${{ matrix.fuzz_target }} -- -max_total_time=60
