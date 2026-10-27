@@ -80,7 +80,7 @@ pub mod cli;
 pub mod wallet;
 pub mod witness_program_codec;
 
-pub use wallet::{ChainIdentity, Wallet, WalletError};
+pub use wallet::{AddressInfo, ChainIdentity, Wallet, WalletError};
 
 use bitcoin::bech32::primitives::decode::{PaddingError, SegwitHrpstringError};
 use bitcoin::bech32::{Hrp, segwit};
