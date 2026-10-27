@@ -59,11 +59,7 @@ jobs:
 
   coverage:
     name: Code Coverage
-    # Pinned: on ubuntu-26.04 the coverage-instrumented zmq_listener tests
-    # die with SIGSEGV (libzmq is vendored C++), while the same tests pass
-    # uninstrumented on 26.04 and instrumented on 24.04. Unpin once the
-    # crash is understood.
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     env:
       CARGO_TERM_COLOR: always
     steps:
