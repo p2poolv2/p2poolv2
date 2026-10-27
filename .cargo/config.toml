@@ -1,0 +1,23 @@
+# Vendored libzmq (zeromq-src, built with the cc crate) never defines
+# HAVE_POSIX_MEMALIGN, so yqueue_t falls back to malloc for its chunks.
+# Those chunks hold command_t, which is declared aligned(64), and malloc
+# only guarantees 16. Compilers that target AVX by default (GCC 15 on
+# Ubuntu 26.04 targets x86-64-v3) emit 32-byte aligned stores into the
+# chunk, and the node dies with SIGSEGV in mailbox_t::send during the
+# first zmq connect. Defining the macro restores posix_memalign.
+#
+# The posix_memalign path also needs ZMQ_CACHELINE_SIZE, which libzmq's
+# CMake build provides but zeromq-src does not. 64 matches command_t's
+# aligned(64).
+#
+# Per-target variables are used because cc appends them to any CXXFLAGS
+# the user already has, instead of replacing them. Every target here has
+# posix_memalign. No other C++ dependency reads these macros.
+#
+# Cargo does not rebuild a cached libzmq when these change; run
+# `cargo clean -p zmq-sys` once on existing build directories.
+[env]
+CXXFLAGS_x86_64_unknown_linux_gnu = "-DHAVE_POSIX_MEMALIGN=1 -DZMQ_CACHELINE_SIZE=64"
+CXXFLAGS_aarch64_unknown_linux_gnu = "-DHAVE_POSIX_MEMALIGN=1 -DZMQ_CACHELINE_SIZE=64"
+CXXFLAGS_x86_64_apple_darwin = "-DHAVE_POSIX_MEMALIGN=1 -DZMQ_CACHELINE_SIZE=64"
+CXXFLAGS_aarch64_apple_darwin = "-DHAVE_POSIX_MEMALIGN=1 -DZMQ_CACHELINE_SIZE=64"
