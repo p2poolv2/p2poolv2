@@ -17,7 +17,7 @@ $EDITOR inventory/group_vars/all/vault.yml
 # 3. Encrypt the vault
 ansible-vault encrypt inventory/group_vars/all/vault.yml
 
-# 4. Dry run to verify
+# 4. Dry run to verify (add -K if sudo on a host needs a password)
 ansible-playbook -i inventory/hosts.yml playbook.yml --check --diff --ask-vault-pass
 
 # 5. Deploy
@@ -30,17 +30,32 @@ Deploy only a specific role:
 ----
 ansible-playbook -i inventory/hosts.yml playbook.yml --tags p2poolv2 --ask-vault-pass
 ansible-playbook -i inventory/hosts.yml playbook.yml --tags nginx --ask-vault-pass
+ansible-playbook -i inventory/hosts.yml playbook.yml --tags grafana --ask-vault-pass
 ----
+
+Deploy to one host only with `--limit <host>`.
 
 == What it does
 
-The playbook deploys one or more P2Poolv2 instances to a host. Each instance gets its own config, systemd service, and data directory. Nginx is configured once per host as a reverse proxy.
+The playbook deploys one or more P2Poolv2 instances to a host. Each instance gets its own config, systemd service, and data directory. Nginx and Grafana are configured once per host.
 
-Two roles:
+Three roles:
 
-*p2poolv2*:: Installs the p2poolv2 binary and CLI using the official installer script (auto-detects architecture), deploys the dashboard static files, templates the TOML config, and manages the systemd service.
+*p2poolv2*:: Installs the p2poolv2 binary and CLI, deploys the dashboard static files, templates the TOML config, and manages the systemd service. Before (re)starting a node it checks that the instance's bitcoind RPC port and ZMQ endpoint are reachable, and stops the run if not. bitcoind itself is not managed.
 
 *nginx_p2poolv2*:: Installs nginx as a reverse proxy in front of the API with rate limiting, WebSocket support, and Let's Encrypt certificates via certbot. Optionally proxies Grafana.
+
+*grafana_p2poolv2*:: Installs Prometheus and Grafana and provisions the P2Poolv2 datasource and dashboards. See <<Grafana>>.
+
+Each host chooses its roles with `p2poolv2_nginx_enabled` and `p2poolv2_grafana_enabled` (both default to true).
+
+=== Binary install method
+
+Set `p2poolv2_install_method` per host:
+
+`release` (default):: Installs the GitHub release for `p2poolv2_version` with the official installer script, which auto-detects architecture and verifies checksums.
+
+`source`:: Builds `p2poolv2_source_ref` (branch, tag or commit) on the host and installs the result. A dedicated `p2poolv2-build` user owns the rust toolchain (installed with rustup) and the checkout in `/var/lib/p2poolv2-build`. The build reruns only when the ref resolves to a commit other than the one installed. A first build takes 10-20 minutes and needs a few GB of RAM.
 
 == Directory layout
 
@@ -57,17 +72,30 @@ ansible/
   roles/
     p2poolv2/
       defaults/main.yml                 # All configurable variables with defaults
-      tasks/main.yml                    # Install, configure, enable service
       templates/
         config.toml.j2                  # P2Poolv2 TOML config
         p2poolv2@.service.j2            # Systemd template unit
-      handlers/main.yml                 # Restart/reload handlers
+      handlers/main.yml                 # Unused; restarts are inline per instance
+      tasks/
+        main.yml                        # Configure and enable services
+        install_release.yml             # Install from a GitHub release
+        install_source.yml              # Build and install from a git ref
+        preflight.yml                   # bitcoind RPC and ZMQ reachability
     nginx_p2poolv2/
       defaults/main.yml                 # Nginx-specific defaults
       tasks/main.yml                    # Install nginx, deploy site, certbot
       templates/
-        p2poolv2_site.conf.j2           # Nginx site config
-      handlers/main.yml                 # Reload handler
+        p2poolv2_site.conf.j2           # Nginx site config with SSL
+        p2poolv2_http.conf.j2           # HTTP-only config for certificate acquisition
+      handlers/main.yml                 # Config test, then reload
+    grafana_p2poolv2/
+      defaults/main.yml                 # Ports, listen addresses, datasource
+      tasks/main.yml                    # Install, configure, provision
+      templates/
+        prometheus.yml.j2               # Scrape config for the instances
+        datasource.yml.j2               # Grafana datasource provisioning
+        grafana-override.conf.j2        # Grafana systemd environment
+      handlers/main.yml                 # Restart handlers
 ----
 
 == Server layout
@@ -82,10 +110,14 @@ The roles deploy to the following paths on the target host:
 | `/opt/p2poolv2/share/static/` | Dashboard static files
 | `/etc/p2poolv2/config-<instance>.toml` | Instance config (mode 0640)
 | `/var/lib/p2poolv2/<instance>/` | RocksDB store and stats
-| `/var/log/p2poolv2/<instance>/` | Log files
 | `/etc/systemd/system/p2poolv2@.service` | Systemd template unit
 | `/etc/nginx/sites-available/p2poolv2.conf` | Nginx reverse proxy config
+| `/etc/prometheus/prometheus.yml` | Prometheus scrape config (mode 0640, holds API credentials)
+| `/etc/grafana/provisioning/` | Grafana datasource and dashboard provisioning
+| `/var/lib/grafana/dashboards/` | Provisioned dashboard JSON
 |===
+
+Logs go to the systemd journal (`journalctl -u p2poolv2@<instance>`). Set `p2poolv2_log_file` to also write daily-rotated files; p2poolv2 never deletes old ones.
 
 == Multiple instances
 
@@ -95,30 +127,41 @@ Define multiple entries in `p2poolv2_instances` in your inventory to run mainnet
 |===
 | Port | Mainnet | Testnet4
 
-| Stratum | 3333 | 3334
-| P2P | 6884 | 6885
-| API | 46884 | 46885
+| Stratum | 3334 | 3333
+| P2P | 6884 | 46884
+| API | 46886 | 46885
 | ZMQ | 28332 | 28333
 |===
 
+These are the ports in `hosts.yml.example`. The ZMQ endpoint must match the `zmqpubhashblock` setting of that network's bitcoind.
+
+The playbook does not manage the host firewall. When you enable an instance, open its stratum and P2P ports in the firewall yourself.
+
 == Nginx
 
-Nginx is configured once per host (not per instance). The config includes:
+Nginx is configured once per host (not per instance), Debian/Ubuntu only. The config includes:
 
 - Reverse proxy to the P2Poolv2 API with rate limiting and WebSocket support
 - HTTP to HTTPS redirect
 - Optional redirect domains (e.g. p2poolv2.org -> testnet4.p2poolv2.org)
-- Optional Grafana reverse proxy (set `p2poolv2_grafana_domain`)
+- Optional Grafana reverse proxy (set `p2poolv2_grafana_domain`). Set `p2poolv2_grafana_public_dashboard_path` (e.g. `/public-dashboards/<access token>`) to send visitors without a Grafana session to a public dashboard instead of the login page.
 - Let's Encrypt certificates via certbot
 - Basic auth header injection toward the API backend (derived from vault credentials)
 
+The role owns a single site, `p2poolv2.conf`, and leaves other sites on the host alone. To replace a hand-written site, list it in `p2poolv2_nginx_remove_sites`; it is removed only after `p2poolv2.conf` is in place. Every reload runs `nginx -t` first, so a broken config fails the play while nginx keeps serving the previous one.
+
+Certificate renewal is kept enabled through `certbot.timer`, and each run checks it with `certbot renew --dry-run` (against the Let's Encrypt staging server). Set `p2poolv2_certbot_renew_check: false` to skip that check.
+
 == Grafana
 
-Installs Prometheus and Grafana natively (via the system package manager, not Docker), and deploys the existing dashboards from `prometheus/grafana/dashboards/` and the datasource/dashboard provisioning from `prometheus/grafana/provisioning/`.
+Installs Prometheus and Grafana natively (via the system package manager, not Docker). Grafana is fully provisioned from this repo; dashboards edited in the Grafana UI cannot be saved.
 
-- Prometheus is available in the default repositories on both Debian/Ubuntu and Arch, so no extra repository setup is needed for it
-- Grafana requires its own official repository, which this role adds automatically
-- Both services are enabled and started via systemd (`prometheus`, `grafana-server`)
+- Prometheus scrapes every enabled instance's API on localhost, with the API credentials when the instance has auth. Add more targets with `p2poolv2_prometheus_extra_targets`.
+- Prometheus listens on 127.0.0.1 only. Grafana listens on `p2poolv2_grafana_listen_address`: `127.0.0.1` behind nginx, `0.0.0.0` for direct LAN access.
+- The datasource is named `Prometheus (P2Poolv2)` with uid `prometheus-p2poolv2` and is not the default, so it never replaces a Prometheus datasource you already have.
+- Both the private dashboards (`prometheus/grafana/dashboards/`) and the public ones (`prometheus/grafana/dashboards-public/`) are deployed. Grafana rescans them every 10 seconds, so dashboard changes go live without a restart. Share a public dashboard once with Grafana's *Share externally*; its link survives later deploys.
+- The Grafana admin password is set from `vault_grafana_admin_password`.
+- On Debian/Ubuntu the role adds Grafana's apt repository. On Arch it does not sync the package database (that would be a partial upgrade); if pacman cannot find a package, run `pacman -Syu` on the host first.
 - Deploy just this role with:
 +
 [source,bash]
@@ -140,12 +183,14 @@ To generate an API auth token:
 p2poolv2_cli gen-auth <username> <password>
 ----
 
-Store the username, password, and resulting token in the vault. The nginx basic auth header is derived automatically from the username and password.
+Store the username, password, and resulting token in the vault. The nginx basic auth header and the Prometheus scrape credentials are derived from the username and password, so the token must be generated from the same pair.
+
+With several hosts, give each host its own bitcoind RPC credentials (e.g. `vault_minis_bitcoin_rpc_user`) and reference them from that host's instances in `hosts.yml`.
 
 == Prerequisites
 
-* Ansible 2.12+
-* A target host running Ubuntu (tested on 22.04) or Arch Linux
-* SSH access with sudo privileges
-* A running Bitcoin Core node on the target (not managed by this playbook)
-* DNS records pointing your domain(s) to the target host (for Let's Encrypt)
+* ansible-core with the `community.general` collection (tested with ansible-core 2.21)
+* A target host running Ubuntu (tested on 22.04) or Arch Linux. The p2poolv2 and grafana roles support both; the nginx role supports Ubuntu only, so set `p2poolv2_nginx_enabled: false` on Arch hosts.
+* SSH access with sudo privileges (run with `-K` if sudo needs a password)
+* A running Bitcoin Core node on the target with `zmqpubhashblock` enabled for each network (not managed by this playbook)
+* DNS records pointing your domain(s) to the target host (for Let's Encrypt, nginx role only)

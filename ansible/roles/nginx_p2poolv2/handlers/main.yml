@@ -1,5 +1,16 @@
 ---
-- name: reload nginx
+# Handlers run in the order listed here: the config test runs before the
+# reload, so a broken config fails the play and nginx keeps serving the
+# config it has.
+
+- name: Test nginx config
+  ansible.builtin.command:
+    cmd: nginx -t
+  changed_when: false
+  listen: reload nginx
+
+- name: Reload nginx service
   ansible.builtin.systemd:
     name: nginx
     state: reloaded
+  listen: reload nginx

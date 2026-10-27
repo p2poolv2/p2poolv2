@@ -1,65 +1,69 @@
 ---
-# Nginx reverse proxy for P2Poolv2
+# Nginx reverse proxy for P2Poolv2 (Debian/Ubuntu only)
 #
-# Bootstrap sequence for fresh hosts:
-#   1. Deploy HTTP-only config (no cert references)
-#   2. Start nginx
-#   3. Obtain Let's Encrypt certificates
-#   4. Deploy full SSL config
-#   5. Reload nginx
+# The role owns one site, p2poolv2.conf. Other sites are left alone unless
+# listed in p2poolv2_nginx_remove_sites.
+#
+# Sequence:
+#   1. Deploy the full SSL config when the certificates exist, otherwise an
+#      HTTP-only config for certificate acquisition
+#   2. Enable it, remove replaced sites, test and reload
+#   3. Obtain missing certificates, then deploy the full SSL config
+#   4. Keep renewal enabled and check that it works
 
-- name: Update apt cache (Debian/Ubuntu)
-  ansible.builtin.apt:
-    update_cache: true
-  when: ansible_os_family == "Debian"
+- name: Check the OS is supported
+  ansible.builtin.assert:
+    that: ansible_os_family == "Debian"
+    fail_msg: >-
+      The nginx role supports Debian/Ubuntu only (sites-available and
+      sites-enabled layout). Set p2poolv2_nginx_enabled: false for this host.
 
 - name: Install nginx
-  ansible.builtin.package:
+  ansible.builtin.apt:
     name: nginx
     state: present
+    update_cache: true
+    cache_valid_time: 3600
 
-- name: Install certbot and nginx plugin (Debian/Ubuntu)
-  ansible.builtin.package:
+- name: Install certbot and nginx plugin
+  ansible.builtin.apt:
     name:
       - certbot
       - python3-certbot-nginx
     state: present
-  when: >
-    ansible_os_family == "Debian" and
-    p2poolv2_certbot_email | default('') | length > 0
+  when: p2poolv2_certbot_email | length > 0
 
-- name: Install certbot and nginx plugin (Arch)
-  ansible.builtin.package:
-    name:
-      - certbot
-      - certbot-nginx
-    state: present
-  when: >
-    ansible_os_family == "Archlinux" and
-    p2poolv2_certbot_email | default('') | length > 0
+# --- Deploy the site config ---
 
-- name: Check if SSL certificate exists
+- name: Check which certificates exist
   ansible.builtin.stat:
-    path: "/etc/letsencrypt/live/{{ p2poolv2_domain }}/fullchain.pem"
-  register: ssl_cert
+    path: "/etc/letsencrypt/live/{{ item }}/fullchain.pem"
+  loop: "{{ [p2poolv2_domain] + ([p2poolv2_grafana_domain] if p2poolv2_grafana_domain is defined else []) }}"
+  register: p2poolv2_certificates
 
-- name: Remove old nginx site configs
-  ansible.builtin.file:
-    path: "/etc/nginx/sites-enabled/{{ item }}"
-    state: absent
-  loop: "{{ p2poolv2_nginx_remove_sites }}"
+# The full config references every certificate, so it needs all of them
+- name: Decide whether all certificates are present
+  ansible.builtin.set_fact:
+    p2poolv2_certificates_present: "{{ p2poolv2_certificates.results | map(attribute='stat.exists') | min }}"
+
+- name: Deploy full nginx config with SSL
+  ansible.builtin.template:
+    src: p2poolv2_site.conf.j2
+    dest: /etc/nginx/sites-available/p2poolv2.conf
+    owner: root
+    group: root
+    mode: "0644"
+  when: p2poolv2_certificates_present | bool
   notify: reload nginx
 
-# --- Bootstrap: HTTP-only config for cert acquisition ---
-
-- name: Deploy HTTP-only nginx config for bootstrap
+- name: Deploy HTTP-only nginx config for certificate acquisition
   ansible.builtin.template:
     src: p2poolv2_http.conf.j2
     dest: /etc/nginx/sites-available/p2poolv2.conf
     owner: root
     group: root
     mode: "0644"
-  when: not ssl_cert.stat.exists
+  when: not p2poolv2_certificates_present | bool
   notify: reload nginx
 
 - name: Enable nginx site
@@ -67,7 +71,15 @@
     src: /etc/nginx/sites-available/p2poolv2.conf
     dest: /etc/nginx/sites-enabled/p2poolv2.conf
     state: link
-    force: true
+  notify: reload nginx
+
+# Removed only after p2poolv2.conf is in place, and both changes reach nginx
+# in the same tested reload
+- name: Remove replaced nginx site configs
+  ansible.builtin.file:
+    path: "/etc/nginx/sites-enabled/{{ item }}"
+    state: absent
+  loop: "{{ p2poolv2_nginx_remove_sites }}"
   notify: reload nginx
 
 - name: Enable and start nginx
@@ -76,8 +88,10 @@
     enabled: true
     state: started
 
-- name: Flush handlers to ensure nginx is running
+- name: Apply nginx config before requesting certificates
   ansible.builtin.meta: flush_handlers
+
+# --- Certificates ---
 
 - name: Obtain Let's Encrypt certificate for {{ p2poolv2_domain }}
   ansible.builtin.command:
@@ -89,7 +103,7 @@
       -d {{ p2poolv2_domain }}
       {% for d in p2poolv2_redirect_domains %}-d {{ d }} {% endfor %}
     creates: "/etc/letsencrypt/live/{{ p2poolv2_domain }}/fullchain.pem"
-  when: p2poolv2_certbot_email | default('') | length > 0
+  when: p2poolv2_certbot_email | length > 0
 
 - name: Obtain Let's Encrypt certificate for grafana
   ansible.builtin.command:
@@ -100,21 +114,41 @@
       --email {{ p2poolv2_certbot_email }}
       -d {{ p2poolv2_grafana_domain }}
     creates: "/etc/letsencrypt/live/{{ p2poolv2_grafana_domain }}/fullchain.pem"
-  when: p2poolv2_grafana_domain is defined and p2poolv2_certbot_email | default('') | length > 0
+  when: p2poolv2_grafana_domain is defined and p2poolv2_certbot_email | length > 0
 
-# --- Deploy full SSL config (only when certs exist) ---
-
-- name: Re-check if SSL certificate exists
+- name: Re-check which certificates exist
   ansible.builtin.stat:
-    path: "/etc/letsencrypt/live/{{ p2poolv2_domain }}/fullchain.pem"
-  register: ssl_cert_after
+    path: "/etc/letsencrypt/live/{{ item }}/fullchain.pem"
+  loop: "{{ [p2poolv2_domain] + ([p2poolv2_grafana_domain] if p2poolv2_grafana_domain is defined else []) }}"
+  register: p2poolv2_certificates_after
 
-- name: Deploy full nginx config with SSL
+- name: Deploy full nginx config once certificates were obtained
   ansible.builtin.template:
     src: p2poolv2_site.conf.j2
     dest: /etc/nginx/sites-available/p2poolv2.conf
     owner: root
     group: root
     mode: "0644"
-  when: ssl_cert_after.stat.exists
+  when:
+    - not p2poolv2_certificates_present | bool
+    - p2poolv2_certificates_after.results | map(attribute='stat.exists') | min
   notify: reload nginx
+
+# --- Renewal ---
+
+- name: Enable certbot renewal timer
+  ansible.builtin.systemd:
+    name: certbot.timer
+    enabled: true
+    state: started
+  when: p2poolv2_certbot_email | length > 0
+
+# Talks to the Let's Encrypt staging server; changes no certificates
+- name: Check certificate renewal works
+  ansible.builtin.command:
+    cmd: certbot renew --dry-run --no-random-sleep-on-renew
+  changed_when: false
+  check_mode: false
+  when:
+    - p2poolv2_certbot_email | length > 0
+    - p2poolv2_certbot_renew_check | bool

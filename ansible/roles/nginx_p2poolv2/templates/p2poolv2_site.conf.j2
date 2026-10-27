@@ -85,10 +85,38 @@ server {
     listen 443 ssl;
     server_name {{ p2poolv2_grafana_domain }};
 
-    location / {
-        proxy_pass http://127.0.0.1:{{ p2poolv2_grafana_port | default(3000) }};
+{% if p2poolv2_grafana_public_dashboard_path | length > 0 %}
+    # Front door: visitors without a Grafana session land on the public
+    # dashboard. A stale or expired session cookie gets past the cookie
+    # check, so Grafana's 302 to /login is intercepted and sent there too.
+    location = / {
+        if ($cookie_grafana_session = "") {
+            return 302 {{ p2poolv2_grafana_public_dashboard_path }};
+        }
+        proxy_pass http://127.0.0.1:{{ p2poolv2_grafana_port }};
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_intercept_errors on;
+        error_page 302 = @public_dashboard;
+        # WebSocket support for Grafana live
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+
+    location @public_dashboard {
+        return 302 {{ p2poolv2_grafana_public_dashboard_path }};
+    }
+
+{% endif %}
+    location / {
+        proxy_pass http://127.0.0.1:{{ p2poolv2_grafana_port }};
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
