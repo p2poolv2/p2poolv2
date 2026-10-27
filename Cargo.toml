@@ -77,6 +77,7 @@ thiserror = "2.0.8"
 serde_json = "1.0.135"
 zmq = "0.10"
 bitcoin = { version = "0.32.5", features = ["serde", "rand"] }
+bdk_wallet = { version = "3.2.0", default-features = false, features = ["std", "rusqlite"] }
 bitcoinconsensus = { version = "0.106.0" }
 base64 = "0.23.1"
 chrono = { version = "0.4", features = ["serde"] }
