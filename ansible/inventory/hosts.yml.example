@@ -21,7 +21,6 @@ all:
           # source:  build p2poolv2_source_ref on the host
           p2poolv2_install_method: release
           # p2poolv2_source_ref: main
-          p2poolv2_certbot_email: "you@example.com"
 
           # Roles enabled on this host
           p2poolv2_nginx_enabled: true
