@@ -1,0 +1,40 @@
+{
+  "stub_schema": 3,
+  "contract": "proposed-wallet-view-v1",
+  "operation": "balance",
+  "examples": [
+    {
+      "id": "example_01",
+      "scenario": "confirmed",
+      "kind": "synthetic",
+      "result": {
+        "confirmed_units": 100000000,
+        "pending_delta_units": 0,
+        "total_units": 100000000,
+        "spendable_units": null
+      }
+    },
+    {
+      "id": "example_02",
+      "scenario": "pending_spend",
+      "kind": "synthetic",
+      "result": {
+        "confirmed_units": 100000000,
+        "pending_delta_units": -60001000,
+        "total_units": 39999000,
+        "spendable_units": null
+      }
+    },
+    {
+      "id": "example_03",
+      "scenario": "unused",
+      "kind": "synthetic",
+      "result": {
+        "confirmed_units": 0,
+        "pending_delta_units": 0,
+        "total_units": 0,
+        "spendable_units": null
+      }
+    }
+  ]
+}

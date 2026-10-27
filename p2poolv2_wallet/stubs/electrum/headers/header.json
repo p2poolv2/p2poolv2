@@ -1,0 +1,114 @@
+{
+  "stub_schema": 3,
+  "method": "blockchain.block.header",
+  "implementation": {
+    "repository": "https://github.com/romanz/electrs",
+    "commit": "6039cadc575866612b1091a76813cfda4f32ef2f",
+    "package_version": "0.12.0",
+    "protocol_version": "1.4",
+    "source": "https://github.com/romanz/electrs/blob/6039cadc575866612b1091a76813cfda4f32ef2f/src/electrum.rs"
+  },
+  "rust_definition": {
+    "dispatch_variant": "BlockHeader",
+    "handler": "Rpc::block_header",
+    "signature": "fn block_header(&self, (height,): (usize,)) -> Result<Value>",
+    "source": "https://github.com/romanz/electrs/blob/6039cadc575866612b1091a76813cfda4f32ef2f/src/electrum.rs#L242"
+  },
+  "parameters": {
+    "names": [
+      "height"
+    ],
+    "positional_variants": [
+      [
+        "usize"
+      ]
+    ],
+    "validation": "Invalid parameter counts or types return -32602 (invalid params)."
+  },
+  "examples": [
+    {
+      "id": "example_01",
+      "scenario": "header_at_height",
+      "kind": "synthetic",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "blockchain.block.header",
+        "params": [
+          972541
+        ]
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "00c008208d8b5d925f4cea6a45c40a02f67c2bd237bfaa41138401000000000000000000e77bec2f271d583084bdec8a9603c4997f2e079d5d31d93fce3634d4e1bf7f2a9835d96a93000217263c6f12"
+      }
+    },
+    {
+      "id": "example_02",
+      "scenario": "extra_checkpoint_parameter",
+      "kind": "synthetic",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "blockchain.block.header",
+        "params": [
+          972541,
+          0
+        ]
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "error": {
+          "code": -32602,
+          "message": "invalid params"
+        }
+      }
+    },
+    {
+      "id": "example_03",
+      "scenario": "negative_height",
+      "kind": "synthetic",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "blockchain.block.header",
+        "params": [
+          -1
+        ]
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "error": {
+          "code": -32602,
+          "message": "invalid params"
+        }
+      }
+    },
+    {
+      "id": "example_04",
+      "scenario": "missing_header",
+      "kind": "synthetic",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "blockchain.block.header",
+        "params": [
+          1072541
+        ]
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "error": {
+          "code": 1,
+          "message": "no header at 1072541"
+        }
+      },
+      "assumptions": "The requested height is beyond the mocked index tip."
+    }
+  ],
+  "behavior": "Accepts exactly one usize argument."
+}

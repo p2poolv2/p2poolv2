@@ -61,6 +61,7 @@ tracing-appender = { version = "0.2.3" }
 config = { version = "0.15", default-features = false, features = ["toml"] }
 serde = { version = "1.0", features = ["derive"] }
 clap = { version = "4.0", features = ["derive", "env"] }
+clap_complete = "4.6"
 hex = "0.4.3"
 # Held at the digest 0.10 generation on purpose. hmac 0.13 / sha2 0.11 move to
 # digest 0.11, but libp2p-identity still pins the older stack through
@@ -76,6 +77,7 @@ thiserror = "2.0.8"
 serde_json = "1.0.135"
 zmq = "0.10"
 bitcoin = { version = "0.32.5", features = ["serde", "rand"] }
+bdk_wallet = { version = "3.2.0", default-features = false, features = ["std", "rusqlite"] }
 bitcoinconsensus = { version = "0.106.0" }
 base64 = "0.23.1"
 chrono = { version = "0.4", features = ["serde"] }

@@ -12,12 +12,25 @@ keywords.workspace = true
 categories.workspace = true
 rust-version.workspace = true
 publish.workspace = true
+autobins = false
+
+[[bin]]
+name = "p2pool-wallet"
+path = "src/bin/cli.rs"
+required-features = ["cli"]
+
+[features]
+cli = ["dep:clap", "dep:clap_complete"]
 
 [dependencies]
+bdk_wallet = { workspace = true }
 bitcoin = { workspace = true }
+clap = { workspace = true, optional = true }
+clap_complete = { workspace = true, optional = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
 hex = { workspace = true }
 serde_json = { workspace = true }
+tempfile = { workspace = true }

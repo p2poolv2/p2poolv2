@@ -1,0 +1,41 @@
+{
+  "stub_schema": 3,
+  "contract": "proposed-wallet-view-v1",
+  "operation": "outputs",
+  "examples": [
+    {
+      "id": "example_01",
+      "scenario": "confirmed",
+      "kind": "synthetic",
+      "result": [
+        {
+          "txid": "3c03366d125b24d382930cfb02b9d98470d50dde84da67a5aeef93c9081a0627",
+          "vout": 0,
+          "amount_units": 100000000,
+          "confirmation_height": 100,
+          "eligibility": "unknown"
+        }
+      ]
+    },
+    {
+      "id": "example_02",
+      "scenario": "pending_spend",
+      "kind": "synthetic",
+      "result": [
+        {
+          "txid": "8d56c14f19b0bd733f123a6c14ebd70e0f396ef79f2ffe4ab6641a9b1769aadb",
+          "vout": 1,
+          "amount_units": 39999000,
+          "confirmation_height": null,
+          "eligibility": "unknown"
+        }
+      ]
+    },
+    {
+      "id": "example_03",
+      "scenario": "unused",
+      "kind": "synthetic",
+      "result": []
+    }
+  ]
+}

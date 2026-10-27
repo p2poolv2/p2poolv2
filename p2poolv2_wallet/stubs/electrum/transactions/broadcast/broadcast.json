@@ -1,0 +1,116 @@
+{
+  "stub_schema": 3,
+  "method": "blockchain.transaction.broadcast",
+  "implementation": {
+    "repository": "https://github.com/romanz/electrs",
+    "commit": "6039cadc575866612b1091a76813cfda4f32ef2f",
+    "package_version": "0.12.0",
+    "protocol_version": "1.4",
+    "source": "https://github.com/romanz/electrs/blob/6039cadc575866612b1091a76813cfda4f32ef2f/src/electrum.rs"
+  },
+  "rust_definition": {
+    "dispatch_variant": "TransactionBroadcast",
+    "handler": "Rpc::transaction_broadcast",
+    "signature": "fn transaction_broadcast(&self, (tx_hex,): &(String,)) -> Result<Value>",
+    "source": "https://github.com/romanz/electrs/blob/6039cadc575866612b1091a76813cfda4f32ef2f/src/electrum.rs#L390"
+  },
+  "parameters": {
+    "names": [
+      "tx_hex"
+    ],
+    "positional_variants": [
+      [
+        "String"
+      ]
+    ],
+    "validation": "Invalid parameter counts or types return -32602 (invalid params)."
+  },
+  "examples": [
+    {
+      "id": "example_01",
+      "scenario": "accepted",
+      "kind": "synthetic",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "blockchain.transaction.broadcast",
+        "params": [
+          "010000000001018b83ea8e743f46a8a228728e473fb655017f50ed4352fd2b591fdba48304c27c01000000000000000001116200000000000016001414be1326745fa6bb1779eb893194912c2624aa20024730440220569ad7bccc078144376b9812145d61c6102f38a50693c81accc3df798f81c5000220434db507eb49ff112a18d7144ce20cd33e22688c1209d0574c1191c375437a1e012103dc59118ce9e7eacd35726b7983c222aee6ccbde906cb6f77f754d60d112f0fe400000000"
+        ]
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": "6ae546d2c7938a748c56a830d70df071120bf345cb11c8c562629bbf5cec12b6"
+      },
+      "assumptions": "The mock daemon accepts the signed transaction before confirmation."
+    },
+    {
+      "id": "example_02",
+      "scenario": "daemon_rejection",
+      "kind": "synthetic",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "blockchain.transaction.broadcast",
+        "params": [
+          "010000000001018b83ea8e743f46a8a228728e473fb655017f50ed4352fd2b591fdba48304c27c01000000000000000001116200000000000016001414be1326745fa6bb1779eb893194912c2624aa20024730440220569ad7bccc078144376b9812145d61c6102f38a50693c81accc3df798f81c5000220434db507eb49ff112a18d7144ce20cd33e22688c1209d0574c1191c375437a1e012103dc59118ce9e7eacd35726b7983c222aee6ccbde906cb6f77f754d60d112f0fe400000000"
+        ]
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "error": {
+          "code": 2,
+          "message": "bad-txns-inputs-missingorspent"
+        }
+      },
+      "daemon_error": {
+        "code": -25,
+        "message": "bad-txns-inputs-missingorspent"
+      }
+    },
+    {
+      "id": "example_03",
+      "scenario": "non_hex",
+      "kind": "synthetic",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "blockchain.transaction.broadcast",
+        "params": [
+          "zz"
+        ]
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "error": {
+          "code": 1,
+          "message": "non-hex transaction"
+        }
+      }
+    },
+    {
+      "id": "example_04",
+      "scenario": "invalid_serialization",
+      "kind": "synthetic",
+      "request": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "method": "blockchain.transaction.broadcast",
+        "params": [
+          "00"
+        ]
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "error": {
+          "code": 1,
+          "message": "invalid transaction"
+        }
+      }
+    }
+  ]
+}
