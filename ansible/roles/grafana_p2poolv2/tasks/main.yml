@@ -136,14 +136,30 @@
     group: grafana
     mode: "0755"
 
-# The dashboard provider rescans every 10 seconds, so no restart is needed
+# Deploys both the private dashboards and the variable-free public ones
+# (shareable with Grafana's "Share externally"). The repo files are shared
+# with the Docker stack, so the datasource uid is substituted here:
+#   - private: the default of their datasource dropdown
+#   - public:  the ${DS_PROMETHEUS} placeholder, otherwise only filled in
+#     by a manual UI import
+# The template module is not used because the dashboards contain Grafana's
+# own double-brace legend syntax. The dashboard provider rescans every 10
+# seconds, so no restart is needed.
 - name: Deploy Grafana dashboard JSON files
   ansible.builtin.copy:
-    src: "{{ playbook_dir }}/../prometheus/grafana/dashboards/"
-    dest: "{{ p2poolv2_grafana_dashboards_dir }}/"
+    content: >-
+      {{ lookup('ansible.builtin.file', item, rstrip=false)
+         | replace('"value": "prometheus"', '"value": "' ~ p2poolv2_grafana_datasource_uid ~ '"')
+         | replace('${DS_PROMETHEUS}', p2poolv2_grafana_datasource_uid) }}
+    dest: "{{ p2poolv2_grafana_dashboards_dir }}/{{ item | basename }}"
     owner: grafana
     group: grafana
     mode: "0644"
+  loop: "{{ query('ansible.builtin.fileglob',
+                  playbook_dir ~ '/../prometheus/grafana/dashboards/*.json',
+                  playbook_dir ~ '/../prometheus/grafana/dashboards-public/*.json') }}"
+  loop_control:
+    label: "{{ item | basename }}"
 
 # --- Enable and start services ---
 
