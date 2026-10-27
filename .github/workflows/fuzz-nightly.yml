@@ -1,0 +1,51 @@
+name: Nightly Fuzz
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch: {}
+
+jobs:
+  fuzz-deep:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        fuzz_target: [wire_message_decode]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - name: Clone shared fuzz corpus
+        run: git clone https://x-access-token:${{ secrets.FUZZ_CORPUS_PAT }}@github.com/Juwon-Ogunseye/p2poolv2-fuzz-corpora "$RUNNER_TEMP/corpora"
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin
+            p2poolv2_lib/fuzz/target
+          key: fuzz-nightly-${{ matrix.fuzz_target }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Run fuzz target (1 hour)
+        working-directory: p2poolv2_lib
+        run: cargo fuzz run ${{ matrix.fuzz_target }} "$RUNNER_TEMP/corpora/${{ matrix.fuzz_target }}" -- -max_total_time=3600
+
+      - name: Push newly discovered corpus entries back
+        working-directory: ${{ runner.temp }}/corpora
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .
+          git diff --cached --quiet || git commit -m "Nightly fuzz: add newly discovered corpus entries"
+          git push
+
+      - name: Upload crash artifacts, if any
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crash-${{ matrix.fuzz_target }}
+          path: p2poolv2_lib/fuzz/artifacts/${{ matrix.fuzz_target }}/
