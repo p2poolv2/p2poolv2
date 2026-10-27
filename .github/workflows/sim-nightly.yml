@@ -38,7 +38,7 @@ jobs:
   # is not available to a job-level `if`.
   select-scenarios:
     name: Select scenarios
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
     outputs:
       matrix: ${{ steps.select.outputs.matrix }}
@@ -81,7 +81,7 @@ jobs:
   sim:
     name: Sim Swarm (${{ matrix.scenario }})
     needs: select-scenarios
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: ${{ matrix.timeout }}
     strategy:
       fail-fast: false   # one failing scenario must not cancel the others
