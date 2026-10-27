@@ -1,0 +1,12 @@
+# Grafana settings -- managed by Ansible
+# Environment variables override grafana.ini, so the packaged ini stays
+# untouched and the same settings apply on every OS.
+[Service]
+Environment=GF_SERVER_HTTP_ADDR={{ p2poolv2_grafana_listen_address }}
+Environment=GF_SERVER_HTTP_PORT={{ p2poolv2_grafana_port }}
+Environment=GF_PATHS_DATA={{ p2poolv2_grafana_data_dir }}
+Environment=GF_PATHS_PROVISIONING={{ p2poolv2_grafana_provisioning_dir }}
+{% if p2poolv2_grafana_domain is defined %}
+Environment=GF_SERVER_DOMAIN={{ p2poolv2_grafana_domain }}
+Environment=GF_SERVER_ROOT_URL=https://{{ p2poolv2_grafana_domain }}/
+{% endif %}
