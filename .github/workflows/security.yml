@@ -21,7 +21,7 @@ jobs:
   # result only changes when a dependency changes, so this blocks.
   policy:
     name: cargo-deny (licences, bans, sources)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
@@ -40,7 +40,7 @@ jobs:
   # unrelated merge. The daily schedule above is what surfaces those.
   advisories:
     name: cargo-deny (advisories)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     continue-on-error: true
     steps:
