@@ -29,4 +29,6 @@ jobs:
 
       - name: Smoke test fuzz target (60s)
         working-directory: p2poolv2_lib
-        run: cargo +nightly fuzz run ${{ matrix.fuzz_target }} -- -max_total_time=60
+        env:
+          RUSTUP_TOOLCHAIN: nightly
+        run: cargo fuzz run ${{ matrix.fuzz_target }} -- -max_total_time=60
