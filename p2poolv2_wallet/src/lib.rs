@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Sharechain addresses.
+//! Sharechain addresses and persistent descriptor wallets.
 //!
 //! A share chain address identifies the owner of a share coinbase output. It
 //! is deliberately not a bitcoin address: shares are traded for bitcoin UTXOs,
@@ -75,7 +75,12 @@
 //! This module never generates, stores or handles a private key. The node only
 //! needs the address to build a share coinbase output.
 
+#[cfg(feature = "wallet")]
+pub mod wallet;
 pub mod witness_program_codec;
+
+#[cfg(feature = "wallet")]
+pub use wallet::{ChainIdentity, Wallet, WalletError};
 
 use bitcoin::bech32::primitives::decode::{PaddingError, SegwitHrpstringError};
 use bitcoin::bech32::{Hrp, segwit};

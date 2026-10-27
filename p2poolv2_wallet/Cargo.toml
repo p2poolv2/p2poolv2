@@ -13,7 +13,11 @@ categories.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[features]
+wallet = ["dep:bdk_wallet"]
+
 [dependencies]
+bdk_wallet = { workspace = true, optional = true }
 bitcoin = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
@@ -21,3 +25,4 @@ thiserror = { workspace = true }
 [dev-dependencies]
 hex = { workspace = true }
 serde_json = { workspace = true }
+tempfile = { workspace = true }
