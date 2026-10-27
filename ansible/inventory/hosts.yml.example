@@ -26,7 +26,6 @@ all:
           # Roles enabled on this host
           p2poolv2_nginx_enabled: true
           p2poolv2_grafana_enabled: true
-          p2poolv2_ufw_enabled: true
 
           # Nginx -- host-level config
           p2poolv2_domain: your-domain.example.com
