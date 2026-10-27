@@ -7,13 +7,21 @@
     system: true
     state: present
 
+- name: Look up existing p2poolv2 user
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ p2poolv2_user }}"
+    fail_key: false
+
+# usermod refuses to move the home of a user with running processes, so
+# an existing user keeps its home and only the shell is enforced.
 - name: Create p2poolv2 system user
   ansible.builtin.user:
     name: "{{ p2poolv2_user }}"
     group: "{{ p2poolv2_group }}"
     system: true
     shell: /bin/false
-    home: "/var/lib/p2poolv2"
+    home: "{{ omit if ansible_facts.getent_passwd.get(p2poolv2_user) else '/var/lib/p2poolv2' }}"
     create_home: false
 
 - name: Create installation directories
@@ -43,14 +51,6 @@
     group: "{{ p2poolv2_group }}"
     mode: "0750"
 
-- name: Create log directory
-  ansible.builtin.file:
-    path: "/var/log/p2poolv2/{{ p2poolv2_instance }}"
-    state: directory
-    owner: "{{ p2poolv2_user }}"
-    group: "{{ p2poolv2_group }}"
-    mode: "0750"
-
 - name: Create stats directory
   ansible.builtin.file:
     path: "{{ p2poolv2_stats_dir }}"
@@ -59,53 +59,18 @@
     group: "{{ p2poolv2_group }}"
     mode: "0750"
 
-# --- Install binaries via official installer script ---
-# The installer auto-detects architecture and verifies checksums.
-# P2POOLV2_NODE_UNMANAGED_INSTALL sets the install dir and skips PATH modification.
+# --- Install binaries and dashboard ---
 
-- name: Check installed p2poolv2 version
-  ansible.builtin.command:
-    cmd: "{{ p2poolv2_bin_dir }}/p2poolv2 --version"
-  register: p2poolv2_installed_version
-  changed_when: false
-  failed_when: false
+- name: Install p2poolv2 from release
+  ansible.builtin.include_tasks: install_release.yml
+  when: p2poolv2_install_method == "release"
 
-- name: Download p2poolv2 installer script
-  ansible.builtin.get_url:
-    url: "{{ p2poolv2_release_url }}/p2poolv2_node-installer.sh"
-    dest: "/tmp/p2poolv2_node-installer-{{ p2poolv2_version }}.sh"
-    mode: "0755"
-  when: >
-    p2poolv2_installed_version.rc != 0 or
-    p2poolv2_version not in p2poolv2_installed_version.stdout
+- name: Install p2poolv2 from source
+  ansible.builtin.include_tasks: install_source.yml
+  when: p2poolv2_install_method == "source"
 
-- name: Install p2poolv2 binaries
-  ansible.builtin.command:
-    cmd: "/tmp/p2poolv2_node-installer-{{ p2poolv2_version }}.sh"
-  environment:
-    P2POOLV2_NODE_UNMANAGED_INSTALL: "{{ p2poolv2_bin_dir }}"
-  when: >
-    p2poolv2_installed_version.rc != 0 or
-    p2poolv2_version not in p2poolv2_installed_version.stdout
-  register: p2poolv2_binary_changed
-
-# --- Download and install dashboard ---
-
-- name: Download dashboard archive
-  ansible.builtin.get_url:
-    url: "{{ p2poolv2_release_url }}/dashboard.tar.gz"
-    dest: "/tmp/p2poolv2-dashboard-{{ p2poolv2_version }}.tar.gz"
-    mode: "0644"
-  register: dashboard_download
-
-- name: Extract dashboard to static directory
-  ansible.builtin.unarchive:
-    src: "/tmp/p2poolv2-dashboard-{{ p2poolv2_version }}.tar.gz"
-    dest: "{{ p2poolv2_static_dir }}"
-    remote_src: true
-    owner: root
-    group: "{{ p2poolv2_group }}"
-  when: dashboard_download.changed and not ansible_check_mode
+- name: Check bitcoind before (re)starting p2poolv2
+  ansible.builtin.include_tasks: preflight.yml
 
 # --- Deploy configuration ---
 
@@ -129,9 +94,16 @@
     mode: "0644"
   register: p2poolv2_unit_changed
 
+# The unit is shared by all instances, so only the first instance in a
+# run sees it change; the fact makes the later ones restart too.
 - name: Reload systemd
   ansible.builtin.systemd:
     daemon_reload: true
+  when: p2poolv2_unit_changed.changed
+
+- name: Record unit update for every instance on this host
+  ansible.builtin.set_fact:
+    p2poolv2_unit_updated: true
   when: p2poolv2_unit_changed.changed
 
 - name: Enable and start p2poolv2 service
@@ -145,6 +117,6 @@
     name: "p2poolv2@{{ p2poolv2_instance }}"
     state: restarted
   when: >
-    (p2poolv2_binary_changed is defined and p2poolv2_binary_changed.changed) or
-    p2poolv2_config_changed.changed or
-    p2poolv2_unit_changed.changed
+    p2poolv2_binary_updated | default(false) or
+    p2poolv2_unit_updated | default(false) or
+    p2poolv2_config_changed.changed

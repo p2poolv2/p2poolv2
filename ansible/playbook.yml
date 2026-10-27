@@ -12,6 +12,9 @@
 #   ansible-playbook -i inventory/hosts.yml playbook.yml --tags p2poolv2
 #   ansible-playbook -i inventory/hosts.yml playbook.yml --tags nginx
 #   ansible-playbook -i inventory/hosts.yml playbook.yml --tags grafana
+#
+# Tags reach the roles' tasks through include_role `apply`; tags on the
+# include task alone would only select the include, not its tasks.
 
 - name: Deploy P2Poolv2
   hosts: p2poolv2_nodes
@@ -21,6 +24,8 @@
     - name: Deploy p2poolv2 instance
       ansible.builtin.include_role:
         name: p2poolv2
+        apply:
+          tags: [p2poolv2]
       vars:
         p2poolv2_instance: "{{ instance.instance }}"
         p2poolv2_p2p_listen_address: "{{ instance.p2p_listen_address }}"
@@ -29,6 +34,7 @@
         p2poolv2_minimum_difficulty: "{{ instance.minimum_difficulty }}"
         p2poolv2_solo_address: "{{ instance.solo_address }}"
         p2poolv2_bootstrap_address: "{{ instance.bootstrap_address }}"
+        p2poolv2_miner_address: "{{ instance.miner_address | default('') }}"
         p2poolv2_bitcoin_network: "{{ instance.bitcoin_network }}"
         p2poolv2_bitcoin_rpc_url: "{{ instance.bitcoin_rpc_url }}"
         p2poolv2_bitcoin_rpc_user: "{{ instance.bitcoin_rpc_user }}"
@@ -36,17 +42,19 @@
         p2poolv2_zmq_endpoint: "{{ instance.zmq_endpoint }}"
         p2poolv2_api_hostname: "{{ instance.api_hostname | default('127.0.0.1') }}"
         p2poolv2_api_port: "{{ instance.api_port }}"
-        p2poolv2_pool_signature: "{{ instance.pool_signature | default(omit) }}"
+        p2poolv2_pool_signature: "{{ instance.pool_signature | default('') }}"
         p2poolv2_pool_mode: "{{ instance.pool_mode | default('p2poolv2') }}"
         p2poolv2_dial_peers: "{{ instance.dial_peers | default([]) }}"
         p2poolv2_blocked_ips: "{{ instance.blocked_ips | default([]) }}"
         p2poolv2_max_established_incoming: "{{ instance.max_established_incoming | default(100) }}"
         p2poolv2_max_established_outgoing: "{{ instance.max_established_outgoing | default(100) }}"
         p2poolv2_max_established_per_peer: "{{ instance.max_established_per_peer | default(1) }}"
-        p2poolv2_api_auth_user: "{{ instance.api_auth_user | default(omit) }}"
-        p2poolv2_api_auth_token: "{{ instance.api_auth_token | default(omit) }}"
-        p2poolv2_external_address: "{{ instance.external_address | default(omit) }}"
+        p2poolv2_difficulty_multiplier: "{{ instance.difficulty_multiplier | default(1.0) }}"
+        p2poolv2_api_auth_user: "{{ instance.api_auth_user | default('') }}"
+        p2poolv2_api_auth_token: "{{ instance.api_auth_token | default('') }}"
+        p2poolv2_external_address: "{{ instance.external_address | default('') }}"
         p2poolv2_wait_for_chain_sync: "{{ instance.wait_for_chain_sync | default(true) }}"
+        p2poolv2_stats_dir: "{{ instance.stats_dir | default('/var/lib/p2poolv2/' ~ instance.instance ~ '/stats') }}"
       loop: "{{ p2poolv2_instances }}"
       loop_control:
         loop_var: instance
@@ -57,8 +65,15 @@
     - name: Deploy nginx
       ansible.builtin.include_role:
         name: nginx_p2poolv2
+        apply:
+          tags: [nginx]
+      when: p2poolv2_nginx_enabled | default(true)
       tags: [nginx]
+
     - name: Deploy Grafana and Prometheus
       ansible.builtin.include_role:
         name: grafana_p2poolv2
+        apply:
+          tags: [grafana]
+      when: p2poolv2_grafana_enabled | default(true)
       tags: [grafana]

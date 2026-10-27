@@ -2,12 +2,28 @@
 # Override these in inventory group_vars or host_vars.
 
 # Version and instance
-p2poolv2_version: "0.12.0"
+p2poolv2_version: "0.16.2"
 p2poolv2_instance: "main"
+
+# How to get the p2poolv2 binaries:
+#   release -- install the GitHub release for p2poolv2_version
+#   source  -- build p2poolv2_source_ref on the host
+p2poolv2_install_method: "release"
 
 # GitHub release URL base
 # The installer script auto-detects architecture.
 p2poolv2_release_url: "https://github.com/p2poolv2/p2poolv2/releases/download/v{{ p2poolv2_version }}"
+
+# --- Source build (p2poolv2_install_method: source) ---
+# Branch, tag or commit to build. The build reruns whenever it resolves
+# to a different commit than the one last installed.
+p2poolv2_source_repo: "https://github.com/p2poolv2/p2poolv2.git"
+p2poolv2_source_ref: "main"
+# Dedicated unprivileged user that owns the rust toolchain and checkout
+p2poolv2_build_user: "p2poolv2-build"
+p2poolv2_build_home: "/var/lib/p2poolv2-build"
+# Records the commit of the installed source build
+p2poolv2_source_stamp: "{{ p2poolv2_bin_dir }}/.source-commit"
 
 # Installation paths
 p2poolv2_bin_dir: "/opt/p2poolv2/bin"
@@ -49,6 +65,9 @@ p2poolv2_minimum_difficulty: 100
 # p2poolv2_maximum_difficulty:
 p2poolv2_solo_address: ""
 p2poolv2_bootstrap_address: ""
+# Share chain address (p2pool/tp2pool/sp2pool/rp2pool bech32m) that owns
+# this node's share coinbase outputs
+p2poolv2_miner_address: ""
 # p2poolv2_donation_address: ""
 # p2poolv2_donation: 0
 # p2poolv2_fee_address: ""
@@ -69,15 +88,18 @@ p2poolv2_bitcoin_rpc_user: ""
 p2poolv2_bitcoin_rpc_pass: ""
 
 # --- Logging config ---
-p2poolv2_log_file: "/var/log/p2poolv2/{{ p2poolv2_instance }}/p2poolv2.log"
+# Logs go to the console, which systemd sends to journald. Set a file path
+# to also write daily-rotated files; p2poolv2 never deletes old ones.
+p2poolv2_log_file: ""
 p2poolv2_log_level: "info"
-p2poolv2_log_console: false
+p2poolv2_log_console: true
 p2poolv2_stats_dir: "/var/lib/p2poolv2/{{ p2poolv2_instance }}/stats"
 
 # --- API config ---
 # Bind to localhost only -- nginx proxies public access
 p2poolv2_api_hostname: "127.0.0.1"
 p2poolv2_api_port: 46884
-# p2poolv2_api_auth_user: ""
-# p2poolv2_api_auth_token: ""
+# Empty disables API authentication
+p2poolv2_api_auth_user: ""
+p2poolv2_api_auth_token: ""
 p2poolv2_api_cors_allowed: false
