@@ -6,6 +6,11 @@ p2poolv2_grafana_listen_address: "127.0.0.1"
 p2poolv2_grafana_port: 3000
 p2poolv2_grafana_admin_password: "{{ vault_grafana_admin_password }}"
 
+# Datasource name and uid are P2Poolv2-specific so they never collide with
+# a Prometheus datasource the operator already has in the same Grafana.
+p2poolv2_grafana_datasource_name: "Prometheus (P2Poolv2)"
+p2poolv2_grafana_datasource_uid: "prometheus-p2poolv2"
+
 # Prometheus is only read by the local Grafana, so it stays on localhost
 p2poolv2_prometheus_listen_address: "127.0.0.1"
 p2poolv2_prometheus_port: 9090
