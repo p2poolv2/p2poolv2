@@ -1,0 +1,138 @@
+---
+# Build p2poolv2 from p2poolv2_source_ref on the host and install it.
+# The toolchain and checkout belong to an unprivileged build user; only
+# the final copy into p2poolv2_bin_dir runs as root. Becoming an
+# unprivileged user needs setfacl (the acl package) on the host.
+
+- name: Install build dependencies (Debian/Ubuntu)
+  ansible.builtin.apt:
+    name:
+      - acl
+      - build-essential
+      - clang
+      - cmake
+      - git
+      - libbz2-dev
+      - liblz4-dev
+      - libsnappy-dev
+      - libssl-dev
+      - libzmq3-dev
+      - libzstd-dev
+      - pkg-config
+      - zlib1g-dev
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  when: ansible_os_family == "Debian"
+
+- name: Install build dependencies (Arch)
+  community.general.pacman:
+    name:
+      - acl
+      - base-devel
+      - bzip2
+      - clang
+      - cmake
+      - git
+      - lz4
+      - openssl
+      - pkgconf
+      - snappy
+      - zeromq
+      - zlib
+      - zstd
+    state: present
+  when: ansible_os_family == "Archlinux"
+
+- name: Create build user
+  ansible.builtin.user:
+    name: "{{ p2poolv2_build_user }}"
+    system: true
+    shell: /bin/false
+    home: "{{ p2poolv2_build_home }}"
+    create_home: true
+
+- name: Download rustup installer
+  ansible.builtin.get_url:
+    url: https://sh.rustup.rs
+    dest: "{{ p2poolv2_build_home }}/rustup-init.sh"
+    mode: "0755"
+  become_user: "{{ p2poolv2_build_user }}"
+
+# rust-toolchain.toml in the checkout selects and installs the toolchain
+- name: Install rustup for the build user
+  ansible.builtin.command:
+    cmd: "{{ p2poolv2_build_home }}/rustup-init.sh -y --profile minimal --default-toolchain none --no-modify-path"
+    creates: "{{ p2poolv2_build_home }}/.cargo/bin/rustup"
+  become_user: "{{ p2poolv2_build_user }}"
+
+- name: Check out source ref
+  ansible.builtin.git:
+    repo: "{{ p2poolv2_source_repo }}"
+    dest: "{{ p2poolv2_build_home }}/src"
+    version: "{{ p2poolv2_source_ref }}"
+    force: true
+  become_user: "{{ p2poolv2_build_user }}"
+  register: p2poolv2_source_checkout
+
+- name: Read commit of the installed source build
+  ansible.builtin.slurp:
+    src: "{{ p2poolv2_source_stamp }}"
+  register: p2poolv2_installed_stamp
+  failed_when: false
+
+- name: Decide whether the source build needs installing
+  ansible.builtin.set_fact:
+    p2poolv2_source_needed: >-
+      {{ p2poolv2_installed_stamp.content is not defined or
+         (p2poolv2_installed_stamp.content | b64decode | trim) != p2poolv2_source_checkout.after }}
+
+# A RocksDB build takes 10-20 minutes; async keeps the SSH session from timing out
+- name: Build p2poolv2
+  ansible.builtin.command:
+    cmd: "{{ p2poolv2_build_home }}/.cargo/bin/cargo build --release --locked --bin p2poolv2 --bin p2poolv2_cli"
+    chdir: "{{ p2poolv2_build_home }}/src"
+  environment:
+    PATH: "{{ p2poolv2_build_home }}/.cargo/bin:{{ ansible_env.PATH }}"
+  become_user: "{{ p2poolv2_build_user }}"
+  async: 3600
+  poll: 30
+  when: p2poolv2_source_needed | bool
+
+- name: Install built binaries
+  ansible.builtin.copy:
+    src: "{{ p2poolv2_build_home }}/src/target/release/{{ item }}"
+    dest: "{{ p2poolv2_bin_dir }}/{{ item }}"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - p2poolv2
+    - p2poolv2_cli
+  when: p2poolv2_source_needed | bool and not ansible_check_mode
+  register: p2poolv2_source_install
+
+- name: Install dashboard from checkout
+  ansible.builtin.copy:
+    src: "{{ p2poolv2_build_home }}/src/p2poolv2_api/static/"
+    dest: "{{ p2poolv2_static_dir }}/"
+    remote_src: true
+    owner: root
+    group: "{{ p2poolv2_group }}"
+    mode: "0644"
+  when: p2poolv2_source_needed | bool and not ansible_check_mode
+
+- name: Record installed source commit
+  ansible.builtin.copy:
+    content: "{{ p2poolv2_source_checkout.after }}\n"
+    dest: "{{ p2poolv2_source_stamp }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when: p2poolv2_source_needed | bool and not ansible_check_mode
+
+- name: Record binary update for every instance on this host
+  ansible.builtin.set_fact:
+    p2poolv2_binary_updated: true
+  when: p2poolv2_source_install is changed

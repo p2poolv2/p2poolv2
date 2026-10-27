@@ -1,0 +1,63 @@
+---
+# Install p2poolv2 binaries and dashboard from a GitHub release.
+# The installer auto-detects architecture and verifies checksums.
+# P2POOLV2_NODE_UNMANAGED_INSTALL sets the install dir and skips PATH modification.
+
+- name: Check installed p2poolv2 version
+  ansible.builtin.command:
+    cmd: "{{ p2poolv2_bin_dir }}/p2poolv2 --version"
+  register: p2poolv2_installed_version
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+# `p2poolv2 --version` prints "p2poolv2_node <version>"
+- name: Decide whether the release needs installing
+  ansible.builtin.set_fact:
+    p2poolv2_release_needed: >-
+      {{ p2poolv2_installed_version.rc != 0 or
+         (p2poolv2_installed_version.stdout.split() | last) != p2poolv2_version }}
+
+- name: Download p2poolv2 installer script
+  ansible.builtin.get_url:
+    url: "{{ p2poolv2_release_url }}/p2poolv2_node-installer.sh"
+    dest: "/tmp/p2poolv2_node-installer-{{ p2poolv2_version }}.sh"
+    mode: "0755"
+  when: p2poolv2_release_needed | bool
+
+- name: Install p2poolv2 binaries
+  ansible.builtin.command:
+    cmd: "/tmp/p2poolv2_node-installer-{{ p2poolv2_version }}.sh"
+  environment:
+    P2POOLV2_NODE_UNMANAGED_INSTALL: "{{ p2poolv2_bin_dir }}"
+  when: p2poolv2_release_needed | bool
+  register: p2poolv2_release_install
+
+# A later switch back to source mode must rebuild, not trust an old stamp
+- name: Remove source build stamp
+  ansible.builtin.file:
+    path: "{{ p2poolv2_source_stamp }}"
+    state: absent
+  when: p2poolv2_release_install is changed
+
+- name: Download dashboard archive
+  ansible.builtin.get_url:
+    url: "{{ p2poolv2_release_url }}/dashboard.tar.gz"
+    dest: "/tmp/p2poolv2-dashboard-{{ p2poolv2_version }}.tar.gz"
+    mode: "0644"
+  register: dashboard_download
+
+# The archive holds a top-level static/ directory
+- name: Extract dashboard to static directory
+  ansible.builtin.unarchive:
+    src: "/tmp/p2poolv2-dashboard-{{ p2poolv2_version }}.tar.gz"
+    dest: "{{ p2poolv2_static_dir | dirname }}"
+    remote_src: true
+    owner: root
+    group: "{{ p2poolv2_group }}"
+  when: dashboard_download.changed and not ansible_check_mode
+
+- name: Record binary update for every instance on this host
+  ansible.builtin.set_fact:
+    p2poolv2_binary_updated: true
+  when: p2poolv2_release_install is changed

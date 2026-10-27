@@ -19,7 +19,7 @@ max_inventory_per_second = {{ p2poolv2_max_inventory_per_second }}
 max_transaction_per_second = {{ p2poolv2_max_transaction_per_second }}
 max_requests_per_second = {{ p2poolv2_max_requests_per_second }}
 dial_timeout_secs = {{ p2poolv2_dial_timeout_secs }}
-{% if p2poolv2_external_address is defined %}
+{% if p2poolv2_external_address | default('') | length > 0 %}
 external_address = "{{ p2poolv2_external_address }}"
 {% endif %}
 
@@ -37,6 +37,9 @@ maximum_difficulty = {{ p2poolv2_maximum_difficulty }}
 {% endif %}
 solo_address = "{{ p2poolv2_solo_address }}"
 bootstrap_address = "{{ p2poolv2_bootstrap_address }}"
+{% if p2poolv2_miner_address | length > 0 %}
+miner_address = "{{ p2poolv2_miner_address }}"
+{% endif %}
 {% if p2poolv2_donation_address is defined %}
 donation_address = "{{ p2poolv2_donation_address }}"
 donation = {{ p2poolv2_donation | default(0) }}
@@ -63,7 +66,9 @@ username = "{{ p2poolv2_bitcoin_rpc_user }}"
 password = "{{ p2poolv2_bitcoin_rpc_pass }}"
 
 [logging]
+{% if p2poolv2_log_file | length > 0 %}
 file = "{{ p2poolv2_log_file }}"
+{% endif %}
 level = "{{ p2poolv2_log_level }}"
 console = {{ p2poolv2_log_console | lower }}
 stats_dir = "{{ p2poolv2_stats_dir }}"
@@ -71,10 +76,10 @@ stats_dir = "{{ p2poolv2_stats_dir }}"
 [api]
 hostname = "{{ p2poolv2_api_hostname }}"
 port = {{ p2poolv2_api_port }}
-{% if p2poolv2_api_auth_user is defined %}
+{% if p2poolv2_api_auth_user | length > 0 %}
 auth_user = "{{ p2poolv2_api_auth_user }}"
 {% endif %}
-{% if p2poolv2_api_auth_token is defined %}
+{% if p2poolv2_api_auth_token | length > 0 %}
 auth_token = "{{ p2poolv2_api_auth_token }}"
 {% endif %}
 cors_allowed = {{ p2poolv2_api_cors_allowed | lower }}

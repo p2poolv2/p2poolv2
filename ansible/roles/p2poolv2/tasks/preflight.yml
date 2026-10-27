@@ -1,0 +1,24 @@
+---
+# Check bitcoind is reachable before (re)starting p2poolv2. Ansible does
+# not manage bitcoind; these checks only connect and change nothing.
+
+- name: Check bitcoind RPC is reachable for {{ p2poolv2_instance }}
+  ansible.builtin.wait_for:
+    host: "{{ p2poolv2_bitcoin_rpc_url | urlsplit('hostname') }}"
+    port: "{{ p2poolv2_bitcoin_rpc_url | urlsplit('port') }}"
+    timeout: 5
+    msg: >-
+      bitcoind RPC {{ p2poolv2_bitcoin_rpc_url }} is not listening for
+      instance {{ p2poolv2_instance }}
+  check_mode: false
+
+- name: Check bitcoind ZMQ hashblock is reachable for {{ p2poolv2_instance }}
+  ansible.builtin.wait_for:
+    host: "{{ p2poolv2_zmq_endpoint | urlsplit('hostname') }}"
+    port: "{{ p2poolv2_zmq_endpoint | urlsplit('port') }}"
+    timeout: 5
+    msg: >-
+      bitcoind ZMQ {{ p2poolv2_zmq_endpoint }} is not listening for instance
+      {{ p2poolv2_instance }}. Add zmqpubhashblock={{ p2poolv2_zmq_endpoint }}
+      to that network's bitcoind config and restart bitcoind.
+  check_mode: false
