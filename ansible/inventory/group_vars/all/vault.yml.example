@@ -17,8 +17,11 @@
 # variables are available to all hosts without any extra include directives.
 
 # Bitcoin RPC credentials (shared across instances on the same host).
-# With several hosts, use one pair per host and reference it from that
-# host's instances in hosts.yml, e.g. vault_minis_bitcoin_rpc_user.
+# With a single host they can live here. With several hosts, put each
+# host's pair in its own vault, inventory/host_vars/<host>/vault.yml, with
+# the same key names, and leave them out of this file so a missing host
+# vault fails loudly instead of using another host's credentials:
+#   ansible-vault create inventory/host_vars/<host>/vault.yml
 vault_bitcoin_rpc_user: "your_rpc_user"
 vault_bitcoin_rpc_pass: "your_rpc_password"
 

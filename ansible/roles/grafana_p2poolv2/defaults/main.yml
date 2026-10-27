@@ -22,11 +22,11 @@ p2poolv2_prometheus_scrape_interval: "15s"
 p2poolv2_prometheus_extra_targets: []
 
 # Per-OS packaging differences
-p2poolv2_grafana_binary: "{{ '/usr/bin/grafana' if ansible_os_family == 'Archlinux' else '/usr/share/grafana/bin/grafana' }}"
-p2poolv2_grafana_service: "{{ 'grafana' if ansible_os_family == 'Archlinux' else 'grafana-server' }}"
-p2poolv2_grafana_config_file: "{{ '/etc/grafana.ini' if ansible_os_family == 'Archlinux' else '/etc/grafana/grafana.ini' }}"
-p2poolv2_prometheus_args_file: "{{ '/etc/conf.d/prometheus' if ansible_os_family == 'Archlinux' else '/etc/default/prometheus' }}"
-p2poolv2_prometheus_args_variable: "{{ 'PROMETHEUS_ARGS' if ansible_os_family == 'Archlinux' else 'ARGS' }}"
+p2poolv2_grafana_binary: "{{ '/usr/bin/grafana' if ansible_facts['os_family'] == 'Archlinux' else '/usr/share/grafana/bin/grafana' }}"
+p2poolv2_grafana_service: "{{ 'grafana' if ansible_facts['os_family'] == 'Archlinux' else 'grafana-server' }}"
+p2poolv2_grafana_config_file: "{{ '/etc/grafana.ini' if ansible_facts['os_family'] == 'Archlinux' else '/etc/grafana/grafana.ini' }}"
+p2poolv2_prometheus_args_file: "{{ '/etc/conf.d/prometheus' if ansible_facts['os_family'] == 'Archlinux' else '/etc/default/prometheus' }}"
+p2poolv2_prometheus_args_variable: "{{ 'PROMETHEUS_ARGS' if ansible_facts['os_family'] == 'Archlinux' else 'ARGS' }}"
 
 # Same paths on every OS; Grafana is pointed at them through its environment
 p2poolv2_grafana_provisioning_dir: /etc/grafana/provisioning

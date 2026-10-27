@@ -10,14 +10,14 @@
     path: /etc/apt/keyrings
     state: directory
     mode: "0755"
-  when: ansible_os_family == "Debian"
+  when: ansible_facts['os_family'] == "Debian"
 
 - name: Download Grafana GPG key (Debian/Ubuntu)
   ansible.builtin.get_url:
     url: https://apt.grafana.com/gpg.key
     dest: /etc/apt/keyrings/grafana.asc
     mode: "0644"
-  when: ansible_os_family == "Debian"
+  when: ansible_facts['os_family'] == "Debian"
 
 - name: Add Grafana apt repository (Debian/Ubuntu)
   ansible.builtin.apt_repository:
@@ -25,7 +25,7 @@
     state: present
     filename: grafana
     update_cache: true
-  when: ansible_os_family == "Debian"
+  when: ansible_facts['os_family'] == "Debian"
 
 # --- Install packages ---
 # Prometheus is in the default repos on Debian/Ubuntu (universe) and Arch
@@ -41,7 +41,7 @@
       - prometheus
       - grafana
     state: present
-  when: ansible_os_family == "Debian"
+  when: ansible_facts['os_family'] == "Debian"
 
 - name: Install prometheus and grafana (Arch)
   community.general.pacman:
@@ -50,7 +50,7 @@
       - prometheus
       - grafana
     state: present
-  when: ansible_os_family == "Archlinux"
+  when: ansible_facts['os_family'] == "Archlinux"
 
 # --- Prometheus ---
 
@@ -166,17 +166,20 @@
 - name: Apply pending config before starting services
   ansible.builtin.meta: flush_handlers
 
+# Check mode does not install the packages, so the services may not exist yet
 - name: Enable and start prometheus service
   ansible.builtin.systemd:
     name: prometheus
     enabled: true
     state: started
+  ignore_errors: "{{ ansible_check_mode }}"
 
 - name: Enable and start grafana service
   ansible.builtin.systemd:
     name: "{{ p2poolv2_grafana_service }}"
     enabled: true
     state: started
+  ignore_errors: "{{ ansible_check_mode }}"
 
 # --- Grafana admin password ---
 # GF_SECURITY_ADMIN_PASSWORD only applies when Grafana creates its database,

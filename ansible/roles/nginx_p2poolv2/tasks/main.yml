@@ -11,7 +11,7 @@
 
 - name: Check the OS is supported
   ansible.builtin.assert:
-    that: ansible_os_family == "Debian"
+    that: ansible_facts['os_family'] == "Debian"
     fail_msg: >-
       The nginx role supports Debian/Ubuntu only (sites-available and
       sites-enabled layout). Set p2poolv2_nginx_enabled: false for this host.
