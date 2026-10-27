@@ -43,7 +43,7 @@ Three roles:
 
 *p2poolv2*:: Installs the p2poolv2 binary and CLI, deploys the dashboard static files, templates the TOML config, and manages the systemd service. Before (re)starting a node it checks that the instance's bitcoind RPC port and ZMQ endpoint are reachable, and stops the run if not. bitcoind itself is not managed.
 
-*nginx_p2poolv2*:: Installs nginx as a reverse proxy in front of the API with rate limiting, WebSocket support, and Let's Encrypt certificates via certbot. Optionally proxies Grafana.
+*nginx_p2poolv2*:: Installs nginx as a reverse proxy in front of the API with rate limiting, WebSocket support, and TLS from certificates you obtain on the host. Optionally proxies Grafana.
 
 *grafana_p2poolv2*:: Installs Prometheus and Grafana and provisions the P2Poolv2 datasource and dashboards. See <<Grafana>>.
 
@@ -83,7 +83,7 @@ ansible/
         preflight.yml                   # bitcoind RPC and ZMQ reachability
     nginx_p2poolv2/
       defaults/main.yml                 # Nginx-specific defaults
-      tasks/main.yml                    # Install nginx, deploy site, certbot
+      tasks/main.yml                    # Install nginx, deploy site
       templates/
         p2poolv2_site.conf.j2           # Nginx site config with SSL
         p2poolv2_http.conf.j2           # HTTP-only config for certificate acquisition
@@ -145,12 +145,12 @@ Nginx is configured once per host (not per instance), Debian/Ubuntu only. The co
 - HTTP to HTTPS redirect
 - Optional redirect domains (e.g. p2poolv2.org -> testnet4.p2poolv2.org)
 - Optional Grafana reverse proxy (set `p2poolv2_grafana_domain`). Set `p2poolv2_grafana_public_dashboard_path` (e.g. `/public-dashboards/<access token>`) to send visitors without a Grafana session to a public dashboard instead of the login page.
-- Let's Encrypt certificates via certbot
+- TLS with Let's Encrypt certificates from `/etc/letsencrypt/live/<domain>/`
 - Basic auth header injection toward the API backend (derived from vault credentials)
 
 The role owns a single site, `p2poolv2.conf`, and leaves other sites on the host alone. To replace a hand-written site, list it in `p2poolv2_nginx_remove_sites`; it is removed only after `p2poolv2.conf` is in place. Every reload runs `nginx -t` first, so a broken config fails the play while nginx keeps serving the previous one.
 
-Certificate renewal is kept enabled through `certbot.timer`, and each run checks it with `certbot renew --dry-run` (against the Let's Encrypt staging server). Set `p2poolv2_certbot_renew_check: false` to skip that check.
+Certificates are not managed by the playbook: obtain and renew them on the host yourself (e.g. with certbot), and reload nginx after a renewal. The role deploys the full SSL config only once a certificate exists for `p2poolv2_domain` (covering the redirect domains) and for `p2poolv2_grafana_domain` if set. Until then it deploys an HTTP-only config, which also serves certbot's HTTP-01 challenge; rerun the role after obtaining the certificates.
 
 == Grafana
 

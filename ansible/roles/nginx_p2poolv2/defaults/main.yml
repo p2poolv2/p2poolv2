@@ -5,12 +5,6 @@
 p2poolv2_nginx_rate_limit: "10r/s"
 p2poolv2_nginx_rate_burst: 20
 
-# Let's Encrypt email for certificate registration
-p2poolv2_certbot_email: ""
-# Fail the play when `certbot renew --dry-run` fails, so a broken renewal
-# shows up at deploy time instead of when the certificates expire
-p2poolv2_certbot_renew_check: true
-
 # Grafana reverse proxy (optional, set domain to enable)
 # p2poolv2_grafana_domain: "grafana.example.com"
 p2poolv2_grafana_port: 3000
