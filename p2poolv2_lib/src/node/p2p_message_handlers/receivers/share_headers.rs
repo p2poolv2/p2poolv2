@@ -179,6 +179,10 @@ impl From<crate::shares::validation::ValidationError> for HeaderSyncError {
 ///   - Cumulative chain work exceeds minimum threshold
 ///
 /// Phase 2 -- Organise:
+///   - Before organising each header, validate its uncles (count, duplicates,
+///     positions, reuse by an ancestor). Organising credits uncle work to chain
+///     work, so this cannot wait for the body. Earlier headers in the batch are
+///     already organised, so the check sees them.
 ///   - Store validated headers via organise_header (persists metadata for later
 ///     validate_with_pool_difficulty in validate_share_block)
 ///
@@ -247,6 +251,13 @@ pub async fn handle_share_headers<C: Send + Sync>(
         .add_header_template_merkle_branches(header_batch.blockhashes_with_branches())
         .await?;
     for header in share_headers {
+        if let Err(error) = share_validator.validate_uncles(header, &chain_store_handle) {
+            error!(
+                "Rejecting header {} from peer {peer_id}: {error}",
+                header.block_hash()
+            );
+            return Err(error.into());
+        }
         chain_store_handle.organise_header(header.clone()).await?;
     }
 
@@ -712,6 +723,9 @@ mod tests {
 
         let mut mock_validator = MockDefaultShareValidator::default();
         setup_minimum_difficulty_mock(&mut mock_validator);
+        mock_validator
+            .expect_validate_uncles()
+            .returning(|_, _| Ok(()));
 
         let share_headers = vec![build_valid_test_header()];
 
@@ -804,6 +818,9 @@ mod tests {
 
         let mut mock_validator = MockDefaultShareValidator::default();
         setup_minimum_difficulty_mock(&mut mock_validator);
+        mock_validator
+            .expect_validate_uncles()
+            .returning(|_, _| Ok(()));
 
         let result = handle_share_headers(
             peer_id,
@@ -816,6 +833,56 @@ mod tests {
         .await;
 
         assert!(result.is_ok(), "Expected Ok, got: {}", result.unwrap_err());
+    }
+
+    /// Organising a header credits its uncles' work to chain work, so a header
+    /// whose uncles break a consensus rule must be rejected before it is
+    /// organised, not only once its body is validated.
+    #[tokio::test]
+    async fn test_handle_share_headers_rejects_invalid_uncles_before_organising() {
+        let peer_id = libp2p::PeerId::random();
+        let header = build_valid_test_header();
+        let branch = vec![bitcoin::TxMerkleNode::from_byte_array([0x42; 32])];
+
+        let mut chain_store_handle = ChainStoreHandle::default();
+        chain_store_handle
+            .expect_add_header_template_merkle_branches()
+            .returning(|_| Ok(()));
+        chain_store_handle.expect_organise_header().times(0);
+        setup_chain_validation_mocks(&mut chain_store_handle);
+
+        let (swarm_tx, _swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
+        let (block_fetcher_handle, _block_fetcher_rx) =
+            block_fetcher::create_block_fetcher_channel();
+
+        let mut mock_validator = MockDefaultShareValidator::default();
+        setup_minimum_difficulty_mock(&mut mock_validator);
+        mock_validator
+            .expect_validate_uncles()
+            .times(1)
+            .returning(|_, _| {
+                Err(ValidationError::consensus(
+                    "Uncle is already listed by an ancestor of the nephew",
+                ))
+            });
+
+        let result = handle_share_headers(
+            peer_id,
+            ShareHeaderBatch::from_headers_with_branches(vec![(header, branch)]),
+            chain_store_handle,
+            swarm_tx,
+            block_fetcher_handle,
+            &mock_validator,
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("already listed by an ancestor")
+        );
     }
 
     #[tokio::test]
@@ -864,6 +931,9 @@ mod tests {
 
         let mut mock_validator = MockDefaultShareValidator::default();
         setup_minimum_difficulty_mock(&mut mock_validator);
+        mock_validator
+            .expect_validate_uncles()
+            .returning(|_, _| Ok(()));
 
         let first = build_valid_test_header();
         let mut parent_hash = first.prev_share_blockhash;
@@ -934,6 +1004,9 @@ mod tests {
 
         let mut mock_validator = MockDefaultShareValidator::default();
         setup_minimum_difficulty_mock(&mut mock_validator);
+        mock_validator
+            .expect_validate_uncles()
+            .returning(|_, _| Ok(()));
 
         let share_headers = vec![build_valid_test_header()];
 

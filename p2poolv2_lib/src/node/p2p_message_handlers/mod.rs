@@ -830,6 +830,9 @@ mod tests {
         mock_validator
             .expect_validate_coinbase_proof()
             .returning(|_, _| Ok(()));
+        mock_validator
+            .expect_validate_uncles()
+            .returning(|_, _| Ok(()));
         let mut pool_difficulty = PoolDifficulty::default();
         pool_difficulty
             .expect_calculate_target_clamped()

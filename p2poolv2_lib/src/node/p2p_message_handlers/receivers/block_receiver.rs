@@ -239,6 +239,20 @@ impl BlockReceiver {
         Ok(())
     }
 
+    /// Checks a block must pass before it is stored: ASERT difficulty and
+    /// the uncle rules. Storing organises the header, which credits its
+    /// uncles' work to chain work, so uncles are checked here rather than
+    /// only during full validation.
+    fn validate_before_store(
+        &self,
+        share_block: &ShareBlock,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        self.validate_asert(share_block)?;
+        self.share_validator
+            .validate_uncles(&share_block.header, &self.chain_store_handle)?;
+        Ok(())
+    }
+
     /// Persist a committed block, organise its header, and queue it
     /// for full validation by the validation worker.
     ///
@@ -288,7 +302,7 @@ impl BlockReceiver {
     /// without storing: its body is never needed and would be pruned.
     ///
     /// Otherwise, if the block's direct parent and all uncles are at
-    /// HeaderValid+, validate ASERT, persist, then drive any
+    /// HeaderValid+, validate ASERT and uncles, persist, then drive any
     /// descendants buffered in pending. If the parent or uncles are
     /// not yet ready, buffer in pending. The headers-first pipeline
     /// will supply ancestors via header sync and block fetch.
@@ -339,8 +353,8 @@ impl BlockReceiver {
 
         self.remove_from_pending(&block_hash);
 
-        // Ancestry is ready: ASERT-check and persist this block.
-        if let Err(error) = self.validate_asert(&share_block) {
+        // Ancestry is ready: check ASERT and uncles, then persist this block.
+        if let Err(error) = self.validate_before_store(&share_block) {
             warn!("Dropping block {block_hash}: {error}");
             return Ok(());
         }
@@ -377,7 +391,7 @@ impl BlockReceiver {
                 continue;
             }
 
-            if let Err(error) = self.validate_asert(&share_block) {
+            if let Err(error) = self.validate_before_store(&share_block) {
                 warn!("Dropping cascaded block {descendant_hash}: {error}");
                 self.remove_from_pending(&descendant_hash);
                 continue;
@@ -428,7 +442,7 @@ mod tests {
     use crate::node::validation_worker;
     #[mockall_double::double]
     use crate::pool_difficulty::PoolDifficulty;
-    use crate::shares::validation::MockDefaultShareValidator;
+    use crate::shares::validation::{MockDefaultShareValidator, ValidationError};
     use crate::store::block_tx_metadata::{BlockMetadata, ChainMembership};
     use crate::store::writer::StoreError;
     use crate::test_utils::TestShareBlockBuilder;
@@ -829,6 +843,9 @@ mod tests {
             .returning(|_| Ok(None));
 
         let mut mock_validator = MockDefaultShareValidator::default();
+        mock_validator
+            .expect_validate_uncles()
+            .returning(|_, _| Ok(()));
         let mut pool_difficulty = PoolDifficulty::default();
         pool_difficulty
             .expect_calculate_target_clamped()
@@ -964,6 +981,9 @@ mod tests {
             .returning(|share| Err(StoreError::BelowPruneHeight(share.block_hash())));
 
         let mut mock_validator = MockDefaultShareValidator::default();
+        mock_validator
+            .expect_validate_uncles()
+            .returning(|_, _| Ok(()));
         let mut pool_difficulty = PoolDifficulty::default();
         pool_difficulty
             .expect_calculate_target_clamped()
@@ -1190,6 +1210,9 @@ mod tests {
             .returning(|_| Ok(None));
 
         let mut mock_validator = MockDefaultShareValidator::default();
+        mock_validator
+            .expect_validate_uncles()
+            .returning(|_, _| Ok(()));
         let mut pool_difficulty = PoolDifficulty::default();
         pool_difficulty
             .expect_calculate_target_clamped()
@@ -1302,6 +1325,90 @@ mod tests {
         assert_eq!(receiver.pending_count(), 0);
     }
 
+    /// Storing a block organises its header, which credits its uncles' work to
+    /// chain work, so a block whose uncles break a consensus rule is dropped
+    /// before it is stored.
+    #[tokio::test]
+    async fn test_process_share_block_invalid_uncles_dropped() {
+        let parent_hash = BlockHash::from_byte_array([0xab; 32]);
+        let parent_header = TestShareBlockBuilder::new()
+            .nonce(0xe9695790)
+            .build()
+            .header;
+        let parent_header_clone = parent_header.clone();
+
+        let mut mock_store = ChainStoreHandle::default();
+        mock_store
+            .expect_get_candidate_tip_height()
+            .returning(|| Ok(Some(0)));
+        mock_store
+            .expect_all_block_and_uncle_data_available()
+            .returning(|_, _| Ok(true));
+        mock_store
+            .expect_get_block_metadata()
+            .returning(move |hash| {
+                if hash == &parent_hash {
+                    Ok(BlockMetadata {
+                        expected_height: Some(0),
+                        chain_work: bitcoin::Work::from_be_bytes([0u8; 32]),
+                        status: Status::BlockValid,
+                        chain: ChainMembership::Confirmed,
+                    })
+                } else {
+                    Err(StoreError::NotFound("not found".to_string()))
+                }
+            });
+        mock_store
+            .expect_get_share_header()
+            .returning(move |_| Ok(parent_header_clone.clone()));
+        mock_store
+            .expect_add_share_block_and_organise_header()
+            .times(0);
+
+        let child_bits = CompactTarget::from_consensus(crate::shares::share_block::MAX_POOL_TARGET);
+        let mut mock_pool_difficulty = PoolDifficulty::default();
+        mock_pool_difficulty
+            .expect_calculate_target_clamped()
+            .returning(move |_, _| child_bits);
+        let mut mock_validator = MockDefaultShareValidator::default();
+        mock_validator
+            .expect_pool_difficulty()
+            .return_const(mock_pool_difficulty);
+        mock_validator
+            .expect_validate_uncles()
+            .times(1)
+            .returning(|_, _| {
+                Err(ValidationError::consensus(
+                    "Uncle is already listed by an ancestor of the nephew",
+                ))
+            });
+
+        let (_, event_rx) = create_block_receiver_channel();
+        let (block_fetcher_handle, _block_fetcher_rx) =
+            block_fetcher::create_block_fetcher_channel();
+        let (validation_tx, mut validation_rx) = validation_worker::create_validation_channel();
+        let mut receiver = BlockReceiver::new(
+            event_rx,
+            Arc::new(mock_validator),
+            mock_store,
+            block_fetcher_handle,
+            validation_tx,
+        );
+
+        let mut child_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(parent_hash.to_string())
+            .nonce(0xe9695791)
+            .build();
+        child_block.header.bits = child_bits;
+
+        let result = receiver.process_share_block(child_block).await;
+        assert!(result.is_ok());
+
+        // Block must NOT enter the store and validation must NOT be emitted.
+        assert!(validation_rx.try_recv().is_err());
+        assert_eq!(receiver.pending_count(), 0);
+    }
+
     #[tokio::test]
     async fn test_cascade_commits_child_when_parent_arrives() {
         let root_hash = BlockHash::from_byte_array([0xcc; 32]);
@@ -1393,6 +1500,9 @@ mod tests {
             .returning(|_| Ok(None));
 
         let mut mock_validator = MockDefaultShareValidator::default();
+        mock_validator
+            .expect_validate_uncles()
+            .returning(|_, _| Ok(()));
         let mut pool_difficulty = PoolDifficulty::default();
         pool_difficulty
             .expect_calculate_target_clamped()
@@ -1508,6 +1618,9 @@ mod tests {
             .returning(|_| Ok(None));
 
         let mut mock_validator = MockDefaultShareValidator::default();
+        mock_validator
+            .expect_validate_uncles()
+            .returning(|_, _| Ok(()));
         let mut pool_difficulty = PoolDifficulty::default();
         pool_difficulty
             .expect_calculate_target_clamped()
