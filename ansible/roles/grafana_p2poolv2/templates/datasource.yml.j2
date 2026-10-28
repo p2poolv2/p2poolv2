@@ -8,15 +8,15 @@ deleteDatasources:
   - name: "{{ p2poolv2_grafana_datasource_name }}"
     orgId: 1
 
-# Not the default datasource: the dashboards select it by uid, and the
-# operator's own default stays as it is.
+# The dashboards select it by uid, so it only needs to be the default when
+# p2poolv2_grafana_datasource_default asks for it.
 datasources:
   - name: "{{ p2poolv2_grafana_datasource_name }}"
     type: prometheus
     uid: "{{ p2poolv2_grafana_datasource_uid }}"
     access: proxy
     url: "http://127.0.0.1:{{ p2poolv2_prometheus_port }}"
-    isDefault: false
+    isDefault: {{ p2poolv2_grafana_datasource_default | bool | lower }}
     editable: false
     jsonData:
       httpMethod: POST

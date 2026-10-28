@@ -10,6 +10,10 @@ p2poolv2_grafana_admin_password: "{{ vault_grafana_admin_password }}"
 # a Prometheus datasource the operator already has in the same Grafana.
 p2poolv2_grafana_datasource_name: "Prometheus (P2Poolv2)"
 p2poolv2_grafana_datasource_uid: "prometheus-p2poolv2"
+# Make it the organisation's default datasource. Off by default so an
+# existing default is left alone; enable on a Grafana used only for P2Poolv2.
+# The provisioned datasource is read-only in the UI, so set this here.
+p2poolv2_grafana_datasource_default: false
 
 # Prometheus is only read by the local Grafana, so it stays on localhost
 p2poolv2_prometheus_listen_address: "127.0.0.1"

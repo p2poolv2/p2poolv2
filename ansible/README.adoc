@@ -158,7 +158,7 @@ Installs Prometheus and Grafana natively (via the system package manager, not Do
 
 - Prometheus scrapes every enabled instance's API on localhost, with the API credentials when the instance has auth. Add more targets with `p2poolv2_prometheus_extra_targets`.
 - Prometheus listens on 127.0.0.1 only. Grafana listens on `p2poolv2_grafana_listen_address`: `127.0.0.1` behind nginx, `0.0.0.0` for direct LAN access.
-- The datasource is named `Prometheus (P2Poolv2)` with uid `prometheus-p2poolv2` and is not the default, so it never replaces a Prometheus datasource you already have.
+- The datasource is named `Prometheus (P2Poolv2)` with uid `prometheus-p2poolv2`, so it never replaces a Prometheus datasource you already have. It is read-only in the Grafana UI; set `p2poolv2_grafana_datasource_default: true` to make it the default datasource (off by default so an existing default is left alone).
 - Both the private dashboards (`prometheus/grafana/dashboards/`) and the public ones (`prometheus/grafana/dashboards-public/`) are deployed. Grafana rescans them every 10 seconds, so dashboard changes go live without a restart. Share a public dashboard once with Grafana's *Share externally*; its link survives later deploys.
 - The Grafana admin password is set from `vault_grafana_admin_password`.
 - On Debian/Ubuntu the role adds Grafana's apt repository. On Arch it does not sync the package database (that would be a partial upgrade); if pacman cannot find a package, run `pacman -Syu` on the host first.
