@@ -7,7 +7,7 @@ use crate::{
     shares::share_block::ShareHeader,
     store::{block_tx_metadata::BlockMetadata, writer::StoreError},
 };
-use bitcoin::BlockHash;
+use bitcoin::{BlockHash, Work};
 use tracing::{debug, info};
 
 use super::{Height, Store, TopResult};
@@ -16,9 +16,8 @@ impl Store {
     /// Organise a share header into the candidate chain.
     ///
     /// Reads block metadata, top candidate, and top confirmed from the store,
-    /// then extends or reorgs the candidate chain as needed. Also marks any
-    /// uncles referenced by the header in the uncles index so that
-    /// find_uncles will not select them again.
+    /// then extends or reorgs the candidate chain as needed. Also records the
+    /// header as the nephew of each uncle it references in the uncles index.
     ///
     /// Returns the new candidate height and chain if the candidate chain
     /// changed, or None if unchanged.
@@ -182,6 +181,10 @@ impl Store {
     /// Stores the header, computes height and chain work from the
     /// parent, records uncle references in the block and uncles
     /// indexes, and writes initial metadata with HeaderValid status.
+    ///
+    /// Chain work is the parent's chain work plus the header's own work plus
+    /// the own work of each uncle it lists. Errors if the parent or any uncle
+    /// header is not in the store.
     fn initialise_new_header(
         &self,
         header: &ShareHeader,
@@ -207,7 +210,8 @@ impl Store {
             ))
         })?;
         let new_height = prev_height + 1;
-        let new_chain_work = prev_metadata.chain_work + share_work;
+        let uncles_work = self.sum_uncles_work(header, blockhash)?;
+        let new_chain_work = prev_metadata.chain_work + share_work + uncles_work;
 
         for uncle_blockhash in &header.uncles {
             self.update_block_index(uncle_blockhash, blockhash, batch)?;
@@ -224,6 +228,28 @@ impl Store {
         self.update_block_metadata(blockhash, &metadata, batch)?;
 
         Ok(metadata)
+    }
+
+    /// Sum the own work of the uncles listed by `header`, reading their
+    /// headers in one batch. Only each uncle's own work counts, not the work
+    /// of its uncles, so every uncle is counted once per chain.
+    ///
+    /// Errors if any uncle header is not in the store.
+    pub(crate) fn sum_uncles_work(
+        &self,
+        header: &ShareHeader,
+        blockhash: &BlockHash,
+    ) -> Result<Work, StoreError> {
+        let uncle_headers = self.get_share_headers(&header.uncles)?;
+        if uncle_headers.len() != header.uncles.len() {
+            return Err(StoreError::NotFound(format!(
+                "Uncle header not found for block {blockhash}"
+            )));
+        }
+        Ok(uncle_headers.iter().fold(
+            Work::from_be_bytes([0u8; 32]),
+            |total, (_, uncle_header)| total + uncle_header.get_work(),
+        ))
     }
 }
 
@@ -400,6 +426,112 @@ mod tests {
         // Top candidate should be fork_share
         let top = store.get_top_candidate().unwrap();
         assert_eq!(top.hash, fork_share.block_hash());
+    }
+
+    /// A share's chain work includes the work of the uncles it lists, so a
+    /// chain is weighed by all the work it references.
+    ///
+    /// Scenario: genesis -> share1(h:1) -> share2(h:2), with uncle_block
+    /// (work 2) as a fork child of genesis at h:1, listed by share2.
+    #[test]
+    fn test_organise_header_chain_work_includes_uncle_work() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        store.push_to_candidate_chain(&share1).unwrap();
+
+        let uncle_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .work(2)
+            .nonce(0xe9695799)
+            .build();
+        store.store_with_valid_metadata(&uncle_block);
+
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .uncles(vec![uncle_block.block_hash()])
+            .nonce(0xe9695793)
+            .build();
+        store.push_to_candidate_chain(&share2).unwrap();
+
+        let expected_work = genesis.header.get_work()
+            + share1.header.get_work()
+            + share2.header.get_work()
+            + uncle_block.header.get_work();
+        assert_eq!(
+            store
+                .get_block_metadata(&share2.block_hash())
+                .unwrap()
+                .chain_work,
+            expected_work
+        );
+    }
+
+    /// Fork choice weighs uncle work: a branch with less work on its main
+    /// line but more total work once uncles count becomes the candidate tip.
+    ///
+    /// Scenario: genesis -> share1(h:1), uncle_block (work 2) as a fork
+    /// child of genesis at h:1. heavy_share (work 2) extends share1 and
+    /// becomes the candidate tip. light_share (work 1) also extends share1
+    /// and lists uncle_block. Both branches share genesis -> share1, so they
+    /// differ only at h:2. On the main line alone light_share's branch has
+    /// less work (1 < 2), but counting its uncle it has more (1 + 2 > 2).
+    #[test]
+    fn test_organise_header_reorgs_to_branch_with_more_uncle_work() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        store.push_to_candidate_chain(&share1).unwrap();
+
+        let uncle_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .work(2)
+            .nonce(0xe9695799)
+            .build();
+        store.store_with_valid_metadata(&uncle_block);
+
+        let heavy_share = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .work(2)
+            .nonce(0xe9695793)
+            .build();
+        store.push_to_candidate_chain(&heavy_share).unwrap();
+        assert_eq!(
+            store.get_top_candidate().unwrap().hash,
+            heavy_share.block_hash()
+        );
+
+        let light_share = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .uncles(vec![uncle_block.block_hash()])
+            .nonce(0xe9695794)
+            .build();
+
+        let result = store.push_to_candidate_chain(&light_share).unwrap();
+
+        assert!(result.is_some());
+        assert_eq!(
+            store.get_top_candidate().unwrap().hash,
+            light_share.block_hash()
+        );
     }
 
     /// Organising a header that references uncles should record the

@@ -442,10 +442,11 @@ impl Store {
     ///
     /// Used in tests for shares that need to be discoverable by
     /// forward walks and uncle lookups. The metadata height and
-    /// chain_work are computed from the parent. Panics if the parent
-    /// is not in the store -- missing parent in test setup is a bug.
-    /// Does NOT go through organise_header, so it avoids candidate
-    /// chain side effects.
+    /// chain_work are computed from the parent, with chain_work adding
+    /// uncle work as `initialise_new_header` does. Panics if the parent
+    /// or an uncle header is not in the store -- missing data in test
+    /// setup is a bug. Does NOT go through organise_header, so it avoids
+    /// candidate chain side effects.
     pub fn store_with_valid_metadata(&self, share: &ShareBlock) {
         let blockhash = share.block_hash();
         let share_work = share.header.get_work();
@@ -459,7 +460,8 @@ impl Store {
             });
         let parent_height = parent_metadata.expected_height.unwrap_or_default();
         let height = parent_height + 1;
-        let chain_work = parent_metadata.chain_work + share_work;
+        let uncles_work = self.sum_uncles_work(&share.header, &blockhash).unwrap();
+        let chain_work = parent_metadata.chain_work + share_work + uncles_work;
         let mut batch = Store::get_write_batch();
         self.add_share_block(share, &mut batch).unwrap();
         self.set_height_to_blockhash(&blockhash, height, &mut batch)
@@ -478,9 +480,10 @@ impl Store {
     /// Create Valid metadata for a share without storing its block data.
     ///
     /// Also stores the header in the Header CF so that downstream
-    /// children can look up parent timestamps and heights. Panics if
-    /// the parent is not in the store -- missing parent in test setup
-    /// is a bug.
+    /// children can look up parent timestamps and heights. chain_work
+    /// adds uncle work as `initialise_new_header` does. Panics if the
+    /// parent or an uncle header is not in the store -- missing data in
+    /// test setup is a bug.
     pub fn create_valid_metadata_only(&self, share: &ShareBlock) {
         let blockhash = share.block_hash();
         let share_work = share.header.get_work();
@@ -494,7 +497,8 @@ impl Store {
             });
         let parent_height = parent_metadata.expected_height.unwrap_or_default();
         let height = parent_height + 1;
-        let chain_work = parent_metadata.chain_work + share_work;
+        let uncles_work = self.sum_uncles_work(&share.header, &blockhash).unwrap();
+        let chain_work = parent_metadata.chain_work + share_work + uncles_work;
         let mut batch = Store::get_write_batch();
         self.add_share_header(&share.header, &mut batch).unwrap();
         self.set_height_to_blockhash(&blockhash, height, &mut batch)

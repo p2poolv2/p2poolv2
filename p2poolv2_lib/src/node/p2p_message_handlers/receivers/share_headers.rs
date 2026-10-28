@@ -269,8 +269,8 @@ pub async fn handle_share_headers<C: Send + Sync>(
 /// checks that the batch forms a connected DAG (every header's parent is
 /// either earlier in the batch or in the store), that every header is bound
 /// to its proof of work by its coinbase proof and meets ASERT difficulty,
-/// that all declared uncle hashes are available, and that cumulative work
-/// exceeds the minimum threshold.
+/// that every declared uncle is earlier in the batch or in the store, and
+/// that cumulative work exceeds the minimum threshold.
 fn validate_header_chain(
     header_batch: &ShareHeaderBatch,
     chain_store_handle: &ChainStoreHandle,
@@ -295,17 +295,11 @@ fn validate_header_chain(
         .max()
         .unwrap_or(Work::from_hex("0x00").unwrap());
 
-    let (batch_hashes, cumulative_chain_work) = validate_dag_connectivity_and_difficulty(
+    let cumulative_chain_work = validate_dag_connectivity_and_difficulty(
         header_batch,
         share_validator,
         pool_difficulty,
         &anchor_hashes,
-        chain_store_handle,
-        lowest_anchor_height,
-    )?;
-    verify_all_uncles_available(
-        share_headers,
-        &batch_hashes,
         chain_store_handle,
         lowest_anchor_height,
     )?;
@@ -341,13 +335,14 @@ fn get_share_time_and_height(
 
 /// Validate that the batch forms a connected DAG with valid difficulty.
 ///
-/// Every header's parent must be either already processed in this batch
-/// or present in the store. Every header must pass minimum difficulty,
-/// its coinbase proof against the batch's branch for it, and ASERT target
-/// validation.
+/// Every header's parent and every uncle it declares must be either
+/// already processed in this batch or present in the store. Headers are
+/// organised in batch order, and organising a header reads its uncles'
+/// headers to add their work, so an uncle delivered after its nephew is
+/// missing. Every header must pass minimum difficulty, its coinbase proof
+/// against the batch's branch for it, and ASERT target validation.
 ///
-/// Returns the set of all blockhashes in the batch and the cumulative
-/// work across all headers.
+/// Returns the cumulative work across all headers.
 fn validate_dag_connectivity_and_difficulty(
     header_batch: &ShareHeaderBatch,
     share_validator: &(dyn ShareValidator + Send + Sync),
@@ -355,7 +350,7 @@ fn validate_dag_connectivity_and_difficulty(
     anchor_hashes: &HashSet<BlockHash>,
     chain_store_handle: &ChainStoreHandle,
     lowest_anchor_height: u32,
-) -> Result<(HashSet<BlockHash>, Work), HeaderSyncError> {
+) -> Result<Work, HeaderSyncError> {
     let share_headers = header_batch.headers();
     let mut known_hashes: HashSet<BlockHash> =
         HashSet::with_capacity(share_headers.len() + anchor_hashes.len());
@@ -395,6 +390,12 @@ fn validate_dag_connectivity_and_difficulty(
 
         let header_height = parent_height + 1;
         check_dense_height(&mut blocks_per_height, header_height)?;
+        check_uncles_known(
+            header,
+            &known_hashes,
+            chain_store_handle,
+            lowest_anchor_height,
+        )?;
 
         let header_hash = header.block_hash();
         time_height_cache.insert(header_hash, (header.time, header_height));
@@ -402,7 +403,7 @@ fn validate_dag_connectivity_and_difficulty(
         cumulative_work = cumulative_work + header.get_work();
     }
 
-    Ok((known_hashes, cumulative_work))
+    Ok(cumulative_work)
 }
 
 /// Reject batches where a single height has too many blocks.
@@ -424,25 +425,23 @@ fn check_dense_height(
     Ok(())
 }
 
-/// Verify every uncle hash declared by any header in the batch exists
-/// either as another header in this batch or in the store. Catches
-/// phantom uncle references that no peer ever sent.
-fn verify_all_uncles_available(
-    share_headers: &[ShareHeader],
-    batch_hashes: &HashSet<BlockHash>,
+/// Verify every uncle declared by `header` is a header already processed
+/// in this batch or is in the store. Catches phantom uncle references that
+/// no peer ever sent, and uncles delivered after their nephew.
+fn check_uncles_known(
+    header: &ShareHeader,
+    known_hashes: &HashSet<BlockHash>,
     chain_store_handle: &ChainStoreHandle,
     lowest_anchor_height: u32,
 ) -> Result<(), HeaderSyncError> {
-    for header in share_headers {
-        for uncle_hash in &header.uncles {
-            if !batch_hashes.contains(uncle_hash)
-                && chain_store_handle.get_block_metadata(uncle_hash).is_err()
-            {
-                return Err(HeaderSyncError::MissingUncle {
-                    uncle_hash: *uncle_hash,
-                    lowest_anchor_height,
-                });
-            }
+    for uncle_hash in &header.uncles {
+        if !known_hashes.contains(uncle_hash)
+            && chain_store_handle.get_block_metadata(uncle_hash).is_err()
+        {
+            return Err(HeaderSyncError::MissingUncle {
+                uncle_hash: *uncle_hash,
+                lowest_anchor_height,
+            });
         }
     }
     Ok(())
@@ -1093,6 +1092,88 @@ mod tests {
             &mock_validator,
         );
         assert!(result.is_ok(), "Expected Ok, got: {}", result.unwrap_err());
+    }
+
+    /// Headers are organised in batch order, and organising a nephew reads its
+    /// uncles' headers to add their work, so an uncle delivered after its
+    /// nephew is treated as missing.
+    #[test]
+    fn test_validate_header_chain_rejects_uncle_after_nephew() {
+        let anchor = TestShareBlockBuilder::new().nonce(1).build();
+        let anchor_hash = anchor.block_hash();
+        let mut share_a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(anchor_hash.to_string())
+            .nonce(2)
+            .build()
+            .header;
+        share_a.bits = CompactTarget::from_consensus(MAX_POOL_TARGET);
+        // uncle is a sibling of share_a (same parent = anchor)
+        let mut uncle = TestShareBlockBuilder::new()
+            .prev_share_blockhash(anchor_hash.to_string())
+            .nonce(3)
+            .build()
+            .header;
+        uncle.bits = CompactTarget::from_consensus(MAX_POOL_TARGET);
+        let mut share_b = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share_a.block_hash().to_string())
+            .uncles(vec![uncle.block_hash()])
+            .nonce(4)
+            .build()
+            .header;
+        share_b.bits = CompactTarget::from_consensus(MAX_POOL_TARGET);
+
+        // Only the anchor is in the store.
+        let mut chain_store_handle = ChainStoreHandle::default();
+        let template_header = build_valid_test_header();
+        let genesis_header = template_header.clone();
+        chain_store_handle
+            .expect_get_genesis_header()
+            .returning(move || Ok(genesis_header.clone()));
+        chain_store_handle
+            .expect_get_share_header()
+            .returning(move |_| Ok(template_header.clone()));
+        let anchor_metadata = BlockMetadata {
+            expected_height: Some(0),
+            chain_work: Work::from_hex("0x00").unwrap(),
+            status: Status::BlockValid,
+            chain: ChainMembership::Confirmed,
+        };
+        let single_metadata = anchor_metadata.clone();
+        chain_store_handle
+            .expect_get_block_metadata()
+            .returning(move |hash| {
+                if *hash == anchor_hash {
+                    Ok(single_metadata.clone())
+                } else {
+                    Err(StoreError::NotFound(format!("{hash} not found")))
+                }
+            });
+        chain_store_handle
+            .expect_get_block_metadata_batch()
+            .returning(move |hashes| {
+                Ok(hashes
+                    .iter()
+                    .filter(|hash| **hash == anchor_hash)
+                    .map(|hash| (*hash, anchor_metadata.clone()))
+                    .collect())
+            });
+        let mut mock_validator = MockDefaultShareValidator::default();
+        setup_minimum_difficulty_mock(&mut mock_validator);
+
+        // Order: share_a, share_b, uncle -- the uncle arrives after its nephew.
+        let headers = vec![share_a, share_b, uncle];
+        let result = validate_header_chain(
+            &share_header_batch_with_empty_branches(headers),
+            &chain_store_handle,
+            &mock_validator,
+        );
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("not delivered in batch and not in store"),
+        );
     }
 
     #[test]
