@@ -413,15 +413,6 @@ impl Store {
         Ok(())
     }
 
-    /// Check if a blockhash has been used as an uncle
-    pub fn is_already_uncle(&self, blockhash: &BlockHash) -> bool {
-        let uncles_cf = self.db.cf_handle(&ColumnFamily::Uncles).unwrap();
-        matches!(
-            self.db.get_cf::<&[u8]>(&uncles_cf, blockhash.as_ref()),
-            Ok(Some(_))
-        )
-    }
-
     /// Get the nephews that have included a blockhash as an uncle
     pub fn get_nephews(&self, uncle: &BlockHash) -> Option<Vec<BlockHash>> {
         let uncles_cf = self.db.cf_handle(&ColumnFamily::Uncles).unwrap();
@@ -435,10 +426,15 @@ impl Store {
     /// chain_work descending.
     ///
     /// Algorithm: walk the base's ancestry up to `MAX_UNCLES_DEPTH` parent
-    /// pointers. The children of those ancestors that are not themselves on
-    /// the base's ancestry, not on the confirmed chain, not already used as
-    /// an uncle, and have their block body stored are the uncle candidates.
-    /// Return the top `MAX_UNCLES` by chain_work.
+    /// pointers, collecting the uncles listed by the base and its ancestors.
+    /// The children of those ancestors that are not themselves on the base's
+    /// ancestry, not on the confirmed chain, not already listed as an uncle on
+    /// this ancestry, and have their block body stored are the uncle
+    /// candidates. Return the top `MAX_UNCLES` by chain_work.
+    ///
+    /// The listed-uncle exclusion matches the validation rule that an uncle
+    /// appears at most once per chain. It looks only at the base's ancestry,
+    /// so an uncle listed by a nephew on a losing branch is still available.
     ///
     /// Anchoring on `base_hash` (the nephew's parent) rather than the
     /// confirmed tip keeps every returned uncle within `MAX_UNCLES_DEPTH` of
@@ -454,12 +450,17 @@ impl Store {
         let mut ancestors: Vec<BlockHash> = Vec::with_capacity(MAX_UNCLES_DEPTH as usize);
         let mut ancestry: HashSet<BlockHash> =
             HashSet::with_capacity(MAX_UNCLES_DEPTH as usize + 1);
+        let mut uncles_listed_on_ancestry: HashSet<BlockHash> =
+            HashSet::with_capacity(MAX_UNCLES_DEPTH as usize * MAX_UNCLES);
         ancestry.insert(*base_hash);
         let mut current = *base_hash;
         let mut steps = 0;
         while steps < MAX_UNCLES_DEPTH as usize && !is_terminal_blockhash(&current) {
             let parent = match self.get_share_header(&current)? {
-                Some(header) => header.prev_share_blockhash,
+                Some(header) => {
+                    uncles_listed_on_ancestry.extend(header.uncles.iter().copied());
+                    header.prev_share_blockhash
+                }
                 None => return Ok(Vec::new()),
             };
             if !is_terminal_blockhash(&parent) {
@@ -483,7 +484,7 @@ impl Store {
             .filter(|(_, blockhash)| {
                 !ancestry.contains(blockhash)
                     && !self.is_confirmed(blockhash)
-                    && !self.is_already_uncle(blockhash)
+                    && !uncles_listed_on_ancestry.contains(blockhash)
                     && self.share_block_exists(blockhash)
             })
             .filter(|(ancestor, blockhash)| self.is_child_of(blockhash, ancestor))
@@ -2666,47 +2667,6 @@ mod tests {
     }
 
     #[test]
-    fn test_is_already_uncle_returns_false_for_new_block() {
-        let temp_dir = tempdir().unwrap();
-        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-
-        let share = TestShareBlockBuilder::new().build();
-        let mut batch = rocksdb::WriteBatch::default();
-        store.add_share_block(&share, &mut batch).unwrap();
-        store.commit_batch(batch).unwrap();
-
-        // A share that has not been used as an uncle should return false
-        assert!(!store.is_already_uncle(&share.block_hash()));
-    }
-
-    #[test]
-    fn test_add_to_uncles_index_and_is_already_uncle() {
-        let temp_dir = tempdir().unwrap();
-        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-
-        let uncle = TestShareBlockBuilder::new().nonce(100).build();
-        let nephew = TestShareBlockBuilder::new().nonce(200).build();
-
-        let mut batch = rocksdb::WriteBatch::default();
-        store.add_share_block(&uncle, &mut batch).unwrap();
-        store.add_share_block(&nephew, &mut batch).unwrap();
-        store.commit_batch(batch).unwrap();
-
-        // Before adding to uncles index
-        assert!(!store.is_already_uncle(&uncle.block_hash()));
-
-        // Add uncle to uncles index
-        let mut batch = rocksdb::WriteBatch::default();
-        store
-            .add_to_uncles_index(&uncle.block_hash(), &nephew.block_hash(), &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
-
-        // After adding to uncles index
-        assert!(store.is_already_uncle(&uncle.block_hash()));
-    }
-
-    #[test]
     fn test_get_nephews_returns_none_for_unused_uncle() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
@@ -3429,17 +3389,72 @@ mod tests {
     }
 
     #[test]
-    fn test_find_uncles_excludes_already_used_uncles() {
+    fn test_find_uncles_excludes_uncles_listed_by_ancestors() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
         // Build chain:
         //   share0 (confirmed)
         //   /    \
-        // share1  uncle1 (not confirmed, but already used as uncle)
+        // share1  uncle1 (not confirmed, listed as uncle by share2)
         // (confirmed)
         //   |    \
         // share2  uncle2 (not confirmed, available)
+        // (confirmed, lists uncle1)
+
+        let share0 = TestShareBlockBuilder::new().nonce(0).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&share0, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share0.block_hash().to_string())
+            .nonce(1)
+            .build();
+        let uncle1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share0.block_hash().to_string())
+            .nonce(100)
+            .build();
+        let share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .uncles(vec![uncle1.block_hash()])
+            .nonce(2)
+            .build();
+        let uncle2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(101)
+            .build();
+
+        // Confirm share1 first so uncle1 and uncle2 can find their parents
+        store.push_to_confirmed_chain(&share1).unwrap();
+        store.store_with_valid_metadata(&uncle1);
+        store.store_with_valid_metadata(&uncle2);
+
+        // Confirm share2
+        store.push_to_confirmed_chain(&share2).unwrap();
+
+        // find_uncles should only find uncle2: share2, an ancestor of the
+        // new share, already lists uncle1.
+        let uncles = store.find_uncles(&store.get_chain_tip().unwrap()).unwrap();
+        assert_eq!(uncles.len(), 1);
+        assert!(uncles.contains(&uncle2.block_hash()));
+        assert!(!uncles.contains(&uncle1.block_hash()));
+    }
+
+    /// An uncle listed only by a losing sibling nephew, off the base's
+    /// ancestry, is still available to the winning chain.
+    #[test]
+    fn test_find_uncles_includes_uncle_listed_only_off_chain() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        // Build chain:
+        //   share0 (confirmed)
+        //   /    \
+        // share1  uncle1 (not confirmed)
+        // (confirmed)
+        //   |    \
+        // share2  losing_nephew (not confirmed, lists uncle1)
         // (confirmed)
 
         let share0 = TestShareBlockBuilder::new().nonce(0).build();
@@ -3459,31 +3474,32 @@ mod tests {
             .prev_share_blockhash(share1.block_hash().to_string())
             .nonce(2)
             .build();
-        let uncle2 = TestShareBlockBuilder::new()
+        let losing_nephew = TestShareBlockBuilder::new()
             .prev_share_blockhash(share1.block_hash().to_string())
+            .uncles(vec![uncle1.block_hash()])
             .nonce(101)
             .build();
 
-        // Confirm share1 first so uncle1 and uncle2 can find their parents
         store.push_to_confirmed_chain(&share1).unwrap();
         store.store_with_valid_metadata(&uncle1);
-        store.store_with_valid_metadata(&uncle2);
-
-        // Confirm share2
+        store.store_with_valid_metadata(&losing_nephew);
         store.push_to_confirmed_chain(&share2).unwrap();
 
-        // Mark uncle1 as already used as uncle
+        // organise_header records every listed uncle in the uncles index,
+        // whichever branch the nephew is on.
         let mut batch = rocksdb::WriteBatch::default();
         store
-            .add_to_uncles_index(&uncle1.block_hash(), &share2.block_hash(), &mut batch)
+            .add_to_uncles_index(
+                &uncle1.block_hash(),
+                &losing_nephew.block_hash(),
+                &mut batch,
+            )
             .unwrap();
         store.commit_batch(batch).unwrap();
 
-        // find_uncles should only find uncle2, not uncle1
         let uncles = store.find_uncles(&store.get_chain_tip().unwrap()).unwrap();
-        assert_eq!(uncles.len(), 1);
-        assert!(uncles.contains(&uncle2.block_hash()));
-        assert!(!uncles.contains(&uncle1.block_hash()));
+        assert!(uncles.contains(&uncle1.block_hash()));
+        assert!(uncles.contains(&losing_nephew.block_hash()));
     }
 
     #[test]

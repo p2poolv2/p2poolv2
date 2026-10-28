@@ -402,13 +402,13 @@ mod tests {
         assert_eq!(top.hash, fork_share.block_hash());
     }
 
-    /// Organising a header that references uncles should mark those
-    /// uncles in the uncles index so find_uncles excludes them later.
+    /// Organising a header that references uncles should record the
+    /// nephew for each of those uncles in the uncles index.
     ///
     /// Scenario: genesis -> share1(h:1, confirmed) with uncle_block as
     /// a fork at h:1. share2(h:2) includes uncle_block as an uncle.
-    /// After organising share2, uncle_block should be marked as already
-    /// used in the uncles index.
+    /// After organising share2, the uncles index should list share2 as
+    /// uncle_block's nephew.
     #[test]
     fn test_organise_header_marks_uncles_in_uncles_index() {
         let temp_dir = tempdir().unwrap();
@@ -433,8 +433,8 @@ mod tests {
             .build();
         store.store_with_valid_metadata(&uncle_block);
 
-        // uncle_block should not be marked as uncle yet
-        assert!(!store.is_already_uncle(&uncle_block.block_hash()));
+        // uncle_block should have no nephews yet
+        assert!(store.get_nephews(&uncle_block.block_hash()).is_none());
 
         // share2: child of share1, includes uncle_block as uncle
         let share2 = TestShareBlockBuilder::new()
@@ -450,17 +450,14 @@ mod tests {
         store.organise_header(&share2.header, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
-        // uncle_block should now be marked in the uncles index
-        assert!(store.is_already_uncle(&uncle_block.block_hash()));
-
         // The nephew recorded for uncle_block should be share2
         let nephews = store.get_nephews(&uncle_block.block_hash()).unwrap();
         assert_eq!(nephews.len(), 1);
         assert_eq!(nephews[0], share2.block_hash());
     }
 
-    /// Organising a header with multiple uncles should mark all of them
-    /// in the uncles index.
+    /// Organising a header with multiple uncles should record the nephew
+    /// for all of them in the uncles index.
     #[test]
     fn test_organise_header_marks_multiple_uncles() {
         let temp_dir = tempdir().unwrap();
@@ -489,8 +486,8 @@ mod tests {
         store.store_with_valid_metadata(&uncle_a);
         store.store_with_valid_metadata(&uncle_b);
 
-        assert!(!store.is_already_uncle(&uncle_a.block_hash()));
-        assert!(!store.is_already_uncle(&uncle_b.block_hash()));
+        assert!(store.get_nephews(&uncle_a.block_hash()).is_none());
+        assert!(store.get_nephews(&uncle_b.block_hash()).is_none());
 
         // share2 includes both uncles
         let share2 = TestShareBlockBuilder::new()
@@ -506,9 +503,15 @@ mod tests {
         store.organise_header(&share2.header, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
-        // Both uncles should be marked
-        assert!(store.is_already_uncle(&uncle_a.block_hash()));
-        assert!(store.is_already_uncle(&uncle_b.block_hash()));
+        // Both uncles should list share2 as their nephew
+        assert_eq!(
+            store.get_nephews(&uncle_a.block_hash()),
+            Some(vec![share2.block_hash()])
+        );
+        assert_eq!(
+            store.get_nephews(&uncle_b.block_hash()),
+            Some(vec![share2.block_hash()])
+        );
     }
 
     /// After organising a header with uncles, find_uncles should no
@@ -553,8 +556,8 @@ mod tests {
             .build();
         store.push_to_confirmed_chain(&share3).unwrap();
 
-        // find_uncles should not return uncle_block since share2
-        // already included it and organise_header marked it
+        // find_uncles should not return uncle_block since share2, an
+        // ancestor of the new share, already lists it
         let uncles = store.find_uncles(&store.get_chain_tip().unwrap()).unwrap();
         assert!(
             !uncles.contains(&uncle_block.block_hash()),
