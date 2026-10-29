@@ -32,6 +32,9 @@ const READ_TIMEOUT: Duration = Duration::from_secs(5);
 /// In-memory buffer per direction of a duplex test connection.
 const DUPLEX_BUFFER_SIZE: usize = 64 * 1024;
 
+/// Pause between connection attempts in `connect_with_retry`.
+const CONNECT_RETRY_DELAY: Duration = Duration::from_millis(10);
+
 /// A client over the in-memory end of a duplex test connection.
 pub(crate) type DuplexClient = TestClient<ReadHalf<DuplexStream>, WriteHalf<DuplexStream>>;
 
@@ -54,6 +57,26 @@ pub(crate) async fn start_test_server(
     let server = tokio::spawn(async move { run_server(&config, shutdown, Some(ready_tx)).await });
     let address = ready_rx.await.unwrap();
     (address, server)
+}
+
+/// Connect to `address`, retrying until a server is listening there.
+/// Panics after `READ_TIMEOUT`.
+pub(crate) async fn connect_with_retry(address: SocketAddr) -> TestClient {
+    timeout(READ_TIMEOUT, async {
+        let mut stream = TcpStream::connect(address).await;
+        while stream.is_err() {
+            tokio::time::sleep(CONNECT_RETRY_DELAY).await;
+            stream = TcpStream::connect(address).await;
+        }
+        stream
+    })
+    .await
+    .expect("timed out waiting for the Electrum server to listen")
+    .map(|stream| {
+        let (reader, writer) = stream.into_split();
+        TestClient::new(reader, writer)
+    })
+    .expect("Electrum server connection failed")
 }
 
 /// Run `handle_connection` on one end of an in-memory duplex stream and
