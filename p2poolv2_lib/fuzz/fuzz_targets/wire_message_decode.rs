@@ -6,6 +6,11 @@ use libfuzzer_sys::fuzz_target;
 use p2poolv2_lib::node::messages::RawMessage;
 use bitcoin::consensus::Decodable;
 
+// This is a smoke test: it only checks that decoding never panics on
+// arbitrary input. It does not verify that successfully-decoded messages
+// contain correct or expected values (that would require a round-trip
+// test using real, generated Message values as the source of truth).
+
 fuzz_target!(|payload: Vec<u8>| {
     // Build a real, correctly-framed wire message around arbitrary,
     // fuzzer-generated payload bytes: compute the genuine checksum for

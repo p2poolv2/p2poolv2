@@ -90,6 +90,7 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "def
 mockall = "0.15"
 mockall_double = "0.3.1"
 tempfile = "3.15.0"
+proptest = "1.5"
 tokio-test = "0.4.3"
 wiremock = "0.6.2"
 dashmap = "6"
