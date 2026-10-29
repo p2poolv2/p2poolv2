@@ -712,7 +712,7 @@ mod tests {
     use super::ChainStoreHandle;
     use super::P2PoolBehaviourEvent;
     use crate::config::{
-        ApiConfig, Config, LoggingConfig, NetworkConfig, StoreConfig, StratumConfig,
+        ApiConfig, Config, ElectrumConfig, LoggingConfig, NetworkConfig, StoreConfig, StratumConfig,
     };
     use crate::monitoring_events::create_monitoring_event_channel;
     use crate::node::Node;
@@ -782,6 +782,7 @@ mod tests {
                 auth_password: None,
                 cors_allowed: false,
             },
+            electrum: ElectrumConfig::default(),
         };
         config.network = network_config;
 
@@ -895,6 +896,7 @@ mod tests {
                 auth_password: None,
                 cors_allowed: false,
             },
+            electrum: ElectrumConfig::default(),
         }
     }
 

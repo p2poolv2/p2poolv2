@@ -110,3 +110,13 @@ port = 46884
 # auth_password = "your_password"
 # Enable permissive CORS (careful with this; allows any origin)
 # cors_allowed = false
+
+# Electrum wallet server: Electrum JSON-RPC over plain TCP, serving the share
+# chain queries to your own wallet. Off unless enabled. It binds localhost and has no
+# TLS or client authentication. Configure remote access or TLS using (SSH tunnel, Tor, stunnel.
+# A publicly reachable listener is not supported.
+# [electrum]
+# enabled = false
+# hostname = "127.0.0.1"
+# port = 50001
+# max_connections = 64

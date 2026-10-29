@@ -4,7 +4,7 @@
 
 use bitcoindrpc::BitcoinRpcConfig;
 use p2poolv2_lib::config::{
-    ApiConfig, Config, LoggingConfig, NetworkConfig, StoreConfig, StratumConfig,
+    ApiConfig, Config, ElectrumConfig, LoggingConfig, NetworkConfig, StoreConfig, StratumConfig,
 };
 
 /// Build a default test configuration with test values that can be replaced later by each test
@@ -56,5 +56,6 @@ pub fn default_test_config() -> Config {
             auth_password: None,
             cors_allowed: false,
         },
+        electrum: ElectrumConfig::default(),
     }
 }
