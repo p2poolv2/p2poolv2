@@ -10,8 +10,9 @@ pub mod error;
 mod methods;
 mod protocol;
 mod server;
+mod supervisor;
 #[cfg(test)]
 mod test_utils;
 
 pub use error::ElectrumServerError;
-pub use server::run_server;
+pub use supervisor::start_electrum_server;

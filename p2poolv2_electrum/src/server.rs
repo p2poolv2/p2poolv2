@@ -36,7 +36,7 @@ const CONNECTION_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 /// binding fails or accepting fails `MAX_CONSECUTIVE_ACCEPT_ERRORS` times in
 /// a row. In every case the listener is closed and all connection tasks have
 /// finished, or been aborted, before this returns.
-pub async fn run_server(
+pub(crate) async fn run_server(
     config: &ElectrumConfig,
     shutdown: CancellationToken,
     ready_tx: Option<oneshot::Sender<SocketAddr>>,
