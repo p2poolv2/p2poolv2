@@ -60,6 +60,7 @@ rlimit = "0.11.0"
 bitcoindrpc = { path = "../bitcoindrpc", features = ["test-utils"] }
 p2poolv2_config = { path = "../p2poolv2_config", features = ["test-utils"] }
 tempfile.workspace = true
+proptest.workspace = true
 test-log = { workspace = true }
 tokio = { workspace = true, features = ["full", "test-util"] }
 rand = { workspace = true }
