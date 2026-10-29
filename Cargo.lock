@@ -2981,6 +2981,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "p2poolv2_electrum"
+version = "0.16.2"
+dependencies = [
+ "p2poolv2_lib",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-stream",
+ "tokio-test",
+ "tokio-util",
+ "tracing",
+]
+
+[[package]]
 name = "p2poolv2_lib"
 version = "0.16.2"
 dependencies = [
