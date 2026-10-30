@@ -29,7 +29,9 @@ bitcoin = { workspace = true }
 bitcoindrpc = { workspace = true }
 p2poolv2_api = { workspace = true }
 p2poolv2_cli = { path = "../p2poolv2_cli" }
+p2poolv2_electrum = { workspace = true }
 p2poolv2_lib = { workspace = true }
+tokio-util = { workspace = true }
 
 [[bin]]
 name = "p2poolv2"

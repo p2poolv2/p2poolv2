@@ -74,6 +74,9 @@ except the per-peer services and the StoreWriter thread:
 - **PplnsShareWorker** -- stores hydrapool PPLNS shares that met their session
   difficulty; spawned by `build_node`, outside the actor.
 - **StoreWriter** -- serializes all RocksDB writes on a `spawn_blocking` thread.
+- **Electrum supervisor** -- runs the optional Electrum wallet server
+  (`p2poolv2_electrum`); spawned by `build_node`, outside the actor, only
+  when `[electrum] enabled = true`. See below.
 
 Every channel is bounded, and every edge has an explicit policy:
 
@@ -106,6 +109,34 @@ before the broadcast would let tasks pile up without limit, so do not.
 
 When adding a channel, add it to this table with its capacity and policy, and
 check that it does not close a cycle of awaited sends.
+
+## Electrum Server Supervision
+
+The Electrum server is the one task whose failure does not stop the node.
+Every other worker failure is fatal (actor supervision above, and the
+`ShutdownReason::Error` sends in `build_node`), because those tasks are the
+node's job. Electrum is opt-in, read-only and not needed for mining, so
+`start_electrum_server` runs it under its own supervisor:
+
+- `supervise` loops `run_server`. A returned error (bind failure, or
+  `MAX_CONSECUTIVE_ACCEPT_ERRORS` accept failures in a row) is logged and
+  the listener is rebound after a backoff of 1s doubling to 60s, reset once
+  an instance has run longer than 60s. It retries for as long as the node
+  runs and never sends a `ShutdownReason`.
+- `run_server` runs each connection as a task in a `JoinSet`, capped by a
+  `max_connections` semaphore. A panicking connection task is logged and
+  reaped; the server keeps running. Release builds are `panic = "abort"`,
+  so this containment only applies to non-release builds.
+- Shutdown is one `CancellationToken`, created in `build_node` and held by
+  `NodeRunner`. Each server instance gets a child token and each connection
+  a child of that, so one `cancel()` in `stop_all` reaches the backoff wait,
+  the accept loop and every open connection. The server drains connections
+  for up to 5s before aborting them, and `stop_all` waits up to
+  `ELECTRUM_SHUTDOWN_TIMEOUT` (10s) for the supervisor task.
+
+Electrum has no channel into the rest of the node yet. Wallet methods will
+read the store through a read model in `p2poolv2_lib`, off the tokio worker
+threads (see WALLET_API_PLAN.md section 5.3).
 
 ## RocksDB Reads in Request Handlers
 

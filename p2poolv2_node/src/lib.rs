@@ -5,7 +5,7 @@
 //! P2Poolv2 node library.
 //!
 //! Provides [`build_node`] which constructs the full node pipeline (store,
-//! stratum, P2P, API) and returns [`NodeHandles`] for injecting extra
+//! stratum, P2P, API, Electrum) and returns [`NodeHandles`] for injecting extra
 //! producers (e.g. a sim emitter) plus a [`NodeRunner`] that drives the
 //! event loop.
 
@@ -14,6 +14,7 @@ pub mod preflight;
 pub mod signal;
 
 use p2poolv2_api::start_api_server;
+use p2poolv2_electrum::start_electrum_server;
 use p2poolv2_lib::accounting::payout::build_payout_for_mode;
 use p2poolv2_lib::accounting::payout::simple_pplns::share_worker::PplnsShareWorker;
 use p2poolv2_lib::accounting::stats::metrics;
@@ -38,7 +39,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
-use tracing::{error, info, trace};
+use tokio_util::sync::CancellationToken;
+use tracing::{error, info, trace, warn};
 
 /// Interval in seconds to poll for new block templates since the last zmq event signal
 const GBT_POLL_INTERVAL: u64 = 10;
@@ -55,6 +57,10 @@ const FULL_DONATION_BIPS: u16 = 10_000;
 /// Notify channel capacity for pending notifications from new clients.
 const NOTIFY_CHANNEL_CAPACITY: usize = 1000;
 
+/// How long shutdown waits for the Electrum server to close its listener
+/// and connections before moving on.
+const ELECTRUM_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Handles exposed by [`build_node`] for wiring external producers (e.g. sim emitter).
 pub struct NodeHandles {
     /// Sender for injecting share emissions into the node pipeline.
@@ -67,6 +73,10 @@ pub struct NodeHandles {
 
 /// Opaque runner returned by [`build_node`]. Call [`NodeRunner::run`] to start
 /// the event loop and block until shutdown.
+///
+/// `electrum_task` is `None` when the Electrum server is disabled. Shutdown
+/// cancels `electrum_shutdown` and waits up to `ELECTRUM_SHUTDOWN_TIMEOUT`
+/// for the task.
 pub struct NodeRunner {
     exit_sender: watch::Sender<ShutdownReason>,
     sig_handle: JoinHandle<()>,
@@ -74,6 +84,8 @@ pub struct NodeRunner {
     node_handle: NodeHandle,
     stratum_shutdown_tx: tokio::sync::oneshot::Sender<()>,
     api_shutdown_tx: tokio::sync::oneshot::Sender<()>,
+    electrum_shutdown: CancellationToken,
+    electrum_task: Option<JoinHandle<()>>,
     metrics_handle: metrics::MetricsHandle,
     stats_dir: String,
 }
@@ -87,6 +99,8 @@ impl NodeRunner {
         let node_handle = self.node_handle;
         let stratum_shutdown_tx = self.stratum_shutdown_tx;
         let api_shutdown_tx = self.api_shutdown_tx;
+        let electrum_shutdown = self.electrum_shutdown;
+        let electrum_task = self.electrum_task;
         let metrics_handle = self.metrics_handle;
         let stats_dir = self.stats_dir;
 
@@ -108,6 +122,10 @@ impl NodeRunner {
 
             let _ = stratum_shutdown_tx.send(());
             let _ = api_shutdown_tx.send(());
+            electrum_shutdown.cancel();
+            if let Some(electrum_task) = electrum_task {
+                stop_electrum_server(electrum_task).await;
+            }
             let _ = exit_sender.send(reason);
             reason
         };
@@ -146,7 +164,24 @@ impl NodeRunner {
     }
 }
 
+/// Wait for the cancelled Electrum server task to finish, logging a join
+/// failure or a timeout. A stuck task is left behind rather than blocking
+/// node shutdown.
+async fn stop_electrum_server(electrum_task: JoinHandle<()>) {
+    match tokio::time::timeout(ELECTRUM_SHUTDOWN_TIMEOUT, electrum_task).await {
+        Ok(Ok(())) => {}
+        Ok(Err(join_error)) => error!("Electrum server task failed: {join_error}"),
+        Err(_) => warn!(
+            "Electrum server did not stop within {ELECTRUM_SHUTDOWN_TIMEOUT:?}, continuing shutdown"
+        ),
+    }
+}
+
 /// Build the full node pipeline and return handles + a runner.
+///
+/// The Electrum server starts after the API server when
+/// `config.electrum.enabled`; it runs under its own supervisor, so its
+/// failures never shut the node down.
 ///
 /// The caller can wire extra producers (e.g. a sim emitter) into
 /// `NodeHandles::emissions_tx` and `NodeHandles::template_rx` before
@@ -408,6 +443,21 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
         config.api.hostname, config.api.port
     );
 
+    let electrum_shutdown = CancellationToken::new();
+    let electrum_task = if config.electrum.enabled {
+        info!(
+            "Starting Electrum server on host {} port {}",
+            config.electrum.hostname, config.electrum.port
+        );
+        Some(start_electrum_server(
+            config.electrum.clone(),
+            electrum_shutdown.clone(),
+        ))
+    } else {
+        info!("Electrum server disabled");
+        None
+    };
+
     let handles = NodeHandles {
         emissions_tx: emissions_tx_for_handles,
         template_rx: template_rx_for_handles,
@@ -421,6 +471,8 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
         node_handle,
         stratum_shutdown_tx,
         api_shutdown_tx,
+        electrum_shutdown,
+        electrum_task,
         metrics_handle,
         stats_dir: config.logging.stats_dir.clone(),
     };
