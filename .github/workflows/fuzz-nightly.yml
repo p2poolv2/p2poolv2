@@ -34,8 +34,15 @@ jobs:
         with:
           tool: cargo-fuzz@0.13.2
 
+      # The corpus repo holds one directory per fuzz target. A target new to
+      # the repo starts from an empty directory, which libFuzzer requires to
+      # exist.
       - name: Clone shared fuzz corpus
-        run: git clone https://x-access-token:${{ secrets.FUZZ_CORPUS_PAT }}@github.com/Juwon-Ogunseye/p2poolv2-fuzz-corpora "$RUNNER_TEMP/corpora"
+        env:
+          FUZZ_CORPUS_TOKEN: ${{ secrets.FUZZ_CORPUS_TOKEN }}
+        run: |
+          git clone "https://x-access-token:${FUZZ_CORPUS_TOKEN}@github.com/p2poolv2/fuzz-corpus" "$RUNNER_TEMP/corpora"
+          mkdir -p "$RUNNER_TEMP/corpora/${{ matrix.fuzz_target }}"
 
       # The fuzz crate is its own workspace with its own target directory.
       # cargo-fuzz comes from install-action each run, so ~/.cargo/bin is not
