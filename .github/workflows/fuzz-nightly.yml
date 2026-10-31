@@ -32,7 +32,7 @@ jobs:
             fuzz-nightly-${{ matrix.fuzz_target }}-
 
       - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz --locked
+        run: cargo install cargo-fuzz --locked --force
 
       - name: Run fuzz target (1 hour)
         working-directory: p2poolv2_lib
