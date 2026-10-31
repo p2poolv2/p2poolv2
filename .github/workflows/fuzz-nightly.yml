@@ -5,39 +5,49 @@ on:
     - cron: '0 2 * * *'
   workflow_dispatch: {}
 
+permissions:
+  contents: read
+
 jobs:
   fuzz-deep:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
+    # One hour of fuzzing plus build, corpus sync and artifact upload.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
         fuzz_target: [wire_message_decode]
+    # rust-toolchain.toml pins stable, but cargo-fuzz needs nightly, and the
+    # nested cargo builds it spawns would otherwise pick up the pinned stable.
+    env:
+      RUSTUP_TOOLCHAIN: nightly
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: nightly
+
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-fuzz@0.13.2
 
       - name: Clone shared fuzz corpus
         run: git clone https://x-access-token:${{ secrets.FUZZ_CORPUS_PAT }}@github.com/Juwon-Ogunseye/p2poolv2-fuzz-corpora "$RUNNER_TEMP/corpora"
 
-      - uses: actions/cache@v4
+      # The fuzz crate is its own workspace with its own target directory.
+      # cargo-fuzz comes from install-action each run, so ~/.cargo/bin is not
+      # cached: a restored binary would shadow the pinned version.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            ~/.cargo/bin
-            p2poolv2_lib/fuzz/target
-          key: fuzz-nightly-${{ matrix.fuzz_target }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            fuzz-nightly-${{ matrix.fuzz_target }}-
-
-      - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz --locked --force
+          workspaces: p2poolv2_lib/fuzz -> target
+          cache-bin: "false"
+          key: fuzz-nightly-${{ matrix.fuzz_target }}
 
       - name: Run fuzz target (1 hour)
         working-directory: p2poolv2_lib
-        env:
-          RUSTUP_TOOLCHAIN: nightly
         run: cargo fuzz run ${{ matrix.fuzz_target }} "$RUNNER_TEMP/corpora/${{ matrix.fuzz_target }}" -- -max_total_time=3600
 
       - name: Push newly discovered corpus entries back
@@ -51,7 +61,7 @@ jobs:
 
       - name: Upload crash artifacts, if any
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: fuzz-crash-${{ matrix.fuzz_target }}
           path: p2poolv2_lib/fuzz/artifacts/${{ matrix.fuzz_target }}/
