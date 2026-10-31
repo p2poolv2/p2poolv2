@@ -30,7 +30,7 @@ pub fn expand_dynamic_args(input: impl IntoIterator<Item = OsString>) -> Vec<OsS
 
     // Disclaimers:
     // You must separate your key and value with an equal sign.
-    // You must either double the - or you a _ when key has a _.
+    // You must have a -- or a _ when key has a _.
     let mut input_iter = input.into_iter();
     let mut output = vec![input_iter.next().unwrap_or_default()];
     for arg in input_iter {
@@ -40,7 +40,7 @@ pub fn expand_dynamic_args(input: impl IntoIterator<Item = OsString>) -> Vec<OsS
         };
         // --P2POOL_BITCOINRPC__URL= -> BITCOINRPC__URL=
         // --bitcoinrpc-URL= -> bitcoinrpc-URL=
-        // --ApiConfig-cors--allowed= -> ApiConfig--cors-allowed=
+        // --ApiConfig-cors--allowed= -> ApiConfig--cors_allowed=
         let mut prefix_removed = text;
         if let Some(stripped) = prefix_removed.strip_prefix("--P2POOL_") {
             prefix_removed = stripped;
@@ -56,7 +56,7 @@ pub fn expand_dynamic_args(input: impl IntoIterator<Item = OsString>) -> Vec<OsS
             // ApiConfig-cors--allowed= -> ApiConfig-cors_allowed=
             let mut key = env_key.to_ascii_lowercase();
             key = key.replace("__", ".");
-            key = key.replace("--", ".");
+            key = key.replace("--", "_");
             key = key.replace("-", ".");
             
             output.push("--set".into());
@@ -117,6 +117,7 @@ mod tests {
             OsString::from("--config config.sample.toml"),
             OsString::from("--P2POOL_BITCOINRPC__URL=http://127.0.0.1:48332"),
             OsString::from("--ApiConfig-cors_allowed=true"),
+            OsString::from("--ApiConfig-cors--allowed=true"),
             OsString::from("--bitcoinrpc-URL=http://127.0.0.1:48332"),
             OsString::from("--NetworkConfig-max_established_per_peer=12")
         ];
@@ -129,6 +130,8 @@ mod tests {
             OsString::from("--config config.sample.toml"),
             OsString::from("--set"),
             OsString::from("bitcoinrpc.url=http://127.0.0.1:48332"),
+            OsString::from("--set"),
+            OsString::from("apiconfig.cors_allowed=true"),
             OsString::from("--set"),
             OsString::from("apiconfig.cors_allowed=true"),
             OsString::from("--set"),
