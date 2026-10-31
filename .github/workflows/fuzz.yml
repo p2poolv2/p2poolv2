@@ -29,7 +29,7 @@ jobs:
             fuzz-${{ matrix.fuzz_target }}-
 
       - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz --locked
+        run: cargo install cargo-fuzz --locked --force
 
       - name: Smoke test fuzz target (60s)
         working-directory: p2poolv2_lib
