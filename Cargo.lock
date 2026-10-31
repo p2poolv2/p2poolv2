@@ -3001,6 +3001,7 @@ dependencies = [
 name = "p2poolv2_electrum"
 version = "0.16.2"
 dependencies = [
+ "bitcoin",
  "p2poolv2_lib",
  "serde_json",
  "thiserror 2.0.21",
