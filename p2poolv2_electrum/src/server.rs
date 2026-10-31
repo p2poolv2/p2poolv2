@@ -5,6 +5,7 @@
 use crate::connection::handle_connection;
 use crate::error::ElectrumServerError;
 use p2poolv2_lib::config::ElectrumConfig;
+use p2poolv2_lib::shares::chain::chain_store_handle::ChainStoreHandle;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -38,6 +39,7 @@ const CONNECTION_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 /// finished, or been aborted, before this returns.
 pub(crate) async fn run_server(
     config: &ElectrumConfig,
+    chain_store_handle: &ChainStoreHandle,
     shutdown: CancellationToken,
     ready_tx: Option<oneshot::Sender<SocketAddr>>,
 ) -> Result<(), ElectrumServerError> {
@@ -52,6 +54,7 @@ pub(crate) async fn run_server(
     let outcome = accept_loop(
         &listener,
         config.max_connections,
+        chain_store_handle,
         &shutdown,
         &connection_shutdown,
         &mut connections,
@@ -86,6 +89,7 @@ async fn bind(config: &ElectrumConfig) -> Result<(TcpListener, SocketAddr), Elec
 async fn accept_loop(
     listener: &TcpListener,
     max_connections: u32,
+    chain_store_handle: &ChainStoreHandle,
     shutdown: &CancellationToken,
     connection_shutdown: &CancellationToken,
     connections: &mut JoinSet<()>,
@@ -105,6 +109,7 @@ async fn accept_loop(
                     accept_connection(
                         stream,
                         peer_address,
+                        chain_store_handle,
                         &connection_semaphore,
                         connection_shutdown,
                         connections,
@@ -134,6 +139,7 @@ async fn accept_loop(
 fn accept_connection(
     stream: TcpStream,
     peer_address: SocketAddr,
+    chain_store_handle: &ChainStoreHandle,
     connection_semaphore: &Arc<Semaphore>,
     connection_shutdown: &CancellationToken,
     connections: &mut JoinSet<()>,
@@ -148,9 +154,10 @@ fn accept_connection(
     debug!("Electrum connection from {peer_address}");
     let (reader, writer) = stream.into_split();
     let shutdown = connection_shutdown.clone();
+    let chain_store_handle = chain_store_handle.clone();
     connections.spawn(async move {
         let _permit = permit;
-        handle_connection(reader, writer, peer_address, shutdown).await;
+        handle_connection(reader, writer, peer_address, chain_store_handle, shutdown).await;
     });
 }
 
@@ -185,6 +192,7 @@ mod tests {
     use super::*;
     use crate::connection::MAX_LINE_LENGTH;
     use crate::test_utils::{TestClient, start_test_server, test_config};
+    use p2poolv2_lib::test_utils::setup_test_chain_store_handle;
     use serde_json::json;
     use std::net::TcpListener as StdTcpListener;
     use tokio::time::timeout;
@@ -195,7 +203,8 @@ mod tests {
     #[tokio::test]
     async fn ping_over_tcp_returns_null_result() {
         let shutdown = CancellationToken::new();
-        let (address, _server) = start_test_server(shutdown.clone()).await;
+        let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(false).await;
+        let (address, _server) = start_test_server(chain_store_handle, shutdown.clone()).await;
         let mut client = TestClient::connect(address).await;
 
         assert_eq!(
@@ -208,7 +217,8 @@ mod tests {
     #[tokio::test]
     async fn over_long_line_closes_only_that_connection() {
         let shutdown = CancellationToken::new();
-        let (address, _server) = start_test_server(shutdown.clone()).await;
+        let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(false).await;
+        let (address, _server) = start_test_server(chain_store_handle, shutdown.clone()).await;
         let mut bystander = TestClient::connect(address).await;
         let mut offender = TestClient::connect(address).await;
 
@@ -235,7 +245,16 @@ mod tests {
         config.max_connections = 1;
         let (ready_tx, ready_rx) = oneshot::channel();
         let server_shutdown = shutdown.clone();
-        tokio::spawn(async move { run_server(&config, server_shutdown, Some(ready_tx)).await });
+        let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(false).await;
+        tokio::spawn(async move {
+            run_server(
+                &config,
+                &chain_store_handle,
+                server_shutdown,
+                Some(ready_tx),
+            )
+            .await
+        });
         let address = ready_rx.await.unwrap();
         let mut first = TestClient::connect(address).await;
         assert_eq!(
@@ -255,7 +274,8 @@ mod tests {
     #[tokio::test]
     async fn cancelling_shutdown_returns_ok_and_closes_clients() {
         let shutdown = CancellationToken::new();
-        let (address, server) = start_test_server(shutdown.clone()).await;
+        let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(false).await;
+        let (address, server) = start_test_server(chain_store_handle, shutdown.clone()).await;
         let mut client = TestClient::connect(address).await;
         assert_eq!(
             client.call(PING).await,
@@ -275,7 +295,8 @@ mod tests {
         let mut config = test_config();
         config.port = held.local_addr().unwrap().port();
 
-        let result = run_server(&config, CancellationToken::new(), None).await;
+        let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(false).await;
+        let result = run_server(&config, &chain_store_handle, CancellationToken::new(), None).await;
 
         assert!(
             matches!(result, Err(ElectrumServerError::Bind { .. })),
