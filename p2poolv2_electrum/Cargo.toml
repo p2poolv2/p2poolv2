@@ -15,6 +15,7 @@ publish.workspace = true
 
 [dependencies]
 p2poolv2_lib = { workspace = true }
+bitcoin = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 tokio-stream = { workspace = true }
