@@ -9,6 +9,7 @@ use p2poolv2_wallet::Address as ShareAddress;
 use serde::Deserialize;
 use std::marker::PhantomData;
 use std::str::FromStr;
+use std::collections::HashMap;
 
 /// Default version mask for BIP 323 version rolling.
 pub const DEFAULT_VERSION_MASK: i32 = 0x1fffe000;
@@ -606,6 +607,20 @@ impl Config {
             )
             .build()?
             .try_deserialize()
+    }
+
+    pub fn load_with_command_args(path: &str, sets: &[String]) -> Result<Self, config::ConfigError> {
+        // Target: override the provided configuration file with the set args.
+        let mut cli = HashMap::new();
+        for set in sets {
+            let (key, value) = set.split_once('=')
+                .ok_or_else(|| config::ConfigError::Message(format!("Expected KEY=VALUE: {set}")))?;
+                cli.insert(format!("P2POOL_{}", key.replace('.', "__").to_uppercase()), value.to_owned());
+        }
+        config::Config::builder()
+            .add_source(config::File::with_name(path))
+            .add_source(config::Environment::with_prefix("P2POOL").prefix_separator("_").separator("__"))
+            .build()?.try_deserialize()
     }
 
     pub fn with_listen_address(mut self, listen_address: String) -> Self {
