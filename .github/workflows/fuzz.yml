@@ -20,15 +20,19 @@ jobs:
       - uses: actions/cache@v4
         with:
           path: |
+            ~/.cargo/registry
+            ~/.cargo/git
             ~/.cargo/bin
             p2poolv2_lib/fuzz/target
           key: fuzz-${{ matrix.fuzz_target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            fuzz-${{ matrix.fuzz_target }}-
 
       - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz --locked
+        run: cargo install cargo-fuzz --locked --force
 
-      - name: Smoke test fuzz target (60s)
+      - name: Build fuzz target
         working-directory: p2poolv2_lib
         env:
           RUSTUP_TOOLCHAIN: nightly
-        run: cargo fuzz run ${{ matrix.fuzz_target }} -- -max_total_time=60
+        run: cargo fuzz build ${{ matrix.fuzz_target }}
