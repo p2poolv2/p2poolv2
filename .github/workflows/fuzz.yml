@@ -1,38 +1,59 @@
 name: Fuzz
 
+# Disabled on push and pull_request: a cold sanitizer build of the fuzz crate
+# takes too long for a PR check. Nightly Fuzz builds and runs the targets daily.
+# Run this by hand to check that a fuzz target still builds.
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
 
 jobs:
   fuzz-smoke-test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         fuzz_target: [wire_message_decode]
+    # rust-toolchain.toml pins stable, but cargo-fuzz needs nightly, and the
+    # nested cargo builds it spawns would otherwise pick up the pinned stable.
+    #
+    # cargo-fuzz defaults --target to the triple it was itself built for. The
+    # prebuilt binary from install-action is musl, and AddressSanitizer
+    # cannot run against a statically linked libc, so name the gnu target.
+    env:
+      RUSTUP_TOOLCHAIN: nightly
+      FUZZ_TARGET_TRIPLE: x86_64-unknown-linux-gnu
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@nightly
-
-      - uses: actions/cache@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            ~/.cargo/bin
-            p2poolv2_lib/fuzz/target
-          key: fuzz-${{ matrix.fuzz_target }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            fuzz-${{ matrix.fuzz_target }}-
+          persist-credentials: false
 
-      - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz --locked --force
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: nightly
+          components: rustfmt
+
+      # The fuzz crate is its own workspace, so the root `cargo fmt --all`
+      # in rust.yml never checks it.
+      - name: Check fuzz crate formatting
+        run: cargo fmt --manifest-path p2poolv2_lib/fuzz/Cargo.toml --check
+
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: cargo-fuzz@0.13.2
+
+      # The fuzz crate is its own workspace with its own target directory.
+      # cargo-fuzz comes from install-action each run, so ~/.cargo/bin is not
+      # cached: a restored binary would shadow the pinned version.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: p2poolv2_lib/fuzz -> target
+          cache-bin: "false"
+          key: fuzz-${{ matrix.fuzz_target }}
 
       - name: Build fuzz target
         working-directory: p2poolv2_lib
-        env:
-          RUSTUP_TOOLCHAIN: nightly
-        run: cargo fuzz build ${{ matrix.fuzz_target }}
+        run: cargo fuzz build --target "$FUZZ_TARGET_TRIPLE" ${{ matrix.fuzz_target }}

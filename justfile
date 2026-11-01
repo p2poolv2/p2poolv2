@@ -87,6 +87,7 @@ clippy:
 # The full gate a change must pass before it is done
 preflight: clippy
     cargo fmt --all -- --check
+    cargo fmt --manifest-path p2poolv2_lib/fuzz/Cargo.toml -- --check
     just test
 
 # Check dependency licences, duplicate versions and source registries.
@@ -106,10 +107,11 @@ advisories:
 cli *args:
     cargo run -p p2poolv2_node --bin p2poolv2_cli -- {{ args }}
 
-# Format source code
+# Format source code. The fuzz crate is its own workspace, so `--all` does
+# not reach it.
 fmt:
     cargo fmt --all
-    just --fmt --unstable
+    cargo fmt --manifest-path p2poolv2_lib/fuzz/Cargo.toml
 
 # Run benchmarks for a package and bench target
 bench package="p2poolv2_lib" name="pplns_window":
