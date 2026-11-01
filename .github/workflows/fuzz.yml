@@ -1,9 +1,10 @@
 name: Fuzz
 
+# Disabled on push and pull_request: a cold sanitizer build of the fuzz crate
+# takes too long for a PR check. Nightly Fuzz builds and runs the targets daily.
+# Run this by hand to check that a fuzz target still builds.
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_dispatch: {}
 
 permissions:
   contents: read
