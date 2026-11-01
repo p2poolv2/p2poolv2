@@ -28,6 +28,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           toolchain: nightly
+          components: rustfmt
+
+      # The fuzz crate is its own workspace, so the root `cargo fmt --all`
+      # in rust.yml never checks it.
+      - name: Check fuzz crate formatting
+        run: cargo fmt --manifest-path p2poolv2_lib/fuzz/Cargo.toml --check
 
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
