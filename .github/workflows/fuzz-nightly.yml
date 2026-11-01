@@ -11,20 +11,24 @@ permissions:
 jobs:
   fuzz-deep:
     runs-on: ubuntu-26.04
-    # One hour of fuzzing plus build, corpus sync and artifact upload.
-    timeout-minutes: 90
+    # One hour of fuzzing plus build, corpus sync and artifact upload. A cold
+    # build (new nightly pin or lockfile change) alone can take about 30
+    # minutes.
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
         fuzz_target: [wire_message_decode]
     # rust-toolchain.toml pins stable, but cargo-fuzz needs nightly, and the
     # nested cargo builds it spawns would otherwise pick up the pinned stable.
+    # The nightly is dated because rust-cache keys on `rustc -vV`: a moving
+    # nightly makes every day's first run a cold build. Bump it deliberately.
     #
     # cargo-fuzz defaults --target to the triple it was itself built for. The
     # prebuilt binary from install-action is musl, and AddressSanitizer
     # cannot run against a statically linked libc, so name the gnu target.
     env:
-      RUSTUP_TOOLCHAIN: nightly
+      RUSTUP_TOOLCHAIN: nightly-2026-10-31
       FUZZ_TARGET_TRIPLE: x86_64-unknown-linux-gnu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -33,7 +37,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
-          toolchain: nightly
+          toolchain: ${{ env.RUSTUP_TOOLCHAIN }}
 
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
@@ -56,6 +60,9 @@ jobs:
         with:
           workspaces: p2poolv2_lib/fuzz -> target
           cache-bin: "false"
+          # Save compiled dependencies even when the job fails (a crash or a
+          # timeout), so the next run does not start cold again.
+          cache-on-failure: "true"
           key: fuzz-nightly-${{ matrix.fuzz_target }}
 
       - name: Run fuzz target (1 hour)
