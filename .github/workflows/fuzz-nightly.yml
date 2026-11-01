@@ -19,8 +19,13 @@ jobs:
         fuzz_target: [wire_message_decode]
     # rust-toolchain.toml pins stable, but cargo-fuzz needs nightly, and the
     # nested cargo builds it spawns would otherwise pick up the pinned stable.
+    #
+    # cargo-fuzz defaults --target to the triple it was itself built for. The
+    # prebuilt binary from install-action is musl, and AddressSanitizer
+    # cannot run against a statically linked libc, so name the gnu target.
     env:
       RUSTUP_TOOLCHAIN: nightly
+      FUZZ_TARGET_TRIPLE: x86_64-unknown-linux-gnu
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -55,7 +60,7 @@ jobs:
 
       - name: Run fuzz target (1 hour)
         working-directory: p2poolv2_lib
-        run: cargo fuzz run ${{ matrix.fuzz_target }} "$RUNNER_TEMP/corpora/${{ matrix.fuzz_target }}" -- -max_total_time=3600
+        run: cargo fuzz run --target "$FUZZ_TARGET_TRIPLE" ${{ matrix.fuzz_target }} "$RUNNER_TEMP/corpora/${{ matrix.fuzz_target }}" -- -max_total_time=3600
 
       - name: Push newly discovered corpus entries back
         working-directory: ${{ runner.temp }}/corpora
