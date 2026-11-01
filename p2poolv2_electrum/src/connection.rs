@@ -2,13 +2,15 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+use crate::methods::dispatch;
 use crate::protocol::handle_line;
+use p2poolv2_lib::shares::chain::chain_store_handle::ChainStoreHandle;
 use std::net::SocketAddr;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio_stream::StreamExt;
 use tokio_util::codec::{FramedRead, LinesCodec};
 use tokio_util::sync::CancellationToken;
-use tracing::debug;
+use tracing::{debug, error};
 
 /// Longest request line accepted. A batch of a hundred scripthash requests
 /// fits comfortably; a longer line closes the connection.
@@ -24,6 +26,7 @@ pub(crate) async fn handle_connection<R, W>(
     reader: R,
     mut writer: W,
     peer_address: SocketAddr,
+    chain_store_handle: ChainStoreHandle,
     shutdown: CancellationToken,
 ) where
     R: AsyncRead + Unpin,
@@ -35,7 +38,7 @@ pub(crate) async fn handle_connection<R, W>(
         open = tokio::select! {
             _ = shutdown.cancelled() => false,
             line = lines.next() => match line {
-                Some(Ok(line)) => respond(&mut writer, &line, peer_address).await,
+                Some(Ok(line)) => respond(&mut writer, line, &chain_store_handle, peer_address).await,
                 Some(Err(error)) => {
                     debug!("Electrum connection {peer_address} read failed: {error}");
                     false
@@ -52,15 +55,36 @@ pub(crate) async fn handle_connection<R, W>(
 
 /// Answer one line, writing nothing for blank lines and notifications.
 /// Returns whether the connection should stay open.
-async fn respond<W>(writer: &mut W, line: &str, peer_address: SocketAddr) -> bool
+///
+/// Methods read RocksDB synchronously, so the line is handled on a blocking
+/// thread rather than on a tokio worker shared with P2P and stratum. A
+/// failed blocking task closes this connection.
+async fn respond<W>(
+    writer: &mut W,
+    line: String,
+    chain_store_handle: &ChainStoreHandle,
+    peer_address: SocketAddr,
+) -> bool
 where
     W: AsyncWrite + Unpin,
 {
     if line.trim().is_empty() {
         return true;
     }
-    let Some(response) = handle_line(line) else {
-        return true;
+    let chain_store_handle = chain_store_handle.clone();
+    let handled = tokio::task::spawn_blocking(move || {
+        handle_line(&line, &|method, params| {
+            dispatch(&chain_store_handle, method, params)
+        })
+    })
+    .await;
+    let response = match handled {
+        Ok(Some(response)) => response,
+        Ok(None) => return true,
+        Err(join_error) => {
+            error!("Electrum connection {peer_address} request handling failed: {join_error}");
+            return false;
+        }
     };
     let mut response = response.to_string();
     response.push('\n');
@@ -77,6 +101,7 @@ where
 mod tests {
     use super::*;
     use crate::test_utils::spawn_test_connection;
+    use p2poolv2_lib::test_utils::setup_test_chain_store_handle;
     use serde_json::json;
     use std::io;
     use std::time::Duration;
@@ -88,7 +113,9 @@ mod tests {
 
     #[tokio::test]
     async fn request_line_gets_one_response_line() {
-        let (mut client, _handler) = spawn_test_connection(CancellationToken::new());
+        let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(false).await;
+        let (mut client, _handler) =
+            spawn_test_connection(chain_store_handle, CancellationToken::new());
 
         assert_eq!(
             client.call(PING).await,
@@ -98,7 +125,9 @@ mod tests {
 
     #[tokio::test]
     async fn invalid_json_gets_parse_error_and_connection_stays_open() {
-        let (mut client, _handler) = spawn_test_connection(CancellationToken::new());
+        let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(false).await;
+        let (mut client, _handler) =
+            spawn_test_connection(chain_store_handle, CancellationToken::new());
 
         let parse_error = client.call("{not json").await;
         assert_eq!(parse_error["error"]["code"], json!(-32700));
@@ -110,7 +139,9 @@ mod tests {
 
     #[tokio::test]
     async fn blank_line_gets_no_response() {
-        let (mut client, _handler) = spawn_test_connection(CancellationToken::new());
+        let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(false).await;
+        let (mut client, _handler) =
+            spawn_test_connection(chain_store_handle, CancellationToken::new());
 
         client.send("").await.unwrap();
         assert_eq!(
@@ -121,7 +152,9 @@ mod tests {
 
     #[tokio::test]
     async fn notification_gets_no_response() {
-        let (mut client, _handler) = spawn_test_connection(CancellationToken::new());
+        let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(false).await;
+        let (mut client, _handler) =
+            spawn_test_connection(chain_store_handle, CancellationToken::new());
 
         client
             .send(r#"{"jsonrpc":"2.0","method":"server.ping","params":[]}"#)
@@ -135,7 +168,9 @@ mod tests {
 
     #[tokio::test]
     async fn over_long_line_closes_connection() {
-        let (mut client, handler) = spawn_test_connection(CancellationToken::new());
+        let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(false).await;
+        let (mut client, handler) =
+            spawn_test_connection(chain_store_handle, CancellationToken::new());
 
         // The handler stops reading at the limit and closes, so the rest of
         // the write may fail.
@@ -147,7 +182,8 @@ mod tests {
 
     #[tokio::test]
     async fn client_eof_ends_handler() {
-        let (client, handler) = spawn_test_connection(CancellationToken::new());
+        let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(false).await;
+        let (client, handler) = spawn_test_connection(chain_store_handle, CancellationToken::new());
 
         drop(client);
 
@@ -157,7 +193,8 @@ mod tests {
     #[tokio::test]
     async fn cancelled_shutdown_ends_handler_and_client_reads_eof() {
         let shutdown = CancellationToken::new();
-        let (mut client, handler) = spawn_test_connection(shutdown.clone());
+        let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(false).await;
+        let (mut client, handler) = spawn_test_connection(chain_store_handle, shutdown.clone());
         assert_eq!(
             client.call(PING).await,
             json!({"jsonrpc": "2.0", "id": 1, "result": null})
@@ -181,10 +218,17 @@ mod tests {
             .write_error(io::Error::from(io::ErrorKind::BrokenPipe))
             .build();
         let peer_address = SocketAddr::from(([127, 0, 0, 1], 0));
+        let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(false).await;
 
         timeout(
             TEST_TIMEOUT,
-            handle_connection(reader, writer, peer_address, CancellationToken::new()),
+            handle_connection(
+                reader,
+                writer,
+                peer_address,
+                chain_store_handle,
+                CancellationToken::new(),
+            ),
         )
         .await
         .unwrap();

@@ -4,6 +4,7 @@
 
 use crate::server::run_server;
 use p2poolv2_lib::config::ElectrumConfig;
+use p2poolv2_lib::shares::chain::chain_store_handle::ChainStoreHandle;
 use std::time::Duration;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
@@ -26,6 +27,8 @@ const PRODUCTION_BACKOFF: RestartBackoff = RestartBackoff {
 
 /// Spawn the Electrum server under a supervisor and return its task.
 ///
+/// Methods read the share chain through `chain_store_handle`.
+///
 /// The supervisor restarts the server with backoff whenever it fails, for
 /// as long as the node runs, so an Electrum failure never stops the node.
 /// Cancelling `shutdown` closes the listener and every open connection; the
@@ -36,9 +39,15 @@ const PRODUCTION_BACKOFF: RestartBackoff = RestartBackoff {
 /// must not `unwrap` or `expect` on runtime paths.
 pub fn start_electrum_server(
     config: ElectrumConfig,
+    chain_store_handle: ChainStoreHandle,
     shutdown: CancellationToken,
 ) -> JoinHandle<()> {
-    tokio::spawn(supervise(config, shutdown, PRODUCTION_BACKOFF))
+    tokio::spawn(supervise(
+        config,
+        chain_store_handle,
+        shutdown,
+        PRODUCTION_BACKOFF,
+    ))
 }
 
 /// Run server instances until `shutdown` is cancelled, waiting out the
@@ -46,6 +55,7 @@ pub fn start_electrum_server(
 /// the delay ends the supervisor at once.
 pub(crate) async fn supervise(
     config: ElectrumConfig,
+    chain_store_handle: ChainStoreHandle,
     shutdown: CancellationToken,
     backoff: RestartBackoff,
 ) {
@@ -53,7 +63,9 @@ pub(crate) async fn supervise(
     while !shutdown.is_cancelled() {
         let started = Instant::now();
         // Returns Ok only once shutdown is cancelled, which ends the loop.
-        if let Err(server_error) = run_server(&config, shutdown.child_token(), None).await {
+        if let Err(server_error) =
+            run_server(&config, &chain_store_handle, shutdown.child_token(), None).await
+        {
             if started.elapsed() > backoff.maximum {
                 delay = backoff.initial;
             }
@@ -72,6 +84,7 @@ pub(crate) async fn supervise(
 mod tests {
     use super::*;
     use crate::test_utils::{connect_with_retry, test_config};
+    use p2poolv2_lib::test_utils::setup_test_chain_store_handle;
     use serde_json::json;
     use std::net::TcpListener as StdTcpListener;
     use tokio::time::timeout;
@@ -90,7 +103,13 @@ mod tests {
         let mut config = test_config();
         config.port = address.port();
         let shutdown = CancellationToken::new();
-        let supervisor = tokio::spawn(supervise(config, shutdown.clone(), FAST_BACKOFF));
+        let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(false).await;
+        let supervisor = tokio::spawn(supervise(
+            config,
+            chain_store_handle,
+            shutdown.clone(),
+            FAST_BACKOFF,
+        ));
 
         drop(held);
         let mut client = connect_with_retry(address).await;
@@ -115,7 +134,13 @@ mod tests {
             initial: Duration::from_secs(60),
             maximum: Duration::from_secs(60),
         };
-        let supervisor = tokio::spawn(supervise(config, shutdown.clone(), long_backoff));
+        let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(false).await;
+        let supervisor = tokio::spawn(supervise(
+            config,
+            chain_store_handle,
+            shutdown.clone(),
+            long_backoff,
+        ));
         tokio::time::sleep(Duration::from_millis(50)).await;
 
         shutdown.cancel();
@@ -131,7 +156,13 @@ mod tests {
         let mut config = test_config();
         config.port = address.port();
         let shutdown = CancellationToken::new();
-        let supervisor = tokio::spawn(supervise(config, shutdown.clone(), FAST_BACKOFF));
+        let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(false).await;
+        let supervisor = tokio::spawn(supervise(
+            config,
+            chain_store_handle,
+            shutdown.clone(),
+            FAST_BACKOFF,
+        ));
         let mut client = connect_with_retry(address).await;
         assert_eq!(
             client.call(PING).await,
