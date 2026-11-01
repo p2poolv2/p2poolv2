@@ -70,6 +70,8 @@ jobs:
         uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: cargo-llvm-cov,nextest
+      # Without a cache every run rebuilds librocksdb-sys from C++ source
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       # Run coverage through nextest so it uses the same runner as the test
       # job. Plain `cargo test` runs the whole workspace in one process per
       # crate, which changes test semantics for anything touching process
