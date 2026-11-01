@@ -5,16 +5,16 @@
 use clap::Parser;
 use p2poolv2_lib::config::Config;
 use p2poolv2_lib::logging::setup_logging;
+use std::ffi::OsString;
 use std::process::ExitCode;
 use tracing::info;
-use std::ffi::OsString;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
     #[arg(short, long, env = "P2POOL_CONFIG")]
     config: String,
-    
+
     #[arg(long = "set", value_name = "KEY=VALUE", num_args = 1.., hide = true)]
     set: Vec<String>,
 }
@@ -24,8 +24,8 @@ pub fn expand_dynamic_args(input: impl IntoIterator<Item = OsString>) -> Vec<OsS
 
     // --P2POOL_BITCOINRPC__URL= -> --set bitcoinrpc.url=
     // --bitcoinrpc-URL= -> --set bitcoinrpc.url=
-    // --ApiConfig-cors--allowed= -> --set apiconfig.cors_allowed= 
-    
+    // --ApiConfig-cors--allowed= -> --set apiconfig.cors_allowed=
+
     // We will expand the args to use the set command as well as normalizing them.
 
     // Disclaimers:
@@ -50,7 +50,7 @@ pub fn expand_dynamic_args(input: impl IntoIterator<Item = OsString>) -> Vec<OsS
             prefix_removed = stripped;
         }
 
-        if let Some((env_key, value)) = prefix_removed.split_once('=') {            
+        if let Some((env_key, value)) = prefix_removed.split_once('=') {
             // BITCOINRPC__URL= -> BITCOINRPC.URL=
             // bitcoinrpc-URL= -> bitcoinrpc-URL=
             // ApiConfig-cors--allowed= -> ApiConfig-cors_allowed=
@@ -58,7 +58,7 @@ pub fn expand_dynamic_args(input: impl IntoIterator<Item = OsString>) -> Vec<OsS
             key = key.replace("__", ".");
             key = key.replace("--", "_");
             key = key.replace("-", ".");
-            
+
             output.push("--set".into());
             output.push(format!("{key}={value}").into());
             continue;
@@ -106,7 +106,7 @@ async fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::*; 
+    use super::*;
     #[test]
     fn test_expand_dynamic_args() {
         let mock_input = vec![
@@ -119,7 +119,7 @@ mod tests {
             OsString::from("--ApiConfig-cors_allowed=true"),
             OsString::from("--ApiConfig-cors--allowed=true"),
             OsString::from("--bitcoinrpc-URL=http://127.0.0.1:48332"),
-            OsString::from("--NetworkConfig-max_established_per_peer=12")
+            OsString::from("--NetworkConfig-max_established_per_peer=12"),
         ];
 
         let expected_output = vec![
@@ -137,7 +137,7 @@ mod tests {
             OsString::from("--set"),
             OsString::from("bitcoinrpc.url=http://127.0.0.1:48332"),
             OsString::from("--set"),
-            OsString::from("networkconfig.max_established_per_peer=12")
+            OsString::from("networkconfig.max_established_per_peer=12"),
         ];
         assert_eq!(expand_dynamic_args(mock_input), expected_output)
     }

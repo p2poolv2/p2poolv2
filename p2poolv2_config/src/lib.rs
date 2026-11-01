@@ -608,7 +608,10 @@ impl Config {
             .try_deserialize()
     }
 
-    pub fn load_with_command_args(path: &str, sets: &[String]) -> Result<Self, config::ConfigError> {
+    pub fn load_with_command_args(
+        path: &str,
+        sets: &[String],
+    ) -> Result<Self, config::ConfigError> {
         // Target: override the provided configuration file with the set args.
         let mut builder = config::Config::builder()
             .add_source(config::File::with_name(path))
@@ -618,11 +621,9 @@ impl Config {
                     .separator("__"),
             );
         for set in sets {
-            let (key, value) = set
-                .split_once('=')
-                .ok_or_else(|| {
-                    config::ConfigError::Message(format!("Expected KEY=VALUE: {set}"))
-                })?;
+            let (key, value) = set.split_once('=').ok_or_else(|| {
+                config::ConfigError::Message(format!("Expected KEY=VALUE: {set}"))
+            })?;
 
             builder = builder.set_override(key, value)?;
         }
