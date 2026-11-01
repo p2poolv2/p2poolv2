@@ -15,7 +15,7 @@ use crate::store::block_tx_metadata::{BlockMetadata, Status};
 use crate::store::dag_store::{BlockValidSearch, ShareDag, UncleInfo};
 use crate::store::found_block::FoundBlock;
 use crate::store::prune_blocks::{PruneStats, get_range_to_prune};
-use crate::store::transaction_store::PrevoutCheck;
+use crate::store::transaction_store::{OutputOrigin, PrevoutCheck};
 use crate::store::writer::{StoreError, StoreHandle};
 use bitcoin::{BlockHash, TxMerkleNode, Work};
 use std::collections::HashMap;
@@ -171,6 +171,24 @@ impl ChainStoreHandle {
         vout: u32,
     ) -> Result<bitcoin::TxOut, StoreError> {
         self.store_handle.get_output(txid, vout)
+    }
+
+    /// Get a transaction and each output's coinbase origin, in output
+    /// order. See `Store::get_tx_with_output_origins`.
+    pub fn get_tx_with_output_origins(
+        &self,
+        txid: &bitcoin::Txid,
+    ) -> Result<(bitcoin::Transaction, Vec<OutputOrigin>), StoreError> {
+        self.store_handle.store().get_tx_with_output_origins(txid)
+    }
+
+    /// Get the hash of every stored block that contains `txid`, confirmed
+    /// or not. Empty when the txid is unknown.
+    pub fn get_blockhashes_for_txid(
+        &self,
+        txid: &bitcoin::Txid,
+    ) -> Result<Vec<BlockHash>, StoreError> {
+        self.store_handle.store().get_blockhashes_for_txid(txid)
     }
 
     /// Check whether a share block exists without deserializing it.
@@ -989,6 +1007,8 @@ mockall::mock! {
         pub fn check_prevouts(&self, outpoints: &[bitcoin::OutPoint], spending_height: u32, min_coinbase_root_height: u32, coinbase_maturity: usize) -> Result<PrevoutCheck, StoreError>;
         pub fn all_block_and_uncle_data_available(&self, blockhashes: &[BlockHash], prune_height: u32) -> Result<bool, StoreError>;
         pub fn get_output(&self, txid: &bitcoin::Txid, vout: u32) -> Result<bitcoin::TxOut, StoreError>;
+        pub fn get_tx_with_output_origins(&self, txid: &bitcoin::Txid) -> Result<(bitcoin::Transaction, Vec<OutputOrigin>), StoreError>;
+        pub fn get_blockhashes_for_txid(&self, txid: &bitcoin::Txid) -> Result<Vec<BlockHash>, StoreError>;
         pub fn share_block_exists(&self, blockhash: &BlockHash) -> bool;
         pub fn first_existing_share_header(&self, blockhashes: &[BlockHash]) -> Option<BlockHash>;
         pub fn get_share(&self, share_hash: &BlockHash) -> Option<ShareBlock>;
