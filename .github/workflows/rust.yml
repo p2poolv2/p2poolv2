@@ -45,7 +45,7 @@ jobs:
           toolchain: 1.99.0
 
       - name: Install latest nextest release
-        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
         with:
           tool: nextest
 
@@ -67,7 +67,7 @@ jobs:
       - name: Install Rust
         run: rustup toolchain install
       - name: Install cargo-llvm-cov and nextest
-        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
         with:
           tool: cargo-llvm-cov,nextest
       # Without a cache every run rebuilds librocksdb-sys from C++ source
