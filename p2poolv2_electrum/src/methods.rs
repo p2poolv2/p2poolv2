@@ -9,6 +9,7 @@
 //! `NOT_SYNCED`, never partial data.
 
 use crate::protocol::{INTERNAL_ERROR, INVALID_PARAMS, METHOD_NOT_FOUND, NOT_SYNCED, RpcError};
+use crate::transaction::transaction_get;
 use bitcoin::consensus::encode::serialize_hex;
 use p2poolv2_lib::accounting::payout::sharechain_pplns::pplns_window::{
     COINBASE_MATURITY, PAYOUT_DEPTH, PRUNE_DEPTH,
@@ -56,6 +57,7 @@ pub(crate) fn dispatch(
         "server.banner" => Ok(Value::from(BANNER)),
         "server.features" => server_features(chain_store_handle),
         "blockchain.block.header" => block_header(chain_store_handle, params),
+        "blockchain.transaction.get" => transaction_get(chain_store_handle, params),
         _ => Err(RpcError::new(
             METHOD_NOT_FOUND,
             format!("unknown method {method}"),
@@ -234,7 +236,7 @@ fn block_header(chain_store_handle: &ChainStoreHandle, params: &Value) -> Result
     Ok(Value::from(serialize_hex(&header)))
 }
 
-fn store_read_error(error: StoreError) -> RpcError {
+pub(crate) fn store_read_error(error: StoreError) -> RpcError {
     RpcError::new(INTERNAL_ERROR, format!("share chain read failed: {error}"))
 }
 
@@ -244,7 +246,7 @@ fn software_version() -> String {
 
 /// A parameter by position, or by name when params are an object; the
 /// Electrum protocol allows both.
-fn param<'a>(params: &'a Value, index: usize, name: &str) -> Option<&'a Value> {
+pub(crate) fn param<'a>(params: &'a Value, index: usize, name: &str) -> Option<&'a Value> {
     match params {
         Value::Array(values) => values.get(index),
         Value::Object(fields) => fields.get(name),

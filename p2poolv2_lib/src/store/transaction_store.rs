@@ -764,7 +764,10 @@ impl Store {
     /// A txid can be in multiple blocks when competing miners include
     /// the same transaction in different blocks.
     /// This is the reverse lookup of add_txids_to_blocks_index.
-    pub fn get_blockhashes_for_txid(&self, txid: &Txid) -> Result<Vec<BlockHash>, StoreError> {
+    pub(crate) fn get_blockhashes_for_txid(
+        &self,
+        txid: &Txid,
+    ) -> Result<Vec<BlockHash>, StoreError> {
         let txids_blocks_cf = self.db.cf_handle(&ColumnFamily::TxidsBlocks).unwrap();
 
         match self.db.get_cf::<&[u8]>(&txids_blocks_cf, txid.as_ref())? {
@@ -778,6 +781,39 @@ impl Store {
                 Ok(blockhashes)
             }
             None => Ok(Vec::new()),
+        }
+    }
+
+    /// The confirmed block containing `txid`, with its height, or `None`
+    /// when no block on the confirmed chain contains it: the txid is
+    /// unknown, or only in uncle, fork or invalid blocks.
+    ///
+    /// At most one confirmed block can contain a txid, because the
+    /// confirmed chain rejects a repeated transaction. Reads `TxidsBlocks`
+    /// once, then the candidate blocks' metadata in one batch; metadata
+    /// carries both chain membership and height.
+    pub fn get_confirmed_block_for_txid(
+        &self,
+        txid: &Txid,
+    ) -> Result<Option<(BlockHash, u32)>, StoreError> {
+        let blockhashes = self.get_blockhashes_for_txid(txid)?;
+        if blockhashes.is_empty() {
+            return Ok(None);
+        }
+        let confirmed = self
+            .get_block_metadata_batch(&blockhashes)?
+            .into_iter()
+            .find(|(_blockhash, metadata)| metadata.chain == ChainMembership::Confirmed);
+        match confirmed {
+            None => Ok(None),
+            Some((blockhash, metadata)) => {
+                let height = metadata.expected_height.ok_or_else(|| {
+                    StoreError::NotFound(format!(
+                        "No height in metadata for confirmed block {blockhash}"
+                    ))
+                })?;
+                Ok(Some((blockhash, height)))
+            }
         }
     }
 
