@@ -94,5 +94,7 @@ jobs:
           path: |
             lcov.info
             pull-request-number
-          retention-days: 7
+          # coverage-gate.yml compares PRs against the newest main report, so
+          # main keeps its report long enough to survive quiet periods.
+          retention-days: ${{ github.event_name == 'push' && 90 || 7 }}
           if-no-files-found: error

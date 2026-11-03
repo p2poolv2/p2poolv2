@@ -3,13 +3,9 @@ codecov:
 
 coverage:
   status:
-    # Blocking: a patch must not lower total coverage relative to its base
-    # commit. The threshold absorbs run-to-run noise from timing-dependent
-    # async tests.
-    project:
-      default:
-        target: auto
-        threshold: 0.1%
+    # Off: the blocking total-coverage check is coverage/gate, posted by
+    # .github/workflows/coverage-gate.yml without depending on Codecov.
+    project: off
     # Advisory: reported on every PR but does not block merge.
     patch:
       default:
