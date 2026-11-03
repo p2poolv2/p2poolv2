@@ -78,16 +78,21 @@ jobs:
       # state and can fail here while passing there.
       - name: Generate code coverage
         run: cargo llvm-cov nextest --all-features --workspace --lcov --output-path lcov.info
-      # Dependabot runs read the Dependabot secret store, not the Actions one,
-      # so the token is empty there and a protected branch rejects the upload.
-      # Coverage is still generated above, which is what catches a dependency
-      # bump that breaks the build. The delta itself is not useful on a
-      # lockfile bump, and skipping keeps the token out of a job that compiles
-      # and runs build scripts from newly proposed dependency versions.
-      - name: Upload coverage to Codecov
-        if: github.actor != 'dependabot[bot]'
-        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+      # This job compiles and runs PR code, including build scripts of newly
+      # proposed dependency versions, so it holds no secrets. It only saves the
+      # report; coverage-upload.yml sends it to Codecov from a workflow_run
+      # that holds CODECOV_TOKEN but never executes PR code. That keeps the
+      # token away from every PR, Dependabot's included, without skipping any.
+      - name: Record pull request number
+        env:
+          PULL_REQUEST_NUMBER: ${{ github.event.pull_request.number }}
+        run: printf '%s' "$PULL_REQUEST_NUMBER" > pull-request-number
+      - name: Save coverage report
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: lcov.info
-          fail_ci_if_error: true
+          name: coverage-report
+          path: |
+            lcov.info
+            pull-request-number
+          retention-days: 7
+          if-no-files-found: error
