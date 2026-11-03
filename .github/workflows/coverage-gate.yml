@@ -1,0 +1,164 @@
+name: Coverage Gate
+
+# Blocks merging a PR that lowers total line coverage, without relying on
+# Codecov's codecov/project status.
+#
+# Rust CI saves an lcov report for every PR and every push to main. This
+# workflow compares a PR's report with the newest report from main and posts
+# the result as the commit status "coverage/gate" on the PR head. Make that
+# status a required check in the main branch protection rule to enforce it.
+# A missing status (Rust CI failed or never finished) also blocks merging.
+#
+# Same trust model as coverage-upload.yml:
+#
+# - workflow_run always runs this file as it is on the default branch, so a
+#   PR cannot change what this workflow does.
+# - Both reports are attacker-controlled data. They are only summed by awk,
+#   never executed, and nothing from the PR is checked out.
+# - Event fields reach shell steps only through env, never through ${{ }}
+#   inside run.
+#
+# It holds no secrets, only statuses: write, so Dependabot and fork PRs are
+# gated like any other PR.
+on:
+  workflow_run:
+    workflows: ["Rust CI"]
+    types: [completed]
+
+permissions: {}
+
+env:
+  STATUS_CONTEXT: coverage/gate
+  # Percentage points the PR may fall below main before failing. Absorbs
+  # run-to-run noise from timing-dependent async tests.
+  ALLOWED_DROP_PERCENT: "0.1"
+
+jobs:
+  gate:
+    name: Compare coverage with main
+    if: github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read # list and download coverage artifacts
+      statuses: write # post coverage/gate on the PR head commit
+    steps:
+      - name: Download pull request coverage report
+        id: pull_request_report
+        if: github.event.workflow_run.conclusion == 'success'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: coverage-report
+          path: ${{ runner.temp }}/pull-request-report
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      #* Pick the newest unexpired coverage report from a main push run.
+      #* Fork PRs can come from a branch called main, so the run must also
+      #* belong to this repository.
+      - name: Find main coverage report
+        id: base
+        if: steps.pull_request_report.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          newest=$(gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/actions/artifacts?name=coverage-report&per_page=100" \
+            --jq '.artifacts[]
+                  | select(.expired == false
+                           and .workflow_run.head_branch == "main"
+                           and .workflow_run.head_repository_id == .workflow_run.repository_id)
+                  | "\(.created_at) \(.workflow_run.id) \(.workflow_run.head_sha)"' \
+            | sort -r | head -n 1)
+
+          if [ -z "$newest" ]; then
+            echo "::error::No unexpired coverage report from main to compare against"
+            exit 1
+          fi
+
+          read -r _ run_id head_sha <<< "$newest"
+          printf 'run_id=%s\nhead_sha=%s\n' "$run_id" "$head_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Download main coverage report
+        if: steps.base.outcome == 'success'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: coverage-report
+          path: ${{ runner.temp }}/base-report
+          run-id: ${{ steps.base.outputs.run_id }}
+          github-token: ${{ github.token }}
+
+      #* Total line coverage is the sum of LH (lines hit) over the sum of LF
+      #* (lines found) across every file record in the lcov report.
+      - name: Compare coverage
+        id: compare
+        if: steps.base.outcome == 'success'
+        env:
+          PULL_REQUEST_LCOV: ${{ runner.temp }}/pull-request-report/lcov.info
+          BASE_LCOV: ${{ runner.temp }}/base-report/lcov.info
+          BASE_SHA: ${{ steps.base.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+
+          sum_lines() {
+            awk -F: '$1 == "LH" { hit += $2 } $1 == "LF" { found += $2 } END { printf "%d %d\n", hit, found }' "$1"
+          }
+
+          read -r pull_request_hit pull_request_found < <(sum_lines "$PULL_REQUEST_LCOV")
+          read -r base_hit base_found < <(sum_lines "$BASE_LCOV")
+
+          if [ "$pull_request_found" -eq 0 ] || [ "$base_found" -eq 0 ]; then
+            echo "::error::A coverage report has no instrumented lines"
+            exit 1
+          fi
+
+          read -r state pull_request_percent base_percent < <(awk \
+            -v pull_request_hit="$pull_request_hit" -v pull_request_found="$pull_request_found" \
+            -v base_hit="$base_hit" -v base_found="$base_found" \
+            -v allowed_drop="$ALLOWED_DROP_PERCENT" \
+            'BEGIN {
+               pull_request = 100 * pull_request_hit / pull_request_found
+               base = 100 * base_hit / base_found
+               printf "%s %.2f %.2f\n", (pull_request >= base - allowed_drop ? "success" : "failure"), pull_request, base
+             }')
+
+          description="Coverage ${pull_request_percent}% vs main ${base_percent}% at ${BASE_SHA:0:7} (allowed drop ${ALLOWED_DROP_PERCENT}%)"
+          echo "$description"
+          {
+            echo "### Coverage gate: $state"
+            echo
+            echo "| | Lines hit | Lines found | Coverage |"
+            echo "|---|---|---|---|"
+            echo "| PR | $pull_request_hit | $pull_request_found | ${pull_request_percent}% |"
+            echo "| main (${BASE_SHA:0:7}) | $base_hit | $base_found | ${base_percent}% |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          printf 'state=%s\ndescription=%s\n' "$state" "$description" >> "$GITHUB_OUTPUT"
+
+      #* Always post a status so the PR shows why it is blocked. Anything
+      #* other than a completed comparison is reported as an error.
+      - name: Post coverage status
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          TRIGGER_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          STATE: ${{ steps.compare.outputs.state }}
+          DESCRIPTION: ${{ steps.compare.outputs.description }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$STATE" ]; then
+            STATE=error
+            if [ "$TRIGGER_CONCLUSION" != "success" ]; then
+              DESCRIPTION="Rust CI concluded '$TRIGGER_CONCLUSION'; no coverage to compare"
+            else
+              DESCRIPTION="Coverage comparison failed; see details"
+            fi
+          fi
+
+          gh api --method POST "repos/$GITHUB_REPOSITORY/statuses/$HEAD_SHA" \
+            -f state="$STATE" \
+            -f context="$STATUS_CONTEXT" \
+            -f description="${DESCRIPTION:0:140}" \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
