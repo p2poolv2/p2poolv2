@@ -10,6 +10,7 @@
 
 use crate::accounting::payout::sharechain_pplns::pplns_window::PRUNE_INTERVAL;
 use crate::accounting::payout::simple_pplns::SimplePplnsShare;
+use crate::config::PoolMode;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::store::block_tx_metadata::{BlockMetadata, Status};
 use crate::store::dag_store::{BlockValidSearch, ShareDag, UncleInfo};
@@ -105,6 +106,42 @@ impl ChainStoreHandle {
             ))),
             Err(StoreError::NotFound(_)) => self.add_share_block(genesis_block).await,
             Err(error) => Err(error),
+        }
+    }
+
+    /// Initialise the chain for the node's pool mode.
+    ///
+    /// P2Poolv2 mode uses `init_or_setup_genesis`, failing with
+    /// `StoreError::GenesisMismatch` on a store built on another share
+    /// chain. Hydrapool mode keeps no share chain beyond genesis, so a
+    /// genesis change between releases must not stop the pool from
+    /// upgrading: it uses `init_or_replace_genesis` instead.
+    pub async fn init_for_mode(
+        &self,
+        genesis_block: ShareBlock,
+        mode: PoolMode,
+    ) -> Result<(), StoreError> {
+        match mode {
+            PoolMode::Hydrapool => self.init_or_replace_genesis(genesis_block).await,
+            PoolMode::P2poolv2 => self.init_or_setup_genesis(genesis_block).await,
+        }
+    }
+
+    /// Initialise the chain like `init_or_setup_genesis`, but replace the
+    /// genesis of a store built on another share chain instead of failing.
+    ///
+    /// The replacement genesis is confirmed at height 0; the old genesis
+    /// stays in the store unreferenced by the confirmed chain.
+    async fn init_or_replace_genesis(&self, genesis_block: ShareBlock) -> Result<(), StoreError> {
+        match self.init_or_setup_genesis(genesis_block.clone()).await {
+            Err(StoreError::GenesisMismatch(reason)) => {
+                warn!(
+                    "Using share chain genesis {}: {reason}",
+                    genesis_block.block_hash()
+                );
+                self.store_handle.setup_genesis(genesis_block).await
+            }
+            result => result,
         }
     }
 
@@ -1027,6 +1064,7 @@ mockall::mock! {
         pub fn is_confirmed_or_confirmed_uncle(&self, blockhash: &BlockHash) -> bool;
         pub fn get_btcaddresses_for_user_ids(&self, user_ids: &[u64]) -> Result<Vec<(u64, String)>, StoreError>;
         pub async fn init_or_setup_genesis(&self, genesis_block: ShareBlock) -> Result<(), StoreError>;
+        pub async fn init_for_mode(&self, genesis_block: ShareBlock, mode: PoolMode) -> Result<(), StoreError>;
         pub async fn organise_header(&self, header: ShareHeader) -> Result<Option<u32>, StoreError>;
         pub async fn organise_block(&self) -> Result<Option<u32>, StoreError>;
         pub async fn mark_invalid(&self, blockhash: BlockHash) -> Result<(), StoreError>;
@@ -1050,6 +1088,7 @@ mockall::mock! {
 
 #[cfg(test)]
 mod tests {
+    use crate::config::PoolMode;
     use crate::store::Store;
     use crate::store::writer::StoreError;
     use crate::test_utils::{
@@ -1093,6 +1132,89 @@ mod tests {
                 .to_string()
                 .contains(&genesis.block_hash().to_string()),
             "error must name the genesis already in the store: {error}"
+        );
+    }
+
+    /// Hydrapool must start on a store built on another share chain, so an
+    /// upgrade across a genesis change does not stop the pool. The code's
+    /// genesis replaces the stored one as the confirmed tip at height 0.
+    #[tokio::test]
+    async fn test_init_for_mode_hydrapool_replaces_genesis_of_another_chain() {
+        let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let genesis = genesis_for_tests();
+        chain_handle
+            .init_or_setup_genesis(genesis.clone())
+            .await
+            .unwrap();
+
+        let other_genesis = TestShareBlockBuilder::new().nonce(0xe9695792).build();
+        assert_ne!(other_genesis.block_hash(), genesis.block_hash());
+
+        chain_handle
+            .init_for_mode(other_genesis.clone(), PoolMode::Hydrapool)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            chain_handle.get_confirmed_at_height(0).unwrap(),
+            other_genesis.block_hash()
+        );
+        assert_eq!(
+            chain_handle.get_chain_tip().unwrap(),
+            other_genesis.block_hash()
+        );
+        assert_eq!(chain_handle.get_tip_height().unwrap(), Some(0));
+    }
+
+    /// In Hydrapool mode, a store already on the code's genesis is
+    /// initialised from the store, leaving the confirmed chain as it was.
+    #[tokio::test]
+    async fn test_init_for_mode_hydrapool_keeps_matching_genesis() {
+        let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let genesis = genesis_for_tests();
+        chain_handle
+            .init_or_setup_genesis(genesis.clone())
+            .await
+            .unwrap();
+
+        chain_handle
+            .init_for_mode(genesis.clone(), PoolMode::Hydrapool)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            chain_handle.get_confirmed_at_height(0).unwrap(),
+            genesis.block_hash()
+        );
+        assert_eq!(chain_handle.get_chain_tip().unwrap(), genesis.block_hash());
+    }
+
+    /// P2Poolv2 mode must keep rejecting a store built on another share
+    /// chain, since it would serve the old chain to peers on the new one.
+    #[tokio::test]
+    async fn test_init_for_mode_p2poolv2_rejects_store_built_on_another_chain() {
+        let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let genesis = genesis_for_tests();
+        chain_handle
+            .init_or_setup_genesis(genesis.clone())
+            .await
+            .unwrap();
+
+        let other_genesis = TestShareBlockBuilder::new().nonce(0xe9695792).build();
+        assert_ne!(other_genesis.block_hash(), genesis.block_hash());
+
+        let error = chain_handle
+            .init_for_mode(other_genesis, PoolMode::P2poolv2)
+            .await
+            .expect_err("store on another chain must be rejected");
+
+        assert!(
+            matches!(error, StoreError::GenesisMismatch(_)),
+            "expected GenesisMismatch, got {error:?}"
+        );
+        assert_eq!(
+            chain_handle.get_confirmed_at_height(0).unwrap(),
+            genesis.block_hash()
         );
     }
 
