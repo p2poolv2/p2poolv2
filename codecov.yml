@@ -3,11 +3,17 @@ codecov:
 
 coverage:
   status:
+    # Blocking: a patch must not lower total coverage relative to its base
+    # commit. The threshold absorbs run-to-run noise from timing-dependent
+    # async tests.
     project:
       default:
-        informational: true
+        target: auto
+        threshold: 0.1%
+    # Advisory: reported on every PR but does not block merge.
     patch:
       default:
+        target: 90%
         informational: true
 
 ignore:

@@ -1,0 +1,116 @@
+name: Coverage Upload
+
+# Sends the coverage report produced by Rust CI to Codecov.
+#
+# Rust CI compiles and runs PR code, including build scripts of newly proposed
+# dependency versions, so it holds no secrets and a read-only token. This
+# workflow holds CODECOV_TOKEN and must never execute PR code:
+#
+# - workflow_run always runs this file as it is on the default branch, so a
+#   PR cannot change what this workflow does.
+# - The artifact and the checked-out tree are attacker-controlled data. They
+#   are read, never executed: Codecov plugins are disabled and only the named
+#   report is uploaded.
+# - Event fields such as the branch name are attacker-controlled. They reach
+#   shell steps only through env, never through ${{ }} inside run.
+#
+# Dependabot restrictions do not apply to workflow_run, so Dependabot PRs get a
+# real Codecov result without the token ever reaching their build.
+on:
+  workflow_run:
+    workflows: ["Rust CI"]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  upload:
+    name: Upload coverage to Codecov
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read # download the artifact from the triggering run
+      contents: read # check out the reported commit for path fixing
+      pull-requests: read # confirm the PR number against the reported commit
+    steps:
+      - name: Download coverage report
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: coverage-report
+          path: ${{ runner.temp }}/coverage-report
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      #* Decide whether to upload, and as which PR and branch. The PR number
+      #* comes from the artifact, so it is only trusted after GitHub confirms
+      #* that PR's head is the reported commit. A mismatch means the PR moved
+      #* on and a newer run will report for it, so skip rather than fail.
+      #* Fork branches are prefixed with their owner so a fork's "main"
+      #* cannot be recorded as this repository's main.
+      - name: Resolve pull request and branch
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPORT_DIRECTORY: ${{ runner.temp }}/coverage-report
+          TRIGGER_EVENT: ${{ github.event.workflow_run.event }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_REPOSITORY: ${{ github.event.workflow_run.head_repository.full_name }}
+          HEAD_OWNER: ${{ github.event.workflow_run.head_repository.owner.login }}
+        run: |
+          set -euo pipefail
+
+          if [ "$TRIGGER_EVENT" = "push" ]; then
+            printf 'upload=true\npull_request_number=\nbranch=%s\n' "$HEAD_BRANCH" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "$TRIGGER_EVENT" != "pull_request" ]; then
+            echo "::notice::Rust CI ran for '$TRIGGER_EVENT'; nothing to report"
+            echo "upload=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          pull_request_number=$(head -c 16 "$REPORT_DIRECTORY/pull-request-number")
+          if ! [[ "$pull_request_number" =~ ^[0-9]+$ ]]; then
+            echo "::error::Coverage artifact has an invalid pull request number"
+            exit 1
+          fi
+
+          pull_request_head=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pull_request_number" --jq .head.sha)
+          if [ "$pull_request_head" != "$HEAD_SHA" ]; then
+            echo "::notice::PR #$pull_request_number head is $pull_request_head, not $HEAD_SHA; a newer run will report"
+            echo "upload=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          branch="$HEAD_BRANCH"
+          if [ "$HEAD_REPOSITORY" != "$GITHUB_REPOSITORY" ]; then
+            branch="$HEAD_OWNER:$HEAD_BRANCH"
+          fi
+
+          printf 'upload=true\npull_request_number=%s\nbranch=%s\n' "$pull_request_number" "$branch" >> "$GITHUB_OUTPUT"
+
+      # Codecov maps report paths onto the repository's file list, so the
+      # reported commit is checked out as files only. Nothing in it runs:
+      # plugins are off and search is disabled below.
+      - name: Check out reported commit
+        if: steps.resolve.outputs.upload == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.event.workflow_run.head_repository.full_name }}
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+
+      - name: Upload coverage to Codecov
+        if: steps.resolve.outputs.upload == 'true'
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ${{ runner.temp }}/coverage-report/lcov.info
+          disable_search: true
+          plugins: noop
+          override_commit: ${{ github.event.workflow_run.head_sha }}
+          override_pr: ${{ steps.resolve.outputs.pull_request_number }}
+          override_branch: ${{ steps.resolve.outputs.branch }}
+          fail_ci_if_error: true
