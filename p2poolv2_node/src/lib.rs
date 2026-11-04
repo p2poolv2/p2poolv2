@@ -209,7 +209,7 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
     let chain_store_handle = ChainStoreHandle::new(store_handle, config.stratum.network);
 
     if let Err(e) = chain_store_handle
-        .init_or_setup_genesis(genesis.clone())
+        .init_for_mode(genesis.clone(), config.stratum.mode)
         .await
     {
         error!("Failed to initialise chain at {}: {e}", config.store.path);
