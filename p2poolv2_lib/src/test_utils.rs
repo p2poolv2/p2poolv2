@@ -229,6 +229,11 @@ pub fn test_funding_transaction(value: u64) -> bitcoin::Transaction {
 /// block holds a transaction no other block has, and a one-node coinbase
 /// merkle branch of byte `h`, so every block's stored branch is distinct
 /// and non-empty. Returns the blocks indexed by height, genesis at 0.
+///
+/// Block `h` is stamped `1_700_000_000 + h` (November 2023), far older than
+/// `MAX_TIP_AGE_SECS`, so `ChainStoreHandle::is_current()` is false on this
+/// chain: the node counts as still syncing. Tests that need a current tip
+/// must stamp blocks near the system clock instead.
 #[cfg(any(test, feature = "test-utils"))]
 pub async fn build_confirmed_test_chain(
     chain_store_handle: &ChainStoreHandle,

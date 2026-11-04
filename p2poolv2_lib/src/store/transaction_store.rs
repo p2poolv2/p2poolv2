@@ -81,6 +81,17 @@ impl Decodable for StoredTxOut {
     }
 }
 
+/// The coinbase ancestry the Outputs CF records for one output, which
+/// `bitcoin::TxOut` cannot carry. Spendability rules read these: a coinbase
+/// output needs `COINBASE_MATURITY`, and any output expires once its
+/// `coinbase_root_height` falls more than `PAYOUT_DEPTH` below the spending
+/// block (see `check_prevouts`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OutputOrigin {
+    pub is_coinbase: bool,
+    pub coinbase_root_height: u32,
+}
+
 /// A TxIn stored in the Inputs CF together with its witness.
 ///
 /// `bitcoin::TxIn::consensus_encode` does not include the witness
@@ -773,6 +784,39 @@ impl Store {
         }
     }
 
+    /// The confirmed block containing `txid`, with its height, or `None`
+    /// when no block on the confirmed chain contains it: the txid is
+    /// unknown, or only in uncle, fork or invalid blocks.
+    ///
+    /// At most one confirmed block can contain a txid, because the
+    /// confirmed chain rejects a repeated transaction. Reads `TxidsBlocks`
+    /// once, then the candidate blocks' metadata in one batch; metadata
+    /// carries both chain membership and height.
+    pub fn get_confirmed_block_for_txid(
+        &self,
+        txid: &Txid,
+    ) -> Result<Option<(BlockHash, u32)>, StoreError> {
+        let blockhashes = self.get_blockhashes_for_txid(txid)?;
+        if blockhashes.is_empty() {
+            return Ok(None);
+        }
+        let confirmed = self
+            .get_block_metadata_batch(&blockhashes)?
+            .into_iter()
+            .find(|(_blockhash, metadata)| metadata.chain == ChainMembership::Confirmed);
+        match confirmed {
+            None => Ok(None),
+            Some((blockhash, metadata)) => {
+                let height = metadata.expected_height.ok_or_else(|| {
+                    StoreError::NotFound(format!(
+                        "No height in metadata for confirmed block {blockhash}"
+                    ))
+                })?;
+                Ok(Some((blockhash, height)))
+            }
+        }
+    }
+
     /// Batch-fetch blockhashes for all provided txids in a single multi_get_cf call.
     ///
     /// Returns a Vec parallel to the input: each entry is the list of
@@ -872,29 +916,43 @@ impl Store {
         txids.0.iter().flat_map(|txid| self.get_tx(txid)).collect()
     }
 
-    /// Get a transaction from the store using a provided txid
-    /// - Load tx metadata
-    /// - Load inputs
-    /// - Load outputs
-    /// - Deserialize inputs and outputs
-    /// - Return transaction
+    /// Get a transaction from the store using a provided txid.
+    ///
+    /// Returns `NotFound` if the transaction, or any of its input or
+    /// output rows, is missing (for example removed by the pruner after
+    /// the metadata read). See `get_tx_with_output_origins`.
     pub fn get_tx(&self, txid: &bitcoin::Txid) -> Result<Transaction, StoreError> {
+        self.get_tx_with_output_origins(txid)
+            .map(|(transaction, _output_origins)| transaction)
+    }
+
+    /// Get a transaction together with each output's `OutputOrigin` (the
+    /// coinbase flag and `coinbase_root_height` that `Transaction` drops),
+    /// in output order.
+    ///
+    /// Loads the tx metadata, then each input (with its witness) and each
+    /// output row. Returns `NotFound` if any row is missing, so a prune
+    /// that interleaves with the reads surfaces as an error, never a panic.
+    pub fn get_tx_with_output_origins(
+        &self,
+        txid: &bitcoin::Txid,
+    ) -> Result<(Transaction, Vec<OutputOrigin>), StoreError> {
         let tx_metadata = self.get_tx_metadata(txid)?;
 
         debug!("Transaction metadata: {:?}", tx_metadata);
 
         let inputs_cf = self.db.cf_handle(&ColumnFamily::Inputs).unwrap();
         let outputs_cf = self.db.cf_handle(&ColumnFamily::Outputs).unwrap();
-        let mut inputs = Vec::new();
-        let mut outputs = Vec::new();
+        let mut inputs = Vec::with_capacity(tx_metadata.input_count as usize);
+        let mut outputs = Vec::with_capacity(tx_metadata.output_count as usize);
+        let mut output_origins = Vec::with_capacity(tx_metadata.output_count as usize);
 
         for i in 0..tx_metadata.input_count {
             let input_key = outpoint_key(txid, i);
             let input = self
                 .db
-                .get_cf::<&[u8]>(&inputs_cf, input_key.as_ref())
-                .unwrap()
-                .unwrap();
+                .get_cf::<&[u8]>(&inputs_cf, input_key.as_ref())?
+                .ok_or_else(|| StoreError::NotFound(format!("Input not found for {input_key}")))?;
             let input: bitcoin::TxIn = match encode::deserialize::<StoredTxIn>(&input) {
                 Ok(stored) => stored.tx_in,
                 Err(e) => {
@@ -908,17 +966,22 @@ impl Store {
             let output_key = outpoint_key(txid, i);
             let output = self
                 .db
-                .get_cf::<&[u8]>(&outputs_cf, output_key.as_ref())
-                .unwrap()
-                .unwrap();
-            let output = match encode::deserialize::<StoredTxOut>(&output) {
-                Ok(stored) => stored.tx_out,
+                .get_cf::<&[u8]>(&outputs_cf, output_key.as_ref())?
+                .ok_or_else(|| {
+                    StoreError::NotFound(format!("Output not found for {output_key}"))
+                })?;
+            let stored = match encode::deserialize::<StoredTxOut>(&output) {
+                Ok(stored) => stored,
                 Err(e) => {
                     tracing::error!("Error deserializing output: {e:?}");
                     return Err(e.into());
                 }
             };
-            outputs.push(output);
+            output_origins.push(OutputOrigin {
+                is_coinbase: stored.is_coinbase,
+                coinbase_root_height: stored.coinbase_root_height,
+            });
+            outputs.push(stored.tx_out);
         }
         let transaction = Transaction {
             version: tx_metadata.version,
@@ -926,7 +989,7 @@ impl Store {
             input: inputs,
             output: outputs,
         };
-        Ok(transaction)
+        Ok((transaction, output_origins))
     }
 
     /// Batch load `TxMetadata` for a list of txids via a single
@@ -1226,6 +1289,84 @@ mod tests {
             let tx = store.get_tx(&tx_meta.txid).unwrap();
             assert_eq!(tx.compute_txid(), tx_meta.txid);
         }
+    }
+
+    /// A pruner can delete a transaction's rows between the `Tx` read and
+    /// the output reads; that must surface as an error, never a panic.
+    #[test]
+    fn test_get_tx_returns_not_found_when_output_row_missing() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let block = TestShareBlockBuilder::new().build();
+        let mut batch = Store::get_write_batch();
+        let metadata = store
+            .add_sharechain_txs(&block.transactions, 1, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+        let txid = metadata[0].txid;
+        let outputs_cf = store.db.cf_handle(&ColumnFamily::Outputs).unwrap();
+        store
+            .db
+            .delete_cf(&outputs_cf, outpoint_key(&txid, 0))
+            .unwrap();
+
+        let result = store.get_tx(&txid);
+
+        assert!(
+            matches!(result, Err(StoreError::NotFound(_))),
+            "unexpected: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_get_tx_with_output_origins_reports_coinbase_root_at_block_height() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let block = TestShareBlockBuilder::new().build();
+        let mut batch = Store::get_write_batch();
+        let metadata = store
+            .add_sharechain_txs(&block.transactions, 7, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+        let coinbase_txid = metadata[0].txid;
+
+        let (transaction, output_origins) =
+            store.get_tx_with_output_origins(&coinbase_txid).unwrap();
+
+        assert_eq!(transaction, block.transactions[0].0);
+        assert_eq!(output_origins.len(), transaction.output.len());
+        assert_eq!(
+            output_origins[0],
+            OutputOrigin {
+                is_coinbase: true,
+                coinbase_root_height: 7,
+            }
+        );
+    }
+
+    #[test]
+    fn test_get_tx_returns_not_found_when_input_row_missing() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let block = TestShareBlockBuilder::new().build();
+        let mut batch = Store::get_write_batch();
+        let metadata = store
+            .add_sharechain_txs(&block.transactions, 1, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+        let txid = metadata[0].txid;
+        let inputs_cf = store.db.cf_handle(&ColumnFamily::Inputs).unwrap();
+        store
+            .db
+            .delete_cf(&inputs_cf, outpoint_key(&txid, 0))
+            .unwrap();
+
+        let result = store.get_tx(&txid);
+
+        assert!(
+            matches!(result, Err(StoreError::NotFound(_))),
+            "unexpected: {result:?}"
+        );
     }
 
     #[test]
@@ -2847,18 +2988,97 @@ mod tests {
 
         assert_eq!(res[0].txid, txid);
 
-        let tx = store.get_tx(&txid).unwrap();
-        assert_eq!(tx.version, tx.version);
-        assert_eq!(tx.lock_time, tx.lock_time);
-        assert_eq!(tx.input.len(), 1);
+        let stored_tx = store.get_tx(&txid).unwrap();
+        assert_eq!(stored_tx.version, tx.version);
+        assert_eq!(stored_tx.lock_time, tx.lock_time);
+        assert_eq!(stored_tx.input.len(), 1);
         assert_eq!(
-            tx.input[0].previous_output,
+            stored_tx.input[0].previous_output,
             bitcoin::OutPoint::new(funding_txid, 0)
         );
-        assert_eq!(tx.input[0].script_sig, script_true);
-        assert_eq!(tx.output.len(), 1);
-        assert_eq!(tx.output[0].value, bitcoin::Amount::from_sat(1000000));
-        assert_eq!(tx.output[0].script_pubkey, script_true);
+        assert_eq!(stored_tx.input[0].script_sig, script_true);
+        assert_eq!(stored_tx.output.len(), 1);
+        assert_eq!(
+            stored_tx.output[0].value,
+            bitcoin::Amount::from_sat(1000000)
+        );
+        assert_eq!(stored_tx.output[0].script_pubkey, script_true);
+        assert_eq!(stored_tx, tx);
+    }
+
+    /// A spending transaction's outputs are not coinbase and inherit the
+    /// coinbase root of their inputs, not the spending block's height:
+    /// trading a share does not reset its expiry.
+    #[test]
+    fn test_get_tx_with_output_origins_reports_inherited_root_for_spending_tx() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let script_true = bitcoin::Script::builder()
+            .push_opcode(bitcoin::opcodes::all::OP_PUSHNUM_1)
+            .into_script();
+        let funding_tx = Transaction {
+            version: bitcoin::transaction::Version(1),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint::new(bitcoin::Txid::all_zeros(), u32::MAX),
+                sequence: bitcoin::Sequence::default(),
+                witness: bitcoin::Witness::default(),
+                script_sig: script_true.clone(),
+            }],
+            output: vec![bitcoin::TxOut {
+                value: bitcoin::Amount::from_sat(1_000_000),
+                script_pubkey: script_true.clone(),
+            }],
+        };
+        let funding_txid = funding_tx.compute_txid();
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_sharechain_txs(&[ShareTransaction(funding_tx)], 1, &mut batch)
+            .unwrap();
+        store.db.write(batch).unwrap();
+        let spending_tx = Transaction {
+            version: bitcoin::transaction::Version(2),
+            lock_time: bitcoin::absolute::LockTime::ZERO,
+            input: vec![bitcoin::TxIn {
+                previous_output: bitcoin::OutPoint::new(funding_txid, 0),
+                sequence: bitcoin::Sequence::default(),
+                witness: bitcoin::Witness::from_slice(&[vec![0x01, 0x02], vec![0x03]]),
+                script_sig: bitcoin::ScriptBuf::new(),
+            }],
+            output: vec![
+                bitcoin::TxOut {
+                    value: bitcoin::Amount::from_sat(600_000),
+                    script_pubkey: script_true.clone(),
+                },
+                bitcoin::TxOut {
+                    value: bitcoin::Amount::from_sat(400_000),
+                    script_pubkey: script_true.clone(),
+                },
+            ],
+        };
+        let spending_txid = spending_tx.compute_txid();
+        let mut batch = rocksdb::WriteBatch::default();
+        store
+            .add_sharechain_txs(&[ShareTransaction(spending_tx.clone())], 2, &mut batch)
+            .unwrap();
+        store.db.write(batch).unwrap();
+
+        let (stored_tx, output_origins) = store.get_tx_with_output_origins(&spending_txid).unwrap();
+
+        assert_eq!(stored_tx, spending_tx);
+        assert_eq!(
+            output_origins,
+            vec![
+                OutputOrigin {
+                    is_coinbase: false,
+                    coinbase_root_height: 1,
+                },
+                OutputOrigin {
+                    is_coinbase: false,
+                    coinbase_root_height: 1,
+                },
+            ]
+        );
     }
 
     #[test]
