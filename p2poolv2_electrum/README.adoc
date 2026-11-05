@@ -1,0 +1,99 @@
+= P2Poolv2 Electrum Server
+
+An Electrum JSON-RPC server over plain TCP that serves share chain
+queries to the operator's own wallet. Use it only with your own fully
+synced node: a wallet trusts the node it connects to completely.
+
+== Configuration
+
+Enable it in the node config (`config-dev.toml` and
+`config-testnet4.toml` already do):
+
+[source,toml]
+----
+[electrum]
+enabled = true
+hostname = "127.0.0.1"
+port = 50001
+max_connections = 64
+----
+
+== Protocol
+
+Requests are newline-delimited JSON-RPC 2.0. Every request must carry
+`"jsonrpc":"2.0"`; JSON-RPC 1.0 is not supported. A request without an
+`id` is a notification and gets no response.
+
+`blockchain.*` methods answer only once the node is synced. Before that
+they return error `-32000`, whose `data` shows sync progress:
+`confirmed_tip_height`, `candidate_tip_height` and `tip_age_secs`.
+`server.*` methods always answer.
+
+== Testing with nc
+
+These commands use OpenBSD netcat. GNU netcat has no `-q`, and its `-w`
+waits for the server to close, which this server never does; use
+`socat -t 1 - TCP:127.0.0.1:50001` in place of `nc -q 1 127.0.0.1 50001`
+instead.
+
+Check the protocol version. `-q 1` makes `nc` exit a second after the
+reply:
+
+[source,bash]
+----
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"server.version","params":["cli","1.4"]}' \
+  | nc -q 1 127.0.0.1 50001
+----
+
+Expected: `{"jsonrpc":"2.0","id":1,"result":["P2Poolv2 <version>","1.4"]}`.
+
+Subscribe to share chain tip changes. `cat` keeps stdin open, so the
+connection stays up and notifications keep arriving until Ctrl-C:
+
+[source,bash]
+----
+{ printf '%s\n' \
+    '{"jsonrpc":"2.0","id":1,"method":"server.version","params":["cli","1.4"]}' \
+    '{"jsonrpc":"2.0","id":2,"method":"blockchain.headers.subscribe","params":[]}'; \
+  cat; } | nc 127.0.0.1 50001
+----
+
+The subscribe answers with the confirmed tip:
+
+----
+{"jsonrpc":"2.0","id":2,"result":{"height":<tip>,"hex":"<share header hex>"}}
+----
+
+Each later tip change is pushed as a notification, without an `id`:
+
+----
+{"jsonrpc":"2.0","method":"blockchain.headers.subscribe","params":[{"height":<new tip>,"hex":"..."}]}
+----
+
+Notifications pause while the node is not current (confirmed tip older
+than 300 seconds) and resume with the latest tip once it catches up.
+
+Fetch the header at a height, to compare with a subscribe result. The
+hex is a consensus-encoded `ShareHeader`, not an 80-byte bitcoin header:
+
+[source,bash]
+----
+printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"blockchain.block.header","params":[<height>]}' \
+  | nc -q 1 127.0.0.1 50001
+----
+
+Pretty-print a live subscription with `jq`; `--unbuffered` shows each
+notification as it arrives:
+
+[source,bash]
+----
+{ printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"blockchain.headers.subscribe","params":[]}'; cat; } \
+  | nc 127.0.0.1 50001 | jq --unbuffered .
+----
+
+For an interactive session, type one request per line:
+
+[source,bash]
+----
+socat - TCP:127.0.0.1:50001
+----

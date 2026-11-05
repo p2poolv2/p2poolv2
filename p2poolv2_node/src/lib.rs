@@ -426,7 +426,7 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
         metrics_handle.clone(),
         tracker_handle,
         node_handle.clone(),
-        monitoring_event_sender,
+        monitoring_event_sender.clone(),
         stratum_config.network,
         stratum_config.pool_signature,
     )
@@ -452,6 +452,7 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
         Some(start_electrum_server(
             config.electrum.clone(),
             chain_store_handle.clone(),
+            monitoring_event_sender,
             electrum_shutdown.clone(),
         ))
     } else {
