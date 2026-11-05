@@ -44,6 +44,7 @@ COPY --parents p2poolv2_wallet/ .
 COPY --parents p2poolv2_api/ .
 COPY --parents p2poolv2_cli/ .
 COPY --parents p2poolv2_config/ .
+COPY --parents p2poolv2_electrum/ .
 COPY --parents p2poolv2_lib/ .
 COPY --parents p2poolv2_node/ .
 
