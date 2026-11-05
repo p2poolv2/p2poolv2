@@ -505,7 +505,7 @@ mod tests {
             metrics_handle,
             tracker_handle,
             node_handle,
-            monitoring_event_sender: create_monitoring_event_channel().0,
+            monitoring_event_sender: create_monitoring_event_channel(),
             auth_user: None,
             auth_token: None,
         });
@@ -738,7 +738,7 @@ mod tests {
             metrics_handle,
             tracker_handle,
             node_handle,
-            monitoring_event_sender: create_monitoring_event_channel().0,
+            monitoring_event_sender: create_monitoring_event_channel(),
             auth_user: None,
             auth_token: None,
         });
@@ -846,7 +846,7 @@ mod tests {
             metrics_handle,
             tracker_handle,
             node_handle,
-            monitoring_event_sender: create_monitoring_event_channel().0,
+            monitoring_event_sender: create_monitoring_event_channel(),
             auth_user: Some(username.to_string()),
             auth_token: Some(token),
         });
@@ -1010,7 +1010,7 @@ mod tests {
             metrics_handle,
             tracker_handle,
             node_handle,
-            monitoring_event_sender: create_monitoring_event_channel().0,
+            monitoring_event_sender: create_monitoring_event_channel(),
             auth_user: None,
             auth_token: None,
         });

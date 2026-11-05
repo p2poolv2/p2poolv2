@@ -19,6 +19,7 @@ use p2poolv2_lib::accounting::payout::build_payout_for_mode;
 use p2poolv2_lib::accounting::payout::simple_pplns::share_worker::PplnsShareWorker;
 use p2poolv2_lib::accounting::stats::metrics;
 use p2poolv2_lib::config::Config;
+use p2poolv2_lib::monitoring_events::create_monitoring_event_channel;
 use p2poolv2_lib::node::actor::NodeHandle;
 use p2poolv2_lib::pool_difficulty::PoolDifficulty;
 use p2poolv2_lib::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -397,8 +398,7 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
         info!("Stratum server stopped");
     });
 
-    let (monitoring_event_sender, _monitoring_event_receiver) =
-        p2poolv2_lib::monitoring_events::create_monitoring_event_channel();
+    let monitoring_event_sender = create_monitoring_event_channel();
 
     let (node_handle, stopping_rx) = match NodeHandle::new(
         config.clone(),
