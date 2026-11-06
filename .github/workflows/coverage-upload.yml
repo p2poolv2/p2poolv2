@@ -101,6 +101,9 @@ jobs:
           repository: ${{ github.event.workflow_run.head_repository.full_name }}
           ref: ${{ github.event.workflow_run.head_sha }}
           persist-credentials: false
+          # Fork PR code is checked out as data only; nothing in it runs
+          # (plugins off, search disabled), so lifting the guard is safe.
+          allow-unsafe-pr-checkout: true
 
       - name: Upload coverage to Codecov
         if: steps.resolve.outputs.upload == 'true'
