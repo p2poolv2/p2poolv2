@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The default stratum version rolling mask is back to the BIP320 mask
+  `1fffe000`, reverting the v0.16.0 switch to the BIP323 mask `1fffffe0`.
+  Some miners, such as Antminer S19, reject a `mining.configure` reply with
+  bits they did not offer and fail to initiate stratum. Existing deployments
+  should set `version_mask = "1fffe000"` in their config.
+
 ## [v0.16.2] - 2026-10-21
 
 ### Added
