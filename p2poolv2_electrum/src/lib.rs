@@ -11,9 +11,11 @@ mod methods;
 mod protocol;
 mod script;
 mod server;
+mod session;
 mod supervisor;
 #[cfg(test)]
 mod test_utils;
+mod tip;
 mod transaction;
 
 pub use error::ElectrumServerError;

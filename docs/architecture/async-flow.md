@@ -93,6 +93,7 @@ Every channel is bounded, and every edge has an explicit policy:
 | Stratum connection -> PplnsShareWorker | 1000 | awaited send (enqueue only) |
 | ValidationWorker -> OrganiseWorker | 512 | awaited send, holding the validation permit |
 | OrganiseWorker -> ValidationWorker (stranded re-drive, startup seed) | 8192 | `try_send`; skip (next arrival re-drives) |
+| OrganiseWorker (`Share`), actor (`Peer`) -> monitoring broadcast (API `/ws` clients, Electrum tip watcher) | 256 | `broadcast` send, never blocks; a receiver that falls behind gets `Lagged` and skips ahead |
 
 **The cycle rule.** The channel graph must have no cycle of awaited sends.
 Where a cycle is unavoidable, at least one edge in it is non-blocking:
@@ -134,9 +135,33 @@ node's job. Electrum is opt-in, read-only and not needed for mining, so
   for up to 5s before aborting them, and `stop_all` waits up to
   `ELECTRUM_SHUTDOWN_TIMEOUT` (10s) for the supervisor task.
 
-Electrum has no channel into the rest of the node yet. Wallet methods will
-read the store through a read model in `p2poolv2_lib`, off the tokio worker
-threads (see WALLET_API_PLAN.md section 5.3).
+Electrum methods read the store through `ChainStoreHandle`, on a
+`spawn_blocking` thread per request line, so RocksDB reads never run on the
+tokio workers shared with P2P and stratum (WALLET_API_PLAN.md section 5.3).
+
+The one channel into the node is the monitoring broadcast, which drives
+`blockchain.headers.subscribe`:
+
+- Each server instance runs one tip watcher (`tip.rs`), subscribed to the
+  broadcast, under the instance's connection token. It stops with the
+  instance and a restarted instance starts it again from a fresh tip read.
+  `run_server` awaits that first read before it signals readiness and
+  accepts connections, so a subscribe to a current node never finds the
+  tip channel empty. If that read fails the instance returns the error and
+  the supervisor restarts it with backoff; a later read failure in the
+  watcher is logged and retried on the next event.
+- The watcher coalesces: on each wake-up it discards every event already
+  queued and reads the confirmed tip once, so a sync burst of thousands of
+  `Share` events costs one read. `Lagged` is handled the same way, since
+  only the latest tip matters. It publishes on a `watch` channel, only when
+  the node is current and the tip changed.
+- Connections hold a `watch` receiver and a `Session` (`session.rs`) with
+  what the client subscribed to. A subscribe is answered from the watched
+  tip, and every later change is pushed from it, so a client never receives
+  a tip older than one it already has. The session moves to the blocking
+  thread with each request line and back. The connection's `select!` is
+  biased so a pending tip change is written before the next request is
+  read.
 
 ## RocksDB Reads in Request Handlers
 

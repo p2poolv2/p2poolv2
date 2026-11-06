@@ -7,6 +7,10 @@
 //! `server.*` methods always answer. `blockchain.*` methods read the share
 //! chain and answer only once the node is synced; before that they return
 //! `NOT_SYNCED`, never partial data.
+//!
+//! `dispatch` routes the stateless methods. Subscription methods change
+//! per-connection state and are routed by `Session` (`session.rs`), which
+//! shares the sync gate `require_synced`.
 
 use crate::protocol::{INTERNAL_ERROR, INVALID_PARAMS, METHOD_NOT_FOUND, NOT_SYNCED, RpcError};
 use crate::transaction::transaction_get;
@@ -38,18 +42,19 @@ the coinbase that created them, and trading them does not reset their expiry.";
 const NOT_SYNCED_MESSAGE: &str = "node is syncing the share chain; wallet \
 methods are available once it is synced";
 
-/// Run the named method and return its result or a JSON-RPC error.
+/// Run the named stateless method and return its result or a JSON-RPC
+/// error.
 ///
 /// A `blockchain.*` method on a node whose confirmed tip is not current
-/// (`ChainStoreHandle::is_current`) returns `NOT_SYNCED` before its params
-/// are even read, so a syncing node never serves a partial chain.
+/// returns `NOT_SYNCED` (see `require_synced`) before its params are even
+/// read, so a syncing node never serves a partial chain.
 pub(crate) fn dispatch(
     chain_store_handle: &ChainStoreHandle,
     method: &str,
     params: &Value,
 ) -> Result<Value, RpcError> {
-    if method.starts_with(BLOCKCHAIN_METHOD_PREFIX) && !chain_store_handle.is_current() {
-        return Err(not_synced_error(chain_store_handle));
+    if method.starts_with(BLOCKCHAIN_METHOD_PREFIX) {
+        require_synced(chain_store_handle)?;
     }
     match method {
         "server.version" => server_version(params),
@@ -65,11 +70,22 @@ pub(crate) fn dispatch(
     }
 }
 
+/// `NOT_SYNCED` unless the node's confirmed tip is current
+/// (`ChainStoreHandle::is_current`). The one sync gate for every
+/// `blockchain.*` method, whichever layer routes it.
+pub(crate) fn require_synced(chain_store_handle: &ChainStoreHandle) -> Result<(), RpcError> {
+    if chain_store_handle.is_current() {
+        Ok(())
+    } else {
+        Err(not_synced_error(chain_store_handle))
+    }
+}
+
 /// The `NOT_SYNCED` error, with sync progress in its `data` member:
 /// confirmed and candidate tip heights and the confirmed tip's age in
 /// seconds. A field the store cannot supply is null; building the error
 /// never fails.
-fn not_synced_error(chain_store_handle: &ChainStoreHandle) -> RpcError {
+pub(crate) fn not_synced_error(chain_store_handle: &ChainStoreHandle) -> RpcError {
     let confirmed_tip_height = chain_store_handle.get_tip_height().ok().flatten();
     let candidate_tip_height = chain_store_handle.get_candidate_tip_height().ok().flatten();
     let now_secs = SystemTime::now()

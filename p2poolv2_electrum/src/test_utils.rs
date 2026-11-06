@@ -3,14 +3,19 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Shared test infrastructure: a stub dispatcher, a current test chain, a
-//! server on an ephemeral port, a connection handler over an in-memory
-//! duplex stream, and a line oriented client for either.
+//! monitoring event to wake the tip watcher, a server on an ephemeral port,
+//! a connection handler over an in-memory duplex stream, and a line
+//! oriented client for either.
 
 use crate::connection::handle_connection;
 use crate::error::ElectrumServerError;
 use crate::protocol::{METHOD_NOT_FOUND, RpcError};
 use crate::server::run_server;
+use crate::tip::TipReceiver;
 use p2poolv2_lib::config::ElectrumConfig;
+use p2poolv2_lib::monitoring_events::{
+    MonitoringEvent, PeerResponse, PeerStatus, create_monitoring_event_channel,
+};
 use p2poolv2_lib::shares::chain::chain_store_handle::ChainStoreHandle;
 use p2poolv2_lib::shares::share_block::ShareBlock;
 use p2poolv2_lib::test_utils::{
@@ -85,6 +90,15 @@ pub(crate) async fn build_current_test_chain(
     blocks
 }
 
+/// A monitoring event for waking the tip watcher. The watcher re-reads the
+/// tip on any event, so tests need not build a `Share` event.
+pub(crate) fn wake_event() -> MonitoringEvent {
+    MonitoringEvent::Peer(PeerResponse {
+        peer_id: "12D3KooWTestPeer".to_string(),
+        status: PeerStatus::Connected,
+    })
+}
+
 /// Dispatcher that knows only `server.ping`, for testing the envelope
 /// layer without a store.
 pub(crate) fn ping_only_dispatch(method: &str, _params: &Value) -> Result<Value, RpcError> {
@@ -98,14 +112,23 @@ pub(crate) fn ping_only_dispatch(method: &str, _params: &Value) -> Result<Value,
 }
 
 /// Spawn `run_server` with `test_config` and wait until it is listening.
+/// The server task owns its monitoring channel, which no test sends on.
 pub(crate) async fn start_test_server(
     chain_store_handle: ChainStoreHandle,
     shutdown: CancellationToken,
 ) -> (SocketAddr, JoinHandle<Result<(), ElectrumServerError>>) {
     let config = test_config();
     let (ready_tx, ready_rx) = oneshot::channel();
+    let (monitoring_event_sender, _monitoring_event_receiver) = create_monitoring_event_channel();
     let server = tokio::spawn(async move {
-        run_server(&config, &chain_store_handle, shutdown, Some(ready_tx)).await
+        run_server(
+            &config,
+            &chain_store_handle,
+            &monitoring_event_sender,
+            shutdown,
+            Some(ready_tx),
+        )
+        .await
     });
     let address = ready_rx.await.unwrap();
     (address, server)
@@ -132,19 +155,22 @@ pub(crate) async fn connect_with_retry(address: SocketAddr) -> TestClient {
 }
 
 /// Run `handle_connection` on one end of an in-memory duplex stream and
-/// return a client for the other end, plus the handler task.
+/// return a client for the other end, plus the handler task. The test owns
+/// the tip channel `tip_receiver` belongs to, and publishes on it.
 pub(crate) fn spawn_test_connection(
     chain_store_handle: ChainStoreHandle,
+    tip_receiver: TipReceiver,
     shutdown: CancellationToken,
 ) -> (DuplexClient, JoinHandle<()>) {
     let (client_stream, server_stream) = duplex(DUPLEX_BUFFER_SIZE);
     let (server_reader, server_writer) = split(server_stream);
-    let peer_address = SocketAddr::from(([127, 0, 0, 1], 0));
+    let client_address = SocketAddr::from(([127, 0, 0, 1], 0));
     let handler = tokio::spawn(handle_connection(
         server_reader,
         server_writer,
-        peer_address,
+        client_address,
         chain_store_handle,
+        tip_receiver,
         shutdown,
     ));
     let (client_reader, client_writer) = split(client_stream);
