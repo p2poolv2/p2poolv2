@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use async_trait::async_trait;
 use bitcoin::consensus::{Decodable, Encodable};
 use bitcoin::hashes::{Hash, sha256d};
 use libp2p::futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -143,7 +142,6 @@ impl ConsensusCodec {
     }
 }
 
-#[async_trait]
 impl Codec for ConsensusCodec {
     type Protocol = P2PoolRequestResponseProtocol;
     type Request = Message;

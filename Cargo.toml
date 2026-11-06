@@ -42,7 +42,7 @@ debug = true
 inherits = "release"
 
 [workspace.dependencies]
-libp2p = { version = "0.56", features = [
+libp2p = { version = "0.57", features = [
     "tcp",
     "dns",
     "tokio",
@@ -63,20 +63,17 @@ config = { version = "0.15", default-features = false, features = ["toml"] }
 serde = { version = "1.0", features = ["derive"] }
 clap = { version = "4.0", features = ["derive", "env"] }
 hex = "0.4.3"
-# Held at the digest 0.10 generation on purpose. hmac 0.13 / sha2 0.11 move to
-# digest 0.11, but libp2p-identity still pins the older stack through
-# ed25519-dalek, hkdf and curve25519-dalek, so upgrading compiles both and adds
-# seven duplicate crates for no functional gain. Revisit when libp2p-identity
-# moves to digest 0.11. The known-answer tests in p2poolv2_lib/src/auth.rs pin
-# the output, so the upgrade is safe whenever it happens.
-hmac = "0.12"
-sha2 = "0.10"
+# On the digest 0.11 generation. libp2p-noise still pulls sha2 0.10 through
+# snow, so digest 0.10 remains in the tree until snow moves. The known-answer
+# tests in p2poolv2_lib/src/auth.rs pin the HMAC output across upgrades.
+hmac = "0.13"
+sha2 = "0.11"
 rocksdb = { version = "0.25.0", features = ["multi-threaded-cf"] }
 async-trait = "0.1.83"
 thiserror = "2.0.8"
 serde_json = "1.0.135"
 zmq = "0.10"
-bitcoin = { version = "0.32.5", features = ["serde", "rand"] }
+bitcoin = { version = "0.32.5", features = ["serde", "rand-std"] }
 bitcoinconsensus = { version = "0.106.0" }
 base64 = "0.23.1"
 chrono = { version = "0.4", features = ["serde"] }
