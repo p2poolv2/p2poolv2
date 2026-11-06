@@ -69,8 +69,8 @@ bootstrap_address = "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk"
 zmqpubhashblock = "tcp://127.0.0.1:28332"
 # The network can be "main", "testnet4" or "signet"
 network = "signet"
-# Use BIP 323 mask for version rolling (see https://github.com/bitcoin/bips/blob/622e47722cd35514e96da37ae89f868e18d581e4/bip-0323.mediawiki#specification)
-version_mask = "1fffffe0"
+# Use BIP 320 mask for version rolling (see https://github.com/bitcoin/bips/blob/master/bip-0320.mediawiki)
+version_mask = "1fffe000"
 # The PPLNS payout window is fixed for the network, not configured: each
 # coinbase pays the last 120,960 shares (about two weeks at the 10 second
 # share target), weighted by share difficulty.
