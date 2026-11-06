@@ -117,8 +117,7 @@ mod tests {
         config.port = address.port();
         let shutdown = CancellationToken::new();
         let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(false).await;
-        let (monitoring_event_sender, _monitoring_event_receiver) =
-            create_monitoring_event_channel();
+        let monitoring_event_sender = create_monitoring_event_channel();
         let supervisor = tokio::spawn(supervise(
             config,
             chain_store_handle,
@@ -151,8 +150,7 @@ mod tests {
             maximum: Duration::from_secs(60),
         };
         let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(false).await;
-        let (monitoring_event_sender, _monitoring_event_receiver) =
-            create_monitoring_event_channel();
+        let monitoring_event_sender = create_monitoring_event_channel();
         let supervisor = tokio::spawn(supervise(
             config,
             chain_store_handle,
@@ -176,8 +174,7 @@ mod tests {
         config.port = address.port();
         let shutdown = CancellationToken::new();
         let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(false).await;
-        let (monitoring_event_sender, _monitoring_event_receiver) =
-            create_monitoring_event_channel();
+        let monitoring_event_sender = create_monitoring_event_channel();
         let supervisor = tokio::spawn(supervise(
             config,
             chain_store_handle,

@@ -311,8 +311,7 @@ mod tests {
         let (ready_tx, ready_rx) = oneshot::channel();
         let server_shutdown = shutdown.clone();
         let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(false).await;
-        let (monitoring_event_sender, _monitoring_event_receiver) =
-            create_monitoring_event_channel();
+        let monitoring_event_sender = create_monitoring_event_channel();
         tokio::spawn(async move {
             run_server(
                 &config,
@@ -364,8 +363,7 @@ mod tests {
         config.port = held.local_addr().unwrap().port();
 
         let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(false).await;
-        let (monitoring_event_sender, _monitoring_event_receiver) =
-            create_monitoring_event_channel();
+        let monitoring_event_sender = create_monitoring_event_channel();
         let result = run_server(
             &config,
             &chain_store_handle,

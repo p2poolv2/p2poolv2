@@ -61,12 +61,14 @@ pub type MonitoringEventSender = broadcast::Sender<MonitoringEvent>;
 /// Receiver half of the monitoring event broadcast channel.
 pub type MonitoringEventReceiver = broadcast::Receiver<MonitoringEvent>;
 
-/// Creates a broadcast channel for monitoring events.
+/// Creates a broadcast channel for monitoring events and returns its sender.
 ///
-/// The returned receiver can be dropped immediately -- each WebSocket
-/// client obtains its own receiver via `sender.subscribe()`.
-pub fn create_monitoring_event_channel() -> (MonitoringEventSender, MonitoringEventReceiver) {
-    broadcast::channel(MONITORING_EVENT_CHANNEL_CAPACITY)
+/// The channel starts with no receivers. Each consumer (a WebSocket client,
+/// the Electrum tip watcher) gets its own with `sender.subscribe()` and
+/// sees only events sent after it subscribed. Sending with no receivers
+/// returns an error, which emitters ignore.
+pub fn create_monitoring_event_channel() -> MonitoringEventSender {
+    MonitoringEventSender::new(MONITORING_EVENT_CHANNEL_CAPACITY)
 }
 
 #[cfg(test)]
@@ -186,7 +188,8 @@ mod tests {
 
     #[test]
     fn test_broadcast_channel_send_receive() {
-        let (sender, mut receiver) = create_monitoring_event_channel();
+        let sender = create_monitoring_event_channel();
+        let mut receiver = sender.subscribe();
         let event = MonitoringEvent::Peer(PeerResponse {
             peer_id: "12D3KooW".to_string(),
             status: PeerStatus::Connected,

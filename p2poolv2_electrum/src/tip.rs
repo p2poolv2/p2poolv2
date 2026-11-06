@@ -174,7 +174,8 @@ mod tests {
 
     #[tokio::test]
     async fn drain_discards_every_queued_event() {
-        let (event_sender, mut event_receiver) = create_monitoring_event_channel();
+        let event_sender = create_monitoring_event_channel();
+        let mut event_receiver = event_sender.subscribe();
         event_sender.send(wake_event()).unwrap();
         event_sender.send(wake_event()).unwrap();
         event_sender.send(wake_event()).unwrap();
@@ -217,7 +218,8 @@ mod tests {
     async fn event_after_new_confirmed_block_publishes_new_tip() {
         let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(true).await;
         let blocks = build_current_test_chain(&chain_store_handle, 2).await;
-        let (event_sender, event_receiver) = create_monitoring_event_channel();
+        let event_sender = create_monitoring_event_channel();
+        let event_receiver = event_sender.subscribe();
         let (tip_sender, mut tip_receiver) = watch::channel(None);
         publish_tip(&chain_store_handle, &tip_sender).await.unwrap();
         tip_receiver.borrow_and_update();
@@ -258,7 +260,8 @@ mod tests {
         let (tip_sender, mut tip_receiver) = watch::channel(None);
         publish_tip(&chain_store_handle, &tip_sender).await.unwrap();
         assert_eq!(tip_receiver.borrow_and_update().as_ref().unwrap().height, 3);
-        let (event_sender, event_receiver) = create_monitoring_event_channel();
+        let event_sender = create_monitoring_event_channel();
+        let event_receiver = event_sender.subscribe();
         event_sender.send(wake_event()).unwrap();
         event_sender.send(wake_event()).unwrap();
         let watcher = tokio::spawn(run_tip_watcher(
@@ -278,7 +281,8 @@ mod tests {
     async fn stale_chain_publishes_nothing() {
         let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(true).await;
         build_confirmed_test_chain(&chain_store_handle, 2).await;
-        let (event_sender, event_receiver) = create_monitoring_event_channel();
+        let event_sender = create_monitoring_event_channel();
+        let event_receiver = event_sender.subscribe();
         event_sender.send(wake_event()).unwrap();
         let (tip_sender, tip_receiver) = watch::channel(None);
         let watcher = tokio::spawn(run_tip_watcher(
@@ -327,7 +331,8 @@ mod tests {
     #[tokio::test]
     async fn cancelling_shutdown_ends_watcher() {
         let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(true).await;
-        let (_event_sender, event_receiver) = create_monitoring_event_channel();
+        let event_sender = create_monitoring_event_channel();
+        let event_receiver = event_sender.subscribe();
         let (tip_sender, _tip_receiver) = watch::channel(None);
         let shutdown = CancellationToken::new();
         let watcher = tokio::spawn(run_tip_watcher(

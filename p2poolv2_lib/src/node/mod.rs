@@ -794,7 +794,7 @@ mod tests {
         let (block_fetcher_tx, _block_fetcher_rx) = create_block_fetcher_channel();
         let (validation_tx, _validation_rx) = create_validation_channel();
         let (block_receiver_handle, _block_receiver_rx) = create_block_receiver_channel();
-        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let monitoring_tx = create_monitoring_event_channel();
         let (response_worker_tx, _response_worker_rx) = create_response_worker_channel();
         let mut node = Node::new(
             config.clone(),
@@ -908,7 +908,7 @@ mod tests {
         let (block_fetcher_tx, _block_fetcher_rx) = create_block_fetcher_channel();
         let (validation_tx, _validation_rx) = create_validation_channel();
         let (block_receiver_handle, _block_receiver_rx) = create_block_receiver_channel();
-        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let monitoring_tx = create_monitoring_event_channel();
         let (response_worker_tx, _response_worker_rx) = create_response_worker_channel();
         Node::new(
             config,

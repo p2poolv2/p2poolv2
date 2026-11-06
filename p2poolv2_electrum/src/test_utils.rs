@@ -119,7 +119,7 @@ pub(crate) async fn start_test_server(
 ) -> (SocketAddr, JoinHandle<Result<(), ElectrumServerError>>) {
     let config = test_config();
     let (ready_tx, ready_rx) = oneshot::channel();
-    let (monitoring_event_sender, _monitoring_event_receiver) = create_monitoring_event_channel();
+    let monitoring_event_sender = create_monitoring_event_channel();
     let server = tokio::spawn(async move {
         run_server(
             &config,
