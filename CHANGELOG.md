@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.16.3] - 2026-11-06
+
 ### Fixed
 
 - The default stratum version rolling mask is back to the BIP320 mask
@@ -1288,7 +1290,8 @@ and existing share chain stores must be cleared.
 
 We used tags like hydrapool.v0.x.0 and we didn't keep a changelog.
 
-[Unreleased]: https://github.com/p2poolv2/p2poolv2/compare/v0.16.2...HEAD
+[Unreleased]: https://github.com/p2poolv2/p2poolv2/compare/v0.16.3...HEAD
+[v0.16.3]: https://github.com/p2poolv2/p2poolv2/compare/v0.16.2...v0.16.3
 [v0.16.2]: https://github.com/p2poolv2/p2poolv2/compare/v0.16.1...v0.16.2
 [v0.16.1]: https://github.com/p2poolv2/p2poolv2/compare/v0.16.0...v0.16.1
 [v0.16.0]: https://github.com/p2poolv2/p2poolv2/compare/v0.15.3...v0.16.0
