@@ -24,6 +24,7 @@ pub enum ColumnFamily {
     TemplateMerkleBranches,
     BitcoinCoinbase,
     FoundBlocks,
+    ScriptHistory,
 }
 
 impl ColumnFamily {
@@ -48,6 +49,7 @@ impl ColumnFamily {
             ColumnFamily::TemplateMerkleBranches => "template_merkle_branches",
             ColumnFamily::BitcoinCoinbase => "bitcoin_coinbase",
             ColumnFamily::FoundBlocks => "found_blocks",
+            ColumnFamily::ScriptHistory => "script_history",
         }
     }
 }
