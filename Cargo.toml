@@ -62,6 +62,7 @@ tracing-appender = { version = "0.2.3" }
 config = { version = "0.15", default-features = false, features = ["toml"] }
 serde = { version = "1.0", features = ["derive"] }
 clap = { version = "4.0", features = ["derive", "env"] }
+clap_complete = "4.6"
 hex = "0.4.3"
 # On the digest 0.11 generation. libp2p-noise still pulls sha2 0.10 through
 # snow, so digest 0.10 remains in the tree until snow moves. The known-answer
