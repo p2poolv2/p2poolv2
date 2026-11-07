@@ -6,9 +6,11 @@ use crate::shares::share_block::ShareBlock;
 use crate::store::block_tx_metadata::{BlockMetadata, ChainMembership, Status};
 use crate::store::column_families::ColumnFamily;
 use crate::store::dag_store::{MAX_BLOCKS_PER_HEIGHT, MAX_UNCLES_DEPTH};
+use crate::store::script_history::script_history_cf_options;
 use bitcoin::consensus::{Encodable, encode};
 use bitcoin::{BlockHash, Work};
 use rocksdb::{BlockBasedOptions, ColumnFamilyDescriptor, DB, Options as RocksDbOptions};
+use std::sync::atomic::AtomicU32;
 use std::sync::{Arc, RwLock};
 use tracing::debug;
 use writer::StoreError;
@@ -21,6 +23,7 @@ pub mod organise;
 mod pplns_shares;
 pub mod prune_blocks;
 mod prune_shares;
+pub mod script_history;
 pub mod share_store;
 pub mod stored_user;
 pub mod transaction_store;
@@ -41,6 +44,9 @@ pub struct Store {
     db: DB,
     // Thread-safe chain state for use by ChainStore
     genesis_blockhash: Arc<RwLock<Option<BlockHash>>>,
+    /// Script history rows below this height are dropped by the
+    /// `ScriptHistory` compaction filter. Shared with that filter.
+    script_history_gc_threshold: Arc<AtomicU32>,
 }
 
 /// Merge operator for appending BlockHashes to a Vec<BlockHash>.
@@ -192,6 +198,12 @@ impl Store {
         let found_blocks_cf =
             ColumnFamilyDescriptor::new(ColumnFamily::FoundBlocks, RocksDbOptions::default());
 
+        let script_history_gc_threshold = Arc::new(AtomicU32::new(0));
+        let script_history_cf = ColumnFamilyDescriptor::new(
+            ColumnFamily::ScriptHistory,
+            script_history_cf_options(Arc::clone(&script_history_gc_threshold)),
+        );
+
         let cfs = vec![
             block_metadata_cf_descriptor,
             block_txids_cf,
@@ -212,6 +224,7 @@ impl Store {
             template_merkle_branches_cf,
             bitcoin_coinbase_cf,
             found_blocks_cf,
+            script_history_cf,
         ];
 
         // for the db too, we use default options for now
@@ -228,6 +241,7 @@ impl Store {
             db,
             // Initialise chain state fields
             genesis_blockhash: Arc::new(RwLock::new(None)),
+            script_history_gc_threshold,
         };
         Ok(store)
     }
@@ -336,7 +350,8 @@ impl Store {
         Ok(metadata.chain_work)
     }
 
-    /// Setup genesis block for the store
+    /// Setup genesis block for the store, including the script history of
+    /// its coinbase.
     /// Returns an error, if store already has even a single block
     pub fn setup_genesis(
         &self,
@@ -367,6 +382,10 @@ impl Store {
             "Genesis should only have one transaction, the coinbase."
         );
         self.append_to_confirmed(&blockhash, 0, &mut metadata, batch)?;
+        // `put_confirmed_entry` skips the history of a block whose body is
+        // not yet committed, and the genesis body is in this batch. Its
+        // coinbase has no prevouts, so its history is written directly.
+        self.add_script_history_for_block(0, &genesis.transactions, batch)?;
         Ok(())
     }
 

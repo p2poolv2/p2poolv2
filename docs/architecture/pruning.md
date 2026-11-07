@@ -311,8 +311,25 @@ Relevant code:
 
 Out of scope:
 - the Hydrapool `Share` CF, which has its own TTL pruning
-  (`prune_shares`, Hydrapool mode only);
-- the wallet API, whose window follows `PAYOUT_DEPTH`.
+  (`prune_shares`, Hydrapool mode only).
+
+Script history (`ScriptHistory`, `store/script_history.rs`) is not pruned
+by the pruner. Its window is spendable depth, heights from
+`candidate tip + 1 - PAYOUT_DEPTH`, half the body retention:
+- Rows are written only for blocks confirmed inside the window. Those were
+  fully validated, so their prevouts are at or above `prune_height` on every
+  node, and every node writes and serves the same rows. Reads never go below
+  the window, so every entry's body can still be fetched.
+- Rows below the window are dropped by a compaction filter at
+  `confirmed tip - PAYOUT_DEPTH - PRUNE_INTERVAL`, which
+  `prune_block_bodies_if_due` raises while the node is current. Periodic
+  compaction filters every file at least daily. Correctness rests on the
+  read bound; the filter only reclaims space.
+- Accepted case: a candidate tip dropping more than `PRUNE_INTERVAL` below
+  the confirmed tip seen at the last threshold update could expose heights
+  whose rows were already dropped, so this node would show less history than
+  one that had not compacted yet. Like the body pruning gap, that needs a
+  heavier but shorter branch over an hour of blocks deep.
 
 ### Boundaries
 

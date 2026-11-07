@@ -307,8 +307,13 @@ impl Store {
     }
 
     /// Take `reorged_out_chain` off the confirmed chain: drop each confirmed
-    /// index entry, remove the spends its transactions recorded, and clear its
-    /// chain membership.
+    /// index entry, remove the spends its transactions recorded and its script
+    /// history rows, and clear its chain membership.
+    ///
+    /// Script history rows are recomputed from the block's transactions and
+    /// deleted. The reorg path rewinds before it confirms the new branch, so
+    /// a new row with the same key at the same height is written after this
+    /// delete and survives.
     ///
     /// Membership drops to `None` rather than `Candidate` because `Candidate`
     /// is reserved for blocks on the candidate chain; a block that is later
@@ -322,6 +327,7 @@ impl Store {
             self.delete_confirmed_entry(*height, batch);
             let reorged_out_txs = self.get_txs_by_blockhash_index(unconfirm)?;
             self.remove_spends_for_block(&reorged_out_txs, batch);
+            self.remove_script_history_for_block(*height, &reorged_out_txs, batch)?;
             let mut metadata = self.get_block_metadata(unconfirm)?;
             metadata.chain = ChainMembership::None;
             self.update_block_metadata(unconfirm, &metadata, batch)?;
@@ -357,8 +363,9 @@ impl Store {
         Ok(new_top_height)
     }
 
-    /// Write a confirmed index entry and record every spend that the
-    /// block's transactions make into `SpendsIndex`.
+    /// Write a confirmed index entry, record every spend that the block's
+    /// transactions make into `SpendsIndex`, and write the block's script
+    /// history rows.
     ///
     /// This is the single point where "a block just became confirmed" is
     /// expressed. `SpendsIndex` presence therefore means exactly
@@ -370,9 +377,11 @@ impl Store {
     /// read against a pending `WriteBatch` will not see its contents.
     ///
     /// For blocks with body data, fetches transactions and records
-    /// spends. For prune-zone blocks without body data, only writes the
-    /// confirmed height index (SpendsIndex not needed because their
-    /// outputs are unspendable via coinbase_root_height check).
+    /// spends and script history (inside the history window only). For
+    /// prune-zone blocks without body data, only writes the confirmed height
+    /// index (SpendsIndex not needed because their outputs are unspendable
+    /// via coinbase_root_height check, and these blocks are far below the
+    /// history window).
     pub(super) fn put_confirmed_entry(
         &self,
         height: Height,
@@ -389,6 +398,7 @@ impl Store {
         if self.share_block_exists(blockhash) {
             let txs = self.get_txs_by_blockhash_index(blockhash)?;
             self.add_spends_for_block(&txs, batch)?;
+            self.add_script_history_for_block(height, &txs, batch)?;
         }
         Ok(())
     }
@@ -609,7 +619,8 @@ mod tests {
     use super::*;
     use crate::shares::share_block::{ShareTransaction, Txids};
     use crate::store::block_tx_metadata::Status;
-    use crate::test_utils::TestShareBlockBuilder;
+    use crate::store::script_history::{ScriptHistoryEntry, script_hash};
+    use crate::test_utils::{PUBKEY_2G, TestShareBlockBuilder};
     use bitcoin::hashes::Hash;
     use tempfile::tempdir;
 
@@ -2133,6 +2144,192 @@ mod tests {
             fork_2.block_hash()
         );
         assert!(store.is_any_prevout_spent(&[prevout]).unwrap());
+    }
+
+    /// Reorging out a confirmed block removes its script history rows, and
+    /// confirming the fork writes the fork's rows.
+    #[test]
+    fn test_reorg_replaces_script_history_of_reorged_out_block() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share_a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .miner_pubkey(PUBKEY_2G)
+            .nonce(0xe9695792)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&share_a, &mut batch).unwrap();
+        let mut metadata_a = BlockMetadata {
+            expected_height: Some(1),
+            chain_work: share_a.header.get_work(),
+            status: Status::HeaderValid,
+            chain: ChainMembership::None,
+        };
+        store
+            .update_block_metadata(&share_a.block_hash(), &metadata_a, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+        let mut batch = Store::get_write_batch();
+        store
+            .append_to_confirmed(&share_a.block_hash(), 1, &mut metadata_a, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+        let share_a_payout = script_hash(&share_a.transactions[0].0.output[0].script_pubkey);
+        assert_eq!(
+            store
+                .get_script_history(&share_a_payout, 0, 10)
+                .unwrap()
+                .entries
+                .len(),
+            1
+        );
+
+        // The fork pays the default script, which genesis also pays.
+        let fork_1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .work(4)
+            .nonce(0xe9695793)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&fork_1, &mut batch).unwrap();
+        let mut fork_1_metadata = BlockMetadata {
+            expected_height: Some(1),
+            chain_work: fork_1.header.get_work(),
+            status: Status::BlockValid,
+            chain: ChainMembership::None,
+        };
+        store
+            .update_block_metadata(&fork_1.block_hash(), &fork_1_metadata, &mut batch)
+            .unwrap();
+        store
+            .append_to_candidates(&fork_1.block_hash(), 1, &mut fork_1_metadata, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+        let top_confirmed = store.get_top_confirmed().unwrap();
+        let mut batch = Store::get_write_batch();
+        store
+            .reorg_confirmed(
+                &top_confirmed,
+                &vec![(1, fork_1.block_hash())],
+                0,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+        assert_eq!(
+            store.get_confirmed_at_height(1).unwrap(),
+            fork_1.block_hash()
+        );
+        let fork_payout = script_hash(&fork_1.transactions[0].0.output[0].script_pubkey);
+
+        let share_a_history = store.get_script_history(&share_a_payout, 0, 10).unwrap();
+        let fork_history = store.get_script_history(&fork_payout, 0, 10).unwrap();
+
+        assert!(share_a_history.entries.is_empty());
+        assert_eq!(
+            fork_history.entries,
+            vec![
+                ScriptHistoryEntry {
+                    height: 0,
+                    txid: genesis.transactions[0].0.compute_txid(),
+                },
+                ScriptHistoryEntry {
+                    height: 1,
+                    txid: fork_1.transactions[0].0.compute_txid(),
+                },
+            ]
+        );
+    }
+
+    /// The fork pays the same script at the same height and position as the
+    /// block it replaces, so its row has the same key: the rewind deletes
+    /// before the confirm writes, and the fork's row must be the one left.
+    #[test]
+    fn test_reorg_to_block_paying_same_script_keeps_new_history_row() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let share_a = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&share_a, &mut batch).unwrap();
+        let mut metadata_a = BlockMetadata {
+            expected_height: Some(1),
+            chain_work: share_a.header.get_work(),
+            status: Status::HeaderValid,
+            chain: ChainMembership::None,
+        };
+        store
+            .update_block_metadata(&share_a.block_hash(), &metadata_a, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+        let mut batch = Store::get_write_batch();
+        store
+            .append_to_confirmed(&share_a.block_hash(), 1, &mut metadata_a, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let fork_1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .work(4)
+            .nonce(0xe9695793)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&fork_1, &mut batch).unwrap();
+        let mut fork_1_metadata = BlockMetadata {
+            expected_height: Some(1),
+            chain_work: fork_1.header.get_work(),
+            status: Status::BlockValid,
+            chain: ChainMembership::None,
+        };
+        store
+            .update_block_metadata(&fork_1.block_hash(), &fork_1_metadata, &mut batch)
+            .unwrap();
+        store
+            .append_to_candidates(&fork_1.block_hash(), 1, &mut fork_1_metadata, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+        let top_confirmed = store.get_top_confirmed().unwrap();
+        let mut batch = Store::get_write_batch();
+        store
+            .reorg_confirmed(
+                &top_confirmed,
+                &vec![(1, fork_1.block_hash())],
+                0,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+        assert_eq!(
+            store.get_confirmed_at_height(1).unwrap(),
+            fork_1.block_hash()
+        );
+        let payout = script_hash(&fork_1.transactions[0].0.output[0].script_pubkey);
+        assert_eq!(
+            payout,
+            script_hash(&share_a.transactions[0].0.output[0].script_pubkey)
+        );
+
+        let history = store.get_script_history(&payout, 1, 10).unwrap();
+
+        assert_eq!(
+            history.entries,
+            vec![ScriptHistoryEntry {
+                height: 1,
+                txid: fork_1.transactions[0].0.compute_txid(),
+            }]
+        );
     }
 
     /// Two candidates on the same chain that spend the same confirmed output
