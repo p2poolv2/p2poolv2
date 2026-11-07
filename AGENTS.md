@@ -165,43 +165,15 @@ Most modules are discoverable by name; these are the non-obvious ones:
 
 ## Code comments
 
-Two kinds, distinguished by a star:
+- `//` comments are human-owned. **Never rewrite, reflow, or delete
+  them.** This is where invariants and hard-won rationale live.
+- `//*` star comments are AI-maintained outline statements. Agents may
+  add, change, or remove them.
+- Extract a well-named function before adding an outline; never
+  outline instead of extracting.
 
-- `//*` -- **star comment**. An AI-maintained outline statement. Agents may add,
-  change, or remove these freely.
-- `//` -- human-owned. **Never rewrite, reflow, or delete.** This is where
-  invariants and hard-won rationale live.
-
-Stripping the `*` adopts a comment as human-owned; adding one releases it for AI
-maintenance.
-
-### Outlines
-
-An outline is a set of `//*` statements that **partition** a function body into
-logical sections and name what each does -- the implementation *strategy*, not
-the contract (that's the doc comment) and not a line-by-line narration.
-
-- **Extract first.** If a block needs a comment, extract it into a
-  well-named function (see Preferred style). Outline only what remains:
-  blocks whose extraction would force lifetimes or copies, or a
-  decomposed fn whose overall strategy is still not obvious from the
-  helper names. Never outline instead of extracting.
-- At most 3 statements in a short fn, 5 in a long one. One phrase each.
-- Read alone, without the code, they should be a complete account of the fn.
-- Name the domain concept the code omits: `//* Gate on cumulative work before
-  writing to RocksDB.` -- not `//* Compare work and call put_cf.`
-- Skip trivial fns, getters, and anything already obvious from the signature. A
-  useless outline is worse than none.
-- **Adding or updating an outline is a comment-only diff.** Never change code in
-  the same edit.
-
-When you change a fn that carries an outline, update the affected `//*`
-statements in the same commit. When a human edits a `//*` statement, treat it as
-intent: change the code to match, and propagate to callers, types, and the doc
-comment.
-
-Full guidance, worked examples, and detail calibration:
-`.claude/skills/nl-outlines/SKILL.md`. Read it before doing outline work.
+Before adding, changing, or reviewing `//*` outlines, read
+`.agents/skills/nl-outlines/SKILL.md`.
 
 ## Prefer existing code
 
