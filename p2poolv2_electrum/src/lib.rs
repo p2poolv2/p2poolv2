@@ -9,14 +9,12 @@ mod connection;
 pub mod error;
 mod methods;
 mod protocol;
-mod script;
-mod server;
 mod session;
 mod supervisor;
+mod tcp_server;
 #[cfg(test)]
 mod test_utils;
 mod tip;
-mod transaction;
 
 pub use error::ElectrumServerError;
 pub use supervisor::start_electrum_server;

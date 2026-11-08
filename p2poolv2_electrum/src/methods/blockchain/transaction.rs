@@ -5,9 +5,9 @@
 //! `blockchain.transaction.get`: confirmed share chain transactions, raw or
 //! decoded in the bitcoind `getrawtransaction` shape plus p2pool extras.
 
+use crate::methods::blockchain::script::script_pubkey_json;
 use crate::methods::{param, store_read_error};
 use crate::protocol::{INTERNAL_ERROR, INVALID_PARAMS, RpcError};
-use crate::script::script_pubkey_json;
 use bitcoin::consensus::encode::serialize_hex;
 use bitcoin::hex::DisplayHex;
 use bitcoin::{BlockHash, Network, Transaction, TxIn, TxOut, Txid};
