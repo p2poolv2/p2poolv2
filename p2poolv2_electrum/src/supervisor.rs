@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use crate::server::run_server;
+use crate::tcp_server::run_server;
 use p2poolv2_lib::config::ElectrumConfig;
 use p2poolv2_lib::monitoring_events::MonitoringEventSender;
 use p2poolv2_lib::shares::chain::chain_store_handle::ChainStoreHandle;

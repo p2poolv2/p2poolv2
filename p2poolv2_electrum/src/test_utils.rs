@@ -11,7 +11,7 @@
 use crate::connection::handle_connection;
 use crate::error::ElectrumServerError;
 use crate::protocol::{METHOD_NOT_FOUND, RpcError};
-use crate::server::run_server;
+use crate::tcp_server::run_server;
 use crate::tip::TipReceiver;
 use bitcoin::Script;
 use bitcoin::hex::DisplayHex;
