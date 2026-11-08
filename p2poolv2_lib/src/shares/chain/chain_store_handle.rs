@@ -1013,9 +1013,11 @@ impl ChainStoreHandle {
     pub async fn promote_block(&self, header: ShareHeader) -> Result<Option<u32>, StoreError> {
         let blockhash = header.block_hash();
         let uncle_count = header.uncles.len();
+        let difficulty = header.get_difficulty(self.network);
         self.organise_header(header).await?;
         let height = self.organise_block().await?;
-        info!("Promoted block {blockhash} to confirmed height {height:?}");
+        let log_height = height.map(|h| h as i64).unwrap_or(-1);
+        info!("Promoted block {blockhash} to confirmed height {log_height}: diff={difficulty}");
         if uncle_count > 0 {
             info!("Confirmed block {blockhash} references {uncle_count} uncle(s)");
         }
