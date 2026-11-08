@@ -13,6 +13,7 @@
 //! shares the sync gate `require_synced`.
 
 use crate::protocol::{INTERNAL_ERROR, INVALID_PARAMS, METHOD_NOT_FOUND, NOT_SYNCED, RpcError};
+use crate::scripthash_history::{HISTORY_PAGE_SIZE, scripthash_get_history};
 use crate::transaction::transaction_get;
 use bitcoin::consensus::encode::serialize_hex;
 use p2poolv2_lib::accounting::payout::sharechain_pplns::pplns_window::{
@@ -63,6 +64,7 @@ pub(crate) fn dispatch(
         "server.features" => server_features(chain_store_handle),
         "blockchain.block.header" => block_header(chain_store_handle, params),
         "blockchain.transaction.get" => transaction_get(chain_store_handle, params),
+        "blockchain.scripthash.get_history" => scripthash_get_history(chain_store_handle, params),
         _ => Err(RpcError::new(
             METHOD_NOT_FOUND,
             format!("unknown method {method}"),
@@ -176,8 +178,9 @@ fn parse_protocol_version(version: &str) -> Option<Vec<u32>> {
 }
 
 /// `server.features`: the standard Electrum fields plus a `p2pool` object
-/// with the network and the depths a wallet needs to judge output maturity
-/// and expiry without hardcoding consensus constants.
+/// with the network, the depths a wallet needs to judge output maturity
+/// and expiry without hardcoding consensus constants, and the
+/// `blockchain.scripthash.get_history` page size.
 fn server_features(chain_store_handle: &ChainStoreHandle) -> Result<Value, RpcError> {
     let genesis_hash = chain_store_handle
         .get_genesis_blockhash()
@@ -195,6 +198,7 @@ fn server_features(chain_store_handle: &ChainStoreHandle) -> Result<Value, RpcEr
             "payout_depth": PAYOUT_DEPTH,
             "coinbase_maturity": COINBASE_MATURITY,
             "prune_depth": PRUNE_DEPTH,
+            "scripthash_history_page_size": HISTORY_PAGE_SIZE,
         },
     }))
 }
@@ -415,7 +419,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn features_report_genesis_hash_and_p2pool_depths() {
+    async fn features_report_genesis_hash_p2pool_depths_and_page_size() {
         let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(true).await;
         build_confirmed_test_chain(&chain_store_handle, 2).await;
 
@@ -434,6 +438,7 @@ mod tests {
                 "payout_depth": PAYOUT_DEPTH,
                 "coinbase_maturity": COINBASE_MATURITY,
                 "prune_depth": PRUNE_DEPTH,
+                "scripthash_history_page_size": HISTORY_PAGE_SIZE,
             })
         );
     }

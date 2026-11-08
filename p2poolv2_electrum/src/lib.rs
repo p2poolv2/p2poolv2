@@ -10,6 +10,7 @@ pub mod error;
 mod methods;
 mod protocol;
 mod script;
+mod scripthash_history;
 mod server;
 mod session;
 mod supervisor;

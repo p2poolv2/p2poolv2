@@ -24,6 +24,9 @@ pub(crate) const INTERNAL_ERROR: i64 = -32603;
 /// Server error (JSON-RPC 2.0 reserves -32000 to -32099 for these): the
 /// node is still syncing, so chain data would be partial
 pub(crate) const NOT_SYNCED: i64 = -32000;
+/// Electrum server error: a script's history is larger than one page and
+/// the request did not ask for pages with `start_height`
+pub(crate) const HISTORY_TOO_LARGE: i64 = 10001;
 
 /// Largest batch request answered. Larger batches get a single
 /// invalid request error rather than a truncated answer.

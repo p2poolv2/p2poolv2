@@ -2,8 +2,9 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Shared test infrastructure: a stub dispatcher, a current test chain, a
-//! monitoring event to wake the tip watcher, a server on an ephemeral port,
+//! Shared test infrastructure: a stub dispatcher, a current test chain, the
+//! Electrum scripthash of a script, a monitoring event to wake the tip
+//! watcher, a server on an ephemeral port,
 //! a connection handler over an in-memory duplex stream, and a line
 //! oriented client for either.
 
@@ -12,12 +13,15 @@ use crate::error::ElectrumServerError;
 use crate::protocol::{METHOD_NOT_FOUND, RpcError};
 use crate::server::run_server;
 use crate::tip::TipReceiver;
+use bitcoin::Script;
+use bitcoin::hex::DisplayHex;
 use p2poolv2_lib::config::ElectrumConfig;
 use p2poolv2_lib::monitoring_events::{
     MonitoringEvent, PeerResponse, PeerStatus, create_monitoring_event_channel,
 };
 use p2poolv2_lib::shares::chain::chain_store_handle::ChainStoreHandle;
 use p2poolv2_lib::shares::share_block::ShareBlock;
+use p2poolv2_lib::store::script_history::script_hash;
 use p2poolv2_lib::test_utils::{
     TestShareBlockBuilder, confirm_test_block, genesis_for_tests, test_funding_transaction,
 };
@@ -88,6 +92,14 @@ pub(crate) async fn build_current_test_chain(
         blocks.push(block);
     }
     blocks
+}
+
+/// The Electrum scripthash of `script`: its sha256 in reversed byte order,
+/// as lowercase hex, the form a wallet sends.
+pub(crate) fn electrum_scripthash(script: &Script) -> String {
+    let mut scripthash = script_hash(script);
+    scripthash.reverse();
+    scripthash.to_lower_hex_string()
 }
 
 /// A monitoring event for waking the tip watcher. The watcher re-reads the
