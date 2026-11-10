@@ -9,9 +9,15 @@
 //! Subscription methods change the session; every other method goes to
 //! the stateless `dispatch`. After each request and on each tip change
 //! the connection asks the session for the notifications to write, so the
-//! connection itself only moves lines.
+//! connection itself only moves lines. Scripthash notifications are
+//! computed only on a tip change: the history changes only when the
+//! confirmed chain does.
+//!
+//! The history window starts from the candidate tip, so an entry can drop
+//! out of it while the confirmed tip stays put. That change is reported
+//! with the next confirmed tip, seconds later on a current node.
 
-use crate::methods::blockchain::scripthash::{parse_scripthash, scripthash_status};
+use crate::methods::blockchain::scripthash::{parse_scripthash, scripthash_hex, scripthash_status};
 use crate::methods::{dispatch, not_synced_error, param, require_synced, store_read_error};
 use crate::protocol::{JSONRPC_VERSION, RpcError, TOO_MANY_SUBSCRIPTIONS};
 use crate::tip::Tip;
@@ -49,8 +55,13 @@ pub(crate) struct Session {
 
 impl Session {
     /// Whether tip changes can produce a notification for this session.
-    pub(crate) fn is_subscribed_to_headers(&self) -> bool {
-        self.sent_tip.is_some()
+    pub(crate) fn has_subscriptions(&self) -> bool {
+        self.sent_tip.is_some() || self.has_scripthash_subscriptions()
+    }
+
+    /// Whether a tip change needs scripthash statuses read from the store.
+    pub(crate) fn has_scripthash_subscriptions(&self) -> bool {
+        !self.scripthash_statuses.is_empty()
     }
 
     /// Run one request and return its result or a JSON-RPC error.
@@ -91,6 +102,36 @@ impl Session {
             self.sent_tip = Some(tip);
             notification
         })
+    }
+
+    /// A copy of the subscribed scripthashes, so their statuses can be read
+    /// on a blocking thread without the session.
+    pub(crate) fn subscribed_scripthashes(&self) -> Vec<ScriptHash> {
+        self.scripthash_statuses.keys().copied().collect()
+    }
+
+    /// A notification for each of `statuses` that differs from the status
+    /// last sent for its scripthash, recording the new status as sent.
+    /// Reads no store. A scripthash the session is not subscribed to is
+    /// ignored rather than subscribed.
+    pub(crate) fn status_notifications(
+        &mut self,
+        statuses: Vec<(ScriptHash, Option<String>)>,
+    ) -> Vec<Value> {
+        let mut notifications = Vec::with_capacity(statuses.len());
+        for (scripthash, status) in statuses {
+            if let Some(sent_status) = self.scripthash_statuses.get_mut(&scripthash)
+                && *sent_status != status
+            {
+                notifications.push(json!({
+                    "jsonrpc": JSONRPC_VERSION,
+                    "method": SCRIPTHASH_SUBSCRIBE_METHOD,
+                    "params": [scripthash_hex(&scripthash), status],
+                }));
+                *sent_status = status;
+            }
+        }
+        notifications
     }
 
     /// `blockchain.headers.subscribe []`: the confirmed tip as
@@ -163,6 +204,7 @@ impl Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::methods::blockchain::scripthash::read_statuses;
     use crate::protocol::{INVALID_PARAMS, NOT_SYNCED};
     use crate::test_utils::{build_current_test_chain, electrum_scripthash};
     use crate::tip::read_tip;
@@ -171,7 +213,8 @@ mod tests {
     use p2poolv2_lib::shares::share_block::ShareHeader;
     use p2poolv2_lib::store::script_history::script_hash;
     use p2poolv2_lib::test_utils::{
-        build_confirmed_test_chain, make_test_share_program, setup_test_chain_store_handle,
+        PUBKEY_2G, TestShareBlockBuilder, build_confirmed_test_chain, confirm_test_block,
+        make_test_share_program, setup_test_chain_store_handle, test_funding_transaction,
     };
 
     #[tokio::test]
@@ -193,7 +236,7 @@ mod tests {
         assert_eq!(result["height"], json!(3));
         let decoded: ShareHeader = deserialize_hex(result["hex"].as_str().unwrap()).unwrap();
         assert_eq!(decoded, blocks[3].header);
-        assert!(session.is_subscribed_to_headers());
+        assert!(session.has_subscriptions());
     }
 
     #[tokio::test]
@@ -213,7 +256,7 @@ mod tests {
 
         assert_eq!(error.code, NOT_SYNCED);
         assert_eq!(error.data.unwrap()["confirmed_tip_height"], json!(2));
-        assert!(!session.is_subscribed_to_headers());
+        assert!(!session.has_subscriptions());
     }
 
     /// A tip published while the node was current is not served once the
@@ -235,7 +278,7 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(error.code, NOT_SYNCED);
-        assert!(!session.is_subscribed_to_headers());
+        assert!(!session.has_subscriptions());
     }
 
     #[tokio::test]
@@ -248,7 +291,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(result, Value::Null);
-        assert!(!session.is_subscribed_to_headers());
+        assert!(!session.has_subscriptions());
     }
 
     #[tokio::test]
@@ -458,6 +501,91 @@ mod tests {
 
         assert_eq!(first, json!(true));
         assert_eq!(second, json!(false));
+        assert!(session.scripthash_statuses.is_empty());
+    }
+
+    #[tokio::test]
+    async fn new_block_paying_subscribed_script_notifies_once() {
+        let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(true).await;
+        let blocks = build_current_test_chain(&chain_store_handle, 2).await;
+        let payout_script = &blocks[1].transactions[0].0.output[0].script_pubkey;
+        let mut session = Session::default();
+        session
+            .handle_method(
+                &chain_store_handle,
+                None,
+                SCRIPTHASH_SUBSCRIBE_METHOD,
+                &json!([electrum_scripthash(payout_script)]),
+            )
+            .unwrap();
+        let next_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(blocks[2].block_hash().to_string())
+            .time(blocks[2].header.time + 1)
+            .add_transaction(test_funding_transaction(3))
+            .build();
+        confirm_test_block(&chain_store_handle, &next_block).await;
+
+        let statuses =
+            read_statuses(&chain_store_handle, &session.subscribed_scripthashes()).unwrap();
+        let notifications = session.status_notifications(statuses);
+        let unchanged_statuses =
+            read_statuses(&chain_store_handle, &session.subscribed_scripthashes()).unwrap();
+        let repeated = session.status_notifications(unchanged_statuses);
+
+        let new_status = scripthash_status(&chain_store_handle, &script_hash(payout_script))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            notifications,
+            vec![json!({
+                "jsonrpc": "2.0",
+                "method": "blockchain.scripthash.subscribe",
+                "params": [electrum_scripthash(payout_script), new_status],
+            })]
+        );
+        assert_eq!(repeated, Vec::<Value>::new());
+    }
+
+    #[tokio::test]
+    async fn new_block_paying_another_script_does_not_notify() {
+        let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(true).await;
+        let blocks = build_current_test_chain(&chain_store_handle, 2).await;
+        let payout_script = &blocks[1].transactions[0].0.output[0].script_pubkey;
+        let mut session = Session::default();
+        session
+            .handle_method(
+                &chain_store_handle,
+                None,
+                SCRIPTHASH_SUBSCRIBE_METHOD,
+                &json!([electrum_scripthash(payout_script)]),
+            )
+            .unwrap();
+        let next_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(blocks[2].block_hash().to_string())
+            .time(blocks[2].header.time + 1)
+            .miner_pubkey(PUBKEY_2G)
+            .add_transaction(test_funding_transaction(3))
+            .build();
+        confirm_test_block(&chain_store_handle, &next_block).await;
+
+        let statuses =
+            read_statuses(&chain_store_handle, &session.subscribed_scripthashes()).unwrap();
+        let notifications = session.status_notifications(statuses);
+
+        assert_ne!(
+            &next_block.transactions[0].0.output[0].script_pubkey,
+            payout_script
+        );
+        assert_eq!(notifications, Vec::<Value>::new());
+    }
+
+    #[test]
+    fn status_for_unsubscribed_scripthash_is_ignored() {
+        let mut session = Session::default();
+
+        let notifications = session.status_notifications(vec![([9u8; 32], Some("ab".repeat(32)))]);
+
+        assert_eq!(notifications, Vec::<Value>::new());
         assert!(session.scripthash_statuses.is_empty());
     }
 }

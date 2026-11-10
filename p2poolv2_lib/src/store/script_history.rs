@@ -389,7 +389,10 @@ where
             }
         }
     }
-    Ok(ScriptHistoryPage { entries, has_more: more })
+    Ok(ScriptHistoryPage {
+        entries,
+        has_more: more,
+    })
 }
 
 #[cfg(test)]

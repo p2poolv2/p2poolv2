@@ -26,6 +26,10 @@ use std::fmt::Write;
 /// `p2pool.scripthash_history_page_size`.
 pub(crate) const HISTORY_PAGE_SIZE: usize = 10_000;
 
+/// Longest `"{tx_hash}:{height}:"`: 64 hex characters, two colons and
+/// ten digits.
+const STATUS_ENTRY_CAPACITY: usize = 76;
+
 /// `blockchain.scripthash.get_history [scripthash, start_height]`.
 ///
 /// Returns `[{"height", "tx_hash"}]` in height then block position order,
@@ -82,6 +86,21 @@ pub(crate) fn scripthash_status(
     status_from_pages(chain_store_handle, scripthash, HISTORY_PAGE_SIZE)
 }
 
+/// The status of each of `scripthashes` (see `scripthash_status`), in the
+/// same order. One failed read fails the whole call, so the caller records
+/// every status or none.
+pub(crate) fn read_statuses(
+    chain_store_handle: &ChainStoreHandle,
+    scripthashes: &[ScriptHash],
+) -> Result<Vec<(ScriptHash, Option<String>)>, StoreError> {
+    scripthashes
+        .iter()
+        .map(|scripthash| {
+            scripthash_status(chain_store_handle, scripthash).map(|status| (*scripthash, status))
+        })
+        .collect()
+}
+
 /// `scripthash_status` with the page size as a parameter, so tests can
 /// hash a short chain across pages.
 ///
@@ -124,9 +143,13 @@ fn status_from_pages(
     }))
 }
 
-/// Longest `"{tx_hash}:{height}:"`: 64 hex characters, two colons and
-/// ten digits.
-const STATUS_ENTRY_CAPACITY: usize = 76;
+/// The Electrum hex form of a store scripthash, the inverse of
+/// `parse_scripthash`: reversed byte order, lowercase hex.
+pub(crate) fn scripthash_hex(scripthash: &ScriptHash) -> String {
+    let mut reversed = *scripthash;
+    reversed.reverse();
+    reversed.to_lower_hex_string()
+}
 
 /// The store's scripthash from the Electrum hex form: 64 hex characters of
 /// the script's sha256 in reversed byte order.
