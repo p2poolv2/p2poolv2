@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+use crate::methods::blockchain::scripthash::read_statuses;
 use crate::protocol::handle_line;
 use crate::session::Session;
 use crate::tip::TipReceiver;
@@ -13,7 +14,7 @@ use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio_stream::StreamExt;
 use tokio_util::codec::{FramedRead, LinesCodec};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 /// Longest request line accepted. A batch of a hundred scripthash requests
 /// fits comfortably; a longer line closes the connection.
@@ -28,8 +29,8 @@ pub(crate) const MAX_LINE_LENGTH: usize = 64 * 1024;
 ///
 /// Requests run through the connection's `Session`, which holds what the
 /// client subscribed to. After every answered line and on every tip
-/// published on `tip_receiver`, the session decides whether a tip
-/// notification is due, and the connection writes it.
+/// published on `tip_receiver`, the session decides which notifications
+/// are due, and the connection writes them (see `send_notifications`).
 pub(crate) async fn handle_connection<R, W>(
     reader: R,
     mut writer: W,
@@ -53,13 +54,15 @@ pub(crate) async fn handle_connection<R, W>(
             _ = shutdown.cancelled() => false,
             // The tip sender outlives every connection of its server, so
             // an error here means the server is stopping.
-            changed = tip_receiver.changed(), if session.is_subscribed_to_headers() => {
+            changed = tip_receiver.changed(), if session.has_subscriptions() => {
                 match changed {
                     Ok(()) => {
-                        send_tip_notification(
+                        send_notifications(
                             &mut writer,
                             &mut session,
                             &mut tip_receiver,
+                            true,
+                            &chain_store_handle,
                             client_address,
                         )
                         .await
@@ -80,11 +83,14 @@ pub(crate) async fn handle_connection<R, W>(
                     .await;
                     // A tip published while the line was handled is sent
                     // straight after the response.
+                    let tip_changed = tip_receiver.has_changed().unwrap_or(false);
                     answered
-                        && send_tip_notification(
+                        && send_notifications(
                             &mut writer,
                             &mut session,
                             &mut tip_receiver,
+                            tip_changed,
+                            &chain_store_handle,
                             client_address,
                         )
                         .await
@@ -154,22 +160,77 @@ where
     }
 }
 
-/// Write the tip notification `session` reports as due for the watched
-/// tip, if any, marking the watched tip seen. Returns whether the
-/// connection should stay open.
-async fn send_tip_notification<W>(
+/// Write the notifications `session` reports as due to be sent
+/// out. This marks the watched tip as seen. The tip notification is
+/// sent first, then, when `tip_changed`, one per scripthash whose
+/// status changed. Returns whether the connection should stay open.
+///
+/// Scripthash statuses are read from the store only on a tip change, since
+/// the history changes only with the confirmed chain, and only for a
+/// session holding scripthash subscriptions.
+async fn send_notifications<W>(
     writer: &mut W,
     session: &mut Session,
     tip_receiver: &mut TipReceiver,
+    tip_changed: bool,
+    chain_store_handle: &ChainStoreHandle,
     client_address: SocketAddr,
 ) -> bool
 where
     W: AsyncWrite + Unpin,
 {
     let watched_tip = tip_receiver.borrow_and_update().clone();
-    match session.tip_notification(watched_tip) {
+    let tip_sent = match session.tip_notification(watched_tip) {
         Some(notification) => write_message(writer, &notification, client_address).await,
         None => true,
+    };
+    if tip_sent && tip_changed && session.has_scripthash_subscriptions() {
+        send_scripthash_notifications(writer, session, chain_store_handle, client_address).await
+    } else {
+        tip_sent
+    }
+}
+
+/// Write a notification for each subscribed scripthash whose status
+/// changed. Returns whether the connection should stay open.
+///
+/// Only the store reads run on a blocking thread, over a copy of the
+/// subscribed scripthashes; the session compares the statuses afterwards.
+/// A failed store read is logged and writes nothing, leaving the session's
+/// statuses as they were, so the next tip change retries; a failed
+/// blocking task or write closes the connection.
+async fn send_scripthash_notifications<W>(
+    writer: &mut W,
+    session: &mut Session,
+    chain_store_handle: &ChainStoreHandle,
+    client_address: SocketAddr,
+) -> bool
+where
+    W: AsyncWrite + Unpin,
+{
+    let scripthashes = session.subscribed_scripthashes();
+    let chain_store_handle = chain_store_handle.clone();
+    let read =
+        tokio::task::spawn_blocking(move || read_statuses(&chain_store_handle, &scripthashes))
+            .await;
+    match read {
+        Ok(Ok(statuses)) => {
+            let mut open = true;
+            for notification in &session.status_notifications(statuses) {
+                open = open && write_message(writer, notification, client_address).await;
+            }
+            open
+        }
+        Ok(Err(error)) => {
+            warn!("Electrum connection {client_address} scripthash status read failed: {error}");
+            true
+        }
+        Err(join_error) => {
+            error!(
+                "Electrum connection {client_address} scripthash notifications failed: {join_error}"
+            );
+            false
+        }
     }
 }
 
@@ -192,9 +253,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::{build_current_test_chain, spawn_test_connection};
+    use crate::methods::blockchain::scripthash::scripthash_status;
+    use crate::test_utils::{build_current_test_chain, electrum_scripthash, spawn_test_connection};
     use crate::tip::{Tip, read_tip};
     use bitcoin::consensus::encode::serialize_hex;
+    use p2poolv2_lib::store::script_history::script_hash;
     use p2poolv2_lib::test_utils::{
         TestShareBlockBuilder, build_confirmed_test_chain, confirm_test_block,
         setup_test_chain_store_handle, test_funding_transaction,
@@ -459,5 +522,92 @@ mod tests {
 
         assert_eq!(client.read_line().await.unwrap(), None);
         timeout(TEST_TIMEOUT, handler).await.unwrap().unwrap();
+    }
+
+    /// The connection holds no headers subscription, so only a guard that
+    /// counts scripthash subscriptions wakes it on the tip change.
+    #[tokio::test]
+    async fn scripthash_subscription_alone_pushes_new_status() {
+        let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(true).await;
+        let blocks = build_current_test_chain(&chain_store_handle, 2).await;
+        let payout_script = &blocks[1].transactions[0].0.output[0].script_pubkey;
+        let scripthash = electrum_scripthash(payout_script);
+        let (tip_sender, tip_receiver) =
+            watch::channel(Some(Arc::new(read_tip(&chain_store_handle).unwrap())));
+        let (mut client, _handler) = spawn_test_connection(
+            chain_store_handle.clone(),
+            tip_receiver,
+            CancellationToken::new(),
+        );
+        let subscribe = format!(
+            r#"{{"jsonrpc":"2.0","id":3,"method":"blockchain.scripthash.subscribe","params":["{scripthash}"]}}"#
+        );
+        assert!(client.call(&subscribe).await["result"].is_string());
+
+        let next_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(blocks[2].block_hash().to_string())
+            .time(blocks[2].header.time + 1)
+            .add_transaction(test_funding_transaction(3))
+            .build();
+        confirm_test_block(&chain_store_handle, &next_block).await;
+        tip_sender.send_replace(Some(Arc::new(read_tip(&chain_store_handle).unwrap())));
+
+        let notification: Value =
+            serde_json::from_str(&client.read_line().await.unwrap().unwrap()).unwrap();
+        let new_status = scripthash_status(&chain_store_handle, &script_hash(payout_script))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            notification,
+            json!({
+                "jsonrpc": "2.0",
+                "method": "blockchain.scripthash.subscribe",
+                "params": [scripthash, new_status],
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn tip_notification_is_pushed_before_scripthash_notification() {
+        let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(true).await;
+        let blocks = build_current_test_chain(&chain_store_handle, 2).await;
+        let payout_script = &blocks[1].transactions[0].0.output[0].script_pubkey;
+        let scripthash = electrum_scripthash(payout_script);
+        let (tip_sender, tip_receiver) =
+            watch::channel(Some(Arc::new(read_tip(&chain_store_handle).unwrap())));
+        let (mut client, _handler) = spawn_test_connection(
+            chain_store_handle.clone(),
+            tip_receiver,
+            CancellationToken::new(),
+        );
+        assert!(client.call(SUBSCRIBE).await["result"].is_object());
+        let subscribe = format!(
+            r#"{{"jsonrpc":"2.0","id":3,"method":"blockchain.scripthash.subscribe","params":["{scripthash}"]}}"#
+        );
+        assert!(client.call(&subscribe).await["result"].is_string());
+
+        let next_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(blocks[2].block_hash().to_string())
+            .time(blocks[2].header.time + 1)
+            .add_transaction(test_funding_transaction(3))
+            .build();
+        confirm_test_block(&chain_store_handle, &next_block).await;
+        let next_tip = read_tip(&chain_store_handle).unwrap();
+        tip_sender.send_replace(Some(Arc::new(next_tip.clone())));
+
+        let first: Value =
+            serde_json::from_str(&client.read_line().await.unwrap().unwrap()).unwrap();
+        let second: Value =
+            serde_json::from_str(&client.read_line().await.unwrap().unwrap()).unwrap();
+        assert_eq!(
+            first,
+            json!({
+                "jsonrpc": "2.0",
+                "method": "blockchain.headers.subscribe",
+                "params": [next_tip.to_json()],
+            })
+        );
+        assert_eq!(second["method"], json!("blockchain.scripthash.subscribe"));
+        assert_eq!(second["params"][0], json!(scripthash));
     }
 }

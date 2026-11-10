@@ -2344,7 +2344,7 @@ mod tests {
                         txid: blocks[2].transactions[0].0.compute_txid(),
                     },
                 ],
-                more: false,
+                has_more: false,
             }
         );
     }
@@ -2368,7 +2368,7 @@ mod tests {
                     height: 1,
                     txid: blocks[1].transactions[0].0.compute_txid(),
                 }],
-                more: true,
+                has_more: true,
             }
         );
     }
@@ -2386,7 +2386,7 @@ mod tests {
             history,
             ScriptHistoryPage {
                 entries: Vec::new(),
-                more: false,
+                has_more: false,
             }
         );
     }

@@ -41,6 +41,15 @@ parameter `start_height` is a P2Poolv2 extension for paging:
   ends at a block boundary. Ask again from the last height plus one
   until the result is `[]`.
 
+`blockchain.scripthash.subscribe [scripthash]` answers with the status
+of the script's history, or null when it is empty. The status is the
+standard Electrum one: the sha256 of `"tx_hash:height:"` joined over the
+whole history, in `get_history` order, as hex. It covers the whole
+history however long, so it never needs paging. A connection may hold
+at most 1,000 scripthash subscriptions; a subscribe to one more is error
+`10002`. `blockchain.scripthash.unsubscribe [scripthash]` answers true if
+the connection was subscribed, false if not.
+
 == Testing with nc
 
 These commands use OpenBSD netcat. GNU netcat has no `-q`, and its `-w`
@@ -128,6 +137,26 @@ printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"blockchain.scripthash.
 
 Repeat with the last height in the result plus one until the result is
 `[]`.
+
+Subscribe to a script. The answer is its status, and each confirmed share
+that changes its history pushes the new status:
+
+[source,bash]
+----
+{ printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"blockchain.scripthash.subscribe\",\"params\":[\"$SCRIPTHASH\"]}"; \
+  cat; } | nc 127.0.0.1 50001
+----
+
+----
+{"jsonrpc":"2.0","id":6,"result":"<status>"}
+{"jsonrpc":"2.0","method":"blockchain.scripthash.subscribe","params":["<scripthash>","<new status>"]}
+----
+
+The status changes when a share pays or spends the script, when a reorg
+removes one, and when an old entry leaves the history window. Statuses
+are checked on each new confirmed tip, so an entry that leaves the window
+while only the candidate tip moved is reported with the next confirmed
+tip.
 
 For an interactive session, type one request per line:
 
