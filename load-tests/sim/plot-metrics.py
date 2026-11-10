@@ -7,7 +7,7 @@ a per-node emission-vs-hashrate bar. Run after (or during) a swarm; re-run to
 refresh. Output: RUN_DIR/metrics.png, or the path given as argv[1].
 
 Data sources (all timestamped) from the logs:
-  "Promoted block … confirmed height Some(N)"  -> main-chain share rate
+  "Promoted block … confirmed height N: diff=D" -> main-chain share rate
   "Confirmed block … references N uncle(s)"      -> uncle rate
   "sim stats: … pool_difficulty=D …"            -> ASERT difficulty / emitted
   "Block submitted successfully"                -> bitcoin block-finds
@@ -55,7 +55,7 @@ def events(path, pattern):
 node0 = os.path.join(RUN_DIR, "node-0.log")
 # Main chain / uncles: node 0's view (the confirmed chain is shared, so one
 # node is representative and avoids cross-node double counting).
-promos = events(node0, r"to confirmed height Some\(")
+promos = events(node0, r"to confirmed height [0-9]+:")
 uncles = events(node0, r"Confirmed block .* references \d+ uncle")
 # Difficulty + block-finds: aggregate across ALL nodes. Difficulty is a shared
 # pool quantity, so pooling every node's periodic samples gives a dense series
