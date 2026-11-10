@@ -72,7 +72,7 @@ pub struct ScriptHistoryEntry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScriptHistoryPage {
     pub entries: Vec<ScriptHistoryEntry>,
-    pub more: bool,
+    pub has_more: bool,
 }
 
 /// The scripthash of `script`.
@@ -389,7 +389,7 @@ where
             }
         }
     }
-    Ok(ScriptHistoryPage { entries, more })
+    Ok(ScriptHistoryPage { entries, has_more: more })
 }
 
 #[cfg(test)]
@@ -463,7 +463,7 @@ mod tests {
                         txid: txids[2],
                     },
                 ],
-                more: false,
+                has_more: false,
             }
         );
     }
@@ -482,7 +482,7 @@ mod tests {
             page,
             ScriptHistoryPage {
                 entries: Vec::new(),
-                more: true,
+                has_more: true,
             }
         );
     }
@@ -523,7 +523,7 @@ mod tests {
                     height: 1,
                     txid: coinbase.compute_txid(),
                 }],
-                more: false,
+                has_more: false,
             }
         );
         assert!(commitment_history.entries.is_empty());
@@ -722,7 +722,7 @@ mod tests {
                         txid: blocks[3].transactions[0].0.compute_txid(),
                     },
                 ],
-                more: false,
+                has_more: false,
             }
         );
     }
@@ -745,7 +745,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![0, 1]
         );
-        assert!(first_page.more);
+        assert!(first_page.has_more);
         assert_eq!(
             second_page
                 .entries
@@ -754,7 +754,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![2, 3]
         );
-        assert!(!second_page.more);
+        assert!(!second_page.has_more);
     }
 
     /// Height 2 holds two rows for the spent script (the coinbase and the
@@ -796,7 +796,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![0, 1, 2, 2]
         );
-        assert!(!page.more);
+        assert!(!page.has_more);
     }
 
     #[tokio::test]
@@ -812,7 +812,7 @@ mod tests {
             history,
             ScriptHistoryPage {
                 entries: Vec::new(),
-                more: false,
+                has_more: false,
             }
         );
     }

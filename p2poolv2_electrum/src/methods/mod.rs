@@ -14,7 +14,7 @@
 //! per-connection state and are routed by `Session` (`session.rs`), which
 //! shares the sync gate `require_synced`.
 
-mod blockchain;
+pub(crate) mod blockchain;
 mod server;
 
 use crate::protocol::{INTERNAL_ERROR, METHOD_NOT_FOUND, NOT_SYNCED, RpcError};

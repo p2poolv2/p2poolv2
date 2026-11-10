@@ -27,6 +27,9 @@ pub(crate) const NOT_SYNCED: i64 = -32000;
 /// Electrum server error: a script's history is larger than one page and
 /// the request did not ask for pages with `start_height`
 pub(crate) const HISTORY_TOO_LARGE: i64 = 10001;
+/// Electrum server error: the session already holds the most scripthash
+/// subscriptions it may, and the request was for a new one
+pub(crate) const TOO_MANY_SUBSCRIPTIONS: i64 = 10002;
 
 /// Largest batch request answered. Larger batches get a single
 /// invalid request error rather than a truncated answer.

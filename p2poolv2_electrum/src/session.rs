@@ -11,22 +11,40 @@
 //! the connection asks the session for the notifications to write, so the
 //! connection itself only moves lines.
 
-use crate::methods::{dispatch, not_synced_error, require_synced};
-use crate::protocol::{JSONRPC_VERSION, RpcError};
+use crate::methods::blockchain::scripthash::{parse_scripthash, scripthash_status};
+use crate::methods::{dispatch, not_synced_error, param, require_synced, store_read_error};
+use crate::protocol::{JSONRPC_VERSION, RpcError, TOO_MANY_SUBSCRIPTIONS};
 use crate::tip::Tip;
 use p2poolv2_lib::shares::chain::chain_store_handle::ChainStoreHandle;
+use p2poolv2_lib::store::script_history::ScriptHash;
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Subscribes the session to tip notifications, which are sent under the
 /// same method name.
 pub(crate) const HEADERS_SUBSCRIBE_METHOD: &str = "blockchain.headers.subscribe";
 
+/// Subscribes the session to status changes of one scripthash, which are
+/// sent under the same method name.
+pub(crate) const SCRIPTHASH_SUBSCRIBE_METHOD: &str = "blockchain.scripthash.subscribe";
+
+/// Ends a scripthash subscription.
+pub(crate) const SCRIPTHASH_UNSUBSCRIBE_METHOD: &str = "blockchain.scripthash.unsubscribe";
+
+/// Most scripthash subscriptions one session may hold. Every tip change
+/// recomputes the status of each, so this bounds the work a client can
+/// cause.
+pub(crate) const MAX_SCRIPTHASH_SUBSCRIPTIONS: usize = 1_000;
+
 #[derive(Debug, Default)]
 pub(crate) struct Session {
     /// The tip last sent to the client, as a subscribe answer or a
     /// notification. `None` until the client subscribes to headers.
     sent_tip: Option<Arc<Tip>>,
+    /// Each subscribed scripthash, in store byte order, with the status
+    /// last sent for it; `None` is the empty history.
+    scripthash_statuses: HashMap<ScriptHash, Option<String>>,
 }
 
 impl Session {
@@ -48,6 +66,12 @@ impl Session {
     ) -> Result<Value, RpcError> {
         match method {
             HEADERS_SUBSCRIBE_METHOD => self.headers_subscribe(chain_store_handle, watched_tip),
+            SCRIPTHASH_SUBSCRIBE_METHOD => {
+                self.scripthash_subscribe(chain_store_handle, params, MAX_SCRIPTHASH_SUBSCRIPTIONS)
+            }
+            SCRIPTHASH_UNSUBSCRIBE_METHOD => {
+                self.scripthash_unsubscribe(chain_store_handle, params)
+            }
             _ => dispatch(chain_store_handle, method, params),
         }
     }
@@ -90,17 +114,65 @@ impl Session {
         self.sent_tip = Some(Arc::clone(tip));
         Ok(tip.to_json())
     }
+
+    /// `blockchain.scripthash.subscribe [scripthash]`: the status of the
+    /// script's history (`scripthash_status`), or null when it is empty,
+    /// and the session is subscribed to it from then on.
+    ///
+    /// Gated on sync like every `blockchain.*` method. A new scripthash
+    /// beyond `max_subscriptions` is refused with `TOO_MANY_SUBSCRIPTIONS`
+    /// before its history is read; one already subscribed is answered
+    /// again. The cap is a parameter so tests can reach it.
+    fn scripthash_subscribe(
+        &mut self,
+        chain_store_handle: &ChainStoreHandle,
+        params: &Value,
+        max_subscriptions: usize,
+    ) -> Result<Value, RpcError> {
+        require_synced(chain_store_handle)?;
+        let scripthash = parse_scripthash(param(params, 0, "scripthash"))?;
+        let is_new = !self.scripthash_statuses.contains_key(&scripthash);
+        if is_new && self.scripthash_statuses.len() >= max_subscriptions {
+            return Err(RpcError::new(
+                TOO_MANY_SUBSCRIPTIONS,
+                format!("at most {max_subscriptions} scripthash subscriptions per connection"),
+            ));
+        }
+        let status =
+            scripthash_status(chain_store_handle, &scripthash).map_err(store_read_error)?;
+        self.scripthash_statuses.insert(scripthash, status.clone());
+        Ok(Value::from(status))
+    }
+
+    /// `blockchain.scripthash.unsubscribe [scripthash]`: true if the
+    /// session was subscribed to the scripthash, false if not. Gated on
+    /// sync like every `blockchain.*` method.
+    fn scripthash_unsubscribe(
+        &mut self,
+        chain_store_handle: &ChainStoreHandle,
+        params: &Value,
+    ) -> Result<Value, RpcError> {
+        require_synced(chain_store_handle)?;
+        let scripthash = parse_scripthash(param(params, 0, "scripthash"))?;
+        Ok(Value::Bool(
+            self.scripthash_statuses.remove(&scripthash).is_some(),
+        ))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::NOT_SYNCED;
-    use crate::test_utils::build_current_test_chain;
+    use crate::protocol::{INVALID_PARAMS, NOT_SYNCED};
+    use crate::test_utils::{build_current_test_chain, electrum_scripthash};
     use crate::tip::read_tip;
+    use bitcoin::ScriptBuf;
     use bitcoin::consensus::encode::{deserialize_hex, serialize_hex};
     use p2poolv2_lib::shares::share_block::ShareHeader;
-    use p2poolv2_lib::test_utils::{build_confirmed_test_chain, setup_test_chain_store_handle};
+    use p2poolv2_lib::store::script_history::script_hash;
+    use p2poolv2_lib::test_utils::{
+        build_confirmed_test_chain, make_test_share_program, setup_test_chain_store_handle,
+    };
 
     #[tokio::test]
     async fn headers_subscribe_answers_watched_tip_and_subscribes() {
@@ -235,5 +307,157 @@ mod tests {
             .unwrap();
 
         assert_eq!(session.tip_notification(Some(watched_tip)), None);
+    }
+
+    #[tokio::test]
+    async fn scripthash_subscribe_answers_status_and_subscribes() {
+        let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(true).await;
+        let blocks = build_current_test_chain(&chain_store_handle, 2).await;
+        let payout_script = &blocks[1].transactions[0].0.output[0].script_pubkey;
+        let mut session = Session::default();
+
+        let result = session
+            .handle_method(
+                &chain_store_handle,
+                None,
+                SCRIPTHASH_SUBSCRIBE_METHOD,
+                &json!([electrum_scripthash(payout_script)]),
+            )
+            .unwrap();
+
+        let status = scripthash_status(&chain_store_handle, &script_hash(payout_script))
+            .unwrap()
+            .unwrap();
+        assert_eq!(result, json!(status));
+        assert_eq!(
+            session.scripthash_statuses.get(&script_hash(payout_script)),
+            Some(&Some(status))
+        );
+    }
+
+    #[tokio::test]
+    async fn scripthash_subscribe_to_empty_history_answers_null_and_subscribes() {
+        let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(true).await;
+        build_current_test_chain(&chain_store_handle, 2).await;
+        let unused_script = ScriptBuf::new_witness_program(&make_test_share_program(2));
+        let mut session = Session::default();
+
+        let result = session
+            .handle_method(
+                &chain_store_handle,
+                None,
+                SCRIPTHASH_SUBSCRIBE_METHOD,
+                &json!([electrum_scripthash(&unused_script)]),
+            )
+            .unwrap();
+
+        assert_eq!(result, Value::Null);
+        assert_eq!(
+            session
+                .scripthash_statuses
+                .get(&script_hash(&unused_script)),
+            Some(&None)
+        );
+    }
+
+    #[tokio::test]
+    async fn scripthash_subscribe_on_stale_chain_is_not_synced() {
+        let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(true).await;
+        let blocks = build_confirmed_test_chain(&chain_store_handle, 2).await;
+        let payout_script = &blocks[1].transactions[0].0.output[0].script_pubkey;
+        let mut session = Session::default();
+
+        let error = session
+            .handle_method(
+                &chain_store_handle,
+                None,
+                SCRIPTHASH_SUBSCRIBE_METHOD,
+                &json!([electrum_scripthash(payout_script)]),
+            )
+            .unwrap_err();
+
+        assert_eq!(error.code, NOT_SYNCED);
+        assert!(session.scripthash_statuses.is_empty());
+    }
+
+    #[tokio::test]
+    async fn scripthash_subscribe_with_bad_scripthash_is_invalid_params() {
+        let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(true).await;
+        build_current_test_chain(&chain_store_handle, 2).await;
+        let mut session = Session::default();
+
+        let error = session
+            .handle_method(
+                &chain_store_handle,
+                None,
+                SCRIPTHASH_SUBSCRIBE_METHOD,
+                &json!(["z".repeat(64)]),
+            )
+            .unwrap_err();
+
+        assert_eq!(error.code, INVALID_PARAMS);
+        assert!(session.scripthash_statuses.is_empty());
+    }
+
+    #[tokio::test]
+    async fn scripthash_subscribe_beyond_cap_is_refused_but_resubscribe_answers() {
+        let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(true).await;
+        let blocks = build_current_test_chain(&chain_store_handle, 2).await;
+        let payout_scripthash =
+            electrum_scripthash(&blocks[1].transactions[0].0.output[0].script_pubkey);
+        let other_scripthash =
+            electrum_scripthash(&ScriptBuf::new_witness_program(&make_test_share_program(2)));
+        let mut session = Session::default();
+        let first_answer = session
+            .scripthash_subscribe(&chain_store_handle, &json!([payout_scripthash]), 1)
+            .unwrap();
+
+        let refused = session
+            .scripthash_subscribe(&chain_store_handle, &json!([other_scripthash]), 1)
+            .unwrap_err();
+        let second_answer = session
+            .scripthash_subscribe(&chain_store_handle, &json!([payout_scripthash]), 1)
+            .unwrap();
+
+        assert_eq!(refused.code, TOO_MANY_SUBSCRIPTIONS);
+        assert_eq!(second_answer, first_answer);
+        assert_eq!(session.scripthash_statuses.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn scripthash_unsubscribe_is_true_once_then_false() {
+        let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(true).await;
+        let blocks = build_current_test_chain(&chain_store_handle, 2).await;
+        let scripthash = electrum_scripthash(&blocks[1].transactions[0].0.output[0].script_pubkey);
+        let mut session = Session::default();
+        session
+            .handle_method(
+                &chain_store_handle,
+                None,
+                SCRIPTHASH_SUBSCRIBE_METHOD,
+                &json!([scripthash]),
+            )
+            .unwrap();
+
+        let first = session
+            .handle_method(
+                &chain_store_handle,
+                None,
+                SCRIPTHASH_UNSUBSCRIBE_METHOD,
+                &json!([scripthash]),
+            )
+            .unwrap();
+        let second = session
+            .handle_method(
+                &chain_store_handle,
+                None,
+                SCRIPTHASH_UNSUBSCRIBE_METHOD,
+                &json!([scripthash]),
+            )
+            .unwrap();
+
+        assert_eq!(first, json!(true));
+        assert_eq!(second, json!(false));
+        assert!(session.scripthash_statuses.is_empty());
     }
 }

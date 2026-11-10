@@ -41,6 +41,15 @@ parameter `start_height` is a P2Poolv2 extension for paging:
   ends at a block boundary. Ask again from the last height plus one
   until the result is `[]`.
 
+`blockchain.scripthash.subscribe [scripthash]` answers with the status
+of the script's history, or null when it is empty. The status is the
+standard Electrum one: the sha256 of `"tx_hash:height:"` joined over the
+whole history, in `get_history` order, as hex. It covers the whole
+history however long, so it never needs paging. A connection may hold
+at most 1,000 scripthash subscriptions; a subscribe to one more is error
+`10002`. `blockchain.scripthash.unsubscribe [scripthash]` answers true if
+the connection was subscribed, false if not.
+
 == Testing with nc
 
 These commands use OpenBSD netcat. GNU netcat has no `-q`, and its `-w`
