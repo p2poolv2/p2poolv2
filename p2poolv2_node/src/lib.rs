@@ -191,7 +191,7 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
     let exit_sender = watch::Sender::new(ShutdownReason::None);
     let sig_handle = setup_signal_handler(exit_sender.clone());
 
-    let genesis = ShareBlock::build_genesis_for_network(config.stratum.network()).unwrap();
+    let genesis = ShareBlock::build_genesis_for_network(config.stratum.chain).unwrap();
     let store = Arc::new(Store::new(config.store.path.clone(), false).unwrap());
 
     let (write_tx, write_rx) = write_channel();

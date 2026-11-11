@@ -13,6 +13,7 @@
 //! whether a peer is on our network.
 
 use super::{SwarmSend, address_filter};
+use crate::config::Chain;
 use libp2p::Multiaddr;
 use libp2p::multiaddr::Protocol;
 use std::collections::HashSet;
@@ -47,15 +48,15 @@ pub(crate) struct DnsSeeds {
     pub(crate) port: u16,
 }
 
-/// Returns the built-in DNS seeds for a bitcoin network, or None when the
-/// network has no seeds.
+/// Returns the built-in DNS seeds for a chain, or None when the chain has
+/// no seeds.
 ///
 /// For use cases where people run multiple p2poolv2 networks for a
 /// single bitcoin network, they should use dial_peers and set
 /// dns_seed to false in their configs.
-pub(crate) fn dns_seeds_for_network(network: bitcoin::Network) -> Option<DnsSeeds> {
-    match network {
-        bitcoin::Network::Testnet4 => Some(DnsSeeds {
+pub(crate) fn dns_seeds_for_network(chain: Chain) -> Option<DnsSeeds> {
+    match chain {
+        Chain::Testnet4 => Some(DnsSeeds {
             hostnames: TESTNET4_SEED_HOSTNAMES,
             port: TESTNET4_P2P_PORT,
         }),
@@ -211,13 +212,19 @@ mod tests {
 
     #[test]
     fn dns_seeds_for_network_testnet4_has_seeds() {
-        let seeds = dns_seeds_for_network(bitcoin::Network::Testnet4).unwrap();
+        let seeds = dns_seeds_for_network(Chain::Testnet4).unwrap();
         assert!(!seeds.hostnames.is_empty());
         assert_eq!(seeds.port, TESTNET4_P2P_PORT);
     }
 
     #[test]
     fn dns_seeds_for_network_signet_is_none() {
-        assert_eq!(dns_seeds_for_network(bitcoin::Network::Signet), None);
+        assert_eq!(dns_seeds_for_network(Chain::Signet), None);
+    }
+
+    /// Testnet5 has its own share chain; it must not dial testnet4 seeds.
+    #[test]
+    fn dns_seeds_for_network_testnet5_is_none() {
+        assert_eq!(dns_seeds_for_network(Chain::Testnet5), None);
     }
 }

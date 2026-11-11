@@ -476,6 +476,7 @@ mod tests {
     use bitcoin::blockdata::constants::genesis_block;
     use bitcoin::{Amount, Network, TxOut};
     use p2poolv2_lib::accounting::stats::metrics;
+    use p2poolv2_lib::config::Chain;
     use p2poolv2_lib::monitoring_events::create_monitoring_event_channel;
     use p2poolv2_lib::shares::share_block::ShareBlock;
     use p2poolv2_lib::stratum::work::block_template::BlockTemplate;
@@ -723,7 +724,7 @@ mod tests {
         );
 
         //  Mock ChainStore
-        let _genesis = ShareBlock::build_genesis_for_network(Network::Signet);
+        let _genesis = ShareBlock::build_genesis_for_network(Chain::Signet);
         let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
 
         //  Prepare AppState
