@@ -69,8 +69,12 @@ Start from `config.sample.toml` and set at least:
 
 ```toml
 [network]
+# Testnet5 nodes listen on 56886; the built-in DNS seed
+# seed.testnet5.p2poolv2.org returns nodes on that port.
+listen_address = "/ip4/0.0.0.0/tcp/56886"
 dial_peers = []
-dns_seed = false
+# Set false only on the first node of a new share chain.
+dns_seed = true
 
 [stratum]
 network = "testnet5"

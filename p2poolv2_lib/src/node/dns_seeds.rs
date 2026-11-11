@@ -41,6 +41,13 @@ const TESTNET4_P2P_PORT: u16 = 46884;
 /// Seed hostnames for testnet4.
 const TESTNET4_SEED_HOSTNAMES: &[&str] = &["seed.testnet4.p2poolv2.org"];
 
+/// P2P port testnet5 nodes listen on. Differs from testnet4 so both can
+/// run on one host.
+const TESTNET5_P2P_PORT: u16 = 56886;
+
+/// Seed hostnames for testnet5.
+const TESTNET5_SEED_HOSTNAMES: &[&str] = &["seed.testnet5.p2poolv2.org"];
+
 /// The DNS seeds for one network and the port their nodes listen on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct DnsSeeds {
@@ -59,6 +66,10 @@ pub(crate) fn dns_seeds_for_network(chain: Chain) -> Option<DnsSeeds> {
         Chain::Testnet4 => Some(DnsSeeds {
             hostnames: TESTNET4_SEED_HOSTNAMES,
             port: TESTNET4_P2P_PORT,
+        }),
+        Chain::Testnet5 => Some(DnsSeeds {
+            hostnames: TESTNET5_SEED_HOSTNAMES,
+            port: TESTNET5_P2P_PORT,
         }),
         _ => None,
     }
@@ -222,9 +233,13 @@ mod tests {
         assert_eq!(dns_seeds_for_network(Chain::Signet), None);
     }
 
-    /// Testnet5 has its own share chain; it must not dial testnet4 seeds.
+    /// Testnet5 has its own share chain, so it uses its own seeds rather
+    /// than testnet4's.
     #[test]
-    fn dns_seeds_for_network_testnet5_is_none() {
-        assert_eq!(dns_seeds_for_network(Chain::Testnet5), None);
+    fn dns_seeds_for_network_testnet5_has_its_own_seeds() {
+        let seeds = dns_seeds_for_network(Chain::Testnet5).unwrap();
+        assert_eq!(seeds.hostnames, &["seed.testnet5.p2poolv2.org"]);
+        assert_eq!(seeds.port, TESTNET5_P2P_PORT);
+        assert_ne!(seeds, dns_seeds_for_network(Chain::Testnet4).unwrap());
     }
 }
