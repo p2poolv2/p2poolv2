@@ -211,8 +211,13 @@ impl BitcoindRpcClient {
         self.request("getblockchaininfo", vec![]).await
     }
 
-    /// Get current bitcoin block count from bitcoind rpc
-    /// We use special rules for signet
+    /// Get a block template from bitcoind rpc
+    ///
+    /// Signet adds the signet rule. Every network declares the BIP 54
+    /// `consensuscleanup` rule: testnet5 marks it required (`!consensuscleanup`)
+    /// and refuses templates to clients that do not declare it, and the
+    /// coinbase we build already follows BIP 54. Nodes that do not know the
+    /// rule ignore it.
     pub async fn getblocktemplate(
         &self,
         network: bitcoin::Network,
@@ -221,13 +226,13 @@ impl BitcoindRpcClient {
             bitcoin::Network::Signet => {
                 vec![serde_json::json!({
                     "capabilities": ["coinbasetxn", "coinbase/append", "workid"],
-                    "rules": ["segwit", "signet"],
+                    "rules": ["segwit", "signet", "consensuscleanup"],
                 })]
             }
             _ => {
                 vec![serde_json::json!({
                     "capabilities": ["coinbasetxn", "coinbase/append", "workid"],
-                    "rules": ["segwit"],
+                    "rules": ["segwit", "consensuscleanup"],
                 })]
             }
         };
@@ -464,7 +469,7 @@ mod tests {
                 "method": "getblocktemplate",
                 "params": [{
                     "capabilities": ["coinbasetxn", "coinbase/append", "workid"],
-                    "rules": ["segwit"],
+                    "rules": ["segwit", "consensuscleanup"],
                 }],
                 "id": 0
             })))
@@ -514,7 +519,7 @@ mod tests {
                 "method": "getblocktemplate",
                 "params": [{
                     "capabilities": ["coinbasetxn", "coinbase/append", "workid"],
-                    "rules": ["segwit", "signet"],
+                    "rules": ["segwit", "signet", "consensuscleanup"],
                 }],
                 "id": 0
             })))
@@ -654,7 +659,7 @@ mod tests {
                     "method": "getblocktemplate",
                     "params": [{
                         "capabilities": ["coinbasetxn", "coinbase/append", "workid"],
-                        "rules": ["segwit"],
+                        "rules": ["segwit", "consensuscleanup"],
                     }],
                     "id": i
                 })))
@@ -679,7 +684,7 @@ mod tests {
                 "method": "getblocktemplate",
                 "params": [{
                     "capabilities": ["coinbasetxn", "coinbase/append", "workid"],
-                    "rules": ["segwit"],
+                    "rules": ["segwit", "consensuscleanup"],
                 }],
                 "id": 3
             })))
