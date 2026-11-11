@@ -523,6 +523,9 @@ impl Node {
                 error!(
                     "Failed to connect to peer: {peer_id:?}, error: {error}, connection_id: {connection_id}"
                 );
+                for address in peer_reconnector::dial_error_addresses(&error) {
+                    self.peer_reconnector.record_dial_failure(address);
+                }
                 Ok(())
             }
             SwarmEvent::Behaviour(event) => match event {

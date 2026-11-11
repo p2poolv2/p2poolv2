@@ -10,6 +10,7 @@
 use std::time::Duration;
 
 use libp2p::Multiaddr;
+use libp2p::swarm::DialError;
 use tokio::time::Instant;
 use tracing::{debug, warn};
 
@@ -139,9 +140,29 @@ impl PeerReconnector {
     }
 }
 
+/// Addresses a failed outgoing dial was attempted on, taken from the swarm's
+/// `DialError`. Dial failures that happen after `Swarm::dial` returns (for
+/// example an unsupported multiaddr or a refused TCP connection) only reach
+/// the node as an `OutgoingConnectionError`, so this is how the reconnector
+/// learns of them. Errors that carry no address yield nothing.
+pub(crate) fn dial_error_addresses(error: &DialError) -> Vec<&Multiaddr> {
+    match error {
+        DialError::Transport(errors) => errors.iter().map(|(address, _)| address).collect(),
+        DialError::WrongPeerId { address, .. } | DialError::LocalPeerId { address } => {
+            vec![address]
+        }
+        DialError::NoAddresses
+        | DialError::DialPeerConditionFalse(_)
+        | DialError::Aborted
+        | DialError::Denied { .. } => Vec::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use libp2p::PeerId;
+    use libp2p::TransportError;
     use tokio::time::advance;
 
     #[tokio::test(start_paused = true)]
@@ -252,5 +273,56 @@ mod tests {
     async fn empty_dial_peers_has_no_peers() {
         let reconnector = PeerReconnector::new(&[]);
         assert!(!reconnector.has_peers());
+    }
+
+    #[test]
+    fn dial_error_addresses_returns_transport_error_address() {
+        let address: Multiaddr = "/dns/example.com/tcp/6884".parse().unwrap();
+        let error = DialError::Transport(vec![(
+            address.clone(),
+            TransportError::MultiaddrNotSupported(address.clone()),
+        )]);
+
+        assert_eq!(dial_error_addresses(&error), vec![&address]);
+    }
+
+    #[test]
+    fn dial_error_addresses_returns_wrong_peer_id_address() {
+        let address: Multiaddr = "/ip4/127.0.0.1/tcp/6884".parse().unwrap();
+        let error = DialError::WrongPeerId {
+            obtained: PeerId::random(),
+            address: address.clone(),
+        };
+
+        assert_eq!(dial_error_addresses(&error), vec![&address]);
+    }
+
+    #[test]
+    fn dial_error_addresses_is_empty_for_aborted_dial() {
+        assert!(dial_error_addresses(&DialError::Aborted).is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn transport_dial_error_backs_off_configured_address() {
+        let mut reconnector = PeerReconnector::new(&["/dns/example.com/tcp/6884".to_string()]);
+
+        let address: Multiaddr = "/dns/example.com/tcp/6884".parse().unwrap();
+        let addresses = reconnector.addresses_to_reconnect(&[]);
+        assert_eq!(addresses, vec![address.clone()]);
+
+        let error = DialError::Transport(vec![(
+            address.clone(),
+            TransportError::MultiaddrNotSupported(address.clone()),
+        )]);
+        reconnector.record_dial_failure(dial_error_addresses(&error)[0]);
+
+        // Backoff doubled from 5s to 10s, so the 5s check interval must not redial
+        advance(Duration::from_secs(6)).await;
+        let addresses = reconnector.addresses_to_reconnect(&[]);
+        assert!(addresses.is_empty(), "Should still be in 10s backoff");
+
+        advance(Duration::from_secs(5)).await;
+        let addresses = reconnector.addresses_to_reconnect(&[]);
+        assert_eq!(addresses, vec![address]);
     }
 }
