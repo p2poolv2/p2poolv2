@@ -16,11 +16,19 @@ genesis is mined.
 
 ## Running Bitcoin Core
 
-No released Bitcoin Core supports testnet5 yet. The reference
-implementation is Bitcoin Core PR #35861 (branch
-`fjahr/2026-07-t5-draft`). That branch still has a placeholder
-genesis, so for the rehearsal chain, we patched `CTestNet5Params` in
-`src/kernel/chainparams.cpp` with the values from `curl -s
+No released Bitcoin Core supports testnet5 yet. Build bitcoind from the
+[`testnet5-rehearsal`](https://github.com/p2poolv2/bitcoin/tree/testnet5-rehearsal)
+branch of `p2poolv2/bitcoin`:
+
+```sh
+git clone --branch testnet5-rehearsal https://github.com/p2poolv2/bitcoin.git
+cd bitcoin
+```
+
+That branch is the reference implementation, Bitcoin Core PR #35861
+(branch `fjahr/2026-07-t5-draft`), with one change. The PR still has a
+placeholder genesis, so for the rehearsal chain `CTestNet5Params` in
+`src/kernel/chainparams.cpp` is patched with the values from `curl -s
 https://lapis.erisian.com.au/chain.json | jq .genesis`:
 
 | field                 | rehearsal value                                                                      |
