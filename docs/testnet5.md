@@ -1,12 +1,11 @@
-# Running P2Poolv2 on testnet5
+# Running P2Poolv2 on testnet5 (rehearsal)
 
 Testnet5 is specified in [BIP 95](https://github.com/bitcoin/bips/blob/master/bip-0095.md).
 It follows mainnet consensus, with two differences:
 
 - there is no minimum difficulty exception;
 - BIP 54 (consensus cleanup) is enforced from block 1.
-
-Its minimum difficulty is about 1,000,000, so mining needs ASICs.
+- the minimum difficulty is about 1,000,000.
 
 As of November 2026 testnet5 is still being bootstrapped by a public ckpool
 at `lapis.erisian.com.au`. A rehearsal chain is live now, and the final genesis
@@ -15,36 +14,24 @@ block will replace it. The share chain genesis in
 genesis (`00000000000027fb...42d7`). It gets replaced once the BIP 95
 genesis is mined.
 
-## How P2Poolv2 treats testnet5
+## Running Bitcoin Core
 
-- `network = "testnet5"` selects `Chain::Testnet5`.
-- Addresses use testnet4 formats: `tb1...` bitcoin addresses and `tp2pool...`
-  share chain addresses. rust-bitcoin has no testnet5 network, so
-  `Chain::Testnet5.bitcoin_network()` returns `Network::Testnet4`.
-- The share chain is separate from testnet4. It has its own genesis share,
-  and the P2P protocol string is `/p2pool/testnet5/<genesis tag>/1.0.0`.
-- There are no built-in DNS seeds. Use `dial_peers`, or bootstrap with
-  `dns_seed = false`.
-- `getblocktemplate` declares the `consensuscleanup` rule. Testnet5 bitcoind
-  refuses templates to clients that do not declare it.
+No released Bitcoin Core supports testnet5 yet. The reference
+implementation is Bitcoin Core PR #35861 (branch
+`fjahr/2026-07-t5-draft`). That branch still has a placeholder
+genesis, so for the rehearsal chain, we patched `CTestNet5Params` in
+`src/kernel/chainparams.cpp` with the values from `curl -s
+https://lapis.erisian.com.au/chain.json | jq .genesis`:
 
-## Bitcoin Core
-
-No released Bitcoin Core supports testnet5 yet. The reference implementation
-is Bitcoin Core PR #35861 (branch `fjahr/2026-07-t5-draft`). That branch
-still has a placeholder genesis, so for the rehearsal chain, patch
-`CTestNet5Params` in `src/kernel/chainparams.cpp` with the values from
-`curl -s https://lapis.erisian.com.au/chain.json | jq .genesis`:
-
-| field | rehearsal value |
-|---|---|
-| `consensus.powLimit` | `0000000000007fff800000000000000000000000000000000000000000000000` |
-| genesis message | `2026-11-09 975209 000000000000000000016bd0ac174bb6916cc35f96a9927fcc13914beabf888b` |
-| genesis output script | `CScript() << OP_RETURN << "8120f26a0014f839"_hex` |
-| nTime, nNonce | `1794253005`, `0x0f270180` |
-| nBits, nVersion | `0x1a7fff80`, `0x24e3a000` |
-| genesis hash | `00000000000027fb17bedec4b497ca06af49783d3618ecb6ed98e357db6c42d7` |
-| merkle root | `0c24fb78382cfdd3fd8da4c9d687a60ae230cab45bfc12201bef01b4c216f02b` |
+| field                 | rehearsal value                                                                      |
+|-----------------------|--------------------------------------------------------------------------------------|
+| `consensus.powLimit`  | `0000000000007fff800000000000000000000000000000000000000000000000`                   |
+| genesis message       | `2026-11-09 975209 000000000000000000016bd0ac174bb6916cc35f96a9927fcc13914beabf888b` |
+| genesis output script | `CScript() << OP_RETURN << "8120f26a0014f839"_hex`                                   |
+| nTime, nNonce         | `1794253005`, `0x0f270180`                                                           |
+| nBits, nVersion       | `0x1a7fff80`, `0x24e3a000`                                                           |
+| genesis hash          | `00000000000027fb17bedec4b497ca06af49783d3618ecb6ed98e357db6c42d7`                   |
+| merkle root           | `0c24fb78382cfdd3fd8da4c9d687a60ae230cab45bfc12201bef01b4c216f02b`                   |
 
 Build with ZMQ (P2Poolv2 subscribes to `zmqpubhashblock`):
 
