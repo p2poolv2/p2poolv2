@@ -16,7 +16,7 @@ all:
         your-server.example.com:
           ansible_user: ubuntu
 
-          p2poolv2_version: "0.16.2"
+          p2poolv2_version: "0.17.0"
           # release: install the GitHub release for p2poolv2_version
           # source:  build p2poolv2_source_ref on the host
           p2poolv2_install_method: release

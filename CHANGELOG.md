@@ -7,6 +7,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.17.0] - 2026-11-11
+
+This release adds testnet5 and changes share chain consensus: uncle work now
+counts toward chain work. Nodes running earlier versions compute different
+chain work for the same headers, so every node on a share chain must upgrade
+together.
+
+### Added
+
+- Testnet5 (BIP 95) support, mining on the bootstrap rehearsal chain run at
+  `lapis.erisian.com.au`. Set `network = "testnet5"`. Testnet5 has its own
+  share chain genesis, anchored on the rehearsal chain's genesis block
+  (`00000000000027fb...42d7`), and its own P2P protocol string, so testnet5
+  nodes never connect to testnet4 nodes. The genesis share is replaced once
+  the final BIP 95 genesis is mined, which will need a testnet5 share chain
+  reset. Addresses use testnet4 formats: `tb1...` bitcoin addresses and
+  `tp2pool1...` share chain addresses. See `docs/testnet5.md` for building and
+  running a testnet5 Bitcoin Core node.
+- Testnet5 DNS seed `seed.testnet5.p2poolv2.org`. Testnet5 nodes listen on
+  P2P port 56886.
+- Electrum wallet server over the share chain, in the new `[electrum]` config
+  section (off by default, binds localhost). Supports `server.version`,
+  `server.ping`, `server.banner`, `server.features`,
+  `blockchain.block.header`, `blockchain.headers.subscribe`,
+  `blockchain.transaction.get`, `blockchain.scripthash.get_history`,
+  `blockchain.scripthash.subscribe` and `blockchain.scripthash.unsubscribe`,
+  with scripthash notifications. The server is supervised and restarted if
+  it fails.
+- Nix flake with a development shell and crane-based package builds.
+- Ansible role to install Prometheus and Grafana natively, with provisioned
+  dashboards. Ansible can also build p2poolv2 from source on the host
+  (`p2poolv2_install_method: source`), and the nginx role supports Arch
+  Linux.
+- Share difficulty in the log line for a confirmed share.
+
+### Changed
+
+- Uncle work counts toward share chain work. Header sync waits for a header's
+  uncles as it waits for its parent, and uncles are validated during header
+  sync.
+- A share may not include an uncle already referenced by one of its
+  ancestors. Shares built by the node exclude such uncles.
+- `getblocktemplate` requests declare the BIP 54 `consensuscleanup` rule on
+  every network. Testnet5 bitcoind refuses templates to clients that do not
+  declare it; nodes that do not know the rule ignore it.
+- The startup log and the found blocks `network` label in `/metrics` use the
+  chain name, so testnet5 shows as `testnet5` rather than `testnet4`. The
+  startup log now says `main` for mainnet, where it said `bitcoin`.
+- The Grafana found blocks table links to the block explorer from a new
+  Explorer column instead of the block hash. Chains without a public explorer
+  (testnet5) show no link.
+- Ansible no longer manages certbot certificates.
+
+### Fixed
+
+- In Hydrapool mode, the node again ignores a change of share chain genesis.
+- The vendored libzmq build no longer crashes with SIGSEGV when the compiler
+  enables AVX by default.
+- The Docker node image build copies the `p2poolv2_electrum` crate.
+
+### Security
+
+- Updated `tokio`, `zstd` and `crypto-bigint` for cargo-deny advisories, and
+  upgraded `sha2` and `hmac`.
+- Removed the unused `k256` secp256k1 dependency from libp2p.
+
 ## [v0.16.3] - 2026-11-06
 
 ### Fixed
@@ -1290,7 +1356,8 @@ and existing share chain stores must be cleared.
 
 We used tags like hydrapool.v0.x.0 and we didn't keep a changelog.
 
-[Unreleased]: https://github.com/p2poolv2/p2poolv2/compare/v0.16.3...HEAD
+[Unreleased]: https://github.com/p2poolv2/p2poolv2/compare/v0.17.0...HEAD
+[v0.17.0]: https://github.com/p2poolv2/p2poolv2/compare/v0.16.3...v0.17.0
 [v0.16.3]: https://github.com/p2poolv2/p2poolv2/compare/v0.16.2...v0.16.3
 [v0.16.2]: https://github.com/p2poolv2/p2poolv2/compare/v0.16.1...v0.16.2
 [v0.16.1]: https://github.com/p2poolv2/p2poolv2/compare/v0.16.0...v0.16.1
