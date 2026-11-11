@@ -233,7 +233,7 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
                 // documented as not required here.
                 let network = match &cli.config {
                     Some(config_path) if Path::new(config_path).exists() => {
-                        Some(Config::load(config_path)?.stratum.network)
+                        Some(Config::load(config_path)?.stratum.network())
                     }
                     _ => None,
                 };

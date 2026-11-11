@@ -191,7 +191,7 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
     let exit_sender = watch::Sender::new(ShutdownReason::None);
     let sig_handle = setup_signal_handler(exit_sender.clone());
 
-    let genesis = ShareBlock::build_genesis_for_network(config.stratum.network).unwrap();
+    let genesis = ShareBlock::build_genesis_for_network(config.stratum.chain).unwrap();
     let store = Arc::new(Store::new(config.store.path.clone(), false).unwrap());
 
     let (write_tx, write_rx) = write_channel();
@@ -207,7 +207,7 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
     });
 
     let store_handle = StoreHandle::new(store.clone(), write_tx);
-    let chain_store_handle = ChainStoreHandle::new(store_handle, config.stratum.network);
+    let chain_store_handle = ChainStoreHandle::new(store_handle, config.stratum.network());
 
     if let Err(e) = chain_store_handle
         .init_for_mode(genesis.clone(), config.stratum.mode)
@@ -256,6 +256,7 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
     );
 
     let stratum_config = config.stratum.clone().parse().unwrap();
+    let network = stratum_config.network();
     let bitcoinrpc_config = config.bitcoinrpc.clone();
 
     let (stratum_shutdown_tx, stratum_shutdown_rx) = tokio::sync::oneshot::channel();
@@ -279,7 +280,7 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
             bitcoinrpc_config_cloned,
             notify_tx_for_gbt,
             GBT_POLL_INTERVAL,
-            stratum_config.network,
+            network,
             zmq_trigger_rx,
         )
         .await
@@ -299,8 +300,7 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
         PoolDifficulty::build(&chain_store_handle).expect("Failed to build pool difficulty");
 
     let cloned_stratum_config = stratum_config.clone();
-    let (payout, shared_pplns_window) =
-        build_payout_for_mode(stratum_config.mode, cloned_stratum_config.network);
+    let (payout, shared_pplns_window) = build_payout_for_mode(stratum_config.mode, network);
     let exit_sender_notify = exit_sender.clone();
     let exit_receiver_notify = exit_sender.subscribe();
     tokio::spawn(async move {
@@ -369,7 +369,7 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
             .validate_addresses(Some(
                 stratum_config.donation.unwrap_or_default() != FULL_DONATION_BIPS,
             ))
-            .network(stratum_config.network)
+            .network(network)
             .version_mask(stratum_config.version_mask)
             .max_connections(stratum_config.max_connections)
             .wait_for_chain_sync(stratum_config.wait_for_chain_sync)
@@ -427,7 +427,7 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
         tracker_handle,
         node_handle.clone(),
         monitoring_event_sender.clone(),
-        stratum_config.network,
+        network,
         stratum_config.pool_signature,
     )
     .await

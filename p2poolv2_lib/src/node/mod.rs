@@ -142,10 +142,10 @@ impl Node {
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let id_keys = libp2p::identity::Keypair::generate_ed25519();
 
-        let genesis_hash = ShareBlock::build_genesis_for_network(config.stratum.network)
+        let genesis_hash = ShareBlock::build_genesis_for_network(config.stratum.chain)
             .map_err(|error| -> Box<dyn Error> { error })?
             .block_hash();
-        let network_protocol = protocol_string(config.stratum.network, genesis_hash);
+        let network_protocol = protocol_string(config.stratum.chain, genesis_hash);
 
         let behavior = match P2PoolBehaviour::new(&id_keys, &config, genesis_hash) {
             Ok(behavior) => behavior,
@@ -255,7 +255,7 @@ impl Node {
         let (swarm_tx, swarm_rx) = mpsc::channel(100);
 
         let dns_seeds = if config.network.dns_seed {
-            dns_seeds::dns_seeds_for_network(config.stratum.network)
+            dns_seeds::dns_seeds_for_network(config.stratum.chain)
         } else {
             None
         };
@@ -712,7 +712,8 @@ mod tests {
     use super::ChainStoreHandle;
     use super::P2PoolBehaviourEvent;
     use crate::config::{
-        ApiConfig, Config, ElectrumConfig, LoggingConfig, NetworkConfig, StoreConfig, StratumConfig,
+        ApiConfig, Chain, Config, ElectrumConfig, LoggingConfig, NetworkConfig, StoreConfig,
+        StratumConfig,
     };
     use crate::monitoring_events::create_monitoring_event_channel;
     use crate::node::Node;
@@ -943,7 +944,7 @@ mod tests {
     #[tokio::test]
     async fn test_dns_seeds_enabled_on_network_with_seeds() {
         let mut config = build_test_config("", None);
-        config.stratum.network = bitcoin::Network::Testnet4;
+        config.stratum.chain = Chain::Testnet4;
         config.network.dns_seed = true;
         let node = build_test_node(config);
 
@@ -953,7 +954,7 @@ mod tests {
     #[tokio::test]
     async fn test_dns_seeds_disabled_by_config() {
         let mut config = build_test_config("", None);
-        config.stratum.network = bitcoin::Network::Testnet4;
+        config.stratum.chain = Chain::Testnet4;
         config.network.dns_seed = false;
         let node = build_test_node(config);
 

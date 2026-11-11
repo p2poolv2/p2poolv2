@@ -8,6 +8,7 @@ use libp2p::futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use libp2p::request_response::{Codec, OutboundFailure};
 use std::io;
 
+use crate::config::Chain;
 use crate::node::messages::{MAX_P2P_MESSAGE_SIZE, Message, RawMessage};
 use bitcoin::BlockHash;
 
@@ -28,30 +29,30 @@ fn genesis_tag(genesis_hash: BlockHash) -> String {
     tag
 }
 
-/// Build the libp2p protocol string for a bitcoin network and share chain.
+/// Build the libp2p protocol string for a bitcoin chain and share chain.
 ///
 /// Network isolation is enforced through protocol negotiation: nodes on
 /// different networks, or on share chains with different genesis blocks,
 /// derive different protocol strings and therefore fail to negotiate a shared
 /// protocol. Centralizing construction here keeps the string consistent across
 /// the request-response protocol, Identify, and the Noise prologue.
-pub fn protocol_string(network: bitcoin::Network, genesis_hash: BlockHash) -> String {
+pub fn protocol_string(chain: Chain, genesis_hash: BlockHash) -> String {
     format!(
         "/p2pool/{}/{}/1.0.0",
-        network.to_core_arg(),
+        chain.as_str(),
         genesis_tag(genesis_hash)
     )
 }
 
-/// Build the Kademlia protocol string for a bitcoin network and share chain.
+/// Build the Kademlia protocol string for a bitcoin chain and share chain.
 ///
 /// Kademlia uses a distinct protocol name from [`protocol_string`] but shares
 /// the same network and genesis segments, so it is derived here to keep both
 /// in step.
-pub fn kad_protocol_string(network: bitcoin::Network, genesis_hash: BlockHash) -> String {
+pub fn kad_protocol_string(chain: Chain, genesis_hash: BlockHash) -> String {
     format!(
         "/p2pool/{}/{}/kad/1.0.0",
-        network.to_core_arg(),
+        chain.as_str(),
         genesis_tag(genesis_hash)
     )
 }
@@ -61,8 +62,8 @@ pub fn kad_protocol_string(network: bitcoin::Network, genesis_hash: BlockHash) -
 pub struct P2PoolRequestResponseProtocol(String);
 
 impl P2PoolRequestResponseProtocol {
-    pub fn new(network: bitcoin::Network, genesis_hash: BlockHash) -> Self {
-        Self(protocol_string(network, genesis_hash))
+    pub fn new(chain: Chain, genesis_hash: BlockHash) -> Self {
+        Self(protocol_string(chain, genesis_hash))
     }
 }
 
@@ -207,17 +208,18 @@ pub enum RequestResponseError {
 #[cfg(test)]
 mod tests {
     use super::{GENESIS_TAG_LEN, kad_protocol_string, protocol_string};
+    use crate::config::Chain;
     use crate::shares::share_block::ShareBlock;
 
     #[test]
     fn test_protocol_string_carries_network_and_genesis_tag() {
-        let genesis_hash = ShareBlock::build_genesis_for_network(bitcoin::Network::Signet)
+        let genesis_hash = ShareBlock::build_genesis_for_network(Chain::Signet)
             .unwrap()
             .block_hash();
         let expected_tag = &genesis_hash.to_string()[..GENESIS_TAG_LEN];
 
         assert_eq!(
-            protocol_string(bitcoin::Network::Signet, genesis_hash),
+            protocol_string(Chain::Signet, genesis_hash),
             format!("/p2pool/signet/{expected_tag}/1.0.0")
         );
     }
@@ -227,17 +229,17 @@ mod tests {
     /// unchanged, so nodes on the old chain cannot negotiate with new ones.
     #[test]
     fn test_protocol_string_differs_when_genesis_differs_on_same_network() {
-        let genesis_hash = ShareBlock::build_genesis_for_network(bitcoin::Network::Testnet4)
+        let genesis_hash = ShareBlock::build_genesis_for_network(Chain::Testnet4)
             .unwrap()
             .block_hash();
-        let other_genesis_hash = ShareBlock::build_genesis_for_network(bitcoin::Network::Signet)
+        let other_genesis_hash = ShareBlock::build_genesis_for_network(Chain::Signet)
             .unwrap()
             .block_hash();
         assert_ne!(genesis_hash, other_genesis_hash);
 
         assert_ne!(
-            protocol_string(bitcoin::Network::Testnet4, genesis_hash),
-            protocol_string(bitcoin::Network::Testnet4, other_genesis_hash)
+            protocol_string(Chain::Testnet4, genesis_hash),
+            protocol_string(Chain::Testnet4, other_genesis_hash)
         );
     }
 
@@ -245,13 +247,35 @@ mod tests {
     /// same genesis so a peer cannot join the DHT of a chain it is not on.
     #[test]
     fn test_kad_protocol_string_is_distinct_but_carries_same_genesis_tag() {
-        let genesis_hash = ShareBlock::build_genesis_for_network(bitcoin::Network::Signet)
+        let genesis_hash = ShareBlock::build_genesis_for_network(Chain::Signet)
             .unwrap()
             .block_hash();
         let expected_tag = &genesis_hash.to_string()[..GENESIS_TAG_LEN];
 
-        let kad = kad_protocol_string(bitcoin::Network::Signet, genesis_hash);
+        let kad = kad_protocol_string(Chain::Signet, genesis_hash);
         assert_eq!(kad, format!("/p2pool/signet/{expected_tag}/kad/1.0.0"));
-        assert_ne!(kad, protocol_string(bitcoin::Network::Signet, genesis_hash));
+        assert_ne!(kad, protocol_string(Chain::Signet, genesis_hash));
+    }
+
+    /// Testnet5 maps to testnet4 for addresses, but its share chain must not
+    /// negotiate with testnet4 nodes.
+    #[test]
+    fn test_testnet5_protocol_string_differs_from_testnet4() {
+        let testnet4_genesis = ShareBlock::build_genesis_for_network(Chain::Testnet4)
+            .unwrap()
+            .block_hash();
+        let testnet5_genesis = ShareBlock::build_genesis_for_network(Chain::Testnet5)
+            .unwrap()
+            .block_hash();
+        let testnet5_tag = &testnet5_genesis.to_string()[..GENESIS_TAG_LEN];
+
+        assert_eq!(
+            protocol_string(Chain::Testnet5, testnet5_genesis),
+            format!("/p2pool/testnet5/{testnet5_tag}/1.0.0")
+        );
+        assert_ne!(
+            protocol_string(Chain::Testnet5, testnet5_genesis),
+            protocol_string(Chain::Testnet4, testnet4_genesis)
+        );
     }
 }

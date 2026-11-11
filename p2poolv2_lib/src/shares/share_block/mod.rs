@@ -7,6 +7,7 @@ pub mod short_ids;
 
 use super::transactions;
 use crate::address::Address as P2PoolAddress;
+use crate::config::Chain;
 use crate::shares::coinbase_proof::{CoinbaseProof, MAX_COINBASE_MERKLE_BRANCH_LENGTH};
 use crate::shares::genesis;
 use crate::shares::share_commitment::ShareCommitment;
@@ -424,22 +425,14 @@ impl ShareBlock {
         .map(TxMerkleNode::from)
     }
 
-    /// Build a genesis share block for a given network
+    /// Build a genesis share block for a given chain
     /// The bitcoin blockhash is hardcoded, so are the coinbase, nonce2, nonce, ntime, diff
     /// The workinfoid and clientid are 0 for genesis block on all networks
-    pub fn build_genesis_for_network(
-        network: bitcoin::Network,
-    ) -> Result<Self, Box<dyn Error + Send + Sync>> {
-        tracing::debug!("USING NETWORK {network}");
-        assert!(
-            network == bitcoin::Network::Signet
-                || network == bitcoin::Network::Bitcoin
-                || network == bitcoin::Network::Testnet4
-                || network == bitcoin::Network::Regtest,
-            "Network Testnet not yet supported"
-        );
-        let genesis_data = genesis::genesis_data(network).unwrap();
-        ShareBlock::build_genesis(&genesis_data, network)
+    /// Returns an error for a chain with no share chain genesis (testnet3).
+    pub fn build_genesis_for_network(chain: Chain) -> Result<Self, Box<dyn Error + Send + Sync>> {
+        tracing::debug!("USING CHAIN {chain}");
+        let genesis_data = genesis::genesis_data(chain).map_err(|error| error.to_string())?;
+        ShareBlock::build_genesis(&genesis_data, chain.bitcoin_network())
     }
 
     /// Build a genesis share chain block from the genesis data
@@ -705,7 +698,7 @@ mod tests {
 
     #[test]
     fn test_build_genesis_share_header() {
-        let share = ShareBlock::build_genesis_for_network(bitcoin::Network::Signet).unwrap();
+        let share = ShareBlock::build_genesis_for_network(Chain::Signet).unwrap();
 
         assert!(share.header.uncles.is_empty());
         // Verify the genesis address is derived from the known pubkey
