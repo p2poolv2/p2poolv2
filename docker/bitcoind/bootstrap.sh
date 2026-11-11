@@ -14,6 +14,10 @@ case "$NETWORK" in
     RPC_PORT=48332
     ADDR="tb1q0afww6y0kgl4tyjjyv6xlttvfwdfqxvrfzz35f"
     ;;
+  testnet5)
+    RPC_PORT=18532
+    ADDR="tb1q0afww6y0kgl4tyjjyv6xlttvfwdfqxvrfzz35f"
+    ;;
   *)
     echo "Unsupported network: $NETWORK"
     exit 1

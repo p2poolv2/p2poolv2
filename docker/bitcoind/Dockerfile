@@ -19,8 +19,8 @@ RUN apk add --no-cache \
     capnproto \
     capnproto-dev
 
-# Clone the latest release from Bitcoin Core repository
-RUN git clone --depth 1 --branch v30.2 https://github.com/bitcoin/bitcoin.git /bitcoin
+# Clone the latest testnet5 from the branch in PR#35861 on core
+ADD --keep-git-dir=true https://github.com/fjahr/bitcoin.git#2026-07-t5-draft /bitcoin
 
 # Build Bitcoin Core
 WORKDIR /bitcoin
@@ -53,7 +53,8 @@ RUN apk add --no-cache \
     libzmq \
     libstdc++ \
     sqlite-libs \
-    python3
+    python3 \
+    capnproto
 
 # Create bitcoin user
 RUN adduser -S bitcoin
@@ -72,8 +73,12 @@ EXPOSE 38332 38333
 # Ports for testnet4
 EXPOSE 48332 48333
 
+# Ports for testnet5
+EXPOSE 18532 18533
+
 COPY signet/bitcoin-signet.conf /etc/bitcoin/
 COPY testnet4/bitcoin-testnet4.conf /etc/bitcoin/
+COPY testnet5/bitcoin-testnet5.conf /etc/bitcoin/
 COPY bcli /usr/local/bin/
 COPY bootstrap.sh /usr/local/bin/
 
