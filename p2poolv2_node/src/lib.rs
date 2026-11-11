@@ -427,7 +427,7 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
         tracker_handle,
         node_handle.clone(),
         monitoring_event_sender.clone(),
-        network,
+        stratum_config.chain,
         stratum_config.pool_signature,
     )
     .await

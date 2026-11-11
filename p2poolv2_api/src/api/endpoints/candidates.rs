@@ -72,7 +72,7 @@ pub(crate) async fn candidates(
     Ok(Json(CandidatesResponse {
         from_height,
         to_height,
-        shares: ShareInfoDisplay::from_share_infos(&candidates, Some(state.app_config.network)),
+        shares: ShareInfoDisplay::from_share_infos(&candidates, Some(state.app_config.network())),
     }))
 }
 
@@ -82,6 +82,7 @@ mod tests {
     use crate::api::server::{AppConfig, AppState};
     use axum::extract::{Query, State};
     use p2poolv2_lib::accounting::stats::metrics;
+    use p2poolv2_lib::config::Chain;
     use p2poolv2_lib::monitoring_events::create_monitoring_event_channel;
     use p2poolv2_lib::node::actor::NodeHandle;
     use p2poolv2_lib::stratum::work::tracker::start_tracker_actor;
@@ -98,7 +99,7 @@ mod tests {
         let state = Arc::new(AppState {
             app_config: AppConfig {
                 pool_signature_length: 0,
-                network: bitcoin::Network::Signet,
+                chain: Chain::Signet,
                 cors_allowed: false,
             },
             chain_store_handle,
