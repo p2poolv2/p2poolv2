@@ -39,7 +39,7 @@ async fn main() -> ExitCode {
 
     info!(
         "Running on {} network (git: {})",
-        &config.stratum.network(),
+        config.stratum.chain,
         env!("GIT_VERSION")
     );
 
