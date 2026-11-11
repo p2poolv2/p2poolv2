@@ -19,7 +19,7 @@ use p2poolv2_lib::node::actor::NodeHandle;
 use p2poolv2_lib::stratum::work::tracker::{JobTracker, parse_coinbase};
 use p2poolv2_lib::{
     accounting::{payout::simple_pplns::SimplePplnsShare, stats::metrics::MetricsHandle},
-    config::ApiConfig,
+    config::{ApiConfig, Chain},
     shares::chain::chain_store_handle::ChainStoreHandle,
     store::found_block::FoundBlock,
 };
@@ -49,8 +49,17 @@ pub(crate) struct AppState {
 #[derive(Clone)]
 pub struct AppConfig {
     pub pool_signature_length: usize,
-    pub network: bitcoin::Network,
+    /// The chain the node mines on. Use `network()` for address rendering.
+    pub chain: Chain,
     pub cors_allowed: bool,
+}
+
+impl AppConfig {
+    /// The rust-bitcoin network for rendering addresses. Testnet5 maps to
+    /// testnet4, whose address formats it shares.
+    pub fn network(&self) -> bitcoin::Network {
+        self.chain.bitcoin_network()
+    }
 }
 
 /// Get AppConfig from AppState ref
@@ -150,12 +159,12 @@ pub async fn start_api_server(
     tracker_handle: Arc<JobTracker>,
     node_handle: NodeHandle,
     monitoring_event_sender: MonitoringEventSender,
-    network: bitcoin::Network,
+    chain: Chain,
     pool_signature: Option<String>,
 ) -> Result<(oneshot::Sender<()>, u16), std::io::Error> {
     let app_config = AppConfig {
         pool_signature_length: pool_signature.unwrap_or_default().len(),
-        network,
+        chain,
         cors_allowed: config.cors_allowed,
     };
 
@@ -224,7 +233,7 @@ async fn metrics(State(state): State<Arc<AppState>>) -> String {
     if let Some(coinbase_distribution) = parse_coinbase::get_distribution(
         &state.tracker_handle,
         state.app_config.pool_signature_length,
-        state.app_config.network,
+        state.app_config.network(),
     ) {
         exposition.push_str("# HELP coinbase_rewards_distribution Current coinbase rewards distribution between users\n");
         exposition.push_str(&coinbase_distribution);
@@ -266,7 +275,7 @@ async fn metrics(State(state): State<Arc<AppState>>) -> String {
     match state.chain_store_handle.get_found_blocks() {
         Ok(found_blocks) => exposition.push_str(&found_blocks_exposition(
             &found_blocks,
-            state.app_config.network,
+            state.app_config.chain,
         )),
         Err(error) => warn!("Failed to read found blocks for /metrics: {error}"),
     }
@@ -284,11 +293,12 @@ async fn metrics(State(state): State<Arc<AppState>>) -> String {
 ///
 /// Emits a counter of all found blocks and one gauge line per block, set to
 /// its bitcoin header time and labeled with blockhash, height, miner and the
-/// bitcoin network so Grafana can list the blocks and link each to the block
-/// explorer for that network. The network label uses bitcoin core's names
-/// (main, testnet4, signet, regtest). Entries are never deleted from the
-/// store, so the counter is monotonic.
-fn found_blocks_exposition(found_blocks: &[FoundBlock], network: bitcoin::Network) -> String {
+/// bitcoin chain so Grafana can list the blocks and link each to the block
+/// explorer for that chain. The network label uses bitcoin core's chain names
+/// (main, testnet4, testnet5, signet, regtest), so testnet5 blocks are not
+/// labeled testnet4. Entries are never deleted from the store, so the counter
+/// is monotonic.
+fn found_blocks_exposition(found_blocks: &[FoundBlock], chain: Chain) -> String {
     let mut output = String::with_capacity(256 + found_blocks.len() * 256);
     output.push_str(
         "# HELP bitcoin_blocks_found_total Total number of bitcoin blocks found by the pool\n",
@@ -302,7 +312,7 @@ fn found_blocks_exposition(found_blocks: &[FoundBlock], network: bitcoin::Networ
         "# HELP bitcoin_block_found_time_seconds Bitcoin header time of a block found by the pool, labeled with blockhash, height, miner and network\n",
     );
     output.push_str("# TYPE bitcoin_block_found_time_seconds gauge\n");
-    let network_name = network.to_core_arg();
+    let network_name = chain.as_str();
     for found_block in found_blocks {
         output.push_str(&format!(
             "bitcoin_block_found_time_seconds{{blockhash=\"{}\",height=\"{}\",miner=\"{}\",network=\"{}\"}} {}\n",
@@ -476,7 +486,6 @@ mod tests {
     use bitcoin::blockdata::constants::genesis_block;
     use bitcoin::{Amount, Network, TxOut};
     use p2poolv2_lib::accounting::stats::metrics;
-    use p2poolv2_lib::config::Chain;
     use p2poolv2_lib::monitoring_events::create_monitoring_event_channel;
     use p2poolv2_lib::shares::share_block::ShareBlock;
     use p2poolv2_lib::stratum::work::block_template::BlockTemplate;
@@ -499,7 +508,7 @@ mod tests {
         let state = Arc::new(AppState {
             app_config: AppConfig {
                 pool_signature_length: 0,
-                network: bitcoin::Network::Signet,
+                chain: Chain::Signet,
                 cors_allowed: false,
             },
             chain_store_handle,
@@ -540,7 +549,7 @@ mod tests {
             miner_bitcoin_address: "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh".to_string(),
         }];
 
-        let exposition = found_blocks_exposition(&found_blocks, Network::Bitcoin);
+        let exposition = found_blocks_exposition(&found_blocks, Chain::Main);
 
         assert!(
             exposition.contains(
@@ -553,9 +562,33 @@ mod tests {
         ));
     }
 
+    /// Testnet5 renders addresses as testnet4, but its found blocks must be
+    /// labeled testnet5 so Grafana does not link them to a testnet4 explorer.
+    #[test]
+    fn test_found_blocks_exposition_labels_testnet5_blocks_testnet5() {
+        let found_blocks = vec![FoundBlock {
+            bitcoin_height: 2843,
+            bitcoin_blockhash: bitcoin::BlockHash::from_str(
+                "0000000000000510b43c583c68c5c442e30630026c0b5f22bce907a28867c6db",
+            )
+            .unwrap(),
+            share_blockhash: bitcoin::BlockHash::from_str(
+                "00000000000000000001b4e3a8b6c1d2e3f405162738495a6b7c8d9e0f1a2b3c",
+            )
+            .unwrap(),
+            bitcoin_time: 1794379121,
+            miner_bitcoin_address: "tb1qpzjmukvv5vulz640jlust6j345ghw2p8hwl6e4".to_string(),
+        }];
+
+        let exposition = found_blocks_exposition(&found_blocks, Chain::Testnet5);
+
+        assert!(exposition.contains("network=\"testnet5\"} 1794379121\n"));
+        assert!(!exposition.contains("network=\"testnet4\""));
+    }
+
     #[test]
     fn test_found_blocks_exposition_with_no_blocks() {
-        let exposition = found_blocks_exposition(&[], Network::Testnet4);
+        let exposition = found_blocks_exposition(&[], Chain::Testnet4);
 
         assert!(exposition.contains("bitcoin_blocks_found_total 0\n"));
         assert!(!exposition.contains("bitcoin_block_found_time_seconds{"));
@@ -732,7 +765,7 @@ mod tests {
         let state = Arc::new(AppState {
             app_config: AppConfig {
                 pool_signature_length: 8,
-                network: bitcoin::Network::Signet,
+                chain: Chain::Signet,
                 cors_allowed: false,
             },
             chain_store_handle,
@@ -840,7 +873,7 @@ mod tests {
         let state = Arc::new(AppState {
             app_config: AppConfig {
                 pool_signature_length: 0,
-                network: bitcoin::Network::Signet,
+                chain: Chain::Signet,
                 cors_allowed: false,
             },
             chain_store_handle,
@@ -1004,7 +1037,7 @@ mod tests {
         let state = Arc::new(AppState {
             app_config: AppConfig {
                 pool_signature_length: 0,
-                network: bitcoin::Network::Signet,
+                chain: Chain::Signet,
                 cors_allowed: true,
             },
             chain_store_handle,

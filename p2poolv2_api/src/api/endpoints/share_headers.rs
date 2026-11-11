@@ -154,7 +154,7 @@ pub(crate) async fn share_headers(
     render_header_addresses(
         &mut value["headers"],
         &response.headers,
-        state.app_config.network,
+        state.app_config.network(),
         |entry| &entry.header,
     );
 
@@ -169,6 +169,7 @@ mod tests {
     use bitcoin::Network;
     use p2poolv2_lib::accounting::stats::metrics;
     use p2poolv2_lib::address::witness_program_codec::to_address_string;
+    use p2poolv2_lib::config::Chain;
     use p2poolv2_lib::monitoring_events::create_monitoring_event_channel;
     use p2poolv2_lib::node::actor::NodeHandle;
     use p2poolv2_lib::stratum::work::tracker::start_tracker_actor;
@@ -185,7 +186,7 @@ mod tests {
         let state = Arc::new(AppState {
             app_config: AppConfig {
                 pool_signature_length: 0,
-                network: bitcoin::Network::Signet,
+                chain: Chain::Signet,
                 cors_allowed: false,
             },
             chain_store_handle,

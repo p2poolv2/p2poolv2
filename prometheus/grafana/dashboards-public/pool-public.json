@@ -327,7 +327,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Bitcoin blocks found by the pool. Only bitcoin blocks this node can decipher from the share chain are shown: blocks carried by confirmed shares and their uncles, recorded as the node runs and rebuilt when a node syncs. Blocks found before the current share chain started are not shown. Use the block hash link to check whether a block is still on the bitcoin main chain.",
+      "description": "Bitcoin blocks found by the pool. Only bitcoin blocks this node can decipher from the share chain are shown: blocks carried by confirmed shares and their uncles, recorded as the node runs and rebuilt when a node syncs. Blocks found before the current share chain started are not shown. Use the explorer link to check whether a block is still on the bitcoin main chain. Chains without a public explorer (testnet5) show no link.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -393,7 +393,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "Only bitcoin blocks this node can decipher from the share chain are shown: blocks carried by confirmed shares and their uncles, recorded as the node runs and rebuilt when a node syncs. Blocks found before the current share chain started are not shown. Use the block hash link to check whether a block is still on the bitcoin main chain.",
+      "description": "Only bitcoin blocks this node can decipher from the share chain are shown: blocks carried by confirmed shares and their uncles, recorded as the node runs and rebuilt when a node syncs. Blocks found before the current share chain started are not shown. Use the explorer link to check whether a block is still on the bitcoin main chain. Chains without a public explorer (testnet5) show no link.",
       "fieldConfig": {
         "defaults": {
           "custom": {
@@ -417,7 +417,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "Block hash"
+              "options": "Explorer"
             },
             "properties": [
               {
@@ -426,7 +426,7 @@
                   {
                     "targetBlank": true,
                     "title": "Open in block explorer",
-                    "url": "${__data.fields.explorer}/block/${__value.raw}"
+                    "url": "${__data.fields.explorer}/block/${__data.fields.blockhash}"
                   }
                 ]
               }
@@ -484,7 +484,7 @@
             "uid": "${DS_PROMETHEUS}"
           },
           "editorMode": "code",
-          "expr": "label_replace(label_replace(max by (blockhash, height, miner, network) (bitcoin_block_found_time_seconds) * 1000, \"explorer\", \"https://mempool.space\", \"network\", \"main\"), \"explorer\", \"https://mempool.space/$1\", \"network\", \"(testnet4|signet)\")",
+          "expr": "label_replace(label_replace(label_replace(max by (blockhash, height, miner, network) (bitcoin_block_found_time_seconds) * 1000, \"explorer\", \"https://mempool.space\", \"network\", \"main\"), \"explorer\", \"https://mempool.space/$1\", \"network\", \"(testnet4|signet)\"), \"explorer_name\", \"mempool.space\", \"explorer\", \".+\")",
           "format": "table",
           "instant": true,
           "range": false,
@@ -503,13 +503,15 @@
               "Value": 0,
               "height": 1,
               "blockhash": 2,
-              "miner": 3
+              "miner": 3,
+              "explorer_name": 4
             },
             "renameByName": {
               "Value": "Found at",
               "blockhash": "Block hash",
               "height": "Height",
-              "miner": "Miner"
+              "miner": "Miner",
+              "explorer_name": "Explorer"
             }
           }
         }

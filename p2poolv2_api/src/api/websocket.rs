@@ -81,7 +81,7 @@ pub(crate) async fn websocket_handler(
     }
 
     let monitoring_event_sender = state.monitoring_event_sender.clone();
-    let network = state.app_config.network;
+    let network = state.app_config.network();
     Ok(upgrade.on_upgrade(move |socket| handle_socket(socket, monitoring_event_sender, network)))
 }
 
