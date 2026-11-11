@@ -67,7 +67,7 @@ bootstrap_address = "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk"
 # In basis points, 1% = 100 basis points. Default 0
 # fee = 0
 zmqpubhashblock = "tcp://127.0.0.1:28332"
-# The network can be "main", "testnet4" or "signet"
+# The network can be "main", "testnet4", "testnet5", "signet" or "regtest"
 network = "signet"
 # Use BIP 320 mask for version rolling (see https://github.com/bitcoin/bips/blob/master/bip-0320.mediawiki)
 version_mask = "1fffe000"

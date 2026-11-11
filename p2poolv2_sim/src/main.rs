@@ -68,7 +68,7 @@ async fn main() -> ExitCode {
 
     info!(
         "Running on {} network (sim mode, git: {})",
-        &node_config.stratum.network,
+        &node_config.stratum.network(),
         env!("GIT_VERSION")
     );
 
@@ -92,7 +92,7 @@ async fn main() -> ExitCode {
 
     // Wire the sim emitter using the node handles.
     if sim_cfg.enabled {
-        let sim_network = node_config.stratum.network;
+        let sim_network = node_config.stratum.network();
         match sim_cfg
             .miner_address
             .parse::<bitcoin::Address<bitcoin::address::NetworkUnchecked>>()
