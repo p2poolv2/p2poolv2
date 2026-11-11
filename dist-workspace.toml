@@ -25,3 +25,8 @@ build = ["true"]
 [[dist.extra-artifacts]]
 artifacts = ["dashboard.tar.gz"]
 build = ["tar", "czf", "dashboard.tar.gz", "-C", "p2poolv2_api", "static"]
+
+# GitHub retired the macos-14 runner that dist 0.32.0 picks by default for
+# aarch64-apple-darwin, which cancels the release build.
+[dist.github-custom-runners]
+aarch64-apple-darwin = "macos-15"
