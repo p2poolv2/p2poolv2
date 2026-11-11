@@ -2,7 +2,7 @@
 # Override these in inventory group_vars or host_vars.
 
 # Version and instance
-p2poolv2_version: "0.16.2"
+p2poolv2_version: "0.17.0"
 p2poolv2_instance: "main"
 
 # How to get the p2poolv2 binaries:
