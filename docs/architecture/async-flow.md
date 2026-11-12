@@ -66,6 +66,12 @@ except the per-peer services and the StoreWriter thread:
 - **BlockReceiver** -- persists received share blocks, resolves dependencies,
   queues validation.
 - **BlockFetcher** -- distributes `GetData` requests across peers with timeouts.
+- **Tx fetch disconnect forwarder** -- relays `ConnectionTracker` disconnect
+  broadcasts to the transaction fetcher.
+- **Transaction fetcher** -- correlates transaction requests to their replies;
+  one flight per txid.
+- **Tx fetch dispatcher** -- converts the fetcher's `TxFetchDispatch::SendRequest`
+  events into `swarm_tx` requests; owns the swarm send.
 - **ValidationWorker** -- context-free validation, one spawned task per block,
   concurrency capped by a semaphore sized to the CPU count.
 - **OrganiseWorker** -- serial candidate-to-confirmed promotion.
@@ -85,6 +91,8 @@ Every channel is bounded, and every edge has an explicit policy:
 | Actor -> per-peer service | max(rps, 16) | `try_send`; disconnect the peer |
 | Actor -> ResponseWorker | 1024 | `try_send`; warn and drop (header sync re-requests, fetcher times out) |
 | Actor -> BlockFetcher (`PeerRemoved`) | 8192 | `try_send`; warn (in-flight requests time out) |
+| Actor -> TxFetcher disconnect forwarder | 256 (broadcast receiver) | awaited recv; lagged events skipped with a warning; channel close ends the forwarder |
+| TxFetcher -> Tx dispatch task | 1024 | awaited send; dispatcher owns `swarm_tx` |
 | Workers / services -> Actor (`swarm_tx`) | 100 | awaited send; bounded because the actor always drains |
 | ResponseWorker -> BlockReceiver | 8192 | awaited send |
 | BlockReceiver -> ValidationWorker | 8192 | awaited send |
