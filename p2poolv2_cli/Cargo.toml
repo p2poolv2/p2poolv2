@@ -19,6 +19,7 @@ path = "src/lib.rs"
 
 [dependencies]
 p2poolv2_lib = { workspace = true }
+bitcoindrpc = { workspace = true }
 p2poolv2_wallet = { workspace = true }
 bitcoin = { workspace = true }
 tokio = { workspace = true }
@@ -41,4 +42,5 @@ chrono = { workspace = true }
 wiremock = { workspace = true }
 tokio = { workspace = true, features = ["full", "test-util"] }
 tempfile = { workspace = true }
+bitcoindrpc = { workspace = true, features = ["test-utils"] }
 

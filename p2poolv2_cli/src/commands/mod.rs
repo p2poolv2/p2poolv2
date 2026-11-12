@@ -11,6 +11,7 @@ pub mod dag;
 pub mod db;
 pub mod db_query;
 pub mod gen_auth;
+pub mod new_address;
 pub mod peers;
 pub mod peers_info;
 pub mod pplns_shares;
@@ -147,6 +148,24 @@ pub enum Commands {
         /// Password (leave empty to auto-generate, or use "-" to prompt)
         password: Option<String>,
     },
+    /// Create a miner address from an existing bitcoind wallet
+    ///
+    /// Loads the wallet named by --wallet-name (default "miner") over RPC
+    /// from [bitcoinrpc] in the config, never creates it, derives one
+    /// bech32m (P2TR) address and prints the bitcoin address, share chain
+    /// address and taproot output key. Requires --config.
+    ///
+    /// More options are available for the stratum password (difficulty
+    /// hints d= and th=), documented in
+    /// docs/architecture/stratum-password.md.
+    NewAddress {
+        /// Override the network from the config: main, testnet4, signet or regtest
+        #[arg(short, long, value_parser = commands::address::parse_network)]
+        network: Option<Network>,
+        /// Name of the bitcoind wallet to load
+        #[arg(long, default_value = "miner")]
+        wallet_name: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -199,6 +218,17 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
         }
         Some(Commands::GenAuth { username, password }) => {
             commands::gen_auth::execute(username.clone(), password.clone())?;
+        }
+        Some(Commands::NewAddress {
+            network,
+            wallet_name,
+        }) => {
+            let config_path = cli
+                .config
+                .as_ref()
+                .ok_or("Config file required for new-address. Use --config")?;
+            let config = Config::load(config_path)?;
+            commands::new_address::execute(&config, *network, wallet_name).await?;
         }
         Some(Commands::Db { command }) => {
             let db_path = cli

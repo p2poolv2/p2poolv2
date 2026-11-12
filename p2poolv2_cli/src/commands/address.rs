@@ -35,7 +35,7 @@ pub fn parse_network(value: &str) -> Result<Network, String> {
 ///
 /// Rejects a key that is not a curve point. Those 32 bytes would encode an
 /// output nobody can ever spend, so a share paid to it would be lost.
-fn encode(output_key_hex: &str, network: Network) -> Result<Address, Box<dyn Error>> {
+pub(crate) fn encode(output_key_hex: &str, network: Network) -> Result<Address, Box<dyn Error>> {
     let output_key_bytes = Vec::from_hex(output_key_hex)
         .map_err(|error| format!("witness program is not hex: {error}"))?;
 

@@ -103,6 +103,16 @@ pub struct GetBlockchainInfo {
     pub initial_block_download: bool,
 }
 
+/// Response of `getaddressinfo`, reduced to the fields this project uses.
+///
+/// `witness_program` is the already tweaked output key that lands in the
+/// `scriptPubKey`; present for segwit addresses, absent otherwise.
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+pub struct GetAddressInfo {
+    #[serde(default)]
+    pub witness_program: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct BitcoindRpcClient {
@@ -180,7 +190,10 @@ impl BitcoindRpcClient {
             });
         }
 
-        let rpc_response: JsonRpcResponse<T> =
+        // Deserialize the envelope as a Value first, so an RPC error carried
+        // over HTTP 200 with a null result surfaces as RpcError instead of
+        // as a type mismatch on T.
+        let rpc_response: JsonRpcResponse<serde_json::Value> =
             response
                 .json()
                 .await
@@ -197,7 +210,9 @@ impl BitcoindRpcClient {
         }
 
         // In JSON-RPC 1.0, result is always present (can be null for void methods like submitblock)
-        Ok(rpc_response.result)
+        serde_json::from_value(rpc_response.result).map_err(|e| BitcoindRpcError::ParseError {
+            message: format!("Failed to parse result: {e}"),
+        })
     }
 
     /// Get current bitcoin difficulty from bitcoind rpc
@@ -329,6 +344,42 @@ impl BitcoindRpcClient {
         // Make the RPC request - submitblock returns null on success, or error string on failure
         let result: serde_json::Value = self.request("submitblock", params).await?;
         Ok(result.to_string())
+    }
+
+    /// Load an existing wallet on the node.
+    pub async fn loadwallet(&self, wallet_name: &str) -> Result<(), BitcoindRpcError> {
+        let params = vec![serde_json::Value::String(wallet_name.to_string())];
+        self.request::<serde_json::Value>("loadwallet", params)
+            .await?;
+        Ok(())
+    }
+
+    /// Get info about the wallet this client is scoped to.
+    pub async fn getwalletinfo(&self) -> Result<(), BitcoindRpcError> {
+        self.request::<serde_json::Value>("getwalletinfo", vec![])
+            .await?;
+        Ok(())
+    }
+
+    /// Get a new address of the given type from the wallet this client is
+    /// scoped to. `address_type` is a Bitcoin Core address type such as
+    /// "bech32m" for a taproot address.
+    pub async fn getnewaddress(
+        &self,
+        label: &str,
+        address_type: &str,
+    ) -> Result<String, BitcoindRpcError> {
+        let params = vec![
+            serde_json::Value::String(label.to_string()),
+            serde_json::Value::String(address_type.to_string()),
+        ];
+        self.request("getnewaddress", params).await
+    }
+
+    /// Get address info for `address`, reduced to the witness program.
+    pub async fn getaddressinfo(&self, address: &str) -> Result<GetAddressInfo, BitcoindRpcError> {
+        let params = vec![serde_json::Value::String(address.to_string())];
+        self.request("getaddressinfo", params).await
     }
 }
 
@@ -740,6 +791,49 @@ mod tests {
             assert_eq!(message, "Unauthorized");
         } else {
             panic!("Expected BitcoindRpcError::HttpError, got {result:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_typed_method_reports_rpc_error_sent_over_http_200() {
+        let mock_server = MockServer::start().await;
+
+        // Bitcoin Core answers some errors, for example wallet errors, with
+        // HTTP 200 and a null result. The error must win over the null not
+        // fitting the typed result.
+        Mock::given(method("POST"))
+            .and(path("/wallet/miner"))
+            .and(body_json(serde_json::json!({
+                "method": "getnewaddress",
+                "params": ["p2poolv2", "bech32m"],
+                "id": 0
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": null,
+                "error": {
+                    "code": -4,
+                    "message": "Error: This wallet has no available keys"
+                },
+                "id": 0
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = BitcoindRpcClient::new(
+            &format!("{}/wallet/miner", mock_server.uri()),
+            "testuser",
+            "testpass",
+        )
+        .unwrap();
+
+        let result = client.getnewaddress("p2poolv2", "bech32m").await;
+
+        assert!(result.is_err());
+        if let Err(BitcoindRpcError::RpcError { code, message }) = result {
+            assert_eq!(code, -4);
+            assert_eq!(message, "Error: This wallet has no available keys");
+        } else {
+            panic!("Expected BitcoindRpcError::RpcError, got {result:?}");
         }
     }
 }

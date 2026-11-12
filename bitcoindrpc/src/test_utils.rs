@@ -28,6 +28,23 @@ pub async fn setup_mock_bitcoin_rpc() -> (MockServer, BitcoinRpcConfig) {
 }
 
 #[cfg(any(test, feature = "test-utils"))]
+pub fn respond(result: serde_json::Value) -> ResponseTemplate {
+    ResponseTemplate::new(200)
+        .set_body_json(serde_json::json!({ "result": result, "error": null, "id": 0 }))
+}
+
+/// JSON-RPC error envelope over HTTP 500, the second of the two channels
+/// Bitcoin Core uses for RPC errors.
+#[cfg(any(test, feature = "test-utils"))]
+pub fn respond_error(code: i32, message: &str) -> ResponseTemplate {
+    ResponseTemplate::new(500).set_body_json(serde_json::json!({
+        "result": serde_json::Value::Null,
+        "error": { "code": code, "message": message },
+        "id": 0,
+    }))
+}
+
+#[cfg(any(test, feature = "test-utils"))]
 pub async fn mock_method(
     mock_server: &MockServer,
     api_method: &str,

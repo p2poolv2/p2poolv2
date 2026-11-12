@@ -44,6 +44,9 @@ Read `docs/architecture/` when working in the relevant area:
 - `metrics.md` -- Prometheus exposition, metric sources, Grafana panels
 - `address-format.md` -- share chain address encoding, parser rules,
   test vectors, and how a miner supplies one over stratum
+- `stratum-password.md` -- stratum password options (`d=`, `th=`,
+  `p2p=`), parsing rules, difficulty conversion, and the `new-address`
+  CLI command that prints a miner setup
 - `mine-on-bitcoin-chain.md` -- bitcoin prevhash handling: share
   messages carry bitcoin headers (outside the share hash), and a share is
   paid only if its bitcoin prev is within one block of the paying share's
