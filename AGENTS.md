@@ -109,17 +109,21 @@ Most modules are discoverable by name; these are the non-obvious ones:
 
 - Set mock expectations inline in each test -- no mock setup helpers.
   This keeps each test self-contained and readable.
-- Test helpers belong in `test_utils` module only if they are generic
-  and reusable. No helpers local to a test module -- they inevitably
-  diverge and hide setup differences between tests.
-- **No loops over collections in tests.** Do not iterate a table of
-  cases inside a test. Write each case as its own `#[test]` with a name
-  that says what it covers, or as explicit sequential assertions.
-  Looping adds indirection to read, hides which case failed, and lets
-  one case's setup silently drift from the others.
+- Test helpers belong in `test_utils` only if generic and reusable; no
+  helpers local to a test module -- they diverge and hide setup differences.
+- **No loops over collections in tests.** Write each case as its own
+  `#[test]` named for what it covers, or explicit sequential assertions;
+  a loop hides which case failed and lets setups silently drift.
 - `TestShareBlockBuilder` for constructing test shares; well-known
   pubkeys `PUBKEY_G` through `PUBKEY_5G` in test_utils.
 - Feature `test-utils` gates shared test infrastructure.
+- rust-analyzer applies `cfg(test)` across the workspace, so it can report
+  mockall_double mock-vs-real mismatches in `p2poolv2_tests` that rustc
+  does not. Trust rustc; fix only what `cargo check` reports.
+- For integration-test fixture construction (endpoints, store handles,
+  genesis), copy the pattern from sibling tests rather than assembling
+  the API from first principles; sibling tests track the canonical forms
+  of APIs that drift.
 
 ## Do not touch
 
@@ -132,6 +136,13 @@ Most modules are discoverable by name; these are the non-obvious ones:
 - For multi-step plans, ask to commit after each step.
 - Never create commits yourself. After completing a logical step, ask the user to review and commit before continuing.
 - Code reviews stay local -- do not post to GitHub.
+
+## Agent memory
+
+- AGENTS.md is team-shared: only constraints the whole team must follow
+  belong here.
+- Personal or session-local observations stay out of this file; make them
+  durable with the `learn` tool (or similar in your harness) instead.
 
 ## Rust conventions
 
@@ -162,6 +173,9 @@ Most modules are discoverable by name; these are the non-obvious ones:
   unnecessary copies.
 - Avoid continue/break. Prefer structured control flow because the distributed
   algorithms are easier to reason about without non-local jumps.
+- **Prefer derive:** Do not hand-write a trait impl before confirming a
+  derive cannot do it (tokio `oneshot::Sender` implements `Debug`, for
+  example).
 
 ## Code comments
 
@@ -195,4 +209,3 @@ Before introducing a new utility, helper, or dependency:
   private keys end up eventually having a security flaw. The only use
   of `rand` crate is for generating session nonces, compact block salt
   and sim jitter.
-  
