@@ -4,9 +4,11 @@
 
 pub mod block_fetcher;
 pub mod peer_block_knowledge;
+pub mod tx_fetch;
 
 use self::block_fetcher::{BlockFetcherEvent, BlockFetcherHandle};
 use self::peer_block_knowledge::PeerBlockKnowledge;
+use self::tx_fetch::{TxFetchEvent, TxFetchHandle};
 use crate::config::NetworkConfig;
 use crate::node::SwarmSend;
 use crate::node::behaviour::request_response::RequestResponseEvent;
@@ -55,6 +57,7 @@ pub struct RequestResponseHandler<C: Send + Sync> {
     chain_store_handle: ChainStoreHandle,
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
     block_fetcher_handle: BlockFetcherHandle,
+    tx_fetch_handle: TxFetchHandle,
     validation_tx: ValidationSender,
     block_receiver_handle: BlockReceiverHandle,
     peer_block_knowledge: PeerBlockKnowledge,
@@ -85,6 +88,7 @@ impl RequestResponseHandler<ResponseChannel<Message>> {
         block_receiver_handle: BlockReceiverHandle,
         share_validator: Arc<dyn ShareValidator + Send + Sync>,
         response_worker_handle: ResponseWorkerSender,
+        tx_fetch_handle: TxFetchHandle,
     ) -> Self {
         Self {
             peer_handles: HashMap::new(),
@@ -92,6 +96,7 @@ impl RequestResponseHandler<ResponseChannel<Message>> {
             chain_store_handle,
             swarm_tx,
             block_fetcher_handle,
+            tx_fetch_handle,
             validation_tx,
             block_receiver_handle,
             peer_block_knowledge: PeerBlockKnowledge::default(),
@@ -240,7 +245,7 @@ impl<C: Send + Sync + 'static> RequestResponseHandler<C> {
     ///
     /// Drops the peer handle, which closes the channel and causes
     /// the peer's service task to exit. Also removes peer block
-    /// knowledge and notifies the block fetcher so it stops sending
+    /// knowledge and notifies the fetchers so they stop sending
     /// requests to this peer.
     pub fn remove_peer(&mut self, peer_id: &PeerId) {
         self.peer_handles.remove(peer_id);
@@ -254,6 +259,14 @@ impl<C: Send + Sync + 'static> RequestResponseHandler<C> {
             .try_send(BlockFetcherEvent::PeerRemoved(*peer_id))
         {
             warn!("Failed to notify block fetcher of peer removal for {peer_id}: {send_error}");
+        }
+        if let Err(send_error) = self
+            .tx_fetch_handle
+            .try_send(TxFetchEvent::PeerRemoved(*peer_id))
+        {
+            warn!(
+                "Failed to notify transaction fetcher of peer removal for {peer_id}: {send_error}"
+            );
         }
     }
 
@@ -310,6 +323,7 @@ impl<C: Send + Sync + 'static> RequestResponseHandler<C> {
             validation_tx: self.validation_tx.clone(),
             block_receiver_handle: self.block_receiver_handle.clone(),
             share_validator: self.share_validator.clone(),
+            tx_fetch_handle: self.tx_fetch_handle.clone(),
         };
 
         let peer_handle = match self.peer_handles.get(&peer) {
@@ -461,12 +475,14 @@ mod tests {
         let (block_receiver_handle, _block_receiver_rx) = create_block_receiver_channel();
         let (response_worker_handle, response_worker_rx) =
             crate::node::response_worker::create_response_worker_channel();
+        let (tx_fetch_handle, _tx_fetch_rx) = tx_fetch::create_tx_fetcher_channel();
         let handler = RequestResponseHandler {
             peer_handles: HashMap::new(),
             max_requests_per_second: TEST_RATE_LIMIT,
             chain_store_handle,
             swarm_tx,
             block_fetcher_handle: block_fetcher_tx,
+            tx_fetch_handle,
             validation_tx,
             block_receiver_handle,
             peer_block_knowledge: PeerBlockKnowledge::default(),

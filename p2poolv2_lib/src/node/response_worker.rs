@@ -16,6 +16,7 @@ use crate::node::messages::Message;
 use crate::node::p2p_message_handlers::handle_response;
 use crate::node::p2p_message_handlers::receivers::block_receiver::BlockReceiverHandle;
 use crate::node::request_response_handler::block_fetcher::BlockFetcherHandle;
+use crate::node::request_response_handler::tx_fetch::TxFetchHandle;
 use crate::node::validation_worker::ValidationSender;
 #[cfg(test)]
 #[mockall_double::double]
@@ -69,6 +70,7 @@ pub struct ResponseWorker {
     chain_store_handle: ChainStoreHandle,
     swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
     block_fetcher_handle: BlockFetcherHandle,
+    tx_fetch_handle: TxFetchHandle,
     validation_tx: ValidationSender,
     block_receiver_handle: BlockReceiverHandle,
     share_validator: Arc<dyn ShareValidator + Send + Sync>,
@@ -81,6 +83,7 @@ impl ResponseWorker {
         chain_store_handle: ChainStoreHandle,
         swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
         block_fetcher_handle: BlockFetcherHandle,
+        tx_fetch_handle: TxFetchHandle,
         validation_tx: ValidationSender,
         block_receiver_handle: BlockReceiverHandle,
         share_validator: Arc<dyn ShareValidator + Send + Sync>,
@@ -90,6 +93,7 @@ impl ResponseWorker {
             chain_store_handle,
             swarm_tx,
             block_fetcher_handle,
+            tx_fetch_handle,
             validation_tx,
             block_receiver_handle,
             share_validator,
@@ -108,6 +112,7 @@ impl ResponseWorker {
                 self.validation_tx.clone(),
                 self.block_receiver_handle.clone(),
                 self.share_validator.clone(),
+                self.tx_fetch_handle.clone(),
             )
             .await
             {

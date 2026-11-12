@@ -9,6 +9,7 @@ use crate::node::SwarmSend;
 use crate::node::messages::{GetData, Message};
 use crate::node::p2p_message_handlers::receivers::block_receiver::BlockReceiverHandle;
 use crate::node::request_response_handler::block_fetcher::{BlockFetcherEvent, BlockFetcherHandle};
+use crate::node::request_response_handler::tx_fetch::TxFetchHandle;
 use crate::node::validation_worker::ValidationSender;
 use crate::service::p2p_service::RequestContext;
 #[cfg(test)]
@@ -19,13 +20,14 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::validation::ShareValidator;
 use crate::utils::time_provider::TimeProvider;
 use receivers::getblocks::handle_getblocks;
-use receivers::getdata::handle_getdata_block;
+use receivers::getdata::{handle_getdata_block, handle_getdata_tx};
 use receivers::getheaders::handle_getheaders;
 use receivers::handshake::handle_handshake;
 use receivers::inventory::handle_inventory;
 use receivers::request_missing_blocks::request_headers_for_missing_blocks;
 use receivers::share_blocks::handle_share_block;
 use receivers::share_headers::handle_share_headers;
+use receivers::transaction::{handle_transaction_not_found, handle_transaction_received};
 use std::error::Error;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -94,13 +96,27 @@ pub async fn handle_request<C: Send + Sync, T: TimeProvider + Send + Sync>(
                     .await
                 }
                 GetData::Txid(txid) => {
-                    debug!("Received txid: {:?}", txid);
-                    Ok(())
+                    handle_getdata_tx(
+                        txid,
+                        ctx.chain_store_handle,
+                        ctx.response_channel,
+                        ctx.swarm_tx,
+                    )
+                    .await
                 }
             }
         }
         Message::Transaction(transaction) => {
-            debug!("Received transaction: {:?}", transaction);
+            debug!("Received transaction from peer {:?}", ctx.peer);
+            if let Err(err) = ctx
+                .swarm_tx
+                .send(SwarmSend::Response(ctx.response_channel, Message::Ack))
+                .await
+            {
+                error!("Failed to send transaction ack to peer {}: {err}", ctx.peer);
+                return Err(format!("Failed to send transaction ack: {err}").into());
+            }
+            handle_transaction_received(ctx.peer, transaction, &ctx.tx_fetch_handle).await;
             Ok(())
         }
         Message::Handshake(handshake_data) => {
@@ -167,6 +183,7 @@ pub async fn handle_response<C: Send + Sync>(
     validation_tx: ValidationSender,
     block_receiver_handle: BlockReceiverHandle,
     share_validator: Arc<dyn ShareValidator + Send + Sync>,
+    tx_fetch_handle: TxFetchHandle,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     debug!("Received response {} from peer: {}", response, peer);
     match response {
@@ -204,8 +221,14 @@ pub async fn handle_response<C: Send + Sync>(
                         .send(BlockFetcherEvent::BlockRequestCompleted(block_hash))
                         .await;
                 }
-                GetData::Txid(_) => {}
+                GetData::Txid(txid) => {
+                    handle_transaction_not_found(peer, txid, &tx_fetch_handle).await;
+                }
             }
+            Ok(())
+        }
+        Message::Transaction(transaction) => {
+            handle_transaction_received(peer, transaction, &tx_fetch_handle).await;
             Ok(())
         }
         Message::Ack => {
@@ -227,6 +250,8 @@ mod tests {
     use crate::node::p2p_message_handlers::receivers::block_receiver::create_block_receiver_channel;
     use crate::node::request_response_handler::block_fetcher::BlockFetcherHandle;
     use crate::node::request_response_handler::block_fetcher::create_block_fetcher_channel;
+    use crate::node::request_response_handler::tx_fetch::TxFetchEvent;
+    use crate::node::request_response_handler::tx_fetch::create_tx_fetcher_channel;
     use crate::node::validation_worker::ValidationSender;
     use crate::node::validation_worker::create_validation_channel;
     #[mockall_double::double]
@@ -249,12 +274,24 @@ mod tests {
     use tokio::sync::mpsc;
     use tokio::sync::oneshot;
 
-    /// Create test block fetcher, validation, and block receiver handles for handle_response tests.
-    fn test_handles() -> (BlockFetcherHandle, ValidationSender, BlockReceiverHandle) {
+    /// Create test block fetcher, validation, block receiver, and
+    /// transaction fetch handles for handler tests.
+    fn test_handles() -> (
+        BlockFetcherHandle,
+        ValidationSender,
+        BlockReceiverHandle,
+        TxFetchHandle,
+    ) {
         let (block_fetcher_tx, _) = create_block_fetcher_channel();
         let (validation_tx, _) = create_validation_channel();
         let (block_receiver_handle, _) = create_block_receiver_channel();
-        (block_fetcher_tx, validation_tx, block_receiver_handle)
+        let (tx_fetch_handle, _) = create_tx_fetcher_channel();
+        (
+            block_fetcher_tx,
+            validation_tx,
+            block_receiver_handle,
+            tx_fetch_handle,
+        )
     }
 
     #[tokio::test]
@@ -264,7 +301,8 @@ mod tests {
         let response_channel = 1u32;
         let mut chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
-        let (block_fetcher_handle, validation_tx, block_receiver_handle) = test_handles();
+        let (block_fetcher_handle, validation_tx, block_receiver_handle, tx_fetch_handle) =
+            test_handles();
 
         // Mock the response headers
         let block1 = TestShareBlockBuilder::new().build();
@@ -298,6 +336,7 @@ mod tests {
             validation_tx,
             block_receiver_handle: block_receiver_handle.clone(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            tx_fetch_handle,
         };
 
         let result = handle_request(ctx).await;
@@ -324,7 +363,8 @@ mod tests {
         let (response_channel, _response_channel_rx) = oneshot::channel::<Message>();
         let mut chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
-        let (block_fetcher_handle, validation_tx, block_receiver_handle) = test_handles();
+        let (block_fetcher_handle, validation_tx, block_receiver_handle, tx_fetch_handle) =
+            test_handles();
 
         // Create test blocks that will be returned
         let block1 = TestShareBlockBuilder::new().build();
@@ -349,6 +389,7 @@ mod tests {
             validation_tx,
             block_receiver_handle: block_receiver_handle.clone(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            tx_fetch_handle,
         };
 
         let result = handle_request(ctx).await;
@@ -374,7 +415,8 @@ mod tests {
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
         let mut chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
-        let (block_fetcher_handle, validation_tx, block_receiver_handle) = test_handles();
+        let (block_fetcher_handle, validation_tx, block_receiver_handle, tx_fetch_handle) =
+            test_handles();
 
         let block_hash1 = "0000000000000000000000000000000000000000000000000000000000000001"
             .parse::<BlockHash>()
@@ -407,6 +449,7 @@ mod tests {
             validation_tx,
             block_receiver_handle: block_receiver_handle.clone(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            tx_fetch_handle,
         };
 
         let result = handle_request(ctx).await;
@@ -438,7 +481,8 @@ mod tests {
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
         let chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
-        let (block_fetcher_handle, validation_tx, block_receiver_handle) = test_handles();
+        let (block_fetcher_handle, validation_tx, block_receiver_handle, tx_fetch_handle) =
+            test_handles();
 
         let tx_hashes: Vec<bitcoin::Txid> = vec![
             "0000000000000000000000000000000000000000000000000000000000000001"
@@ -461,6 +505,7 @@ mod tests {
             validation_tx,
             block_receiver_handle: block_receiver_handle.clone(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            tx_fetch_handle,
         };
 
         let result = handle_request(ctx).await;
@@ -484,7 +529,8 @@ mod tests {
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
         let chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
-        let (block_fetcher_handle, validation_tx, block_receiver_handle) = test_handles();
+        let (block_fetcher_handle, validation_tx, block_receiver_handle, tx_fetch_handle) =
+            test_handles();
 
         let ctx = RequestContext {
             peer: peer_id,
@@ -497,6 +543,7 @@ mod tests {
             validation_tx,
             block_receiver_handle: block_receiver_handle.clone(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            tx_fetch_handle,
         };
 
         let result = handle_request(ctx).await;
@@ -511,7 +558,8 @@ mod tests {
         let response_channel = 1u32;
         let mut chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
-        let (block_fetcher_handle, validation_tx, block_receiver_handle) = test_handles();
+        let (block_fetcher_handle, validation_tx, block_receiver_handle, tx_fetch_handle) =
+            test_handles();
 
         let block = TestShareBlockBuilder::new().build();
         let block_hash = block.block_hash();
@@ -537,6 +585,7 @@ mod tests {
             validation_tx,
             block_receiver_handle: block_receiver_handle.clone(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            tx_fetch_handle,
         };
 
         let result = handle_request(ctx).await;
@@ -559,7 +608,8 @@ mod tests {
         let response_channel = 1u32;
         let mut chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
-        let (block_fetcher_handle, validation_tx, block_receiver_handle) = test_handles();
+        let (block_fetcher_handle, validation_tx, block_receiver_handle, tx_fetch_handle) =
+            test_handles();
 
         let block_hash = "0000000000000000000000000000000000000000000000000000000000000001"
             .parse::<BlockHash>()
@@ -580,6 +630,7 @@ mod tests {
             validation_tx,
             block_receiver_handle: block_receiver_handle.clone(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            tx_fetch_handle,
         };
 
         let result = handle_request(ctx).await;
@@ -596,18 +647,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_handle_request_get_data_for_txn() {
+    async fn test_handle_request_get_data_for_txn_serves_confirmed_transaction() {
         let peer_id = libp2p::PeerId::random();
-        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
+        let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
-        let chain_store_handle = ChainStoreHandle::default();
+        let mut chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
-        let (block_fetcher_handle, validation_tx, block_receiver_handle) = test_handles();
+        let (block_fetcher_handle, validation_tx, block_receiver_handle, tx_fetch_handle) =
+            test_handles();
 
-        // Test GetData message with txid
-        let txid = "0000000000000000000000000000000000000000000000000000000000000001"
-            .parse()
-            .unwrap();
+        let transaction = test_coinbase_transaction(1);
+        let txid = transaction.compute_txid();
+
+        chain_store_handle
+            .expect_get_tx()
+            .returning(move |_| Ok(transaction.clone()));
+
         let get_data = GetData::Txid(txid);
 
         let ctx = RequestContext {
@@ -621,24 +676,32 @@ mod tests {
             validation_tx,
             block_receiver_handle: block_receiver_handle.clone(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            tx_fetch_handle,
         };
 
         let result = handle_request(ctx).await;
 
         assert!(result.is_ok());
+        if let Some(SwarmSend::Response(_, Message::Transaction(served))) = swarm_rx.recv().await {
+            assert_eq!(served.compute_txid(), txid);
+        } else {
+            panic!("Expected SwarmSend::Response with Transaction message");
+        }
     }
 
     #[tokio::test]
-    async fn test_handle_request_transaction() {
+    async fn test_handle_request_transaction_acks_and_resolves_fetch() {
         let peer_id = libp2p::PeerId::random();
-        let (swarm_tx, _swarm_rx) = mpsc::channel(32);
+        let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
         let chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
-        let (block_fetcher_handle, validation_tx, block_receiver_handle) = test_handles();
+        let (block_fetcher_handle, validation_tx, block_receiver_handle, _) = test_handles();
+        let (tx_fetch_handle, mut tx_fetch_rx) = create_tx_fetcher_channel();
 
         // Create a test transaction
         let transaction = test_coinbase_transaction(1);
+        let txid = transaction.compute_txid();
 
         let ctx = RequestContext {
             peer: peer_id,
@@ -651,11 +714,26 @@ mod tests {
             validation_tx,
             block_receiver_handle: block_receiver_handle.clone(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            tx_fetch_handle,
         };
 
         let result = handle_request(ctx).await;
 
         assert!(result.is_ok());
+        if let Some(SwarmSend::Response(_, Message::Ack)) = swarm_rx.recv().await {
+        } else {
+            panic!("Expected SwarmSend::Response with Ack message");
+        }
+        match tx_fetch_rx.try_recv().expect("Expected fetcher event") {
+            TxFetchEvent::TransactionReceived {
+                peer: received_peer,
+                transaction: received,
+            } => {
+                assert_eq!(received_peer, peer_id);
+                assert_eq!(received.compute_txid(), txid);
+            }
+            other => panic!("Expected TransactionReceived fetch event, got: {other}"),
+        }
     }
 
     #[tokio::test]
@@ -665,7 +743,8 @@ mod tests {
         let (response_channel_tx, _response_channel_rx) = oneshot::channel::<Message>();
         let mut chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
-        let (block_fetcher_handle, validation_tx, block_receiver_handle) = test_handles();
+        let (block_fetcher_handle, validation_tx, block_receiver_handle, tx_fetch_handle) =
+            test_handles();
 
         // Create test share headers
         let block1 = TestShareBlockBuilder::new().build();
@@ -692,6 +771,7 @@ mod tests {
             validation_tx,
             block_receiver_handle: block_receiver_handle.clone(),
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            tx_fetch_handle,
         };
 
         let result = handle_request(ctx).await;
@@ -706,7 +786,8 @@ mod tests {
         let response_channel = 1u32;
         let mut chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
-        let (block_fetcher_handle, validation_tx, block_receiver_handle) = test_handles();
+        let (block_fetcher_handle, validation_tx, block_receiver_handle, tx_fetch_handle) =
+            test_handles();
 
         let share_block = valid_share_block_from_fixture();
 
@@ -731,6 +812,7 @@ mod tests {
             validation_tx,
             block_receiver_handle,
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            tx_fetch_handle,
         };
 
         let result = handle_request(ctx).await;
@@ -757,7 +839,8 @@ mod tests {
         let response_channel = 5u32;
         let mut chain_store_handle = ChainStoreHandle::default();
         let time_provider = TestTimeProvider::new(SystemTime::now());
-        let (block_fetcher_handle, validation_tx, block_receiver_handle) = test_handles();
+        let (block_fetcher_handle, validation_tx, block_receiver_handle, tx_fetch_handle) =
+            test_handles();
 
         let share_block = valid_share_block_from_fixture();
         let parent_hash = share_block.header.prev_share_blockhash;
@@ -792,6 +875,7 @@ mod tests {
             validation_tx,
             block_receiver_handle,
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            tx_fetch_handle,
         };
 
         let result = handle_request(ctx).await;
@@ -880,7 +964,8 @@ mod tests {
         header2.prev_share_blockhash = header1.block_hash();
         let share_headers = vec![header1, header2];
 
-        let (block_fetcher_handle, validation_tx, block_receiver_handle) = test_handles();
+        let (block_fetcher_handle, validation_tx, block_receiver_handle, tx_fetch_handle) =
+            test_handles();
         let result = handle_response(
             peer_id,
             Message::ShareHeaders(share_header_batch_with_empty_branches(share_headers)),
@@ -890,6 +975,7 @@ mod tests {
             validation_tx,
             block_receiver_handle,
             Arc::new(mock_validator),
+            tx_fetch_handle,
         )
         .await;
 
@@ -905,6 +991,7 @@ mod tests {
         let (block_fetcher_handle, mut block_fetcher_rx) = create_block_fetcher_channel();
         let (validation_tx, _) = create_validation_channel();
         let (block_receiver_handle, _) = create_block_receiver_channel();
+        let (tx_fetch_handle, _) = create_tx_fetcher_channel();
 
         let block_hash = BlockHash::all_zeros();
         let result = handle_response(
@@ -916,6 +1003,7 @@ mod tests {
             validation_tx,
             block_receiver_handle,
             Arc::new(MockDefaultShareValidator::default()),
+            tx_fetch_handle,
         )
         .await;
 
@@ -933,6 +1021,79 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_handle_response_not_found_resolves_tx_flight() {
+        let peer_id = libp2p::PeerId::random();
+        let chain_store_handle = ChainStoreHandle::default();
+        let (swarm_tx, _swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
+
+        let (block_fetcher_handle, validation_tx, block_receiver_handle, _) = test_handles();
+        let (tx_fetch_handle, mut tx_fetch_rx) = create_tx_fetcher_channel();
+
+        let txid = bitcoin::Txid::all_zeros();
+        let result = handle_response(
+            peer_id,
+            Message::NotFound(GetData::Txid(txid)),
+            chain_store_handle,
+            swarm_tx,
+            block_fetcher_handle,
+            validation_tx,
+            block_receiver_handle,
+            Arc::new(MockDefaultShareValidator::default()),
+            tx_fetch_handle,
+        )
+        .await;
+
+        assert!(result.is_ok());
+        match tx_fetch_rx.try_recv().expect("Expected fetcher event") {
+            TxFetchEvent::TransactionNotFound {
+                peer: found_peer,
+                txid: found,
+            } => {
+                assert_eq!(found_peer, peer_id);
+                assert_eq!(found, txid);
+            }
+            other => panic!("Expected TransactionNotFound fetch event, got: {other}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_response_transaction_forwards_to_fetcher() {
+        let peer_id = libp2p::PeerId::random();
+        let chain_store_handle = ChainStoreHandle::default();
+        let (swarm_tx, _swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
+
+        let (block_fetcher_handle, validation_tx, block_receiver_handle, _) = test_handles();
+        let (tx_fetch_handle, mut tx_fetch_rx) = create_tx_fetcher_channel();
+
+        let transaction = test_coinbase_transaction(1);
+        let txid = transaction.compute_txid();
+        let result = handle_response(
+            peer_id,
+            Message::Transaction(transaction),
+            chain_store_handle,
+            swarm_tx,
+            block_fetcher_handle,
+            validation_tx,
+            block_receiver_handle,
+            Arc::new(MockDefaultShareValidator::default()),
+            tx_fetch_handle,
+        )
+        .await;
+
+        assert!(result.is_ok());
+        match tx_fetch_rx.try_recv().expect("Expected fetcher event") {
+            TxFetchEvent::TransactionReceived {
+                peer: received_peer,
+                transaction: received,
+            } => {
+                assert_eq!(received_peer, peer_id);
+                assert_eq!(received.compute_txid(), txid);
+            }
+            other => panic!("Expected TransactionReceived fetch event, got: {other}"),
+        }
+    }
+
+    #[tokio::test]
     async fn test_handle_response_inventory() {
         let peer_id = libp2p::PeerId::random();
         let chain_store_handle = ChainStoreHandle::default();
@@ -945,7 +1106,8 @@ mod tests {
         ];
         let inventory = InventoryMessage::BlockHashes(block_hashes);
 
-        let (block_fetcher_handle, validation_tx, block_receiver_handle) = test_handles();
+        let (block_fetcher_handle, validation_tx, block_receiver_handle, tx_fetch_handle) =
+            test_handles();
         let result = handle_response(
             peer_id,
             Message::Inventory(inventory),
@@ -955,6 +1117,7 @@ mod tests {
             validation_tx,
             block_receiver_handle,
             Arc::new(MockDefaultShareValidator::default()),
+            tx_fetch_handle,
         )
         .await;
 
@@ -967,7 +1130,8 @@ mod tests {
         let chain_store_handle = ChainStoreHandle::default();
         let (swarm_tx, _swarm_rx) = mpsc::channel::<SwarmSend<oneshot::Sender<Message>>>(32);
 
-        let (block_fetcher_handle, validation_tx, block_receiver_handle) = test_handles();
+        let (block_fetcher_handle, validation_tx, block_receiver_handle, tx_fetch_handle) =
+            test_handles();
         let result = handle_response(
             peer_id,
             Message::GetData(GetData::Block(BlockHash::all_zeros())),
@@ -977,6 +1141,7 @@ mod tests {
             validation_tx,
             block_receiver_handle,
             Arc::new(MockDefaultShareValidator::default()),
+            tx_fetch_handle,
         )
         .await;
 

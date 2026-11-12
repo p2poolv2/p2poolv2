@@ -16,6 +16,7 @@ use crate::node::messages::Message;
 use crate::node::p2p_message_handlers::handle_request;
 use crate::node::p2p_message_handlers::receivers::block_receiver::BlockReceiverHandle;
 use crate::node::request_response_handler::block_fetcher::BlockFetcherHandle;
+use crate::node::request_response_handler::tx_fetch::TxFetchHandle;
 use crate::node::validation_worker::ValidationSender;
 #[cfg(test)]
 #[mockall_double::double]
@@ -37,6 +38,7 @@ pub struct RequestContext<C, T> {
     pub validation_tx: ValidationSender,
     pub block_receiver_handle: BlockReceiverHandle,
     pub share_validator: Arc<dyn ShareValidator + Send + Sync>,
+    pub tx_fetch_handle: TxFetchHandle,
 }
 
 /// The Tower service that processes inbound P2P requests.

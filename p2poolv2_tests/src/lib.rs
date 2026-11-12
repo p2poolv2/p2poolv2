@@ -13,6 +13,8 @@ mod organise_pipeline_test;
 #[cfg(test)]
 mod pruned_serving_test;
 #[cfg(test)]
+mod share_transaction_fetch_test;
+#[cfg(test)]
 mod stratum_server_test;
 #[cfg(test)]
 mod test_api_server_health_check;

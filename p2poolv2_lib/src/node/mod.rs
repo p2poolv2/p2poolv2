@@ -28,6 +28,7 @@ use crate::node::p2p_message_handlers::receivers::block_receiver::BlockReceiverH
 use crate::node::p2p_message_handlers::senders::build_handshake_message;
 use crate::node::request_response_handler::RequestResponseHandler;
 use crate::node::request_response_handler::block_fetcher::BlockFetcherHandle;
+use crate::node::request_response_handler::tx_fetch::TxFetchHandle;
 use crate::node::request_sender::RequestSender;
 use crate::node::response_worker::ResponseWorkerSender;
 use crate::node::validation_worker::ValidationSender;
@@ -208,6 +209,7 @@ impl Node {
         monitoring_event_sender: MonitoringEventSender,
         share_validator: Arc<dyn ShareValidator + Send + Sync>,
         response_worker_tx: ResponseWorkerSender,
+        tx_fetch_handle: TxFetchHandle,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let id_keys = libp2p::identity::Keypair::generate_ed25519();
 
@@ -344,6 +346,7 @@ impl Node {
             block_receiver_handle,
             share_validator,
             response_worker_tx,
+            tx_fetch_handle,
         );
 
         let peer_reconnector = peer_reconnector::PeerReconnector::new(&config.network.dial_peers);
@@ -787,6 +790,7 @@ mod tests {
     use crate::node::Node;
     use crate::node::p2p_message_handlers::receivers::block_receiver::create_block_receiver_channel;
     use crate::node::request_response_handler::block_fetcher::create_block_fetcher_channel;
+    use crate::node::request_response_handler::tx_fetch::create_tx_fetcher_channel;
     use crate::node::response_worker::create_response_worker_channel;
     use crate::node::validation_worker::create_validation_channel;
     use bitcoindrpc::BitcoinRpcConfig;
@@ -872,6 +876,7 @@ mod tests {
         let (block_receiver_handle, _block_receiver_rx) = create_block_receiver_channel();
         let monitoring_tx = create_monitoring_event_channel();
         let (response_worker_tx, _response_worker_rx) = create_response_worker_channel();
+        let (tx_fetch_handle, _tx_fetch_rx) = create_tx_fetcher_channel();
         let mut node = Node::new(
             config.clone(),
             chain_store_handle,
@@ -881,6 +886,7 @@ mod tests {
             monitoring_tx,
             Arc::new(crate::shares::validation::MockDefaultShareValidator::default()),
             response_worker_tx,
+            tx_fetch_handle,
         )
         .expect("Node initialization failed");
 
@@ -996,6 +1002,7 @@ mod tests {
             monitoring_tx,
             Arc::new(crate::shares::validation::MockDefaultShareValidator::default()),
             response_worker_tx,
+            create_tx_fetcher_channel().0,
         )
         .expect("Node initialization failed")
     }
