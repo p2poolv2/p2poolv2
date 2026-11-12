@@ -19,7 +19,7 @@ use crate::store::prune_blocks::{PruneStats, get_range_to_prune};
 use crate::store::script_history::{ScriptHash, ScriptHistoryPage};
 use crate::store::transaction_store::{OutputOrigin, PrevoutCheck};
 use crate::store::writer::{StoreError, StoreHandle};
-use bitcoin::{BlockHash, TxMerkleNode, Work};
+use bitcoin::{BlockHash, Transaction, TxMerkleNode, Work};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, info, warn};
@@ -261,6 +261,14 @@ impl ChainStoreHandle {
     /// Get a share from the chain.
     pub fn get_share(&self, share_hash: &BlockHash) -> Option<ShareBlock> {
         self.store_handle.get_share(share_hash)
+    }
+
+    /// Get a transaction stored with a share body, confirmed or not.
+    ///
+    /// Rows live as long as the share body that carries them; only body
+    /// pruning removes them.
+    pub fn get_tx(&self, txid: &bitcoin::Txid) -> Result<Transaction, StoreError> {
+        self.store_handle.get_tx(txid)
     }
 
     /// Get shares at a specific height.
@@ -1098,6 +1106,7 @@ mockall::mock! {
         pub fn share_block_exists(&self, blockhash: &BlockHash) -> bool;
         pub fn first_existing_share_header(&self, blockhashes: &[BlockHash]) -> Option<BlockHash>;
         pub fn get_share(&self, share_hash: &BlockHash) -> Option<ShareBlock>;
+        pub fn get_tx(&self, txid: &bitcoin::Txid) -> Result<Transaction, StoreError>;
         pub fn get_shares_at_height(&self, height: u32) -> Result<HashMap<BlockHash, ShareBlock>, StoreError>;
         pub fn get_share_headers(&self, share_hashes: &[BlockHash]) -> Result<Vec<(BlockHash, ShareHeader)>, StoreError>;
         pub fn get_share_header(&self, share_hash: &BlockHash) -> Result<ShareHeader, StoreError>;

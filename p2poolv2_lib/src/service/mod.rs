@@ -192,6 +192,8 @@ mod tests {
             .expect_clone()
             .returning(ChainStoreHandle::default);
         let (block_fetcher_tx, _) = block_fetcher::create_block_fetcher_channel();
+        let (tx_fetch_handle, _) =
+            crate::node::request_response_handler::tx_fetch::create_tx_fetcher_channel();
         let (validation_tx, _) = validation_worker::create_validation_channel();
         let (block_receiver_handle, _) = create_block_receiver_channel();
 
@@ -206,6 +208,7 @@ mod tests {
             validation_tx,
             block_receiver_handle,
             share_validator: Arc::new(MockDefaultShareValidator::default()),
+            tx_fetch_handle,
         }
     }
 
