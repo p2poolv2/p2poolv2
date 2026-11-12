@@ -209,6 +209,12 @@ Bitcoin addresses must also be rejected, including
 is a Bitcoin Core wallet, which gives you a taproot key it will custody,
 back up and can later sign with.
 
+`p2poolv2_cli new-address` automates this flow against a running
+bitcoind: it loads an existing wallet over RPC (never creating one),
+derives one bech32m address from it and prints the share address
+together with the bitcoin address and output key. See
+`stratum-password.md`.
+
 Ask the wallet for a taproot address, then read its details:
 
 ```sh
@@ -314,27 +320,15 @@ and the operator wins.
 
 ### From the miner: the stratum password
 
-Set the stratum password to `p2p=<address>`. It combines with the
-existing difficulty hints as a delimiter-separated list, in any order:
-
-```
-p2p=sp2pool1pmfr3p9j00pfxjh0zmgp99y8zftmd3s5pmedqhyptwy6lm87hf5ss5najrp,d=1000
-```
-
-Accepted delimiters are comma, space, tab and semicolon. The key `p2p=`
-is matched case-insensitively; the address value keeps the case it was
-given, so an all-uppercase address works and a mixed-case one is
-rejected by the checksum.
+Set the stratum password to `p2p=<address>`, optionally combined with
+the difficulty hints `d=<integer>` and `th=<integer>`. The full contract
+of the password field, its parsing rules and the `new-address` CLI
+command that prints a ready made setup live in
+`stratum-password.md`.
 
 The stratum **username** remains the bitcoin payout address, exactly as
 before. These are two different addresses on two different chains, and
 swapping them is rejected rather than silently accepted.
-
-Note that `p2p=<address>` is 71 characters. Some miner firmware caps the
-password field, and a truncated address fails its checksum rather than
-silently redirecting shares elsewhere -- which is exactly what the
-checksum is for. An operator whose fleet cannot carry 71 characters
-should use the config route instead.
 
 ### From the operator: `[stratum] miner_address`
 
