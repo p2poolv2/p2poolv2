@@ -31,9 +31,6 @@
 //!   path spend on each chain with no HTLC script and no preimage published.
 //!   Witness version 0 would force HTLC scripts, and therefore P2WSH and 32
 //!   byte programs, so it does not even avoid the wider format.
-//! * A single output type keeps a single swap protocol. Supporting both would
-//!   split the share chain into shares that trade via adaptor signatures and
-//!   shares that need HTLCs, and every downstream tool would carry both paths.
 //! * Ark is taproot only.
 //!
 //! That restriction lives in [`Address::from_witness_program`], not in the
@@ -71,9 +68,6 @@
 //! included, will decode a share address quite happily. Any code deciding
 //! whether a string is a bitcoin address must check the HRP, not merely that it
 //! parses as segwit.
-//!
-//! This module never generates, stores or handles a private key. The node only
-//! needs the address to build a share coinbase output.
 
 #[cfg(feature = "wallet")]
 pub mod wallet;

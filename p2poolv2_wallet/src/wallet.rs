@@ -9,13 +9,24 @@ use bdk_wallet::descriptor::{DescriptorError, ExtendedDescriptor, IntoWalletDesc
 use bdk_wallet::miniscript::descriptor::KeyMap;
 use bdk_wallet::rusqlite::{Connection, Error as SqliteError, OpenFlags};
 use bdk_wallet::{
-    CreateWithPersistError, KeychainKind, LoadError, LoadWithPersistError, PersistedWallet,
-    Wallet as BdkWallet,
+    CreateParams, CreateWithPersistError, KeychainKind, LoadError, LoadWithPersistError,
+    PersistedWallet, Wallet as BdkWallet,
 };
 use bitcoin::secp256k1::Secp256k1;
 use bitcoin::{BlockHash, Network};
-use std::io;
+use std::fs::{self, OpenOptions};
+use std::io::{self, ErrorKind};
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
+
+/// SQLite `application_id` marking a complete P2Poolv2 wallet database
+/// ("P2PW"). bdk leaves this header field unset.
+const WALLET_APPLICATION_ID: i32 = 0x5032_5057;
+
+/// Permissions of a new wallet database file: owner read and write only.
+#[cfg(unix)]
+const DATABASE_FILE_MODE: u32 = 0o600;
 
 /// The network and share chain a wallet belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,8 +49,8 @@ pub enum WalletError {
     /// A descriptor does not produce taproot outputs.
     #[error("The {0:?} descriptor must use taproot")]
     UnsupportedDescriptor(KeychainKind),
-    /// The database already contains a wallet.
-    #[error("A wallet already exists in this database")]
+    /// A file already exists at the database path.
+    #[error("A file already exists at this database path")]
     AlreadyExists,
     /// The database file or its wallet state does not exist.
     #[error("No wallet exists at this database path")]
@@ -53,9 +64,33 @@ pub enum WalletError {
     /// The database path could not be accessed.
     #[error(transparent)]
     Io(#[from] io::Error),
+    /// Writing a new wallet failed and its database file could not be removed.
+    #[error("{error}; the new database file could not be removed: {removal}")]
+    PartialDatabase {
+        /// The error that stopped the wallet from being written.
+        error: Box<WalletError>,
+        /// The error from removing the new database file.
+        removal: io::Error,
+    },
 }
 
-/// A descriptor wallet and its SQLite connection.
+/// A share chain descriptor wallet and its SQLite connection.
+///
+/// `Wallet` wraps a bdk wallet. bdk is a bitcoin wallet and does the descriptor
+/// work: deriving keys, tracking wallet state and saving it as `ChangeSet`s.
+/// `Wallet` adds the P2Poolv2 rules bdk does not know about, and keeps bdk
+/// types out of its callers. Its responsibilities are:
+///
+/// * Accept only networks that have a share chain address prefix.
+/// * Accept only taproot descriptors, both when creating a wallet and when
+///   opening a database another tool may have written.
+/// * Pin the wallet to a network and share chain genesis hash, and refuse to
+///   open it for any other chain.
+/// * Own the database file: never overwrite an existing file, create it
+///   owner-only, mark a complete wallet with the P2Poolv2 application id,
+///   remove the file when a create fails, and never create a file on open.
+/// * Keep the bdk wallet paired with the connection it was created or loaded
+///   from, so staged changes are always saved to the same database.
 ///
 /// The database stores public descriptors and wallet state, not signing keys.
 /// Imported private descriptor keys remain in the newly created wallet's
@@ -66,10 +101,12 @@ pub struct Wallet {
 }
 
 impl Wallet {
-    /// Create a wallet at `database_path`, failing if one already exists there.
+    /// Create a wallet in a new database file at `database_path`, failing if
+    /// any file already exists there.
     ///
     /// A two-path descriptor supplies both keychains when `change_descriptor`
-    /// is `None`. The parent directory must exist.
+    /// is `None`. The parent directory must exist. If the wallet cannot be
+    /// written, the new database file is removed.
     pub fn create(
         database_path: &Path,
         descriptor: &str,
@@ -94,16 +131,12 @@ impl Wallet {
         .network(chain.network)
         .genesis_hash(chain.sharechain_genesis_hash);
 
-        //* Write the wallet to SQLite, refusing a database that already holds one.
-        let mut connection = Connection::open(database_path)?;
-        let inner = params
-            .create_wallet(&mut connection)
-            .map_err(|error| match error {
-                CreateWithPersistError::DataAlreadyExists(_) => WalletError::AlreadyExists,
-                CreateWithPersistError::Descriptor(error) => WalletError::Descriptor(error),
-                CreateWithPersistError::Persist(error) => WalletError::Storage(error),
-            })?;
-        Ok(Self { inner, connection })
+        //* Write the wallet into a new database file, removing the file on failure.
+        create_database_file(database_path)?;
+        match write_new_wallet(database_path, params) {
+            Ok((inner, connection)) => Ok(Self { inner, connection }),
+            Err(error) => Err(remove_partial_database(database_path, error)),
+        }
     }
 
     /// Open the wallet at `database_path`, failing unless it belongs to
@@ -117,10 +150,7 @@ impl Wallet {
             return Err(WalletError::NotFound);
         }
         //* Load the wallet, failing if its stored network or genesis hash differs.
-        let mut connection = Connection::open_with_flags(
-            database_path,
-            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )?;
+        let mut connection = open_database_file(database_path)?;
         let inner = BdkWallet::load()
             .check_network(expected_chain.network)
             .check_genesis_hash(expected_chain.sharechain_genesis_hash)
@@ -162,6 +192,66 @@ impl Wallet {
     }
 }
 
+/// Create an empty database file at `database_path`, failing if any file
+/// already exists there.
+///
+/// On unix the file is readable and writable by its owner only, because its
+/// public descriptors reveal every wallet address. SQLite gives its journal
+/// files the same permissions.
+fn create_database_file(database_path: &Path) -> Result<(), WalletError> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(DATABASE_FILE_MODE);
+    match options.open(database_path) {
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => Err(WalletError::AlreadyExists),
+        Err(error) => Err(WalletError::Io(error)),
+    }
+}
+
+/// Open an existing database file for reading and writing, never creating it.
+fn open_database_file(database_path: &Path) -> Result<Connection, WalletError> {
+    Ok(Connection::open_with_flags(
+        database_path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?)
+}
+
+/// Write a new wallet into the empty database file at `database_path`, then
+/// mark the file with the P2Poolv2 wallet application id.
+///
+/// bdk commits its tables and the wallet in separate transactions, so the
+/// application id is written last: a file without it never holds a complete
+/// wallet, whether the write failed or the process stopped part way.
+fn write_new_wallet(
+    database_path: &Path,
+    params: CreateParams,
+) -> Result<(PersistedWallet<Connection>, Connection), WalletError> {
+    let mut connection = open_database_file(database_path)?;
+    let inner = params
+        .create_wallet(&mut connection)
+        .map_err(|error| match error {
+            CreateWithPersistError::DataAlreadyExists(_) => WalletError::AlreadyExists,
+            CreateWithPersistError::Descriptor(error) => WalletError::Descriptor(error),
+            CreateWithPersistError::Persist(error) => WalletError::Storage(error),
+        })?;
+    connection.pragma_update(None, "application_id", WALLET_APPLICATION_ID)?;
+    Ok((inner, connection))
+}
+
+/// Remove the database file left by a failed create, returning `error`, or
+/// `PartialDatabase` if the file cannot be removed.
+fn remove_partial_database(database_path: &Path, error: WalletError) -> WalletError {
+    match fs::remove_file(database_path) {
+        Ok(()) => error,
+        Err(removal) => WalletError::PartialDatabase {
+            error: Box::new(error),
+            removal,
+        },
+    }
+}
+
 /// Parse a descriptor for `network`, rejecting one that is not taproot.
 fn parse_descriptor(
     descriptor: &str,
@@ -180,6 +270,8 @@ mod tests {
     use super::*;
     use bdk_wallet::LoadMismatch;
     use bitcoin::hashes::Hash;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     use tempfile::tempdir;
 
     const RECEIVE: &str = "tr(79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798)";
@@ -243,6 +335,44 @@ mod tests {
     }
 
     #[test]
+    fn wallet_create_writes_an_owner_only_file_marked_as_a_p2pool_wallet() {
+        let chain = ChainIdentity {
+            network: Network::Signet,
+            sharechain_genesis_hash: BlockHash::from_byte_array([42; 32]),
+        };
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("wallet.sqlite");
+        drop(Wallet::create(&path, RECEIVE, Some(CHANGE), chain).unwrap());
+
+        let connection = Connection::open(&path).unwrap();
+        let application_id: i32 = connection
+            .pragma_query_value(None, "application_id", |row| row.get(0))
+            .unwrap();
+        assert_eq!(application_id, WALLET_APPLICATION_ID);
+        #[cfg(unix)]
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            DATABASE_FILE_MODE
+        );
+    }
+
+    #[test]
+    fn wallet_create_refuses_existing_file_and_leaves_it_unchanged() {
+        let chain = ChainIdentity {
+            network: Network::Signet,
+            sharechain_genesis_hash: BlockHash::from_byte_array([42; 32]),
+        };
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("wallet.sqlite");
+        fs::write(&path, b"not a wallet").unwrap();
+        assert!(matches!(
+            Wallet::create(&path, RECEIVE, Some(CHANGE), chain),
+            Err(WalletError::AlreadyExists)
+        ));
+        assert_eq!(fs::read(&path).unwrap(), b"not a wallet");
+    }
+
+    #[test]
     fn wallet_enforces_p2pool_network_and_taproot_descriptors() {
         let chain = ChainIdentity {
             network: Network::Signet,
@@ -267,6 +397,13 @@ mod tests {
         assert!(matches!(
             Wallet::create(&path, RECEIVE, Some(SEGWIT), chain),
             Err(WalletError::UnsupportedDescriptor(KeychainKind::Internal))
+        ));
+        assert!(!path.exists());
+        assert!(matches!(
+            Wallet::create(&path, RECEIVE, Some(RECEIVE), chain),
+            Err(WalletError::Descriptor(
+                DescriptorError::ExternalAndInternalAreTheSame
+            ))
         ));
         assert!(!path.exists());
 
