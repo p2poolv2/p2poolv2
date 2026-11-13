@@ -335,6 +335,9 @@ mod tests {
     const RECEIVE: &str = "tr(79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798)";
     const CHANGE: &str = "tr(c6047f9441ed7d6d3045406e95c07cd85c778e4b8cef3ca7abac09b95c709ee5)";
     const SEGWIT: &str = "wpkh(0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798)";
+    const TWO_PATH: &str = "tr(tpubD6NzVbkrYhZ4XHndKkuB8FifXm8r5FQHwrN6oZuWCz13qb93rtgKvD4PQsqC4HP4yhV3tA2fqr2RbY5mNXfM7RxXUoeABoDtsFUq2zJq6YK/<0;1>/*)";
+    const RECEIVE_BRANCH: &str = "tr(tpubD6NzVbkrYhZ4XHndKkuB8FifXm8r5FQHwrN6oZuWCz13qb93rtgKvD4PQsqC4HP4yhV3tA2fqr2RbY5mNXfM7RxXUoeABoDtsFUq2zJq6YK/0/*)";
+    const CHANGE_BRANCH: &str = "tr(tpubD6NzVbkrYhZ4XHndKkuB8FifXm8r5FQHwrN6oZuWCz13qb93rtgKvD4PQsqC4HP4yhV3tA2fqr2RbY5mNXfM7RxXUoeABoDtsFUq2zJq6YK/1/*)";
 
     #[test]
     fn wallet_reopen_preserves_descriptors_and_rejects_identity_conflicts() {
@@ -615,5 +618,79 @@ mod tests {
             Err(WalletError::InUse)
         ));
         drop(opened);
+    }
+
+    #[test]
+    fn wallet_create_splits_a_two_path_descriptor_into_receive_and_change() {
+        let chain = ChainIdentity {
+            network: Network::Signet,
+            sharechain_genesis_hash: BlockHash::from_byte_array([42; 32]),
+        };
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("wallet.sqlite");
+        let receive_branch: ExtendedDescriptor = RECEIVE_BRANCH.parse().unwrap();
+        let change_branch: ExtendedDescriptor = CHANGE_BRANCH.parse().unwrap();
+
+        //* Create from one `<0;1>` descriptor with no change descriptor.
+        let wallet = Wallet::create(&path, TWO_PATH, None, chain).unwrap();
+        //* Path 0 becomes the receive keychain and path 1 the change keychain.
+        assert_eq!(
+            wallet.public_descriptor(KeychainKind::External),
+            &receive_branch
+        );
+        assert_eq!(
+            wallet.public_descriptor(KeychainKind::Internal),
+            &change_branch
+        );
+        drop(wallet);
+
+        //* Reopening restores both single-path keychains from the database.
+        let reopened = Wallet::open(&path, chain).unwrap();
+        assert_eq!(
+            reopened.public_descriptor(KeychainKind::External),
+            &receive_branch
+        );
+        assert_eq!(
+            reopened.public_descriptor(KeychainKind::Internal),
+            &change_branch
+        );
+    }
+
+    #[test]
+    fn wallet_create_refuses_a_two_path_receive_descriptor_with_a_change_descriptor() {
+        let chain = ChainIdentity {
+            network: Network::Signet,
+            sharechain_genesis_hash: BlockHash::from_byte_array([42; 32]),
+        };
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("wallet.sqlite");
+
+        //* A `<0;1>` receive descriptor already holds the change path, so bdk
+        //* rejects an extra change descriptor after the file exists.
+        assert!(matches!(
+            Wallet::create(&path, TWO_PATH, Some(CHANGE_BRANCH), chain),
+            Err(WalletError::Descriptor(DescriptorError::Miniscript(_)))
+        ));
+        //* Create removed the file it made.
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn wallet_create_refuses_a_two_path_change_descriptor() {
+        let chain = ChainIdentity {
+            network: Network::Signet,
+            sharechain_genesis_hash: BlockHash::from_byte_array([42; 32]),
+        };
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("wallet.sqlite");
+
+        //* A change descriptor must be single-path, so bdk rejects a `<0;1>` one
+        //* after the file exists.
+        assert!(matches!(
+            Wallet::create(&path, RECEIVE_BRANCH, Some(TWO_PATH), chain),
+            Err(WalletError::Descriptor(DescriptorError::Miniscript(_)))
+        ));
+        //* Create removed the file it made.
+        assert!(!path.exists());
     }
 }
