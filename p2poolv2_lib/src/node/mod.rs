@@ -5,6 +5,7 @@
 mod address_filter;
 pub mod behaviour;
 pub mod connection_tracker;
+mod dial_filter;
 mod dns_seeds;
 pub mod emission_worker;
 pub mod organise_worker;
@@ -98,6 +99,7 @@ pub enum SwarmSend<C> {
 }
 
 use connection_tracker::{ConnectionAction, ConnectionTracker, PING_FAILURE_THRESHOLD};
+use dial_filter::DialFilter;
 
 /// Close a connection after this long with no streams in use and no protocol
 /// asking to keep it alive.
@@ -112,10 +114,17 @@ const IDLE_CONNECTION_TIMEOUT_SECS: u64 = 600;
 
 /// The transport below the noise and yamux upgrade: TCP wrapped in DNS
 /// resolution, so `/dns`, `/dns4` and `/dns6` dial addresses work. The
-/// resolver is configured from the system's resolv.conf.
-fn base_transport(tcp_config: TcpConfig) -> Boxed<TcpStream> {
+/// resolver is configured from the system's resolv.conf. A DialFilter on top
+/// lets through only the `/dns` addresses configured as dial_peers, so
+/// hostnames learned from peers are never resolved or dialed.
+fn base_transport(tcp_config: TcpConfig, dial_peers: &[String]) -> Boxed<TcpStream> {
     let tcp_transport = TcpTransport::new(tcp_config.clone());
-    dns_or_tcp_transport(DnsTransport::system(tcp_transport), tcp_config)
+    let dns_or_tcp = dns_or_tcp_transport(DnsTransport::system(tcp_transport), tcp_config);
+    let configured_dns = dial_filter::configured_dns_addresses(dial_peers);
+    DialFilter::new(dns_or_tcp, move |address: &Multiaddr| {
+        dial_filter::is_configured_or_not_dns(address, &configured_dns)
+    })
+    .boxed()
 }
 
 /// Boxes the DNS transport, or, when the system resolver config could not
@@ -196,7 +205,7 @@ impl Node {
             }
         };
 
-        let transport = base_transport(tcp_config)
+        let transport = base_transport(tcp_config, &config.network.dial_peers)
             .upgrade(libp2p::core::upgrade::Version::V1)
             .authenticate(noise_config)
             .multiplex(libp2p::yamux::Config::default())
