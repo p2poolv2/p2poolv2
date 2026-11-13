@@ -179,11 +179,9 @@ impl Wallet {
             })?
             .ok_or(WalletError::NotFound)?;
         //* Reject non-taproot keychains, which a database written by another tool can hold.
-        for (keychain, descriptor) in inner.keychains() {
-            if !matches!(descriptor, ExtendedDescriptor::Tr(_)) {
-                return Err(WalletError::UnsupportedDescriptor(keychain));
-            }
-        }
+        inner
+            .keychains()
+            .try_for_each(|(keychain, descriptor)| require_taproot(descriptor, keychain))?;
         Ok(Self { inner, connection })
     }
 
@@ -317,10 +315,20 @@ fn parse_descriptor(
     keychain: KeychainKind,
 ) -> Result<(ExtendedDescriptor, KeyMap), WalletError> {
     let parsed = descriptor.into_wallet_descriptor(&Secp256k1::new(), network.into())?;
-    if !matches!(parsed.0, ExtendedDescriptor::Tr(_)) {
-        return Err(WalletError::UnsupportedDescriptor(keychain));
-    }
+    require_taproot(&parsed.0, keychain)?;
     Ok(parsed)
+}
+
+/// Fail with `UnsupportedDescriptor` for `keychain` unless `descriptor`
+/// produces taproot outputs, the only kind a share chain address can hold.
+fn require_taproot(
+    descriptor: &ExtendedDescriptor,
+    keychain: KeychainKind,
+) -> Result<(), WalletError> {
+    match descriptor {
+        ExtendedDescriptor::Tr(_) => Ok(()),
+        _ => Err(WalletError::UnsupportedDescriptor(keychain)),
+    }
 }
 
 #[cfg(test)]
