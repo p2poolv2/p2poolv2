@@ -49,7 +49,7 @@ use libp2p::tcp::Config as TcpConfig;
 use libp2p::{
     Multiaddr, Swarm,
     kad::{Event as KademliaEvent, QueryResult},
-    swarm::SwarmEvent,
+    swarm::{SwarmEvent, dial_opts::DialOpts},
 };
 use std::collections::HashSet;
 use std::error::Error;
@@ -252,19 +252,6 @@ impl Node {
             }
         }
 
-        for peer_addr in &config.network.dial_peers {
-            match peer_addr.parse::<Multiaddr>() {
-                Ok(remote) => {
-                    if let Err(e) = swarm.dial(remote) {
-                        debug!("Failed to dial {}: {}", peer_addr, e);
-                    } else {
-                        info!("Dialed {}", peer_addr);
-                    }
-                }
-                Err(e) => debug!("Invalid multiaddr {}: {}", peer_addr, e),
-            }
-        }
-
         let (swarm_tx, swarm_rx) = mpsc::channel(100);
 
         let dns_seeds = if config.network.dns_seed {
@@ -304,7 +291,7 @@ impl Node {
             info!("Loaded {} blocked IPs from config", blocked_ips.len());
         }
 
-        Ok(Self {
+        let mut node = Self {
             swarm,
             swarm_tx,
             swarm_rx,
@@ -317,7 +304,9 @@ impl Node {
             listen_port,
             has_bootstrapped_kad: false,
             dns_seeds,
-        })
+        };
+        node.attempt_reconnections();
+        Ok(node)
     }
 
     /// Queries the DNS seeds and dials the returned addresses, unless a peer
@@ -367,16 +356,23 @@ impl Node {
         }
     }
 
-    /// Attempt to reconnect to any configured dial_peers that are not currently connected.
+    /// Dial any configured dial_peers that are not connected and have no dial
+    /// in flight. Called once from Node::new and then on the reconnect timer.
+    /// Each started dial's ConnectionId is handed to the reconnector so the
+    /// outcome can be matched back to it.
     fn attempt_reconnections(&mut self) {
         let connected_dial_addresses = self.connection_tracker.connected_dial_addresses();
         let addresses = self
             .peer_reconnector
             .addresses_to_reconnect(&connected_dial_addresses);
         for address in addresses {
-            match self.swarm.dial(address.clone()) {
+            let dial_opts = DialOpts::unknown_peer_id().address(address.clone()).build();
+            let connection_id = dial_opts.connection_id();
+            match self.swarm.dial(dial_opts) {
                 Ok(_) => {
-                    debug!("Reconnecting to {address}");
+                    info!("Dialing {address}");
+                    self.peer_reconnector
+                        .record_dial_started(&address, connection_id);
                 }
                 Err(error) => {
                     error!("Failed to redial {address}: {error}");
@@ -442,9 +438,8 @@ impl Node {
                 num_established,
                 ..
             } => {
-                if let libp2p::core::ConnectedPoint::Dialer { ref address, .. } = endpoint {
-                    self.peer_reconnector.record_dial_success(address);
-                }
+                self.peer_reconnector
+                    .record_connection_established(connection_id);
 
                 match self
                     .connection_tracker
@@ -526,9 +521,8 @@ impl Node {
                 error!(
                     "Failed to connect to peer: {peer_id:?}, error: {error}, connection_id: {connection_id}"
                 );
-                for address in peer_reconnector::dial_error_addresses(&error) {
-                    self.peer_reconnector.record_dial_failure(address);
-                }
+                self.peer_reconnector
+                    .record_connection_failure(connection_id);
                 Ok(())
             }
             SwarmEvent::Behaviour(event) => match event {
@@ -739,11 +733,13 @@ mod tests {
     use crate::node::validation_worker::create_validation_channel;
     use bitcoindrpc::BitcoinRpcConfig;
     use futures::StreamExt;
-    use libp2p::PeerId;
     use libp2p::ping::Failure;
-    use libp2p::swarm::{ConnectionId, SwarmEvent};
+    use libp2p::swarm::{ConnectionId, DialError, SwarmEvent};
+    use libp2p::{Multiaddr, PeerId, TransportError};
+    use std::io;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
+    use tokio::time::advance;
 
     #[tokio::test]
     async fn test_node_dial_timeout_does_not_hang() {
@@ -990,6 +986,41 @@ mod tests {
                 .connection_counters()
                 .num_pending_outgoing(),
             1
+        );
+    }
+
+    /// A failed dial_peer dial reported by the swarm reaches the reconnector,
+    /// which ends the pending dial and backs off from 5s to 10s.
+    #[tokio::test(start_paused = true)]
+    async fn test_outgoing_connection_error_backs_off_dial_peer() {
+        let mut config = build_test_config("", None);
+        config.network.dial_peers = vec!["/ip4/127.0.0.1/tcp/65535".to_string()];
+        let mut node = build_test_node(config);
+        let address: Multiaddr = "/ip4/127.0.0.1/tcp/65535".parse().unwrap();
+        let connection_id = node
+            .peer_reconnector
+            .pending_dial(&address)
+            .expect("Node::new should have dialed the dial_peer");
+
+        let event = SwarmEvent::OutgoingConnectionError {
+            connection_id,
+            peer_id: None,
+            error: DialError::Transport(vec![(
+                address.clone(),
+                TransportError::Other(io::Error::other("connection refused")),
+            )]),
+        };
+        node.handle_swarm_event(event).unwrap();
+
+        advance(Duration::from_secs(9)).await;
+        assert!(
+            node.peer_reconnector.addresses_to_reconnect(&[]).is_empty(),
+            "Should still be in 10s backoff"
+        );
+        advance(Duration::from_secs(2)).await;
+        assert_eq!(
+            node.peer_reconnector.addresses_to_reconnect(&[]),
+            vec![address]
         );
     }
 
