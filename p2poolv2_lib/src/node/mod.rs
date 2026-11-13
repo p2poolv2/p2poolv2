@@ -171,7 +171,10 @@ impl Node {
         let dns_transport = match libp2p::dns::tokio::Transport::system(tcp_transport) {
             Ok(dns_transport) => dns_transport,
             Err(err) => {
-                error!("Failed to create DNS transport from system resolver config: {}", err);
+                error!(
+                    "Failed to create DNS transport from system resolver config: {}",
+                    err
+                );
                 return Err(Box::new(err));
             }
         };
