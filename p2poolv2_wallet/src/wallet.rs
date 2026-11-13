@@ -12,7 +12,7 @@ use bdk_wallet::{
     CreateParams, CreateWithPersistError, KeychainKind, LoadError, LoadWithPersistError,
     PersistedWallet, Wallet as BdkWallet,
 };
-use bitcoin::secp256k1::Secp256k1;
+use bitcoin::secp256k1::{All, Secp256k1};
 use bitcoin::{BlockHash, Network};
 use std::fs::{self, OpenOptions};
 use std::io::{self, ErrorKind};
@@ -126,12 +126,22 @@ impl Wallet {
     ) -> Result<Self, WalletError> {
         //* Reject a network with no share chain prefix and a non-taproot receive descriptor.
         expected_hrp(chain.network)?;
-        let external = parse_descriptor(descriptor, chain.network, KeychainKind::External)?;
+        let secp256k1_context = Secp256k1::new();
+        let external = parse_descriptor(
+            &secp256k1_context,
+            descriptor,
+            chain.network,
+            KeychainKind::External,
+        )?;
         //* Pick the keychain layout and pin the network and share chain genesis.
         let params = match change_descriptor {
             Some(change_descriptor) => {
-                let internal =
-                    parse_descriptor(change_descriptor, chain.network, KeychainKind::Internal)?;
+                let internal = parse_descriptor(
+                    &secp256k1_context,
+                    change_descriptor,
+                    chain.network,
+                    KeychainKind::Internal,
+                )?;
                 BdkWallet::create(external, internal)
             }
             None if external.0.is_multipath() => {
@@ -308,13 +318,18 @@ fn remove_partial_database(database_path: &Path, error: WalletError) -> WalletEr
     }
 }
 
-/// Parse a descriptor for `network`, rejecting one that is not taproot.
+/// Parse a descriptor for `network` with the caller's `secp256k1_context`,
+/// rejecting one that is not taproot.
+///
+/// bdk requires a full signing and verification context here, so `create`
+/// builds one and shares it across both of its descriptors.
 fn parse_descriptor(
+    secp256k1_context: &Secp256k1<All>,
     descriptor: &str,
     network: Network,
     keychain: KeychainKind,
 ) -> Result<(ExtendedDescriptor, KeyMap), WalletError> {
-    let parsed = descriptor.into_wallet_descriptor(&Secp256k1::new(), network.into())?;
+    let parsed = descriptor.into_wallet_descriptor(secp256k1_context, network.into())?;
     require_taproot(&parsed.0, keychain)?;
     Ok(parsed)
 }
