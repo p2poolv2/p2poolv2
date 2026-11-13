@@ -7,7 +7,7 @@
 use crate::{AddressError, expected_hrp};
 use bdk_wallet::descriptor::{DescriptorError, ExtendedDescriptor, IntoWalletDescriptor};
 use bdk_wallet::miniscript::descriptor::KeyMap;
-use bdk_wallet::rusqlite::{Connection, Error as SqliteError, OpenFlags};
+use bdk_wallet::rusqlite::{Connection, Error as SqliteError, ErrorCode, OpenFlags};
 use bdk_wallet::{
     CreateParams, CreateWithPersistError, KeychainKind, LoadError, LoadWithPersistError,
     PersistedWallet, Wallet as BdkWallet,
@@ -19,6 +19,7 @@ use std::io::{self, ErrorKind};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
+use std::time::Duration;
 
 /// SQLite `application_id` marking a complete P2Poolv2 wallet database
 /// ("P2PW"). bdk leaves this header field unset.
@@ -52,9 +53,15 @@ pub enum WalletError {
     /// A file already exists at the database path.
     #[error("A file already exists at this database path")]
     AlreadyExists,
-    /// The database file or its wallet state does not exist.
+    /// No file exists at the database path.
     #[error("No wallet exists at this database path")]
     NotFound,
+    /// The file at the database path is not a complete P2Poolv2 wallet.
+    #[error("The file at this database path is not a P2Poolv2 wallet")]
+    NotAWallet,
+    /// Another connection, in this or another process, holds the wallet open.
+    #[error("The wallet is already open elsewhere")]
+    InUse,
     /// Persisted wallet state is invalid or differs from the expected chain.
     #[error(transparent)]
     Load(#[from] LoadError),
@@ -89,6 +96,10 @@ pub enum WalletError {
 /// * Own the database file: never overwrite an existing file, create it
 ///   owner-only, mark a complete wallet with the P2Poolv2 application id,
 ///   remove the file when a create fails, and never create a file on open.
+/// * Refuse to open a file without the application id, before bdk can add its
+///   tables to it.
+/// * Hold an exclusive lock on the database while the wallet is open, so two
+///   processes cannot hand out the same address.
 /// * Keep the bdk wallet paired with the connection it was created or loaded
 ///   from, so staged changes are always saved to the same database.
 ///
@@ -142,15 +153,22 @@ impl Wallet {
     /// Open the wallet at `database_path`, failing unless it belongs to
     /// `expected_chain`.
     ///
-    /// A missing file is reported as `NotFound`, never created.
+    /// A missing file is reported as `NotFound`, never created. A file without
+    /// the P2Poolv2 wallet application id is reported as `NotAWallet` and left
+    /// unchanged. The wallet holds the database locked until it is dropped.
     pub fn open(database_path: &Path, expected_chain: ChainIdentity) -> Result<Self, WalletError> {
         //* Reject an unsupported network, and report a missing file as `NotFound`.
         expected_hrp(expected_chain.network)?;
         if !database_path.try_exists()? {
             return Err(WalletError::NotFound);
         }
-        //* Load the wallet, failing if its stored network or genesis hash differs.
+        //* Refuse the file unless it is marked as a complete wallet, then lock it.
         let mut connection = open_database_file(database_path)?;
+        if read_application_id(&connection)? != WALLET_APPLICATION_ID {
+            return Err(WalletError::NotAWallet);
+        }
+        lock_database(&connection)?;
+        //* Load the wallet, failing if its stored network or genesis hash differs.
         let inner = BdkWallet::load()
             .check_network(expected_chain.network)
             .check_genesis_hash(expected_chain.sharechain_genesis_hash)
@@ -210,12 +228,51 @@ fn create_database_file(database_path: &Path) -> Result<(), WalletError> {
     }
 }
 
-/// Open an existing database file for reading and writing, never creating it.
+/// Open an existing database file for reading and writing, never creating
+/// it, in exclusive locking mode.
+///
+/// In exclusive locking mode SQLite keeps every lock it takes until the
+/// connection closes. Lock waits fail at once instead of retrying, so a
+/// database held by another connection is reported as `InUse` without delay.
+/// Nothing is read or written yet.
 fn open_database_file(database_path: &Path) -> Result<Connection, WalletError> {
-    Ok(Connection::open_with_flags(
+    let connection = Connection::open_with_flags(
         database_path,
         OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )?)
+    )?;
+    connection.busy_timeout(Duration::ZERO)?;
+    connection.execute_batch("PRAGMA locking_mode = EXCLUSIVE;")?;
+    Ok(connection)
+}
+
+/// Take an exclusive lock on the database, held until `connection` closes,
+/// failing with `InUse` if another connection holds a lock on it.
+///
+/// An empty exclusive transaction acquires the lock. On an empty file it
+/// writes the SQLite header, so `open` checks the application id first.
+fn lock_database(connection: &Connection) -> Result<(), WalletError> {
+    connection
+        .execute_batch("BEGIN EXCLUSIVE; COMMIT;")
+        .map_err(classify_open_error)
+}
+
+/// Read the SQLite `application_id` of the database, failing with
+/// `NotAWallet` if the file is not an SQLite database. This never writes.
+fn read_application_id(connection: &Connection) -> Result<i32, WalletError> {
+    connection
+        .pragma_query_value(None, "application_id", |row| row.get(0))
+        .map_err(classify_open_error)
+}
+
+/// Map an SQLite error from opening a database to `InUse` when another
+/// connection holds the lock, `NotAWallet` when the file is not an SQLite
+/// database, or `Storage` otherwise.
+fn classify_open_error(error: SqliteError) -> WalletError {
+    match error.sqlite_error_code() {
+        Some(ErrorCode::DatabaseBusy) => WalletError::InUse,
+        Some(ErrorCode::NotADatabase) => WalletError::NotAWallet,
+        _ => WalletError::Storage(error),
+    }
 }
 
 /// Write a new wallet into the empty database file at `database_path`, then
@@ -229,6 +286,7 @@ fn write_new_wallet(
     params: CreateParams,
 ) -> Result<(PersistedWallet<Connection>, Connection), WalletError> {
     let mut connection = open_database_file(database_path)?;
+    lock_database(&connection)?;
     let inner = params
         .create_wallet(&mut connection)
         .map_err(|error| match error {
@@ -286,21 +344,25 @@ mod tests {
         };
         let directory = tempdir().unwrap();
         let path = directory.path().join("wallet.sqlite");
+        //* Opening a path with no file reports NotFound and does not create one.
         assert!(matches!(
             Wallet::open(&path, chain),
             Err(WalletError::NotFound)
         ));
         assert!(!path.exists());
+        //* Create a wallet with separate receive and change descriptors and keep its public descriptors.
         let wallet = Wallet::create(&path, RECEIVE, Some(CHANGE), chain).unwrap();
         let external = wallet.public_descriptor(KeychainKind::External).clone();
         let internal = wallet.public_descriptor(KeychainKind::Internal).clone();
         assert_ne!(external, internal);
         drop(wallet);
 
+        //* A second create at the same path is refused.
         assert!(matches!(
             Wallet::create(&path, CHANGE, None, chain),
             Err(WalletError::AlreadyExists)
         ));
+        //* Opening for another share chain or another network is refused.
         let wrong_genesis = ChainIdentity {
             sharechain_genesis_hash: BlockHash::from_byte_array([43; 32]),
             ..chain
@@ -322,6 +384,7 @@ mod tests {
             )))
         ));
 
+        //* Reopening for the right chain restores the chain identity and both descriptors.
         let reopened = Wallet::open(&path, chain).unwrap();
         assert_eq!(reopened.chain(), chain);
         assert_eq!(
@@ -342,13 +405,16 @@ mod tests {
         };
         let directory = tempdir().unwrap();
         let path = directory.path().join("wallet.sqlite");
+        //* Create a wallet and close it so the file can be inspected directly.
         drop(Wallet::create(&path, RECEIVE, Some(CHANGE), chain).unwrap());
 
+        //* The file header carries the P2PW application id.
         let connection = Connection::open(&path).unwrap();
         let application_id: i32 = connection
             .pragma_query_value(None, "application_id", |row| row.get(0))
             .unwrap();
         assert_eq!(application_id, WALLET_APPLICATION_ID);
+        //* On unix only the owner can read or write the file.
         #[cfg(unix)]
         assert_eq!(
             fs::metadata(&path).unwrap().permissions().mode() & 0o777,
@@ -364,7 +430,9 @@ mod tests {
         };
         let directory = tempdir().unwrap();
         let path = directory.path().join("wallet.sqlite");
+        //* Put an unrelated file at the wallet path.
         fs::write(&path, b"not a wallet").unwrap();
+        //* Create refuses the path, and the file keeps its original contents.
         assert!(matches!(
             Wallet::create(&path, RECEIVE, Some(CHANGE), chain),
             Err(WalletError::AlreadyExists)
@@ -380,6 +448,7 @@ mod tests {
         };
         let directory = tempdir().unwrap();
         let path = directory.path().join("wallet.sqlite");
+        //* A network with no share chain address prefix is refused.
         let unsupported = ChainIdentity {
             network: Network::Testnet,
             ..chain
@@ -390,6 +459,7 @@ mod tests {
                 Network::Testnet
             )))
         ));
+        //* A non-taproot receive or change descriptor is refused before any file is created.
         assert!(matches!(
             Wallet::create(&path, SEGWIT, None, chain),
             Err(WalletError::UnsupportedDescriptor(KeychainKind::External))
@@ -399,6 +469,7 @@ mod tests {
             Err(WalletError::UnsupportedDescriptor(KeychainKind::Internal))
         ));
         assert!(!path.exists());
+        //* Identical receive and change descriptors pass our parsing but bdk rejects them after the file exists; create removes the file.
         assert!(matches!(
             Wallet::create(&path, RECEIVE, Some(RECEIVE), chain),
             Err(WalletError::Descriptor(
@@ -407,16 +478,142 @@ mod tests {
         ));
         assert!(!path.exists());
 
+        //* Write a marked segwit wallet with bdk directly, as another tool could, and check open refuses its descriptor.
         let mut connection = Connection::open(&path).unwrap();
         BdkWallet::create_single(SEGWIT)
             .network(chain.network)
             .genesis_hash(chain.sharechain_genesis_hash)
             .create_wallet(&mut connection)
             .unwrap();
+        connection
+            .pragma_update(None, "application_id", WALLET_APPLICATION_ID)
+            .unwrap();
         drop(connection);
         assert!(matches!(
             Wallet::open(&path, chain),
             Err(WalletError::UnsupportedDescriptor(KeychainKind::External))
         ));
+    }
+
+    #[test]
+    fn wallet_open_refuses_another_sqlite_database_without_adding_tables() {
+        let chain = ChainIdentity {
+            network: Network::Signet,
+            sharechain_genesis_hash: BlockHash::from_byte_array([42; 32]),
+        };
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("other.sqlite");
+        //* Create another application's SQLite database: one unrelated table and no P2PW application id.
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch("CREATE TABLE notes (body TEXT NOT NULL);")
+            .unwrap();
+        drop(connection);
+
+        //* Open refuses it because the application id is not P2PW.
+        assert!(matches!(
+            Wallet::open(&path, chain),
+            Err(WalletError::NotAWallet)
+        ));
+        //* The database still holds only its own table, so bdk added none of its tables before the refusal.
+        let connection = Connection::open(&path).unwrap();
+        let tables: Vec<String> = connection
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(tables, vec!["notes".to_string()]);
+    }
+
+    #[test]
+    fn wallet_open_refuses_a_bdk_wallet_without_the_application_id() {
+        let chain = ChainIdentity {
+            network: Network::Signet,
+            sharechain_genesis_hash: BlockHash::from_byte_array([42; 32]),
+        };
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("wallet.sqlite");
+        //* Write a complete bdk wallet without the P2PW application id, as a create that stopped before marking the file leaves it.
+        let mut connection = Connection::open(&path).unwrap();
+        BdkWallet::create(RECEIVE, CHANGE)
+            .network(chain.network)
+            .genesis_hash(chain.sharechain_genesis_hash)
+            .create_wallet(&mut connection)
+            .unwrap();
+        drop(connection);
+
+        //* Open refuses it even though bdk could load it.
+        assert!(matches!(
+            Wallet::open(&path, chain),
+            Err(WalletError::NotAWallet)
+        ));
+    }
+
+    #[test]
+    fn wallet_open_refuses_an_empty_file_and_leaves_it_empty() {
+        let chain = ChainIdentity {
+            network: Network::Signet,
+            sharechain_genesis_hash: BlockHash::from_byte_array([42; 32]),
+        };
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("wallet.sqlite");
+        //* Leave a zero-length file at the wallet path, as a create that stopped right after making the file does.
+        fs::write(&path, b"").unwrap();
+
+        //* Open refuses it, and taking no lock means SQLite wrote no header into it.
+        assert!(matches!(
+            Wallet::open(&path, chain),
+            Err(WalletError::NotAWallet)
+        ));
+        assert_eq!(fs::metadata(&path).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn wallet_open_refuses_a_file_that_is_not_sqlite_and_leaves_it_unchanged() {
+        let chain = ChainIdentity {
+            network: Network::Signet,
+            sharechain_genesis_hash: BlockHash::from_byte_array([42; 32]),
+        };
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("wallet.sqlite");
+        //* Put a file at the wallet path whose bytes are not an SQLite database.
+        let contents = vec![7u8; 4096];
+        fs::write(&path, &contents).unwrap();
+
+        //* Open refuses it and leaves its bytes unchanged.
+        assert!(matches!(
+            Wallet::open(&path, chain),
+            Err(WalletError::NotAWallet)
+        ));
+        assert_eq!(fs::read(&path).unwrap(), contents);
+    }
+
+    #[test]
+    fn wallet_open_refuses_a_wallet_held_open_by_another_wallet() {
+        let chain = ChainIdentity {
+            network: Network::Signet,
+            sharechain_genesis_hash: BlockHash::from_byte_array([42; 32]),
+        };
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("wallet.sqlite");
+        //* Keep a newly created wallet open; it holds the exclusive lock.
+        let created = Wallet::create(&path, RECEIVE, Some(CHANGE), chain).unwrap();
+
+        //* A second open fails at once while the created wallet holds the lock.
+        assert!(matches!(
+            Wallet::open(&path, chain),
+            Err(WalletError::InUse)
+        ));
+        //* Closing the created wallet releases the lock, so open succeeds and now holds it.
+        drop(created);
+        let opened = Wallet::open(&path, chain).unwrap();
+        //* A further open fails while the opened wallet holds the lock.
+        assert!(matches!(
+            Wallet::open(&path, chain),
+            Err(WalletError::InUse)
+        ));
+        drop(opened);
     }
 }
