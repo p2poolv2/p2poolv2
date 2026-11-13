@@ -119,6 +119,12 @@ pub(crate) async fn resolve_dns_seeds(seeds: DnsSeeds) -> HashSet<Multiaddr> {
 /// Resolves one seed hostname through the system resolver and returns at
 /// most MAX_ADDRESSES_PER_SEED routable addresses on `port`. Duplicates are
 /// left to the caller, which merges every seed's addresses into one set.
+///
+/// Seeds are resolved here with getaddrinfo, not dialed as `/dns` addresses
+/// through the libp2p DNS transport (hickory) that dial_peers use: a `/dns`
+/// dial stops at the first IP that connects, while a seed must yield every
+/// A record so the node can connect to many peers. The two resolvers can
+/// disagree on names that only nsswitch knows (mDNS, NSS plugins).
 async fn resolve_dns_seed(hostname: &str, port: u16) -> Vec<Multiaddr> {
     let lookup = timeout(
         Duration::from_secs(DNS_SEED_LOOKUP_TIMEOUT_SECS),

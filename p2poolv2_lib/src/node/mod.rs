@@ -5,6 +5,7 @@
 mod address_filter;
 pub mod behaviour;
 pub mod connection_tracker;
+mod dial_filter;
 mod dns_seeds;
 pub mod emission_worker;
 pub mod organise_worker;
@@ -41,18 +42,21 @@ use behaviour::request_response::protocol_string;
 use behaviour::{P2PoolBehaviour, P2PoolBehaviourEvent};
 use libp2p::PeerId;
 use libp2p::SwarmBuilder;
-use libp2p::core::transport::Transport;
+use libp2p::core::transport::{Boxed, Transport};
+use libp2p::dns::tokio::Transport as DnsTransport;
 use libp2p::identify;
 use libp2p::ping::Failure;
 use libp2p::request_response::ResponseChannel;
 use libp2p::tcp::Config as TcpConfig;
+use libp2p::tcp::tokio::{TcpStream, Transport as TcpTransport};
 use libp2p::{
     Multiaddr, Swarm,
     kad::{Event as KademliaEvent, QueryResult},
-    swarm::SwarmEvent,
+    swarm::{SwarmEvent, dial_opts::DialOpts},
 };
 use std::collections::HashSet;
 use std::error::Error;
+use std::io;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -94,7 +98,8 @@ pub enum SwarmSend<C> {
     Dial(Multiaddr),
 }
 
-use connection_tracker::{ConnectionAction, ConnectionTracker, PING_FAILURE_THRESHOLD};
+use connection_tracker::{BlockedIps, ConnectionAction, ConnectionTracker, PING_FAILURE_THRESHOLD};
+use dial_filter::DialFilter;
 
 /// Close a connection after this long with no streams in use and no protocol
 /// asking to keep it alive.
@@ -106,6 +111,70 @@ use connection_tracker::{ConnectionAction, ConnectionTracker, PING_FAILURE_THRES
 /// keeps working there); closing on repeated ping failures handles that. This
 /// only reaps connections where everything, identify included, has gone quiet.
 const IDLE_CONNECTION_TIMEOUT_SECS: u64 = 600;
+
+/// The transport below the noise and yamux upgrade. A dial passes through
+/// three layers, in this order:
+///
+/// 1. A `/dns`, `/dns4`, `/dns6` or `/dnsaddr` address is refused unless it
+///    is a configured dial_peer, so hostnames learned from peers (Kademlia)
+///    are never resolved or dialed. IP addresses pass through.
+/// 2. DNS resolves the hostname to IP addresses, using the system's
+///    resolv.conf. IP addresses pass through unchanged.
+/// 3. Each resolved IP is refused if it is on the blocklist, otherwise TCP
+///    connects to it. The blocklist check sits after DNS because only there
+///    is the IP behind a hostname known.
+fn base_transport(
+    tcp_config: TcpConfig,
+    dial_peers: &[String],
+    blocked_ips: BlockedIps,
+) -> Boxed<TcpStream> {
+    let tcp_for_dns_transport = blocked_ip_filtered_tcp(tcp_config.clone(), blocked_ips.clone());
+    let fallback_tcp = blocked_ip_filtered_tcp(tcp_config, blocked_ips);
+    let dns_or_tcp =
+        dns_or_tcp_transport(DnsTransport::system(tcp_for_dns_transport), fallback_tcp);
+    let configured_dns = dial_filter::configured_dns_addresses(dial_peers);
+    DialFilter::new(dns_or_tcp, move |address: &Multiaddr| {
+        dial_filter::is_configured_or_not_dns(address, &configured_dns)
+    })
+    .boxed()
+}
+
+/// TCP that refuses to dial IPs on the blocklist.
+fn blocked_ip_filtered_tcp(
+    tcp_config: TcpConfig,
+    blocked_ips: BlockedIps,
+) -> DialFilter<TcpTransport, impl Fn(&Multiaddr) -> bool + Send + Sync + Unpin + 'static> {
+    DialFilter::new(TcpTransport::new(tcp_config), move |address: &Multiaddr| {
+        dial_filter::is_not_blocked(address, &blocked_ips)
+    })
+}
+
+/// Boxes the DNS transport, or, when the system resolver config could not
+/// be loaded (no /etc/resolv.conf or no nameservers in it, as in some minimal
+/// containers), warns and boxes `fallback` instead. The node then still runs
+/// with `/ip4` and `/ip6` peers; `/dns` dials fail with MultiaddrNotSupported.
+/// `fallback` is passed in because DnsTransport::system consumes the inner
+/// transport even when it fails.
+fn dns_or_tcp_transport<T>(
+    dns_transport: Result<DnsTransport<T>, io::Error>,
+    fallback: T,
+) -> Boxed<TcpStream>
+where
+    T: Transport<Output = TcpStream> + Send + Unpin + 'static,
+    T::Error: Send + Sync + 'static,
+    T::Dial: Send + 'static,
+    T::ListenerUpgrade: Send + 'static,
+{
+    match dns_transport {
+        Ok(dns_transport) => dns_transport.boxed(),
+        Err(error) => {
+            warn!(
+                "Failed to load system resolver config, /dns dial addresses will not resolve: {error}"
+            );
+            fallback.boxed()
+        }
+    }
+}
 
 /// Node is the main struct that represents the node
 struct Node {
@@ -166,20 +235,26 @@ impl Node {
             }
         };
 
-        let tcp_transport =
-            libp2p::tcp::Transport::<libp2p::tcp::tokio::Tcp>::new(tcp_config.clone());
-        let dns_transport = match libp2p::dns::tokio::Transport::system(tcp_transport) {
-            Ok(dns_transport) => dns_transport,
-            Err(err) => {
-                error!(
-                    "Failed to create DNS transport from system resolver config: {}",
-                    err
-                );
-                return Err(Box::new(err));
-            }
-        };
+        let blocked_ips: HashSet<IpAddr> = config
+            .network
+            .blocked_ips
+            .iter()
+            .filter_map(|ip_str| {
+                ip_str
+                    .parse::<IpAddr>()
+                    .map_err(|error| {
+                        warn!("Invalid blocked IP '{}' in config: {}", ip_str, error);
+                    })
+                    .ok()
+            })
+            .collect();
 
-        let transport = dns_transport
+        if !blocked_ips.is_empty() {
+            info!("Loaded {} blocked IPs from config", blocked_ips.len());
+        }
+        let blocked_ips = BlockedIps::new(blocked_ips);
+
+        let transport = base_transport(tcp_config, &config.network.dial_peers, blocked_ips.clone())
             .upgrade(libp2p::core::upgrade::Version::V1)
             .authenticate(noise_config)
             .multiplex(libp2p::yamux::Config::default())
@@ -252,19 +327,6 @@ impl Node {
             }
         }
 
-        for peer_addr in &config.network.dial_peers {
-            match peer_addr.parse::<Multiaddr>() {
-                Ok(remote) => {
-                    if let Err(e) = swarm.dial(remote) {
-                        debug!("Failed to dial {}: {}", peer_addr, e);
-                    } else {
-                        info!("Dialed {}", peer_addr);
-                    }
-                }
-                Err(e) => debug!("Invalid multiaddr {}: {}", peer_addr, e),
-            }
-        }
-
         let (swarm_tx, swarm_rx) = mpsc::channel(100);
 
         let dns_seeds = if config.network.dns_seed {
@@ -286,25 +348,7 @@ impl Node {
 
         let peer_reconnector = peer_reconnector::PeerReconnector::new(&config.network.dial_peers);
 
-        let blocked_ips: HashSet<IpAddr> = config
-            .network
-            .blocked_ips
-            .iter()
-            .filter_map(|ip_str| {
-                ip_str
-                    .parse::<IpAddr>()
-                    .map_err(|error| {
-                        warn!("Invalid blocked IP '{}' in config: {}", ip_str, error);
-                    })
-                    .ok()
-            })
-            .collect();
-
-        if !blocked_ips.is_empty() {
-            info!("Loaded {} blocked IPs from config", blocked_ips.len());
-        }
-
-        Ok(Self {
+        let mut node = Self {
             swarm,
             swarm_tx,
             swarm_rx,
@@ -317,7 +361,9 @@ impl Node {
             listen_port,
             has_bootstrapped_kad: false,
             dns_seeds,
-        })
+        };
+        node.attempt_reconnections();
+        Ok(node)
     }
 
     /// Queries the DNS seeds and dials the returned addresses, unless a peer
@@ -367,16 +413,23 @@ impl Node {
         }
     }
 
-    /// Attempt to reconnect to any configured dial_peers that are not currently connected.
+    /// Dial any configured dial_peers that are not connected and have no dial
+    /// in flight. Called once from Node::new and then on the reconnect timer.
+    /// Each started dial's ConnectionId is handed to the reconnector so the
+    /// outcome can be matched back to it.
     fn attempt_reconnections(&mut self) {
         let connected_dial_addresses = self.connection_tracker.connected_dial_addresses();
         let addresses = self
             .peer_reconnector
             .addresses_to_reconnect(&connected_dial_addresses);
         for address in addresses {
-            match self.swarm.dial(address.clone()) {
+            let dial_opts = DialOpts::unknown_peer_id().address(address.clone()).build();
+            let connection_id = dial_opts.connection_id();
+            match self.swarm.dial(dial_opts) {
                 Ok(_) => {
-                    debug!("Reconnecting to {address}");
+                    info!("Dialing {address}");
+                    self.peer_reconnector
+                        .record_dial_started(&address, connection_id);
                 }
                 Err(error) => {
                     error!("Failed to redial {address}: {error}");
@@ -442,9 +495,8 @@ impl Node {
                 num_established,
                 ..
             } => {
-                if let libp2p::core::ConnectedPoint::Dialer { ref address, .. } = endpoint {
-                    self.peer_reconnector.record_dial_success(address);
-                }
+                self.peer_reconnector
+                    .record_connection_established(connection_id);
 
                 match self
                     .connection_tracker
@@ -526,9 +578,8 @@ impl Node {
                 error!(
                     "Failed to connect to peer: {peer_id:?}, error: {error}, connection_id: {connection_id}"
                 );
-                for address in peer_reconnector::dial_error_addresses(&error) {
-                    self.peer_reconnector.record_dial_failure(address);
-                }
+                self.peer_reconnector
+                    .record_connection_failure(connection_id);
                 Ok(())
             }
             SwarmEvent::Behaviour(event) => match event {
@@ -727,6 +778,7 @@ impl Node {
 mod tests {
     use super::ChainStoreHandle;
     use super::P2PoolBehaviourEvent;
+    use super::dns_or_tcp_transport;
     use crate::config::{
         ApiConfig, Chain, Config, ElectrumConfig, LoggingConfig, NetworkConfig, StoreConfig,
         StratumConfig,
@@ -739,11 +791,17 @@ mod tests {
     use crate::node::validation_worker::create_validation_channel;
     use bitcoindrpc::BitcoinRpcConfig;
     use futures::StreamExt;
-    use libp2p::PeerId;
+    use libp2p::core::Endpoint;
+    use libp2p::core::transport::{DialOpts as TransportDialOpts, PortUse, Transport};
     use libp2p::ping::Failure;
-    use libp2p::swarm::{ConnectionId, SwarmEvent};
+    use libp2p::swarm::{ConnectionId, DialError, SwarmEvent};
+    use libp2p::tcp::Config as TcpConfig;
+    use libp2p::tcp::tokio::Transport as TcpTransport;
+    use libp2p::{Multiaddr, PeerId, TransportError};
+    use std::io;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
+    use tokio::time::advance;
 
     #[tokio::test]
     async fn test_node_dial_timeout_does_not_hang() {
@@ -990,6 +1048,97 @@ mod tests {
                 .connection_counters()
                 .num_pending_outgoing(),
             1
+        );
+    }
+
+    /// Without a usable system resolver config the node falls back to plain
+    /// TCP: `/ip4` dials are accepted and `/dns` dials are refused, instead of
+    /// the node failing to start.
+    #[tokio::test]
+    async fn test_dns_or_tcp_transport_falls_back_to_tcp_without_resolver_config() {
+        let mut transport = dns_or_tcp_transport::<TcpTransport>(
+            Err(io::Error::other("no nameservers found in config")),
+            TcpTransport::new(TcpConfig::default()),
+        );
+        let dial_opts = TransportDialOpts {
+            role: Endpoint::Dialer,
+            port_use: PortUse::New,
+        };
+
+        let ip_address: Multiaddr = "/ip4/127.0.0.1/tcp/65535".parse().unwrap();
+        assert!(transport.dial(ip_address, dial_opts).is_ok());
+
+        let dns_address: Multiaddr = "/dns4/localhost/tcp/65535".parse().unwrap();
+        assert!(matches!(
+            transport.dial(dns_address, dial_opts),
+            Err(TransportError::MultiaddrNotSupported(_))
+        ));
+    }
+
+    /// A dial_peer hostname that resolves to a blocked IP is refused by the
+    /// transport before any TCP connection is opened. The listener stands in
+    /// for the peer: it must never see a connection.
+    #[tokio::test]
+    async fn test_dns_dial_to_blocked_ip_is_refused_before_connecting() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let mut config = build_test_config("", None);
+        config.network.dial_peers = vec![format!("/dns4/localhost/tcp/{port}")];
+        config.network.blocked_ips = vec!["127.0.0.1".to_string()];
+        let mut node = build_test_node(config);
+
+        let dial_error = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Some(SwarmEvent::OutgoingConnectionError { error, .. }) =
+                    node.swarm.next().await
+                {
+                    return error;
+                }
+            }
+        })
+        .await
+        .expect("Dial should fail");
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), listener.accept())
+                .await
+                .is_err(),
+            "No TCP connection should reach a blocked IP, dial error: {dial_error}"
+        );
+    }
+
+    /// A failed dial_peer dial reported by the swarm reaches the reconnector,
+    /// which ends the pending dial and backs off from 5s to 10s.
+    #[tokio::test(start_paused = true)]
+    async fn test_outgoing_connection_error_backs_off_dial_peer() {
+        let mut config = build_test_config("", None);
+        config.network.dial_peers = vec!["/ip4/127.0.0.1/tcp/65535".to_string()];
+        let mut node = build_test_node(config);
+        let address: Multiaddr = "/ip4/127.0.0.1/tcp/65535".parse().unwrap();
+        let connection_id = node
+            .peer_reconnector
+            .pending_dial(&address)
+            .expect("Node::new should have dialed the dial_peer");
+
+        let event = SwarmEvent::OutgoingConnectionError {
+            connection_id,
+            peer_id: None,
+            error: DialError::Transport(vec![(
+                address.clone(),
+                TransportError::Other(io::Error::other("connection refused")),
+            )]),
+        };
+        node.handle_swarm_event(event).unwrap();
+
+        advance(Duration::from_secs(9)).await;
+        assert!(
+            node.peer_reconnector.addresses_to_reconnect(&[]).is_empty(),
+            "Should still be in 10s backoff"
+        );
+        advance(Duration::from_secs(2)).await;
+        assert_eq!(
+            node.peer_reconnector.addresses_to_reconnect(&[]),
+            vec![address]
         );
     }
 
