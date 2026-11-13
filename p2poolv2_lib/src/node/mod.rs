@@ -166,7 +166,20 @@ impl Node {
             }
         };
 
-        let transport = libp2p::tcp::Transport::<libp2p::tcp::tokio::Tcp>::new(tcp_config.clone())
+        let tcp_transport =
+            libp2p::tcp::Transport::<libp2p::tcp::tokio::Tcp>::new(tcp_config.clone());
+        let dns_transport = match libp2p::dns::tokio::Transport::system(tcp_transport) {
+            Ok(dns_transport) => dns_transport,
+            Err(err) => {
+                error!(
+                    "Failed to create DNS transport from system resolver config: {}",
+                    err
+                );
+                return Err(Box::new(err));
+            }
+        };
+
+        let transport = dns_transport
             .upgrade(libp2p::core::upgrade::Version::V1)
             .authenticate(noise_config)
             .multiplex(libp2p::yamux::Config::default())
@@ -513,6 +526,9 @@ impl Node {
                 error!(
                     "Failed to connect to peer: {peer_id:?}, error: {error}, connection_id: {connection_id}"
                 );
+                for address in peer_reconnector::dial_error_addresses(&error) {
+                    self.peer_reconnector.record_dial_failure(address);
+                }
                 Ok(())
             }
             SwarmEvent::Behaviour(event) => match event {
