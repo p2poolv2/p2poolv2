@@ -11,7 +11,13 @@
 //! dial_peers as well. Without a policy, any peer could make the node resolve
 //! and dial a hostname pointing at a private or loopback host. The node
 //! therefore only dials `/dns` addresses its operator configured.
+//!
+//! A second filter checks each address after DNS has resolved it and before
+//! TCP connects, and refuses dials to IPs on the blocklist. Before resolution
+//! the IP behind a hostname is not known, so the check cannot go earlier.
+//! See base_transport in node/mod.rs for the order of the layers.
 
+use super::connection_tracker::{BlockedIps, extract_ip_from_multiaddr};
 use libp2p::Multiaddr;
 use libp2p::core::transport::{DialOpts, ListenerId, Transport, TransportError, TransportEvent};
 use libp2p::multiaddr::Protocol;
@@ -101,6 +107,16 @@ pub(crate) fn is_configured_or_not_dns(
     !has_dns_component(address) || configured_dns.contains(&without_p2p_suffix(address.clone()))
 }
 
+/// Dial policy: refuse an address whose IP is on the blocklist. Placed below
+/// DNS, so `/dns` addresses arrive here already resolved. Addresses without
+/// an IP are allowed; the transport below decides whether it supports them.
+pub(crate) fn is_not_blocked(address: &Multiaddr, blocked_ips: &BlockedIps) -> bool {
+    match extract_ip_from_multiaddr(address) {
+        Some(ip) => !blocked_ips.contains(&ip),
+        None => true,
+    }
+}
+
 fn has_dns_component(address: &Multiaddr) -> bool {
     address.iter().any(|protocol| {
         matches!(
@@ -187,6 +203,22 @@ mod tests {
             "not-a-multiaddr".to_string(),
         ]);
         assert!(configured.is_empty());
+    }
+
+    #[test]
+    fn blocked_ip_address_is_refused() {
+        let blocked_ips = BlockedIps::default();
+        blocked_ips.insert("203.0.113.5".parse().unwrap());
+        let address: Multiaddr = "/ip4/203.0.113.5/tcp/6884".parse().unwrap();
+        assert!(!is_not_blocked(&address, &blocked_ips));
+    }
+
+    #[test]
+    fn unblocked_ip_address_is_allowed() {
+        let blocked_ips = BlockedIps::default();
+        blocked_ips.insert("203.0.113.5".parse().unwrap());
+        let address: Multiaddr = "/ip4/203.0.113.6/tcp/6884".parse().unwrap();
+        assert!(is_not_blocked(&address, &blocked_ips));
     }
 
     #[test]
