@@ -74,7 +74,7 @@ pub mod wallet;
 pub mod witness_program_codec;
 
 #[cfg(feature = "wallet")]
-pub use wallet::{ChainIdentity, Wallet, WalletError};
+pub use wallet::{ChainIdentity, Keychain, Wallet, WalletError};
 
 use bitcoin::bech32::primitives::decode::{PaddingError, SegwitHrpstringError};
 use bitcoin::bech32::{Hrp, segwit};
