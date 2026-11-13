@@ -14,6 +14,7 @@ use bdk_wallet::{
 };
 use bitcoin::secp256k1::{All, Secp256k1};
 use bitcoin::{BlockHash, Network};
+use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::{self, ErrorKind};
 #[cfg(unix)]
@@ -38,6 +39,44 @@ pub struct ChainIdentity {
     pub sharechain_genesis_hash: BlockHash,
 }
 
+/// The two keychains of a wallet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Keychain {
+    /// Addresses handed out to receive payments.
+    Receive,
+    /// Addresses that receive the change from the wallet's own transactions.
+    Change,
+}
+
+/// From, To and Fmt for Keychain. We want them private so we don't
+/// use the Into Trait.
+impl Keychain {
+    /// The bdk keychain this keychain corresponds to.
+    fn to_keychain_kind(self) -> KeychainKind {
+        match self {
+            Keychain::Receive => KeychainKind::External,
+            Keychain::Change => KeychainKind::Internal,
+        }
+    }
+
+    /// The keychain a bdk keychain corresponds to.
+    fn from_keychain_kind(keychain_kind: KeychainKind) -> Self {
+        match keychain_kind {
+            KeychainKind::External => Keychain::Receive,
+            KeychainKind::Internal => Keychain::Change,
+        }
+    }
+}
+
+impl fmt::Display for Keychain {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Keychain::Receive => formatter.write_str("receive"),
+            Keychain::Change => formatter.write_str("change"),
+        }
+    }
+}
+
 /// Errors produced when creating, opening or saving a wallet.
 #[derive(Debug, thiserror::Error)]
 pub enum WalletError {
@@ -48,8 +87,8 @@ pub enum WalletError {
     #[error(transparent)]
     Descriptor(#[from] DescriptorError),
     /// A descriptor does not produce taproot outputs.
-    #[error("The {0:?} descriptor must use taproot")]
-    UnsupportedDescriptor(KeychainKind),
+    #[error("The {0} descriptor must use taproot")]
+    UnsupportedDescriptor(Keychain),
     /// A file already exists at the database path.
     #[error("A file already exists at this database path")]
     AlreadyExists,
@@ -131,7 +170,7 @@ impl Wallet {
             &secp256k1_context,
             descriptor,
             chain.network,
-            KeychainKind::External,
+            Keychain::Receive,
         )?;
         //* Pick the keychain layout and pin the network and share chain genesis.
         let create_parameters = match change_descriptor {
@@ -140,7 +179,7 @@ impl Wallet {
                     &secp256k1_context,
                     change_descriptor,
                     chain.network,
-                    KeychainKind::Internal,
+                    Keychain::Change,
                 )?;
                 BdkWallet::create(external, internal)
             }
@@ -191,7 +230,9 @@ impl Wallet {
         //* Reject non-taproot keychains, which a database written by another tool can hold.
         inner
             .keychains()
-            .try_for_each(|(keychain, descriptor)| require_taproot(descriptor, keychain))?;
+            .try_for_each(|(keychain_kind, descriptor)| {
+                require_taproot(descriptor, Keychain::from_keychain_kind(keychain_kind))
+            })?;
         Ok(Self { inner, connection })
     }
 
@@ -203,11 +244,13 @@ impl Wallet {
         }
     }
 
-    /// The public descriptor for `keychain`.
+    /// The public descriptor for `keychain`, with its checksum.
     ///
-    /// A single-descriptor wallet uses its external descriptor for both keychains.
-    pub fn public_descriptor(&self, keychain: KeychainKind) -> &ExtendedDescriptor {
-        self.inner.public_descriptor(keychain)
+    /// A single-descriptor wallet uses its receive descriptor for both keychains.
+    pub fn public_descriptor(&self, keychain: Keychain) -> String {
+        self.inner
+            .public_descriptor(keychain.to_keychain_kind())
+            .to_string()
     }
 
     /// Save staged changes, returning whether anything was written.
@@ -327,7 +370,7 @@ fn parse_descriptor(
     secp256k1_context: &Secp256k1<All>,
     descriptor: &str,
     network: Network,
-    keychain: KeychainKind,
+    keychain: Keychain,
 ) -> Result<(ExtendedDescriptor, KeyMap), WalletError> {
     let parsed = descriptor.into_wallet_descriptor(secp256k1_context, network.into())?;
     require_taproot(&parsed.0, keychain)?;
@@ -336,10 +379,7 @@ fn parse_descriptor(
 
 /// Fail with `UnsupportedDescriptor` for `keychain` unless `descriptor`
 /// produces taproot outputs, the only kind a share chain address can hold.
-fn require_taproot(
-    descriptor: &ExtendedDescriptor,
-    keychain: KeychainKind,
-) -> Result<(), WalletError> {
+fn require_taproot(descriptor: &ExtendedDescriptor, keychain: Keychain) -> Result<(), WalletError> {
     match descriptor {
         ExtendedDescriptor::Tr(_) => Ok(()),
         _ => Err(WalletError::UnsupportedDescriptor(keychain)),
@@ -378,8 +418,8 @@ mod tests {
         assert!(!path.exists());
         //* Create a wallet with separate receive and change descriptors and keep its public descriptors.
         let wallet = Wallet::create(&path, RECEIVE, Some(CHANGE), chain).unwrap();
-        let external = wallet.public_descriptor(KeychainKind::External).clone();
-        let internal = wallet.public_descriptor(KeychainKind::Internal).clone();
+        let external = wallet.public_descriptor(Keychain::Receive);
+        let internal = wallet.public_descriptor(Keychain::Change);
         assert_ne!(external, internal);
         drop(wallet);
 
@@ -413,14 +453,8 @@ mod tests {
         //* Reopening for the right chain restores the chain identity and both descriptors.
         let reopened = Wallet::open(&path, chain).unwrap();
         assert_eq!(reopened.chain(), chain);
-        assert_eq!(
-            reopened.public_descriptor(KeychainKind::External),
-            &external
-        );
-        assert_eq!(
-            reopened.public_descriptor(KeychainKind::Internal),
-            &internal
-        );
+        assert_eq!(reopened.public_descriptor(Keychain::Receive), external);
+        assert_eq!(reopened.public_descriptor(Keychain::Change), internal);
     }
 
     #[test]
@@ -488,11 +522,11 @@ mod tests {
         //* A non-taproot receive or change descriptor is refused before any file is created.
         assert!(matches!(
             Wallet::create(&path, SEGWIT, None, chain),
-            Err(WalletError::UnsupportedDescriptor(KeychainKind::External))
+            Err(WalletError::UnsupportedDescriptor(Keychain::Receive))
         ));
         assert!(matches!(
             Wallet::create(&path, RECEIVE, Some(SEGWIT), chain),
-            Err(WalletError::UnsupportedDescriptor(KeychainKind::Internal))
+            Err(WalletError::UnsupportedDescriptor(Keychain::Change))
         ));
         assert!(!path.exists());
         //* Identical receive and change descriptors pass our parsing but bdk rejects them after the file exists; create removes the file.
@@ -517,7 +551,7 @@ mod tests {
         drop(connection);
         assert!(matches!(
             Wallet::open(&path, chain),
-            Err(WalletError::UnsupportedDescriptor(KeychainKind::External))
+            Err(WalletError::UnsupportedDescriptor(Keychain::Receive))
         ));
     }
 
@@ -651,32 +685,29 @@ mod tests {
         };
         let directory = tempdir().unwrap();
         let path = directory.path().join("wallet.sqlite");
-        let receive_branch: ExtendedDescriptor = RECEIVE_BRANCH.parse().unwrap();
-        let change_branch: ExtendedDescriptor = CHANGE_BRANCH.parse().unwrap();
+        let receive_branch = RECEIVE_BRANCH
+            .parse::<ExtendedDescriptor>()
+            .unwrap()
+            .to_string();
+        let change_branch = CHANGE_BRANCH
+            .parse::<ExtendedDescriptor>()
+            .unwrap()
+            .to_string();
 
         //* Create from one `<0;1>` descriptor with no change descriptor.
         let wallet = Wallet::create(&path, TWO_PATH, None, chain).unwrap();
         //* Path 0 becomes the receive keychain and path 1 the change keychain.
-        assert_eq!(
-            wallet.public_descriptor(KeychainKind::External),
-            &receive_branch
-        );
-        assert_eq!(
-            wallet.public_descriptor(KeychainKind::Internal),
-            &change_branch
-        );
+        assert_eq!(wallet.public_descriptor(Keychain::Receive), receive_branch);
+        assert_eq!(wallet.public_descriptor(Keychain::Change), change_branch);
         drop(wallet);
 
         //* Reopening restores both single-path keychains from the database.
         let reopened = Wallet::open(&path, chain).unwrap();
         assert_eq!(
-            reopened.public_descriptor(KeychainKind::External),
-            &receive_branch
+            reopened.public_descriptor(Keychain::Receive),
+            receive_branch
         );
-        assert_eq!(
-            reopened.public_descriptor(KeychainKind::Internal),
-            &change_branch
-        );
+        assert_eq!(reopened.public_descriptor(Keychain::Change), change_branch);
     }
 
     #[test]
