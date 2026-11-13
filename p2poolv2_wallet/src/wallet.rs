@@ -134,7 +134,7 @@ impl Wallet {
             KeychainKind::External,
         )?;
         //* Pick the keychain layout and pin the network and share chain genesis.
-        let params = match change_descriptor {
+        let create_parameters = match change_descriptor {
             Some(change_descriptor) => {
                 let internal = parse_descriptor(
                     &secp256k1_context,
@@ -154,7 +154,7 @@ impl Wallet {
 
         //* Write the wallet into a new database file, removing the file on failure.
         create_database_file(database_path)?;
-        match write_new_wallet(database_path, params) {
+        match write_new_wallet(database_path, create_parameters) {
             Ok((inner, connection)) => Ok(Self { inner, connection }),
             Err(error) => Err(remove_partial_database(database_path, error)),
         }
@@ -291,11 +291,11 @@ fn classify_open_error(error: SqliteError) -> WalletError {
 /// wallet, whether the write failed or the process stopped part way.
 fn write_new_wallet(
     database_path: &Path,
-    params: CreateParams,
+    create_parameters: CreateParams,
 ) -> Result<(PersistedWallet<Connection>, Connection), WalletError> {
     let mut connection = open_database_file(database_path)?;
     lock_database(&connection)?;
-    let inner = params
+    let inner = create_parameters
         .create_wallet(&mut connection)
         .map_err(|error| match error {
             CreateWithPersistError::DataAlreadyExists(_) => WalletError::AlreadyExists,
