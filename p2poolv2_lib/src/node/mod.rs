@@ -41,11 +41,13 @@ use behaviour::request_response::protocol_string;
 use behaviour::{P2PoolBehaviour, P2PoolBehaviourEvent};
 use libp2p::PeerId;
 use libp2p::SwarmBuilder;
-use libp2p::core::transport::Transport;
+use libp2p::core::transport::{Boxed, Transport};
+use libp2p::dns::tokio::Transport as DnsTransport;
 use libp2p::identify;
 use libp2p::ping::Failure;
 use libp2p::request_response::ResponseChannel;
 use libp2p::tcp::Config as TcpConfig;
+use libp2p::tcp::tokio::{TcpStream, Transport as TcpTransport};
 use libp2p::{
     Multiaddr, Swarm,
     kad::{Event as KademliaEvent, QueryResult},
@@ -53,6 +55,7 @@ use libp2p::{
 };
 use std::collections::HashSet;
 use std::error::Error;
+use std::io;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -106,6 +109,33 @@ use connection_tracker::{ConnectionAction, ConnectionTracker, PING_FAILURE_THRES
 /// keeps working there); closing on repeated ping failures handles that. This
 /// only reaps connections where everything, identify included, has gone quiet.
 const IDLE_CONNECTION_TIMEOUT_SECS: u64 = 600;
+
+/// The transport below the noise and yamux upgrade: TCP wrapped in DNS
+/// resolution, so `/dns`, `/dns4` and `/dns6` dial addresses work. The
+/// resolver is configured from the system's resolv.conf.
+fn base_transport(tcp_config: TcpConfig) -> Boxed<TcpStream> {
+    let tcp_transport = TcpTransport::new(tcp_config.clone());
+    dns_or_tcp_transport(DnsTransport::system(tcp_transport), tcp_config)
+}
+
+/// Boxes the DNS transport, or, when the system resolver config could not
+/// be loaded (no /etc/resolv.conf or no nameservers in it, as in some minimal
+/// containers), warns and falls back to plain TCP. The node then still runs
+/// with `/ip4` and `/ip6` peers; `/dns` dials fail with MultiaddrNotSupported.
+fn dns_or_tcp_transport(
+    dns_transport: Result<DnsTransport<TcpTransport>, io::Error>,
+    tcp_config: TcpConfig,
+) -> Boxed<TcpStream> {
+    match dns_transport {
+        Ok(dns_transport) => dns_transport.boxed(),
+        Err(error) => {
+            warn!(
+                "Failed to load system resolver config, /dns dial addresses will not resolve: {error}"
+            );
+            TcpTransport::new(tcp_config).boxed()
+        }
+    }
+}
 
 /// Node is the main struct that represents the node
 struct Node {
@@ -166,20 +196,7 @@ impl Node {
             }
         };
 
-        let tcp_transport =
-            libp2p::tcp::Transport::<libp2p::tcp::tokio::Tcp>::new(tcp_config.clone());
-        let dns_transport = match libp2p::dns::tokio::Transport::system(tcp_transport) {
-            Ok(dns_transport) => dns_transport,
-            Err(err) => {
-                error!(
-                    "Failed to create DNS transport from system resolver config: {}",
-                    err
-                );
-                return Err(Box::new(err));
-            }
-        };
-
-        let transport = dns_transport
+        let transport = base_transport(tcp_config)
             .upgrade(libp2p::core::upgrade::Version::V1)
             .authenticate(noise_config)
             .multiplex(libp2p::yamux::Config::default())
@@ -721,6 +738,7 @@ impl Node {
 mod tests {
     use super::ChainStoreHandle;
     use super::P2PoolBehaviourEvent;
+    use super::dns_or_tcp_transport;
     use crate::config::{
         ApiConfig, Chain, Config, ElectrumConfig, LoggingConfig, NetworkConfig, StoreConfig,
         StratumConfig,
@@ -733,8 +751,11 @@ mod tests {
     use crate::node::validation_worker::create_validation_channel;
     use bitcoindrpc::BitcoinRpcConfig;
     use futures::StreamExt;
+    use libp2p::core::Endpoint;
+    use libp2p::core::transport::{DialOpts as TransportDialOpts, PortUse, Transport};
     use libp2p::ping::Failure;
     use libp2p::swarm::{ConnectionId, DialError, SwarmEvent};
+    use libp2p::tcp::Config as TcpConfig;
     use libp2p::{Multiaddr, PeerId, TransportError};
     use std::io;
     use std::sync::Arc;
@@ -987,6 +1008,30 @@ mod tests {
                 .num_pending_outgoing(),
             1
         );
+    }
+
+    /// Without a usable system resolver config the node falls back to plain
+    /// TCP: `/ip4` dials are accepted and `/dns` dials are refused, instead of
+    /// the node failing to start.
+    #[tokio::test]
+    async fn test_dns_or_tcp_transport_falls_back_to_tcp_without_resolver_config() {
+        let mut transport = dns_or_tcp_transport(
+            Err(io::Error::other("no nameservers found in config")),
+            TcpConfig::default(),
+        );
+        let dial_opts = TransportDialOpts {
+            role: Endpoint::Dialer,
+            port_use: PortUse::New,
+        };
+
+        let ip_address: Multiaddr = "/ip4/127.0.0.1/tcp/65535".parse().unwrap();
+        assert!(transport.dial(ip_address, dial_opts).is_ok());
+
+        let dns_address: Multiaddr = "/dns4/localhost/tcp/65535".parse().unwrap();
+        assert!(matches!(
+            transport.dial(dns_address, dial_opts),
+            Err(TransportError::MultiaddrNotSupported(_))
+        ));
     }
 
     /// A failed dial_peer dial reported by the swarm reaches the reconnector,
