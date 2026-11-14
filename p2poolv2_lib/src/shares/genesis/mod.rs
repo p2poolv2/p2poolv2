@@ -45,15 +45,14 @@ const TESTNET4_GENESIS_DATA: GenesisData = GenesisData {
     timestamp: 1792472400, // 10-20-2026T0500
 };
 
-// Testnet5 genesis block (height 0), hash
-// 00000000000027fb17bedec4b497ca06af49783d3618ecb6ed98e357db6c42d7.
-// This is the genesis of the lapis.erisian.com.au rehearsal chain; replace it
-// with the BIP 95 genesis once that is mined.
+// Testnet5 block at height 35, hash
+// 00000000000002bd0196f81f7b58c99cb72b2e4b4720bb24dc98c2a47ae3b3b8,
+// from the lapis.erisian.com.au testnet5 bootstrap chain.
 const TESTNET5_GENESIS_DATA: GenesisData = GenesisData {
     public_key: "02ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d",
     bitcoin_block: include_bytes!("testnet5.dat"),
-    bitcoin_height: 0,
-    timestamp: 1794378600, // 11-11-2026T0630
+    bitcoin_height: 35,
+    timestamp: 1794634644, // 11-14-2026T0537
 };
 
 // Mainnet block hash 000000000000000000006fa29653a523d531657ad20d6f946d0fef88c97cd935,
@@ -129,11 +128,11 @@ mod tests {
 
         assert_eq!(
             block.block_hash(),
-            BlockHash::from_str("00000000000027fb17bedec4b497ca06af49783d3618ecb6ed98e357db6c42d7")
+            BlockHash::from_str("00000000000002bd0196f81f7b58c99cb72b2e4b4720bb24dc98c2a47ae3b3b8")
                 .unwrap()
         );
         assert!(block.check_merkle_root());
-        assert_eq!(genesis.bitcoin_height, 0);
+        assert_eq!(genesis.bitcoin_height, 35);
     }
 
     #[test]
