@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.18.0] - 2026-11-14
+
+This release moves testnet5 from the rehearsal chain to the final BIP 95
+chain, mined on 2026-11-14. The testnet5 share chain is reset: testnet5 nodes
+must upgrade, rebuild Bitcoin Core for the new chain and start both bitcoind
+and p2poolv2 from fresh data directories. Testnet4 and mainnet are unchanged.
+
+### Added
+
+- `dial_peers` accepts hostnames as `/dns4/`, `/dns6/` or `/dns/` multiaddrs,
+  resolved when the node dials them. Only hostnames listed in `dial_peers` are
+  dialed; `/dns` addresses learned from peers through Kademlia are ignored.
+
+### Changed
+
+- The testnet5 share chain genesis anchors on block 35
+  (`00000000000002bd...b3b8`) of the final BIP 95 testnet5 chain, replacing
+  the rehearsal chain genesis. `docs/testnet5.md` now builds Bitcoin Core from
+  PR #35861 patched with the final genesis parameters.
+
+### Fixed
+
+- The node no longer redials a `dial_peers` peer while an earlier dial to it
+  is still pending, and backs off after dials that fail asynchronously.
+- A host without a usable resolver config (no `/etc/resolv.conf` or no
+  nameservers, as in some minimal containers) no longer stops the node. It
+  warns and runs with `/ip4` and `/ip6` peers only; `/dns` dials fail.
+
+### Security
+
+- Blocked IPs are checked after a `/dns` address resolves, so a hostname
+  that resolves to a blocked IP is not dialed.
+
 ## [v0.17.0] - 2026-11-11
 
 This release adds testnet5 and changes share chain consensus: uncle work now
@@ -1356,7 +1389,8 @@ and existing share chain stores must be cleared.
 
 We used tags like hydrapool.v0.x.0 and we didn't keep a changelog.
 
-[Unreleased]: https://github.com/p2poolv2/p2poolv2/compare/v0.17.0...HEAD
+[Unreleased]: https://github.com/p2poolv2/p2poolv2/compare/v0.18.0...HEAD
+[v0.18.0]: https://github.com/p2poolv2/p2poolv2/compare/v0.17.0...v0.18.0
 [v0.17.0]: https://github.com/p2poolv2/p2poolv2/compare/v0.16.3...v0.17.0
 [v0.16.3]: https://github.com/p2poolv2/p2poolv2/compare/v0.16.2...v0.16.3
 [v0.16.2]: https://github.com/p2poolv2/p2poolv2/compare/v0.16.1...v0.16.2
