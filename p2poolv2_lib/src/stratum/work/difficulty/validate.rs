@@ -4,10 +4,10 @@
 
 use crate::stratum::error::Error;
 use crate::stratum::messages::SimpleRequest;
+use crate::stratum::session::EXTRANONCE2_SIZE;
 use crate::stratum::work::gbt::compute_merkle_root_from_branches;
 use crate::stratum::work::tracker::JobDetails;
 use bitcoin::blockdata::block::Header;
-use bitcoin::consensus::Decodable;
 use hex::FromHex;
 use std::str::FromStr;
 use tracing::{debug, info};
@@ -36,7 +36,7 @@ pub fn build_coinbase_from_components(
 
     let tx_bytes = Vec::from_hex(&complete_tx)
         .map_err(|_| Error::InvalidParams("Invalid coinbase hex".into()))?;
-    bitcoin::Transaction::consensus_decode(&mut std::io::Cursor::new(tx_bytes))
+    bitcoin::consensus::deserialize(&tx_bytes)
         .map_err(|_e| Error::InvalidParams("Failed to decode coinbase transaction".into()))
 }
 
@@ -84,6 +84,12 @@ pub fn validate_bitcoin_difficulty(
         .as_ref()
         .ok_or_else(|| Error::InvalidParams("Missing enonce2".into()))?
         .as_str();
+
+    if enonce2.len() != EXTRANONCE2_SIZE * 2 {
+        return Err(Error::InvalidParams(format!(
+            "extranonce2 must be {EXTRANONCE2_SIZE} bytes"
+        )));
+    }
 
     // build coinbase from submission
     let coinbase =
@@ -136,4 +142,56 @@ pub fn validate_bitcoin_difficulty(
         coinbase,
         meets_bitcoin_difficulty,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bitcoin::absolute::LockTime;
+    use bitcoin::transaction::Version;
+    use bitcoin::{Amount, OutPoint, ScriptBuf, Sequence, TxIn, TxOut, Witness};
+
+    fn sample_transaction() -> bitcoin::Transaction {
+        bitcoin::Transaction {
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint::null(),
+                script_sig: ScriptBuf::new(),
+                sequence: Sequence::MAX,
+                witness: Witness::new(),
+            }],
+            output: vec![TxOut {
+                value: Amount::from_sat(5_000_000_000),
+                script_pubkey: ScriptBuf::new(),
+            }],
+        }
+    }
+
+    #[test]
+    fn test_build_coinbase_from_components_rejects_trailing_bytes() {
+        let tx = sample_transaction();
+        let tx_hex = hex::encode(bitcoin::consensus::serialize(&tx));
+
+        // Split the serialized transaction into the four components the
+        // function concatenates. The split points are arbitrary; only the
+        // concatenation matters.
+        let coinbase1 = &tx_hex[..8];
+        let enonce1 = &tx_hex[8..16];
+        let enonce2 = &tx_hex[16..32];
+        let coinbase2 = &tx_hex[32..];
+
+        let decoded = build_coinbase_from_components(coinbase1, enonce1, enonce2, coinbase2)
+            .expect("exact transaction must decode");
+        assert_eq!(decoded, tx);
+
+        // One extra byte after the transaction must be rejected.
+        let coinbase2_with_trailing = format!("{coinbase2}00");
+        let result =
+            build_coinbase_from_components(coinbase1, enonce1, enonce2, &coinbase2_with_trailing);
+        assert!(
+            matches!(result, Err(Error::InvalidParams(_))),
+            "trailing bytes must be rejected with InvalidParams"
+        );
+    }
 }
