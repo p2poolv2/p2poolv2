@@ -54,6 +54,7 @@ Run it with its own datadir and peer with the bootstrap pool's node:
 ```sh
 build-t5/bin/bitcoind -testnet5 -datadir=$HOME/.bitcoin-t5 -server -daemon \
   -addnode=lapis.erisian.com.au:18353 \
+  -addnode=tn5.21m.dev:18353 \
   -zmqpubhashblock=tcp://127.0.0.1:28335 \
   -rpcuser=p2pool -rpcpassword=p2pool
 ```
