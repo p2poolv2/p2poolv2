@@ -11,6 +11,12 @@ use tracing::debug;
 /// Handle the "mining.suggest_difficulty" message
 /// Applies difficulty adjuster's constraints to the suggested difficulty
 /// and stores the constrained difficulty to session.
+///
+/// If the miner already set a difficulty with `d=` or `th=` in the
+/// authorize password, the suggestion is recorded but the current
+/// difficulty is kept and resent. Firmware often sends a suggestion
+/// automatically right after authorize, and it must not override the
+/// operator's explicit password setting.
 pub async fn handle_suggest_difficulty<'a, D: DifficultyAdjusterTrait>(
     message: SuggestDifficulty<'a>,
     session: &mut Session<D>,
@@ -23,12 +29,22 @@ pub async fn handle_suggest_difficulty<'a, D: DifficultyAdjusterTrait>(
                 .difficulty_adjuster
                 .apply_difficulty_constraints(*param, Some(*param));
             session.suggested_difficulty = Some(difficulty);
-            session
-                .difficulty_adjuster
-                .set_current_difficulty(difficulty);
-            debug!("Suggested difficulty set to {}", difficulty);
+            let effective_difficulty = if session.difficulty_from_password {
+                let current_difficulty = session.difficulty_adjuster.get_current_difficulty();
+                debug!(
+                    "Ignoring suggested difficulty {} in favour of password difficulty {}",
+                    difficulty, current_difficulty
+                );
+                current_difficulty
+            } else {
+                session
+                    .difficulty_adjuster
+                    .set_current_difficulty(difficulty);
+                debug!("Suggested difficulty set to {}", difficulty);
+                difficulty
+            };
             Ok(vec![Message::SetDifficulty(
-                SetDifficultyNotification::new(difficulty),
+                SetDifficultyNotification::new(effective_difficulty),
             )])
         }
         None => Err(Error::InvalidParams(

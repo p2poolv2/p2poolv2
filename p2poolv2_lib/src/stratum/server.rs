@@ -516,7 +516,7 @@ where
                     &ctx.tracker_handle,
                 ) {
                     Ok(notify_json) => {
-                        debug!("Sending first notify after authorize");
+                        debug!("Tx {addr} first notify after authorize {notify_json:?}");
                         if let Err(e) = writer
                             .write_all(format!("{notify_json}\n").as_bytes())
                             .await
@@ -564,7 +564,7 @@ where
                     };
                     match build_notify_from_prepared(&prepared, commitment_address, share_address, &ctx.tracker_handle) {
                         Ok(notify_json) => {
-                            debug!("Send notify in reponse to new template");
+                            debug!("Tx {addr} notify for new template {notify_json:?}");
                             if let Err(e) = writer.write_all(format!("{notify_json}\n").as_bytes()).await {
                                 error!("Failed to write notify to {addr}: {e}");
                                 break;
@@ -607,7 +607,7 @@ where
                 }
             }
             _ = monitor.tick() => {
-                match check_session_timeouts::<T>(session, time_provider) {
+                match check_session_timeouts::<T>(session, time_provider, addr) {
                     Ok(()) => {}
                     Err(Error::TimeoutError) => {
                         debug!("{addr} inactive, disconnecting...");

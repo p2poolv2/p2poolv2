@@ -6,6 +6,7 @@ use crate::stratum::difficulty_adjuster::DifficultyAdjuster;
 use crate::stratum::error::Error;
 use crate::stratum::session::Session;
 use crate::utils::time_provider::TimeProvider;
+use std::net::SocketAddr;
 use tracing::error;
 
 /// Timeout period to wait for first share (seconds)
@@ -19,10 +20,12 @@ pub const MONITOR_INTERVAL: u64 = 1;
 ///
 /// This function evaluates the session's state to determine if it has exceeded
 /// the allowed time for completing the initialization (if not yet subscribed or
-/// authorized) or for remaining inactive after submitting a share
+/// authorized) or for remaining inactive after submitting a share.
+/// `client_address` is the remote stratum client, included in timeout logs.
 pub fn check_session_timeouts<T: TimeProvider>(
     session: &Session<DifficultyAdjuster>,
     time_provider: &T,
+    client_address: SocketAddr,
 ) -> Result<(), Error> {
     let now = time_provider.now();
     if !session.subscribed || session.username.is_none() {
@@ -34,7 +37,7 @@ pub fn check_session_timeouts<T: TimeProvider>(
             }
         };
         if time_since_connected >= tokio::time::Duration::from_secs(FIRST_SHARE_TIMEOUT) {
-            error!("First share timeout");
+            error!("First share timeout for {client_address}");
             return Err(Error::TimeoutError);
         }
     } else {
@@ -52,7 +55,7 @@ pub fn check_session_timeouts<T: TimeProvider>(
             }
         };
         if time_since_last_share >= tokio::time::Duration::from_secs(INACTIVITY_TIMEOUT) {
-            error!("Inactivity timeout");
+            error!("Inactivity timeout for {client_address}");
             return Err(Error::TimeoutError);
         }
     }
@@ -66,7 +69,11 @@ mod timeout_test {
     use crate::stratum::difficulty_adjuster::DifficultyAdjuster;
     use crate::stratum::error::Error;
     use crate::utils::time_provider::TestTimeProvider;
+    use std::net::{IpAddr, Ipv4Addr};
     use std::time::SystemTime;
+
+    const TEST_CLIENT_ADDRESS: SocketAddr =
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 3333);
 
     #[test]
     fn test_inactivity_timeout_not_subscribed() {
@@ -80,7 +87,7 @@ mod timeout_test {
         session.last_share_time = None;
 
         test_time_provider.set_since_epoch(test_time_provider.seconds_since_epoch() + 901); // One second more than first share timeout
-        let result = check_session_timeouts(&session, &test_time_provider);
+        let result = check_session_timeouts(&session, &test_time_provider, TEST_CLIENT_ADDRESS);
 
         assert!(matches!(result, Err(Error::TimeoutError)));
     }
@@ -97,7 +104,7 @@ mod timeout_test {
         session.last_share_time = None;
 
         test_time_provider.set_since_epoch(test_time_provider.seconds_since_epoch() + 901); // One second more than first share timeout
-        let result = check_session_timeouts(&session, &test_time_provider);
+        let result = check_session_timeouts(&session, &test_time_provider, TEST_CLIENT_ADDRESS);
 
         assert!(matches!(result, Err(Error::TimeoutError)));
     }
@@ -114,7 +121,7 @@ mod timeout_test {
         session.last_share_time = Some(connection_time);
 
         test_time_provider.set_since_epoch(test_time_provider.seconds_since_epoch() + 901); // One second more than inactivity timeout
-        let result = check_session_timeouts(&session, &test_time_provider);
+        let result = check_session_timeouts(&session, &test_time_provider, TEST_CLIENT_ADDRESS);
 
         assert!(matches!(result, Err(Error::TimeoutError)));
     }

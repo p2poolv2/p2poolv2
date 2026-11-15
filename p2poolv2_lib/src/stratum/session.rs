@@ -52,6 +52,11 @@ pub struct Session<D: DifficultyAdjusterTrait> {
     pub version_mask: i32,
     /// Difficulty suggested by the client
     pub suggested_difficulty: Option<u64>,
+    /// True when the miner set its difficulty with `d=` or `th=` in the
+    /// authorize password. An explicit password difficulty takes precedence
+    /// over a later mining.suggest_difficulty, which firmware often sends
+    /// automatically.
+    pub difficulty_from_password: bool,
     /// Instant when the session was created
     pub connected_at: SystemTime,
     /// Instant when the last valid share was submitted
@@ -89,6 +94,7 @@ impl<D: DifficultyAdjusterTrait> Session<D> {
             difficulty_adjuster: D::new(start_difficulty, minimum_difficulty, maximum_difficulty),
             version_mask,
             suggested_difficulty: None,
+            difficulty_from_password: false,
             connected_at: now,
             last_share_time: None,
             auth_failed_once: false,
