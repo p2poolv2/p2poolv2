@@ -61,6 +61,11 @@ pub fn parse_share_address(address: &str, network: Network) -> Result<ShareAddre
 /// Max length for pool signature P2Poolv2 + 8 more bytes for users to add
 const MAX_POOL_SIGNATURE_LENGTH: usize = 16;
 
+/// Maximum donation or fee cut, in basis points (100%).
+///
+/// This crate does not depend on p2poolv2_lib, so the bound is repeated here.
+const MAX_CUT_BASIS_POINTS: u16 = 10_000;
+
 /// Pool operating mode.
 ///
 /// P2Poolv2 mode runs the full share chain with ASERT difficulty and
@@ -162,6 +167,25 @@ impl StratumConfig<Raw> {
         if self.pool_signature.clone().unwrap_or("".to_string()).len() > MAX_POOL_SIGNATURE_LENGTH {
             return Err(ConfigError {
                 message: format!("Pool signature length is limited to {MAX_POOL_SIGNATURE_LENGTH}"),
+            });
+        }
+
+        if let Some(donation) = self
+            .donation
+            .filter(|donation| *donation > MAX_CUT_BASIS_POINTS)
+        {
+            return Err(ConfigError {
+                message: format!(
+                    "donation {donation} must be in the range 0..={MAX_CUT_BASIS_POINTS} basis points"
+                ),
+            });
+        }
+
+        if let Some(fee) = self.fee.filter(|fee| *fee > MAX_CUT_BASIS_POINTS) {
+            return Err(ConfigError {
+                message: format!(
+                    "fee {fee} must be in the range 0..={MAX_CUT_BASIS_POINTS} basis points"
+                ),
             });
         }
 
@@ -1283,6 +1307,50 @@ mod tests {
         let parsed = config.parse().unwrap();
         assert!(parsed.fee_address_parsed.is_some());
         assert_eq!(parsed.fee, Some(200));
+    }
+
+    #[test]
+    fn test_parse_fails_donation_above_maximum() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.donation_address = Some("tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string());
+        config.donation = Some(10_001);
+
+        let error = config.parse().unwrap_err();
+
+        assert!(
+            error.message.contains("donation") && error.message.contains("0..=10000"),
+            "unexpected message: {}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn test_parse_fails_fee_above_maximum() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.fee_address = Some("tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string());
+        config.fee = Some(10_001);
+
+        let error = config.parse().unwrap_err();
+
+        assert!(
+            error.message.contains("fee") && error.message.contains("0..=10000"),
+            "unexpected message: {}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn test_parse_succeeds_with_maximum_donation_and_fee() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.donation_address = Some("tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string());
+        config.donation = Some(10_000);
+        config.fee_address = Some("tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string());
+        config.fee = Some(10_000);
+
+        let parsed = config.parse().unwrap();
+
+        assert_eq!(parsed.donation, Some(10_000));
+        assert_eq!(parsed.fee, Some(10_000));
     }
 
     #[test]

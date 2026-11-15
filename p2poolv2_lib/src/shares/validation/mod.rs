@@ -7,7 +7,7 @@ mod bitcoin_block_validation;
 use super::share_block::{MAX_POOL_TARGET, ShareHeader};
 use crate::accounting::OutputPair;
 use crate::accounting::payout::payout_distribution::{
-    append_proportional_distribution, include_address_and_cut,
+    MAX_CUT_BASIS_POINTS, append_proportional_distribution, include_address_and_cut,
 };
 #[cfg(test)]
 #[mockall_double::double]
@@ -993,6 +993,22 @@ impl DefaultShareValidator {
         }
     }
 
+    /// Donation and fee are basis points, so values above 10_000 exceed 100%
+    /// and cannot be used in payout arithmetic.
+    fn validate_donation_and_fee(share_header: &ShareHeader) -> Result<(), ValidationError> {
+        for (field, cut) in [
+            ("donation", share_header.donation),
+            ("fee", share_header.fee),
+        ] {
+            if let Some(value) = cut.filter(|cut| *cut > MAX_CUT_BASIS_POINTS) {
+                return Err(ValidationError::consensus(format!(
+                    "Share header {field} {value} exceeds {MAX_CUT_BASIS_POINTS} basis points"
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// Build the expected payout outputs from share header donation/fee and PPLNS distribution.
     ///
     /// When the PPLNS window is empty (bootstrap phase), returns an error.
@@ -1001,6 +1017,9 @@ impl DefaultShareValidator {
         address_difficulty_map: &HashMap<Address, u128>,
         coinbase_value: u64,
     ) -> Result<Vec<OutputPair>, ValidationError> {
+        // Stored shares may predate the header gate, so payout reconstruction
+        // must reject an excessive cut rather than reaching the subtraction.
+        Self::validate_donation_and_fee(share_header)?;
         if address_difficulty_map.is_empty() {
             return Err(ValidationError::consensus(
                 "Can't build output from empty distribution. There should be at least one payout address",
@@ -1199,6 +1218,9 @@ impl ShareValidator for DefaultShareValidator {
         &self,
         share_header: &ShareHeader,
     ) -> Result<(), ValidationError> {
+        // An inherent check keeps ShareValidator and its mockall expectations
+        // unchanged while covering both header validation entry points.
+        Self::validate_donation_and_fee(share_header)?;
         self.validate_miner_address(share_header)?;
         if share_header.uncles.len() > MAX_UNCLES {
             return Err(ValidationError::consensus(format!(
@@ -3894,6 +3916,26 @@ mod tests {
     }
 
     #[test]
+    fn test_build_expected_outputs_rejects_donation_above_maximum() {
+        let mut header = TestShareBlockBuilder::new().build().header;
+        header.donation_address = Some(crate::test_utils::parse_address_from_string(
+            "bc1q34aq5drpuwy3wgl9lhup9892qp6svr8ldzyy7c",
+        ));
+        header.donation = Some(10_001);
+        let miner = crate::test_utils::parse_address_from_string(
+            "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
+        );
+        let difficulty_map = HashMap::from([(miner, 1000u128)]);
+
+        let error =
+            DefaultShareValidator::build_expected_outputs(&header, &difficulty_map, 5_000_000_000)
+                .unwrap_err();
+
+        assert_eq!(error.kind(), FailureKind::Consensus);
+        assert!(error.to_string().contains("donation"));
+    }
+
+    #[test]
     fn test_build_expected_outputs_empty_distribution_returns_error() {
         let header = TestShareBlockBuilder::new()
             .miner_pubkey("020202020202020202020202020202020202020202020202020202020202020202")
@@ -4665,6 +4707,54 @@ mod tests {
             share_block.template_merkle_branches.len(),
             3,
             "Expected 3 merkle branches for 4 template transactions"
+        );
+    }
+
+    #[test]
+    fn test_validate_header_minimum_difficulty_rejects_donation_above_maximum() {
+        let mut header = TestShareBlockBuilder::new().build().header;
+        header.donation = Some(10_001);
+
+        let error = validator()
+            .validate_header_minimum_difficulty(&header)
+            .unwrap_err();
+
+        assert_eq!(error.kind(), FailureKind::Consensus);
+        assert!(error.to_string().contains("donation"));
+        assert!(error.to_string().contains("10000 basis points"));
+    }
+
+    #[test]
+    fn test_validate_header_minimum_difficulty_rejects_fee_above_maximum() {
+        let mut header = TestShareBlockBuilder::new().build().header;
+        header.fee = Some(10_001);
+
+        let error = validator()
+            .validate_header_minimum_difficulty(&header)
+            .unwrap_err();
+
+        assert_eq!(error.kind(), FailureKind::Consensus);
+        assert!(error.to_string().contains("fee"));
+        assert!(error.to_string().contains("10000 basis points"));
+    }
+
+    #[test]
+    fn test_validate_header_minimum_difficulty_does_not_reject_maximum_cuts() {
+        let mut header = TestShareBlockBuilder::new().build().header;
+        header.donation = Some(10_000);
+        header.fee = Some(10_000);
+
+        let error = validator()
+            .validate_header_minimum_difficulty(&header)
+            .unwrap_err();
+
+        // The synthetic header still fails its target check, which shows the
+        // cut check accepted exactly 100%.
+        assert!(
+            error
+                .to_string()
+                .contains("easier than maximum pool target"),
+            "unexpected error: {error}"
         );
     }
 
