@@ -607,7 +607,7 @@ where
                 }
             }
             _ = monitor.tick() => {
-                match check_session_timeouts::<T>(session, time_provider) {
+                match check_session_timeouts::<T>(session, time_provider, addr) {
                     Ok(()) => {}
                     Err(Error::TimeoutError) => {
                         debug!("{addr} inactive, disconnecting...");
