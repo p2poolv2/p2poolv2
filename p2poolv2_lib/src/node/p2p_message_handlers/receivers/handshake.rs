@@ -104,7 +104,7 @@ pub async fn handle_handshake<C: Send + Sync>(
 mod tests {
     use super::*;
     use crate::node::SwarmSend;
-    use crate::node::messages::Message;
+    use crate::node::messages::{GetShareHeaders, Message};
     use crate::store::block_tx_metadata::{BlockMetadata, ChainMembership};
     use crate::store::writer::StoreError;
     use bitcoin::BlockHash;
@@ -177,7 +177,14 @@ mod tests {
 
         let message = swarm_rx.recv().await.unwrap();
         match message {
-            SwarmSend::Request(sent_peer, Message::GetShareHeaders(locator, stop_hash)) => {
+            SwarmSend::Request(
+                sent_peer,
+                Message::GetShareHeaders(GetShareHeaders {
+                    locator,
+                    stop: stop_hash,
+                    ..
+                }),
+            ) => {
                 assert_eq!(sent_peer, peer_id);
                 assert_eq!(locator, vec![locator_hash]);
                 assert_eq!(stop_hash, BlockHash::all_zeros());
@@ -248,7 +255,10 @@ mod tests {
         }
 
         match swarm_rx.recv().await.unwrap() {
-            SwarmSend::Request(sent_peer, Message::GetShareHeaders(locator, _)) => {
+            SwarmSend::Request(
+                sent_peer,
+                Message::GetShareHeaders(GetShareHeaders { locator, .. }),
+            ) => {
                 assert_eq!(sent_peer, peer_id);
                 assert_eq!(locator, vec![locator_hash]);
             }
@@ -394,7 +404,10 @@ mod tests {
         }
 
         match swarm_rx.recv().await.unwrap() {
-            SwarmSend::Request(sent_peer, Message::GetShareHeaders(locator, _)) => {
+            SwarmSend::Request(
+                sent_peer,
+                Message::GetShareHeaders(GetShareHeaders { locator, .. }),
+            ) => {
                 assert_eq!(sent_peer, peer_id);
                 assert_eq!(locator, vec![peer_tip_hash]);
             }
@@ -567,7 +580,14 @@ mod tests {
 
         let message = swarm_rx.recv().await.unwrap();
         match message {
-            SwarmSend::Request(sent_peer, Message::GetShareHeaders(locator, stop_hash)) => {
+            SwarmSend::Request(
+                sent_peer,
+                Message::GetShareHeaders(GetShareHeaders {
+                    locator,
+                    stop: stop_hash,
+                    ..
+                }),
+            ) => {
                 assert_eq!(sent_peer, peer_id);
                 assert_eq!(locator, vec![locator_hash]);
                 assert_eq!(stop_hash, BlockHash::all_zeros());
@@ -635,7 +655,10 @@ mod tests {
 
         let message = swarm_rx.recv().await.unwrap();
         match message {
-            SwarmSend::Request(sent_peer, Message::GetShareHeaders(locator, _)) => {
+            SwarmSend::Request(
+                sent_peer,
+                Message::GetShareHeaders(GetShareHeaders { locator, .. }),
+            ) => {
                 assert_eq!(sent_peer, peer_id);
                 assert_eq!(locator, vec![genesis_hash]);
             }

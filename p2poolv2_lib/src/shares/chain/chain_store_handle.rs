@@ -307,6 +307,21 @@ impl ChainStoreHandle {
             .get_headers_for_locator(block_hashes, stop_block_hash, limit)
     }
 
+    /// Get every servable header after `resume_after`, or after the locator
+    /// when `resume_after` is absent or not servable, for a protocol 1.1.0
+    /// header request.
+    pub fn get_headers_after(
+        &self,
+        locator: &[BlockHash],
+        resume_after: Option<BlockHash>,
+        stop_block_hash: &BlockHash,
+        limit: usize,
+    ) -> Result<Vec<ShareHeader>, StoreError> {
+        self.store_handle
+            .store()
+            .get_headers_after(locator, resume_after, stop_block_hash, limit)
+    }
+
     /// Get blockhashes for a locator.
     pub fn get_blockhashes_for_locator(
         &self,
@@ -1088,6 +1103,7 @@ mockall::mock! {
         pub fn get_share_header(&self, share_hash: &BlockHash) -> Result<ShareHeader, StoreError>;
         pub fn get_found_blocks(&self) -> Result<Vec<FoundBlock>, StoreError>;
         pub fn get_headers_for_locator(&self, block_hashes: &[BlockHash], stop_block_hash: &BlockHash, limit: usize) -> Result<Vec<ShareHeader>, StoreError>;
+        pub fn get_headers_after(&self, locator: &[BlockHash], resume_after: Option<BlockHash>, stop_block_hash: &BlockHash, limit: usize) -> Result<Vec<ShareHeader>, StoreError>;
         pub fn get_blockhashes_for_locator(&self, locator: &[BlockHash], stop_block_hash: &BlockHash, max_blockhashes: usize) -> Result<Vec<BlockHash>, StoreError>;
         pub fn get_tip_height(&self) -> Result<Option<u32>, StoreError>;
         pub fn get_candidate_tip_height(&self) -> Result<Option<u32>, StoreError>;

@@ -248,6 +248,77 @@ impl Store {
         Ok(None)
     }
 
+    /// Get headers to satisfy a protocol 1.1.0 header request.
+    ///
+    /// Serves every servable block, paged by `limit` with no per-height cap
+    /// (see `get_blockhashes_from_height`). The page starts after
+    /// `resume_after` when this node can serve that block, continuing a
+    /// previous page from inside a height. Otherwise it starts from the
+    /// locator the same way `get_blockhashes_for_locator` does, and when no
+    /// locator hash is known it returns just the genesis header.
+    pub fn get_headers_after(
+        &self,
+        locator: &[BlockHash],
+        resume_after: Option<BlockHash>,
+        stop_blockhash: &BlockHash,
+        limit: usize,
+    ) -> Result<Vec<ShareHeader>, StoreError> {
+        let blockhashes = match self.resolve_page_start(locator, resume_after)? {
+            Some((start_height, skip_through)) => {
+                self.get_blockhashes_from_height(start_height, skip_through, stop_blockhash, limit)?
+            }
+            None => self.get_genesis_blockhash().into_iter().collect(),
+        };
+        let headers = self.get_share_headers(&blockhashes)?;
+        Ok(headers.into_iter().map(|(_, header)| header).collect())
+    }
+
+    /// Where a protocol 1.1.0 page starts: a height, and the hash at that
+    /// height to skip through, if any.
+    ///
+    /// A `resume_after` this node can serve (known, not `Pending` or
+    /// `Invalid`) resumes right after it. Any other `resume_after` -- unknown
+    /// here, or no longer servable -- falls back to the locator, which starts
+    /// `MAX_UNCLES_DEPTH` heights below the first known locator hash so fork
+    /// blocks near the boundary get their parents. Returns `None` when no
+    /// locator hash is known either.
+    fn resolve_page_start(
+        &self,
+        locator: &[BlockHash],
+        resume_after: Option<BlockHash>,
+    ) -> Result<Option<(u32, Option<BlockHash>)>, StoreError> {
+        if let Some(resume_hash) = resume_after
+            && let Some(height) = self.servable_height(&resume_hash)?
+        {
+            return Ok(Some((height, Some(resume_hash))));
+        }
+
+        match self.first_known_for_locator(locator)? {
+            Some(locator_hash) => {
+                let locator_height = self.servable_height(&locator_hash)?.ok_or_else(|| {
+                    StoreError::Database(format!("No height found for {locator_hash}"))
+                })?;
+                let start_height = locator_height.saturating_sub(MAX_UNCLES_DEPTH as u32) + 1;
+                Ok(Some((start_height, None)))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Height of `blockhash` if this node would serve it in header sync, or
+    /// `None` when it is unknown, `Pending`, `Invalid` or has no height.
+    fn servable_height(&self, blockhash: &BlockHash) -> Result<Option<u32>, StoreError> {
+        match self.get_block_metadata(blockhash) {
+            Ok(metadata)
+                if metadata.status != Status::Pending && metadata.status != Status::Invalid =>
+            {
+                Ok(metadata.expected_height)
+            }
+            Ok(_) | Err(StoreError::NotFound(_)) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
     /// Get headers to satisfy the locator query.
     pub fn get_headers_for_locator(
         &self,
@@ -4434,5 +4505,308 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].blockhash, share.block_hash());
         assert!(!entries[0].has_block_data);
+    }
+
+    /// A dense height is served whole: the confirmed block that sorts above
+    /// the 20 smallest hashes is included, where the 1.0.0 walk drops it.
+    #[test]
+    fn test_get_headers_after_serves_every_block_at_dense_height() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        //* Mine 26 children of genesis. The one with the largest hash becomes
+        //* the confirmed block, so a 20-per-height cap would leave it out.
+        let mut siblings: Vec<ShareBlock> = (1..=26)
+            .map(|nonce| {
+                TestShareBlockBuilder::new()
+                    .prev_share_blockhash(genesis.block_hash().to_string())
+                    .nonce(nonce)
+                    .build()
+            })
+            .collect();
+        siblings.sort_by_key(|block| block.block_hash());
+        let chain_block = siblings.pop().unwrap();
+        store.push_to_confirmed_chain(&chain_block).unwrap();
+        siblings
+            .iter()
+            .for_each(|sibling| store.store_with_valid_metadata(sibling));
+        let child = TestShareBlockBuilder::new()
+            .prev_share_blockhash(chain_block.block_hash().to_string())
+            .nonce(1000)
+            .build();
+        store.push_to_confirmed_chain(&child).unwrap();
+
+        //* Serving order: height 1 ascending by hash (chain block last), then
+        //* the child at height 2.
+        let mut expected: Vec<BlockHash> =
+            siblings.iter().map(|block| block.block_hash()).collect();
+        expected.push(chain_block.block_hash());
+        expected.push(child.block_hash());
+
+        let served: Vec<BlockHash> = store
+            .get_headers_after(&[genesis.block_hash()], None, &BlockHash::all_zeros(), 100)
+            .unwrap()
+            .iter()
+            .map(|header| header.block_hash())
+            .collect();
+        assert_eq!(served, expected);
+
+        //* The 1.0.0 walk truncates height 1 and leaves the chain block out,
+        //* which is the sync wall this walk removes.
+        let legacy = store
+            .get_blockhashes_for_locator(&[genesis.block_hash()], &BlockHash::all_zeros(), 100)
+            .unwrap();
+        assert!(!legacy.contains(&chain_block.block_hash()));
+    }
+
+    /// Pages stop at exactly the limit, even inside a height, and resuming
+    /// after the last served block continues with no gaps or duplicates.
+    #[test]
+    fn test_get_headers_after_pages_mid_height_and_resumes() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        //* Mine 26 children of genesis. The one with the largest hash becomes
+        //* the confirmed block, so a 20-per-height cap would leave it out.
+        let mut siblings: Vec<ShareBlock> = (1..=26)
+            .map(|nonce| {
+                TestShareBlockBuilder::new()
+                    .prev_share_blockhash(genesis.block_hash().to_string())
+                    .nonce(nonce)
+                    .build()
+            })
+            .collect();
+        siblings.sort_by_key(|block| block.block_hash());
+        let chain_block = siblings.pop().unwrap();
+        store.push_to_confirmed_chain(&chain_block).unwrap();
+        siblings
+            .iter()
+            .for_each(|sibling| store.store_with_valid_metadata(sibling));
+        let child = TestShareBlockBuilder::new()
+            .prev_share_blockhash(chain_block.block_hash().to_string())
+            .nonce(1000)
+            .build();
+        store.push_to_confirmed_chain(&child).unwrap();
+
+        //* Serving order: height 1 ascending by hash (chain block last), then
+        //* the child at height 2.
+        let mut expected: Vec<BlockHash> =
+            siblings.iter().map(|block| block.block_hash()).collect();
+        expected.push(chain_block.block_hash());
+        expected.push(child.block_hash());
+
+        let locator = [genesis.block_hash()];
+        let first_page: Vec<BlockHash> = store
+            .get_headers_after(&locator, None, &BlockHash::all_zeros(), 10)
+            .unwrap()
+            .iter()
+            .map(|header| header.block_hash())
+            .collect();
+        let second_page: Vec<BlockHash> = store
+            .get_headers_after(
+                &locator,
+                first_page.last().copied(),
+                &BlockHash::all_zeros(),
+                10,
+            )
+            .unwrap()
+            .iter()
+            .map(|header| header.block_hash())
+            .collect();
+        let third_page: Vec<BlockHash> = store
+            .get_headers_after(
+                &locator,
+                second_page.last().copied(),
+                &BlockHash::all_zeros(),
+                10,
+            )
+            .unwrap()
+            .iter()
+            .map(|header| header.block_hash())
+            .collect();
+
+        //* Two full pages inside height 1, then a short page with the rest of
+        //* height 1 and the child, which tells the receiver it is done.
+        assert_eq!(first_page, expected[..10]);
+        assert_eq!(second_page, expected[10..20]);
+        assert_eq!(third_page, expected[20..]);
+        assert_eq!(third_page.len(), 7);
+    }
+
+    /// A resume point this node does not know falls back to the locator.
+    #[test]
+    fn test_get_headers_after_unknown_resume_point_falls_back_to_locator() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        //* Mine 26 children of genesis. The one with the largest hash becomes
+        //* the confirmed block, so a 20-per-height cap would leave it out.
+        let mut siblings: Vec<ShareBlock> = (1..=26)
+            .map(|nonce| {
+                TestShareBlockBuilder::new()
+                    .prev_share_blockhash(genesis.block_hash().to_string())
+                    .nonce(nonce)
+                    .build()
+            })
+            .collect();
+        siblings.sort_by_key(|block| block.block_hash());
+        let chain_block = siblings.pop().unwrap();
+        store.push_to_confirmed_chain(&chain_block).unwrap();
+        siblings
+            .iter()
+            .for_each(|sibling| store.store_with_valid_metadata(sibling));
+        let child = TestShareBlockBuilder::new()
+            .prev_share_blockhash(chain_block.block_hash().to_string())
+            .nonce(1000)
+            .build();
+        store.push_to_confirmed_chain(&child).unwrap();
+
+        //* Serving order: height 1 ascending by hash (chain block last), then
+        //* the child at height 2.
+        let mut expected: Vec<BlockHash> =
+            siblings.iter().map(|block| block.block_hash()).collect();
+        expected.push(chain_block.block_hash());
+        expected.push(child.block_hash());
+
+        let unknown = BlockHash::from_byte_array([7u8; 32]);
+        let served: Vec<BlockHash> = store
+            .get_headers_after(
+                &[genesis.block_hash()],
+                Some(unknown),
+                &BlockHash::all_zeros(),
+                100,
+            )
+            .unwrap()
+            .iter()
+            .map(|header| header.block_hash())
+            .collect();
+
+        assert_eq!(served, expected);
+    }
+
+    /// A resume point marked invalid since the previous page is no longer
+    /// served, so the walk falls back to the locator and skips it.
+    #[test]
+    fn test_get_headers_after_invalid_resume_point_falls_back_to_locator() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        //* Mine 26 children of genesis. The one with the largest hash becomes
+        //* the confirmed block, so a 20-per-height cap would leave it out.
+        let mut siblings: Vec<ShareBlock> = (1..=26)
+            .map(|nonce| {
+                TestShareBlockBuilder::new()
+                    .prev_share_blockhash(genesis.block_hash().to_string())
+                    .nonce(nonce)
+                    .build()
+            })
+            .collect();
+        siblings.sort_by_key(|block| block.block_hash());
+        let chain_block = siblings.pop().unwrap();
+        store.push_to_confirmed_chain(&chain_block).unwrap();
+        siblings
+            .iter()
+            .for_each(|sibling| store.store_with_valid_metadata(sibling));
+        let child = TestShareBlockBuilder::new()
+            .prev_share_blockhash(chain_block.block_hash().to_string())
+            .nonce(1000)
+            .build();
+        store.push_to_confirmed_chain(&child).unwrap();
+
+        //* Serving order: height 1 ascending by hash (chain block last), then
+        //* the child at height 2.
+        let mut expected: Vec<BlockHash> =
+            siblings.iter().map(|block| block.block_hash()).collect();
+        expected.push(chain_block.block_hash());
+        expected.push(child.block_hash());
+
+        let invalidated = siblings[3].block_hash();
+        let mut batch = Store::get_write_batch();
+        store.mark_invalid(&invalidated, None, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        let served: Vec<BlockHash> = store
+            .get_headers_after(
+                &[genesis.block_hash()],
+                Some(invalidated),
+                &BlockHash::all_zeros(),
+                100,
+            )
+            .unwrap()
+            .iter()
+            .map(|header| header.block_hash())
+            .collect();
+
+        let expected_without_invalid: Vec<BlockHash> = expected
+            .iter()
+            .copied()
+            .filter(|hash| *hash != invalidated)
+            .collect();
+        assert_eq!(served, expected_without_invalid);
+    }
+
+    /// The walk stops right after the stop hash, even inside a height.
+    #[test]
+    fn test_get_headers_after_stops_at_stop_hash() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        //* Mine 26 children of genesis. The one with the largest hash becomes
+        //* the confirmed block, so a 20-per-height cap would leave it out.
+        let mut siblings: Vec<ShareBlock> = (1..=26)
+            .map(|nonce| {
+                TestShareBlockBuilder::new()
+                    .prev_share_blockhash(genesis.block_hash().to_string())
+                    .nonce(nonce)
+                    .build()
+            })
+            .collect();
+        siblings.sort_by_key(|block| block.block_hash());
+        let chain_block = siblings.pop().unwrap();
+        store.push_to_confirmed_chain(&chain_block).unwrap();
+        siblings
+            .iter()
+            .for_each(|sibling| store.store_with_valid_metadata(sibling));
+        let child = TestShareBlockBuilder::new()
+            .prev_share_blockhash(chain_block.block_hash().to_string())
+            .nonce(1000)
+            .build();
+        store.push_to_confirmed_chain(&child).unwrap();
+
+        //* Serving order: height 1 ascending by hash (chain block last), then
+        //* the child at height 2.
+        let mut expected: Vec<BlockHash> =
+            siblings.iter().map(|block| block.block_hash()).collect();
+        expected.push(chain_block.block_hash());
+        expected.push(child.block_hash());
+
+        let served: Vec<BlockHash> = store
+            .get_headers_after(&[genesis.block_hash()], None, &expected[4], 100)
+            .unwrap()
+            .iter()
+            .map(|header| header.block_hash())
+            .collect();
+
+        assert_eq!(served, expected[..5]);
     }
 }

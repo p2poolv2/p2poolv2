@@ -38,7 +38,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::ShareBlock;
 use crate::shares::validation::ShareValidator;
-use behaviour::request_response::protocol_string;
+use behaviour::request_response::network_prologue;
 use behaviour::{P2PoolBehaviour, P2PoolBehaviourEvent};
 use libp2p::PeerId;
 use libp2p::SwarmBuilder;
@@ -214,7 +214,7 @@ impl Node {
         let genesis_hash = ShareBlock::build_genesis_for_network(config.stratum.chain)
             .map_err(|error| -> Box<dyn Error> { error })?
             .block_hash();
-        let network_protocol = protocol_string(config.stratum.chain, genesis_hash);
+        let network_protocol = network_prologue(config.stratum.chain, genesis_hash);
 
         let behavior = match P2PoolBehaviour::new(&id_keys, &config, genesis_hash) {
             Ok(behavior) => behavior,

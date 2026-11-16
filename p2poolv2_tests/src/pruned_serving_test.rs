@@ -13,7 +13,7 @@
 use bitcoin::BlockHash;
 use bitcoin::hashes::Hash;
 use p2poolv2_lib::node::SwarmSend;
-use p2poolv2_lib::node::messages::{GetData, Message};
+use p2poolv2_lib::node::messages::{GetData, GetShareHeaders, Message};
 use p2poolv2_lib::node::p2p_message_handlers::receivers::getdata::handle_getdata_block;
 use p2poolv2_lib::node::p2p_message_handlers::receivers::getheaders::handle_getheaders;
 use p2poolv2_lib::test_utils::{build_confirmed_test_chain, setup_test_chain_store_handle};
@@ -41,8 +41,7 @@ async fn test_pruned_node_serves_every_header_from_genesis() {
     let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<u32>>(1);
 
     handle_getheaders(
-        vec![blocks[0].block_hash()],
-        BlockHash::all_zeros(),
+        GetShareHeaders::new(vec![blocks[0].block_hash()], BlockHash::all_zeros(), None),
         chain_store_handle,
         RESPONSE_CHANNEL,
         swarm_tx,

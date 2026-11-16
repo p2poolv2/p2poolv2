@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use bitcoin::consensus::{Decodable, Encodable};
+use bitcoin::consensus::Encodable;
 use bitcoin::hashes::{Hash, sha256d};
 use libp2p::futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use libp2p::request_response::{Codec, OutboundFailure};
@@ -29,14 +29,60 @@ fn genesis_tag(genesis_hash: BlockHash) -> String {
     tag
 }
 
-/// Build the libp2p protocol string for a bitcoin chain and share chain.
+/// Version of the request-response protocol negotiated on a stream.
 ///
-/// Network isolation is enforced through protocol negotiation: nodes on
+/// The version selects how version-dependent messages are serialized and how
+/// a request is served, so a node can keep talking to peers that only know an
+/// older version.
+///
+/// The version is independent of share chain isolation. A chain reset
+/// re-anchors genesis, which changes the genesis tag in every protocol string
+/// (see [`network_prologue`]); it does not need, and must not rely on, a
+/// version bump.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProtocolVersion {
+    /// Original protocol. Header responses truncate each height to
+    /// `MAX_BLOCKS_PER_HEIGHT` blocks.
+    V1_0,
+    /// Header responses serve every block at a height and page with a resume
+    /// point inside a height.
+    V1_1,
+}
+
+impl ProtocolVersion {
+    /// Version segment of the protocol string.
+    fn as_str(self) -> &'static str {
+        match self {
+            ProtocolVersion::V1_0 => "1.0.0",
+            ProtocolVersion::V1_1 => "1.1.0",
+        }
+    }
+}
+
+/// Request-response versions this node supports, most preferred first.
+///
+/// Outbound streams offer the versions in this order and multistream-select
+/// takes the first one the remote accepts, so two current nodes negotiate the
+/// newest version and a current node falls back to 1.0.0 with an older peer.
+pub const SUPPORTED_PROTOCOL_VERSIONS: [ProtocolVersion; 2] =
+    [ProtocolVersion::V1_1, ProtocolVersion::V1_0];
+
+/// Build the network identifier for a bitcoin chain and share chain.
+///
+/// Used as the Noise prologue and the Identify protocol version. Network
+/// isolation is enforced through the chain and genesis segments: nodes on
 /// different networks, or on share chains with different genesis blocks,
-/// derive different protocol strings and therefore fail to negotiate a shared
-/// protocol. Centralizing construction here keeps the string consistent across
-/// the request-response protocol, Identify, and the Noise prologue.
-pub fn protocol_string(chain: Chain, genesis_hash: BlockHash) -> String {
+/// derive different prologues and therefore fail the Noise handshake. The
+/// same two segments are carried by [`request_response_protocol_string`] and
+/// [`kad_protocol_string`], so such nodes also fail to negotiate any shared
+/// protocol. Centralizing construction here keeps the segments consistent
+/// across the Noise prologue, Identify, request-response and Kademlia.
+///
+/// The string is frozen at the one v0.18 nodes use, including its `1.0.0`
+/// suffix, and does not follow the request-response protocol version. Noise
+/// requires byte-identical prologues, so changing it would stop old and new
+/// nodes from connecting at all and leave nothing to negotiate a version over.
+pub fn network_prologue(chain: Chain, genesis_hash: BlockHash) -> String {
     format!(
         "/p2pool/{}/{}/1.0.0",
         chain.as_str(),
@@ -44,9 +90,34 @@ pub fn protocol_string(chain: Chain, genesis_hash: BlockHash) -> String {
     )
 }
 
+/// Build the request-response protocol string for a chain, share chain and
+/// protocol version.
+///
+/// Carries the same network and genesis segments as [`network_prologue`], so
+/// nodes on different networks, or on share chains with different genesis
+/// blocks, fail to negotiate a stream whatever version they support. Only the
+/// last segment varies with `version`. The 1.0.0 string equals the one v0.18
+/// nodes offer.
+///
+/// The chain and genesis segments are not strictly required for 1.1.0, since
+/// the Noise prologue already isolates chains, but 1.0.0 needs them for
+/// compatibility and keeping them helps debugging.
+pub fn request_response_protocol_string(
+    chain: Chain,
+    genesis_hash: BlockHash,
+    version: ProtocolVersion,
+) -> String {
+    format!(
+        "/p2pool/{}/{}/{}",
+        chain.as_str(),
+        genesis_tag(genesis_hash),
+        version.as_str()
+    )
+}
+
 /// Build the Kademlia protocol string for a bitcoin chain and share chain.
 ///
-/// Kademlia uses a distinct protocol name from [`protocol_string`] but shares
+/// Kademlia uses a distinct protocol name from [`network_prologue`] but shares
 /// the same network and genesis segments, so it is derived here to keep both
 /// in step.
 pub fn kad_protocol_string(chain: Chain, genesis_hash: BlockHash) -> String {
@@ -59,17 +130,29 @@ pub fn kad_protocol_string(chain: Chain, genesis_hash: BlockHash) -> String {
 
 // Protocol name for our request-response protocol
 #[derive(Debug, Clone)]
-pub struct P2PoolRequestResponseProtocol(String);
+pub struct P2PoolRequestResponseProtocol {
+    name: String,
+    version: ProtocolVersion,
+}
 
 impl P2PoolRequestResponseProtocol {
-    pub fn new(chain: Chain, genesis_hash: BlockHash) -> Self {
-        Self(protocol_string(chain, genesis_hash))
+    /// Protocol for `version` on the given chain and share chain.
+    pub fn new(chain: Chain, genesis_hash: BlockHash, version: ProtocolVersion) -> Self {
+        Self {
+            name: request_response_protocol_string(chain, genesis_hash, version),
+            version,
+        }
+    }
+
+    /// Version this protocol negotiates.
+    pub fn version(&self) -> ProtocolVersion {
+        self.version
     }
 }
 
 impl AsRef<str> for P2PoolRequestResponseProtocol {
     fn as_ref(&self) -> &str {
-        &self.0
+        &self.name
     }
 }
 
@@ -78,7 +161,9 @@ impl AsRef<str> for P2PoolRequestResponseProtocol {
 pub struct ConsensusCodec;
 
 impl ConsensusCodec {
-    async fn read_message<T>(&self, io: &mut T) -> io::Result<Message>
+    /// Read one framed message, decoding the payload in the layout of the
+    /// stream's protocol `version`.
+    async fn read_message<T>(&self, version: ProtocolVersion, io: &mut T) -> io::Result<Message>
     where
         T: AsyncRead + Unpin + Send,
     {
@@ -124,17 +209,24 @@ impl ConsensusCodec {
             ));
         }
 
-        let message = Message::consensus_decode(&mut &payload_bytes[..])
+        let message = Message::consensus_decode_with_version(version, &mut &payload_bytes[..])
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
 
         Ok(message)
     }
 
-    async fn write_message<T>(&self, io: &mut T, msg: Message) -> io::Result<()>
+    /// Write one framed message, encoding the payload in the layout of the
+    /// stream's protocol `version`.
+    async fn write_message<T>(
+        &self,
+        version: ProtocolVersion,
+        io: &mut T,
+        msg: Message,
+    ) -> io::Result<()>
     where
         T: AsyncWrite + Unpin + Send,
     {
-        let raw_msg = RawMessage::new(msg);
+        let raw_msg = RawMessage::new_with_version(version, msg);
         let mut bytes = Vec::new();
         raw_msg
             .consensus_encode(&mut bytes)
@@ -148,46 +240,50 @@ impl Codec for ConsensusCodec {
     type Request = Message;
     type Response = Message;
 
-    async fn read_request<T>(&mut self, _: &Self::Protocol, io: &mut T) -> io::Result<Self::Request>
+    async fn read_request<T>(
+        &mut self,
+        protocol: &Self::Protocol,
+        io: &mut T,
+    ) -> io::Result<Self::Request>
     where
         T: AsyncRead + Unpin + Send,
     {
-        self.read_message(io).await
+        self.read_message(protocol.version(), io).await
     }
 
     async fn read_response<T>(
         &mut self,
-        _: &Self::Protocol,
+        protocol: &Self::Protocol,
         io: &mut T,
     ) -> io::Result<Self::Response>
     where
         T: AsyncRead + Unpin + Send,
     {
-        self.read_message(io).await
+        self.read_message(protocol.version(), io).await
     }
 
     async fn write_request<T>(
         &mut self,
-        _: &Self::Protocol,
+        protocol: &Self::Protocol,
         io: &mut T,
         req: Self::Request,
     ) -> io::Result<()>
     where
         T: AsyncWrite + Unpin + Send,
     {
-        self.write_message(io, req).await
+        self.write_message(protocol.version(), io, req).await
     }
 
     async fn write_response<T>(
         &mut self,
-        _: &Self::Protocol,
+        protocol: &Self::Protocol,
         io: &mut T,
         res: Self::Response,
     ) -> io::Result<()>
     where
         T: AsyncWrite + Unpin + Send,
     {
-        self.write_message(io, res).await
+        self.write_message(protocol.version(), io, res).await
     }
 }
 
@@ -207,28 +303,39 @@ pub enum RequestResponseError {
 
 #[cfg(test)]
 mod tests {
-    use super::{GENESIS_TAG_LEN, kad_protocol_string, protocol_string};
+    use super::{
+        ConsensusCodec, GENESIS_TAG_LEN, P2PoolRequestResponseProtocol, ProtocolVersion,
+        kad_protocol_string, network_prologue, request_response_protocol_string,
+    };
     use crate::config::Chain;
+    use crate::node::messages::{GetShareHeaders, Message};
     use crate::shares::share_block::ShareBlock;
+    use bitcoin::BlockHash;
+    use bitcoin::hashes::Hash;
+    use libp2p::futures::io::Cursor;
+    use libp2p::request_response::Codec;
+    use std::str::FromStr;
 
+    /// The prologue must stay byte-identical to the string v0.18 nodes use,
+    /// or the Noise handshake between old and new nodes fails.
     #[test]
-    fn test_protocol_string_carries_network_and_genesis_tag() {
+    fn test_network_prologue_carries_network_and_genesis_tag() {
         let genesis_hash = ShareBlock::build_genesis_for_network(Chain::Signet)
             .unwrap()
             .block_hash();
         let expected_tag = &genesis_hash.to_string()[..GENESIS_TAG_LEN];
 
         assert_eq!(
-            protocol_string(Chain::Signet, genesis_hash),
+            network_prologue(Chain::Signet, genesis_hash),
             format!("/p2pool/signet/{expected_tag}/1.0.0")
         );
     }
 
     /// The isolation property a chain reset relies on: re-anchoring genesis
-    /// changes the protocol string even though the bitcoin network is
-    /// unchanged, so nodes on the old chain cannot negotiate with new ones.
+    /// changes the prologue even though the bitcoin network is unchanged, so
+    /// nodes on the old chain cannot connect to new ones.
     #[test]
-    fn test_protocol_string_differs_when_genesis_differs_on_same_network() {
+    fn test_network_prologue_differs_when_genesis_differs_on_same_network() {
         let genesis_hash = ShareBlock::build_genesis_for_network(Chain::Testnet4)
             .unwrap()
             .block_hash();
@@ -238,8 +345,8 @@ mod tests {
         assert_ne!(genesis_hash, other_genesis_hash);
 
         assert_ne!(
-            protocol_string(Chain::Testnet4, genesis_hash),
-            protocol_string(Chain::Testnet4, other_genesis_hash)
+            network_prologue(Chain::Testnet4, genesis_hash),
+            network_prologue(Chain::Testnet4, other_genesis_hash)
         );
     }
 
@@ -254,13 +361,13 @@ mod tests {
 
         let kad = kad_protocol_string(Chain::Signet, genesis_hash);
         assert_eq!(kad, format!("/p2pool/signet/{expected_tag}/kad/1.0.0"));
-        assert_ne!(kad, protocol_string(Chain::Signet, genesis_hash));
+        assert_ne!(kad, network_prologue(Chain::Signet, genesis_hash));
     }
 
     /// Testnet5 maps to testnet4 for addresses, but its share chain must not
-    /// negotiate with testnet4 nodes.
+    /// connect to testnet4 nodes.
     #[test]
-    fn test_testnet5_protocol_string_differs_from_testnet4() {
+    fn test_testnet5_network_prologue_differs_from_testnet4() {
         let testnet4_genesis = ShareBlock::build_genesis_for_network(Chain::Testnet4)
             .unwrap()
             .block_hash();
@@ -270,12 +377,119 @@ mod tests {
         let testnet5_tag = &testnet5_genesis.to_string()[..GENESIS_TAG_LEN];
 
         assert_eq!(
-            protocol_string(Chain::Testnet5, testnet5_genesis),
+            network_prologue(Chain::Testnet5, testnet5_genesis),
             format!("/p2pool/testnet5/{testnet5_tag}/1.0.0")
         );
         assert_ne!(
-            protocol_string(Chain::Testnet5, testnet5_genesis),
-            protocol_string(Chain::Testnet4, testnet4_genesis)
+            network_prologue(Chain::Testnet5, testnet5_genesis),
+            network_prologue(Chain::Testnet4, testnet4_genesis)
         );
+    }
+
+    /// A v0.18 node offers exactly this string for request-response, so the
+    /// 1.0.0 protocol must keep it for the two to negotiate a stream.
+    #[test]
+    fn test_v1_0_request_response_protocol_matches_legacy_string() {
+        let genesis_hash = ShareBlock::build_genesis_for_network(Chain::Signet)
+            .unwrap()
+            .block_hash();
+        let expected_tag = &genesis_hash.to_string()[..GENESIS_TAG_LEN];
+
+        assert_eq!(
+            request_response_protocol_string(Chain::Signet, genesis_hash, ProtocolVersion::V1_0),
+            format!("/p2pool/signet/{expected_tag}/1.0.0")
+        );
+    }
+
+    #[test]
+    fn test_v1_1_request_response_protocol_carries_version() {
+        let genesis_hash = ShareBlock::build_genesis_for_network(Chain::Signet)
+            .unwrap()
+            .block_hash();
+        let expected_tag = &genesis_hash.to_string()[..GENESIS_TAG_LEN];
+
+        assert_eq!(
+            request_response_protocol_string(Chain::Signet, genesis_hash, ProtocolVersion::V1_1),
+            format!("/p2pool/signet/{expected_tag}/1.1.0")
+        );
+    }
+
+    /// On a 1.0.0 stream the codec writes the legacy request layout, so the
+    /// resume point is not carried, and the reading side records the 1.0.0
+    /// stream on the decoded request.
+    #[tokio::test]
+    async fn test_codec_v1_0_stream_drops_resume_point_and_records_version() {
+        let genesis_hash = ShareBlock::build_genesis_for_network(Chain::Signet)
+            .unwrap()
+            .block_hash();
+        let protocol =
+            P2PoolRequestResponseProtocol::new(Chain::Signet, genesis_hash, ProtocolVersion::V1_0);
+        let locator_hash =
+            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+                .unwrap();
+        let request = GetShareHeaders::new(
+            vec![locator_hash],
+            BlockHash::all_zeros(),
+            Some(
+                BlockHash::from_str(
+                    "a3fbd2a0e62c42446e4e6d18dab3a479ebc84c279757450e019eafc89dfc1a62",
+                )
+                .unwrap(),
+            ),
+        );
+        let mut codec = ConsensusCodec;
+        let mut stream = Cursor::new(Vec::new());
+
+        codec
+            .write_request(&protocol, &mut stream, Message::GetShareHeaders(request))
+            .await
+            .unwrap();
+        stream.set_position(0);
+        let decoded = codec.read_request(&protocol, &mut stream).await.unwrap();
+
+        assert_eq!(
+            decoded,
+            Message::GetShareHeaders(GetShareHeaders {
+                locator: vec![locator_hash],
+                stop: BlockHash::all_zeros(),
+                resume_after: None,
+                protocol_version: ProtocolVersion::V1_0,
+            })
+        );
+    }
+
+    /// On a 1.1.0 stream the resume point survives the round trip.
+    #[tokio::test]
+    async fn test_codec_v1_1_stream_carries_resume_point() {
+        let genesis_hash = ShareBlock::build_genesis_for_network(Chain::Signet)
+            .unwrap()
+            .block_hash();
+        let protocol =
+            P2PoolRequestResponseProtocol::new(Chain::Signet, genesis_hash, ProtocolVersion::V1_1);
+        let locator_hash =
+            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+                .unwrap();
+        let request = GetShareHeaders::new(
+            vec![locator_hash],
+            BlockHash::all_zeros(),
+            Some(
+                BlockHash::from_str(
+                    "a3fbd2a0e62c42446e4e6d18dab3a479ebc84c279757450e019eafc89dfc1a62",
+                )
+                .unwrap(),
+            ),
+        );
+        let message = Message::GetShareHeaders(request);
+        let mut codec = ConsensusCodec;
+        let mut stream = Cursor::new(Vec::new());
+
+        codec
+            .write_request(&protocol, &mut stream, message.clone())
+            .await
+            .unwrap();
+        stream.set_position(0);
+        let decoded = codec.read_request(&protocol, &mut stream).await.unwrap();
+
+        assert_eq!(decoded, message);
     }
 }
