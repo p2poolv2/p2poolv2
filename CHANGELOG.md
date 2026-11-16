@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Testnet5 DNS seed `seed.p2pool.testnet5.roose.io`.
+
 ## [v0.18.0] - 2026-11-14
 
 This release moves testnet5 from the rehearsal chain to the final BIP 95

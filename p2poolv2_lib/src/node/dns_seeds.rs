@@ -46,7 +46,10 @@ const TESTNET4_SEED_HOSTNAMES: &[&str] = &["seed.testnet4.p2poolv2.org"];
 const TESTNET5_P2P_PORT: u16 = 56886;
 
 /// Seed hostnames for testnet5.
-const TESTNET5_SEED_HOSTNAMES: &[&str] = &["seed.testnet5.p2poolv2.org"];
+const TESTNET5_SEED_HOSTNAMES: &[&str] = &[
+    "seed.testnet5.p2poolv2.org",
+    "seed.p2pool.testnet5.roose.io",
+];
 
 /// The DNS seeds for one network and the port their nodes listen on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -244,7 +247,13 @@ mod tests {
     #[test]
     fn dns_seeds_for_network_testnet5_has_its_own_seeds() {
         let seeds = dns_seeds_for_network(Chain::Testnet5).unwrap();
-        assert_eq!(seeds.hostnames, &["seed.testnet5.p2poolv2.org"]);
+        assert_eq!(
+            seeds.hostnames,
+            &[
+                "seed.testnet5.p2poolv2.org",
+                "seed.p2pool.testnet5.roose.io"
+            ]
+        );
         assert_eq!(seeds.port, TESTNET5_P2P_PORT);
         assert_ne!(seeds, dns_seeds_for_network(Chain::Testnet4).unwrap());
     }
