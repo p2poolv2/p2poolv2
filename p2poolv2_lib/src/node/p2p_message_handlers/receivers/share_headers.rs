@@ -22,7 +22,6 @@ use crate::shares::share_block::{
 };
 use crate::shares::validation::ShareValidator;
 use crate::store::block_tx_metadata::BlockMetadata;
-use crate::store::dag_store::MAX_BLOCKS_PER_HEIGHT;
 use crate::store::writer::StoreError;
 use bitcoin::hashes::Hash;
 use bitcoin::{BlockHash, CompactTarget, Target, Work};
@@ -61,10 +60,6 @@ enum HeaderSyncError {
         expected: u32,
     },
     InsufficientWork,
-    DenseHeight {
-        height: u32,
-        count: usize,
-    },
     Other(Box<dyn Error + Send + Sync>),
 }
 
@@ -135,12 +130,6 @@ impl fmt::Display for HeaderSyncError {
             }
             HeaderSyncError::InsufficientWork => {
                 write!(formatter, "Cumulative chain work below minimum")
-            }
-            HeaderSyncError::DenseHeight { height, count } => {
-                write!(
-                    formatter,
-                    "Height {height} has {count} blocks, exceeds MAX_BLOCKS_PER_HEIGHT"
-                )
             }
             HeaderSyncError::Other(error) => write!(formatter, "{error}"),
         }
@@ -236,10 +225,6 @@ pub async fn handle_share_headers<C: Send + Sync>(
             );
             send_getheaders(peer_id, chain_store_handle, swarm_tx, depth).await?;
             return Ok(());
-        }
-        if matches!(sync_error, HeaderSyncError::DenseHeight { .. }) {
-            error!("Disconnecting peer {peer_id}: {sync_error}");
-            let _ = swarm_tx.send(SwarmSend::Disconnect(peer_id)).await;
         }
         return Err(sync_error.into());
     }
@@ -370,7 +355,6 @@ fn validate_dag_connectivity_and_difficulty(
     let mut cumulative_work = Work::from_hex("0x00").unwrap();
     let mut time_height_cache: HashMap<BlockHash, (u32, u32)> =
         HashMap::with_capacity(share_headers.len() + 1);
-    let mut blocks_per_height: HashMap<u32, usize> = HashMap::with_capacity(64);
 
     for (position, header) in share_headers.iter().enumerate() {
         share_validator.validate_header_minimum_difficulty(header)?;
@@ -400,7 +384,6 @@ fn validate_dag_connectivity_and_difficulty(
         }
 
         let header_height = parent_height + 1;
-        check_dense_height(&mut blocks_per_height, header_height)?;
         check_uncles_known(
             header,
             &known_hashes,
@@ -415,25 +398,6 @@ fn validate_dag_connectivity_and_difficulty(
     }
 
     Ok(cumulative_work)
-}
-
-/// Reject batches where a single height has too many blocks.
-///
-/// In normal operation a height has at most a few blocks (confirmed +
-/// uncles). A dense height indicates a misbehaving or attacking peer.
-fn check_dense_height(
-    blocks_per_height: &mut HashMap<u32, usize>,
-    height: u32,
-) -> Result<(), HeaderSyncError> {
-    let count = blocks_per_height.entry(height).or_insert(0);
-    *count += 1;
-    if *count > MAX_BLOCKS_PER_HEIGHT {
-        return Err(HeaderSyncError::DenseHeight {
-            height,
-            count: *count,
-        });
-    }
-    Ok(())
 }
 
 /// Verify every uncle declared by `header` is a header already processed
@@ -630,6 +594,7 @@ mod tests {
     use crate::shares::chain::chain_store_handle::ChainStoreHandle;
     use crate::shares::validation::{MockDefaultShareValidator, ValidationError};
     use crate::store::block_tx_metadata::{BlockMetadata, ChainMembership, Status};
+    use crate::store::dag_store::MAX_BLOCKS_PER_HEIGHT;
     use crate::test_utils::{TestShareBlockBuilder, share_header_batch_with_empty_branches};
     use tokio::sync::{mpsc, oneshot};
 
@@ -1407,6 +1372,38 @@ mod tests {
         setup_minimum_difficulty_mock(&mut mock_validator);
 
         let headers = vec![share_a, share_b, share_c, share_d];
+        let result = validate_header_chain(
+            &share_header_batch_with_empty_branches(headers),
+            &chain_store_handle,
+            &mock_validator,
+        );
+        assert!(result.is_ok(), "Expected Ok, got: {}", result.unwrap_err());
+    }
+
+    /// A height with more blocks than the old per-height cap is valid: every
+    /// block is real proof of work, and a server that serves all of them must
+    /// not have its batch rejected or be disconnected for it.
+    #[test]
+    fn test_validate_header_chain_accepts_more_than_max_blocks_at_one_height() {
+        let anchor = TestShareBlockBuilder::new().nonce(1).build();
+        let sibling_count = MAX_BLOCKS_PER_HEIGHT as u32 + 1;
+        let headers: Vec<ShareHeader> = (0..sibling_count)
+            .map(|offset| {
+                let mut header = TestShareBlockBuilder::new()
+                    .prev_share_blockhash(anchor.block_hash().to_string())
+                    .nonce(100 + offset)
+                    .build()
+                    .header;
+                header.bits = CompactTarget::from_consensus(MAX_POOL_TARGET);
+                header
+            })
+            .collect();
+
+        let mut chain_store_handle = ChainStoreHandle::default();
+        setup_chain_validation_mocks(&mut chain_store_handle);
+        let mut mock_validator = MockDefaultShareValidator::default();
+        setup_minimum_difficulty_mock(&mut mock_validator);
+
         let result = validate_header_chain(
             &share_header_batch_with_empty_branches(headers),
             &chain_store_handle,
