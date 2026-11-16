@@ -277,6 +277,10 @@ impl Store {
     /// This produces a topologically sorted DAG subgraph because every
     /// block's parent is at height H-1, which is either in this batch
     /// or was sent in a previous batch.
+    ///
+    /// Returns an empty list when the store has no confirmed chain yet, since
+    /// there is nothing to serve. Any other store error is returned, so a
+    /// requester never mistakes a storage failure for the end of the chain.
     fn get_descendant_blockhashes(
         &self,
         blockhash: &BlockHash,
@@ -293,7 +297,8 @@ impl Store {
 
         let top_confirmed_height = match self.get_top_confirmed_height() {
             Ok(height) => height,
-            Err(_) => return Ok(blockhashes),
+            Err(StoreError::NotFound(_)) => return Ok(blockhashes),
+            Err(error) => return Err(error),
         };
 
         let end_height = std::cmp::min(
@@ -333,6 +338,10 @@ impl Store {
     ///
     /// Every block's parent is at the height below, either earlier in this
     /// page or served by a previous one, so pages arrive topologically sorted.
+    ///
+    /// Returns an empty list when the store has no confirmed chain yet, since
+    /// there is nothing to serve. Any other store error is returned, so a
+    /// requester never mistakes a storage failure for the end of the chain.
     fn get_blockhashes_from_height(
         &self,
         start_height: u32,
@@ -347,7 +356,8 @@ impl Store {
 
         let top_confirmed_height = match self.get_top_confirmed_height() {
             Ok(height) => height,
-            Err(_) => return Ok(blockhashes),
+            Err(StoreError::NotFound(_)) => return Ok(blockhashes),
+            Err(error) => return Err(error),
         };
 
         // Every height up to the confirmed tip holds at least its confirmed
