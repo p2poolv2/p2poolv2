@@ -427,10 +427,15 @@ mod tests {
         let locator_hash =
             BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
                 .unwrap();
-        let mut request = GetShareHeaders::new(vec![locator_hash], BlockHash::all_zeros());
-        request.resume_after = Some(
-            BlockHash::from_str("a3fbd2a0e62c42446e4e6d18dab3a479ebc84c279757450e019eafc89dfc1a62")
+        let request = GetShareHeaders::new(
+            vec![locator_hash],
+            BlockHash::all_zeros(),
+            Some(
+                BlockHash::from_str(
+                    "a3fbd2a0e62c42446e4e6d18dab3a479ebc84c279757450e019eafc89dfc1a62",
+                )
                 .unwrap(),
+            ),
         );
         let mut codec = ConsensusCodec;
         let mut stream = Cursor::new(Vec::new());
@@ -464,10 +469,15 @@ mod tests {
         let locator_hash =
             BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
                 .unwrap();
-        let mut request = GetShareHeaders::new(vec![locator_hash], BlockHash::all_zeros());
-        request.resume_after = Some(
-            BlockHash::from_str("a3fbd2a0e62c42446e4e6d18dab3a479ebc84c279757450e019eafc89dfc1a62")
+        let request = GetShareHeaders::new(
+            vec![locator_hash],
+            BlockHash::all_zeros(),
+            Some(
+                BlockHash::from_str(
+                    "a3fbd2a0e62c42446e4e6d18dab3a479ebc84c279757450e019eafc89dfc1a62",
+                )
                 .unwrap(),
+            ),
         );
         let message = Message::GetShareHeaders(request);
         let mut codec = ConsensusCodec;

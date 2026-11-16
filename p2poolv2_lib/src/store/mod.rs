@@ -303,15 +303,7 @@ impl Store {
         let height_entries = self.get_blockhashes_for_height_range(start_height, end_height);
 
         for (_height, raw_hashes) in height_entries {
-            let mut hashes_at_height: Vec<BlockHash> = self
-                .get_block_metadata_batch(&raw_hashes)?
-                .into_iter()
-                .filter(|(_, metadata)| {
-                    metadata.status != Status::Pending && metadata.status != Status::Invalid
-                })
-                .map(|(hash, _)| hash)
-                .collect();
-            hashes_at_height.sort();
+            let mut hashes_at_height = self.servable_blockhashes_sorted(&raw_hashes)?;
             hashes_at_height.truncate(MAX_BLOCKS_PER_HEIGHT);
 
             let found_stop = hashes_at_height.contains(stop_blockhash);
@@ -323,6 +315,90 @@ impl Store {
         }
 
         Ok(blockhashes)
+    }
+
+    /// Serve every servable block from `start_height` upward, for protocol
+    /// 1.1.0 header sync.
+    ///
+    /// Walks heights in ascending order and, within a height, blockhashes in
+    /// ascending order -- the same order `get_descendant_blockhashes` uses, but
+    /// with no per-height cap, so a block on the chain can never be left out
+    /// of a dense height. Pending and invalid blocks are excluded.
+    ///
+    /// `resume_after` skips the blocks at `start_height` up to and including
+    /// that hash, continuing a previous page from inside a height. The walk
+    /// stops after exactly `limit` blocks, even mid-height, so a response never
+    /// overshoots; the next request resumes after the last block served. It
+    /// also stops after `stop_blockhash` and at the top confirmed height.
+    ///
+    /// Every block's parent is at the height below, either earlier in this
+    /// page or served by a previous one, so pages arrive topologically sorted.
+    fn get_blockhashes_from_height(
+        &self,
+        start_height: u32,
+        resume_after: Option<BlockHash>,
+        stop_blockhash: &BlockHash,
+        limit: usize,
+    ) -> Result<Vec<BlockHash>, StoreError> {
+        let mut blockhashes = Vec::with_capacity(limit);
+        if limit == 0 {
+            return Ok(blockhashes);
+        }
+
+        let top_confirmed_height = match self.get_top_confirmed_height() {
+            Ok(height) => height,
+            Err(_) => return Ok(blockhashes),
+        };
+
+        // Every height up to the confirmed tip holds at least its confirmed
+        // block, so `limit` heights always hold at least `limit` blocks.
+        let end_height = std::cmp::min(
+            start_height.saturating_add(limit as u32),
+            top_confirmed_height,
+        );
+        let height_entries = self.get_blockhashes_for_height_range(start_height, end_height);
+
+        for (height, raw_hashes) in height_entries {
+            let hashes_at_height = self.servable_blockhashes_sorted(&raw_hashes)?;
+            //* Hashes are sorted, so the resume point is found by binary
+            //* search: serving starts at the first hash after it.
+            let first_unserved = match resume_after {
+                Some(resume_hash) if height == start_height => {
+                    hashes_at_height.partition_point(|hash| *hash <= resume_hash)
+                }
+                _ => 0,
+            };
+
+            //* Serve hashes in order, ending the page once it is full or the
+            //* stop hash has been served.
+            for blockhash in &hashes_at_height[first_unserved..] {
+                blockhashes.push(*blockhash);
+                if blockhashes.len() == limit || blockhash == stop_blockhash {
+                    return Ok(blockhashes);
+                }
+            }
+        }
+
+        Ok(blockhashes)
+    }
+
+    /// The blocks among `raw_hashes` a header sync server may serve -- not
+    /// `Pending` and not `Invalid` -- sorted ascending by blockhash, the order
+    /// both serving walks use within a height.
+    fn servable_blockhashes_sorted(
+        &self,
+        raw_hashes: &[BlockHash],
+    ) -> Result<Vec<BlockHash>, StoreError> {
+        let mut servable: Vec<BlockHash> = self
+            .get_block_metadata_batch(raw_hashes)?
+            .into_iter()
+            .filter(|(_, metadata)| {
+                metadata.status != Status::Pending && metadata.status != Status::Invalid
+            })
+            .map(|(hash, _)| hash)
+            .collect();
+        servable.sort();
+        Ok(servable)
     }
 
     /// Get genesis block hash from chain state

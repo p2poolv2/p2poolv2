@@ -561,6 +561,11 @@ async fn trigger_block_fetch(
 
 /// More headers are available -- send a follow-up GetShareHeaders
 /// request to the same peer starting from the last received header.
+///
+/// The request resumes after that header, so a 1.1.0 server continues
+/// exactly where the page ended, even inside a height. The locator is the
+/// same header, which is what a 1.0.0 server (that never sees the resume
+/// point) starts from.
 async fn request_next_headers<C: Send + Sync>(
     peer_id: libp2p::PeerId,
     share_headers: &[ShareHeader],
@@ -572,8 +577,11 @@ async fn request_next_headers<C: Send + Sync>(
         "Requesting more share headers, locator={last_block_hash}, batch_size={}",
         share_headers.len(),
     );
-    let getheaders_request =
-        Message::GetShareHeaders(GetShareHeaders::new(vec![last_block_hash], stop_block_hash));
+    let getheaders_request = Message::GetShareHeaders(GetShareHeaders::new(
+        vec![last_block_hash],
+        stop_block_hash,
+        Some(last_block_hash),
+    ));
     if let Err(send_error) = swarm_tx
         .send(SwarmSend::Request(peer_id, getheaders_request))
         .await
@@ -937,12 +945,15 @@ mod tests {
                 Message::GetShareHeaders(GetShareHeaders {
                     locator,
                     stop: stop_hash,
+                    resume_after,
                     ..
                 }),
             ) => {
                 assert_eq!(sent_peer_id, peer_id);
                 assert_eq!(locator, vec![expected_last_hash]);
                 assert_eq!(stop_hash, BlockHash::all_zeros());
+                // A 1.1.0 server continues right after the last header served.
+                assert_eq!(resume_after, Some(expected_last_hash));
             }
             other => panic!("expected SwarmSend::Request with GetShareHeaders, got: {other:?}"),
         }

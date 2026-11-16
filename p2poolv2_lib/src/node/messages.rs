@@ -106,13 +106,14 @@ pub struct GetShareHeaders {
 }
 
 impl GetShareHeaders {
-    /// Request the headers after `locator`, up to `stop`, with no resume
-    /// point.
-    pub fn new(locator: Vec<BlockHash>, stop: BlockHash) -> Self {
+    /// Request the headers after `locator`, up to `stop`. A `resume_after`
+    /// asks a 1.1.0 server to continue right after that header, even inside a
+    /// height; pass `None` to start from the locator.
+    pub fn new(locator: Vec<BlockHash>, stop: BlockHash, resume_after: Option<BlockHash>) -> Self {
         Self {
             locator,
             stop,
-            resume_after: None,
+            resume_after,
             protocol_version: ProtocolVersion::V1_1,
         }
     }
@@ -831,10 +832,15 @@ mod tests {
         let stop =
             BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7")
                 .unwrap();
-        let mut request = GetShareHeaders::new(locator, stop);
-        request.resume_after = Some(
-            BlockHash::from_str("a3fbd2a0e62c42446e4e6d18dab3a479ebc84c279757450e019eafc89dfc1a62")
+        let request = GetShareHeaders::new(
+            locator,
+            stop,
+            Some(
+                BlockHash::from_str(
+                    "a3fbd2a0e62c42446e4e6d18dab3a479ebc84c279757450e019eafc89dfc1a62",
+                )
                 .unwrap(),
+            ),
         );
         let message = Message::GetShareHeaders(request);
 
@@ -856,7 +862,7 @@ mod tests {
                 .unwrap(),
         ];
         let message =
-            Message::GetShareHeaders(GetShareHeaders::new(locator, BlockHash::all_zeros()));
+            Message::GetShareHeaders(GetShareHeaders::new(locator, BlockHash::all_zeros(), None));
 
         let mut encoded = Vec::new();
         message
@@ -881,10 +887,15 @@ mod tests {
         let stop =
             BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7")
                 .unwrap();
-        let mut request = GetShareHeaders::new(locator.clone(), stop);
-        request.resume_after = Some(
-            BlockHash::from_str("a3fbd2a0e62c42446e4e6d18dab3a479ebc84c279757450e019eafc89dfc1a62")
+        let request = GetShareHeaders::new(
+            locator.clone(),
+            stop,
+            Some(
+                BlockHash::from_str(
+                    "a3fbd2a0e62c42446e4e6d18dab3a479ebc84c279757450e019eafc89dfc1a62",
+                )
                 .unwrap(),
+            ),
         );
 
         let mut encoded = Vec::new();

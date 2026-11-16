@@ -766,8 +766,8 @@ mod tests {
                 TestShareBlockBuilder::new().build().header,
                 TestShareBlockBuilder::new().build().header,
             ];
-            mock.expect_get_headers_for_locator()
-                .returning(move |_, _, _| Ok(headers.clone()));
+            mock.expect_get_headers_after()
+                .returning(move |_, _, _, _| Ok(headers.clone()));
             mock.expect_get_template_merkle_branches()
                 .returning(|_| Ok(Vec::new()));
             mock
@@ -782,7 +782,7 @@ mod tests {
         let result = handler.dispatch_request(
             peer_id,
             ConnectionId::new_unchecked(1),
-            Message::GetShareHeaders(GetShareHeaders::new(block_hashes, stop_block_hash)),
+            Message::GetShareHeaders(GetShareHeaders::new(block_hashes, stop_block_hash, None)),
             response_tx,
             &mut MockRequestSender::new(),
         );

@@ -50,8 +50,7 @@ pub async fn handle_request<C: Send + Sync, T: TimeProvider + Send + Sync>(
     match ctx.request {
         Message::GetShareHeaders(request) => {
             handle_getheaders(
-                request.locator,
-                request.stop,
+                request,
                 ctx.chain_store_handle,
                 ctx.response_channel,
                 ctx.swarm_tx,
@@ -277,8 +276,8 @@ mod tests {
         let response_headers = vec![block1.header.clone(), block2.header.clone()];
 
         chain_store_handle
-            .expect_get_headers_for_locator()
-            .returning(move |_, _, _| Ok(response_headers.clone()));
+            .expect_get_headers_after()
+            .returning(move |_, _, _, _| Ok(response_headers.clone()));
 
         chain_store_handle
             .expect_get_template_merkle_branches()
@@ -286,7 +285,11 @@ mod tests {
 
         let ctx = RequestContext {
             peer: peer_id,
-            request: Message::GetShareHeaders(GetShareHeaders::new(block_hashes, stop_block_hash)),
+            request: Message::GetShareHeaders(GetShareHeaders::new(
+                block_hashes,
+                stop_block_hash,
+                None,
+            )),
             chain_store_handle,
             response_channel,
             swarm_tx,

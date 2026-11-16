@@ -34,6 +34,7 @@ pub fn build_getheaders_message(
     Ok(Message::GetShareHeaders(GetShareHeaders::new(
         locator,
         stop_block_hash,
+        None,
     )))
 }
 

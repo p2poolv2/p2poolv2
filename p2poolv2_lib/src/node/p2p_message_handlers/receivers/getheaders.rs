@@ -4,36 +4,47 @@
 
 use crate::node::Message;
 use crate::node::SwarmSend;
-use crate::node::messages::ShareHeaderBatch;
+use crate::node::behaviour::request_response::ProtocolVersion;
+use crate::node::messages::{GetShareHeaders, ShareHeaderBatch};
 use crate::node::p2p_message_handlers::MAX_HEADERS_IN_RESPONSE;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
-use bitcoin::BlockHash;
 use std::error::Error;
 use tokio::sync::mpsc;
 use tracing::debug;
 
 /// Handle a GetHeaders request from a peer
-/// - start from chain tip, find blockhashes up to the stop block hash
-/// - limit the number of blocks to MAX_HEADERS_IN_RESPONSE
+/// - serve in the form the requester's protocol version understands:
+///   - 1.0.0: headers after the locator, each height truncated to
+///     MAX_BLOCKS_PER_HEIGHT, as v0.18 receivers expect
+///   - 1.1.0: every header after `resume_after` (or after the locator), with
+///     no per-height cap, paged mid-height when a page fills
+/// - stop at the stop block hash and limit to MAX_HEADERS_IN_RESPONSE blocks
 /// - respond with all headers found, each with the stored coinbase merkle
 ///   branch its proof is checked against
 pub async fn handle_getheaders<C: Send + Sync>(
-    block_hashes: Vec<BlockHash>,
-    stop_block_hash: BlockHash,
+    request: GetShareHeaders,
     chain_store_handle: ChainStoreHandle,
     response_channel: C,
     swarm_tx: mpsc::Sender<SwarmSend<C>>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    debug!("Received GetHeaders: {:?}", block_hashes);
-    let response_headers = chain_store_handle.get_headers_for_locator(
-        &block_hashes,
-        &stop_block_hash,
-        MAX_HEADERS_IN_RESPONSE,
-    )?;
+    debug!("Received GetHeaders: {:?}", request);
+    let response_headers = match request.protocol_version {
+        ProtocolVersion::V1_0 => chain_store_handle.get_headers_for_locator(
+            &request.locator,
+            &request.stop,
+            MAX_HEADERS_IN_RESPONSE,
+        )?,
+        ProtocolVersion::V1_1 => chain_store_handle.get_headers_after(
+            &request.locator,
+            request.resume_after,
+            &request.stop,
+            MAX_HEADERS_IN_RESPONSE,
+        )?,
+    };
     let mut entries = Vec::with_capacity(response_headers.len());
     for header in response_headers {
         let branch = chain_store_handle.get_template_merkle_branches(&header.block_hash())?;
@@ -59,11 +70,15 @@ mod tests {
     #[mockall_double::double]
     use crate::shares::chain::chain_store_handle::ChainStoreHandle;
     use crate::test_utils::TestShareBlockBuilder;
+    use bitcoin::BlockHash;
     use bitcoin::hashes::Hash;
     use tokio::sync::mpsc;
 
+    /// A request from a 1.0.0 peer is served from the locator by the legacy
+    /// walk, never the 1.1.0 one, whose uncapped heights the old receiver
+    /// would reject.
     #[tokio::test]
-    async fn test_handle_getheaders() {
+    async fn test_handle_getheaders_v1_0_request_serves_from_locator() {
         let mut chain_store_handle = ChainStoreHandle::default();
         let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<u32>>(1);
         let response_channel = 1u32;
@@ -81,19 +96,20 @@ mod tests {
         // Set up mock expectations
         chain_store_handle
             .expect_get_headers_for_locator()
+            .times(1)
             .returning(move |_, _, _| Ok(response_headers.clone()));
         chain_store_handle
             .expect_get_template_merkle_branches()
             .returning(|_| Ok(Vec::new()));
 
-        let _result = handle_getheaders(
-            block_hashes,
-            stop_block_hash,
-            chain_store_handle,
-            response_channel,
-            swarm_tx,
-        )
-        .await;
+        let request = GetShareHeaders {
+            locator: block_hashes,
+            stop: stop_block_hash,
+            resume_after: None,
+            protocol_version: ProtocolVersion::V1_0,
+        };
+        let _result =
+            handle_getheaders(request, chain_store_handle, response_channel, swarm_tx).await;
 
         // Verify swarm message
         if let Some(SwarmSend::Response(channel, Message::ShareHeaders(headers))) =
@@ -123,16 +139,15 @@ mod tests {
         let stored_branch = branch.clone();
 
         chain_store_handle
-            .expect_get_headers_for_locator()
-            .returning(move |_, _, _| Ok(response_headers.clone()));
+            .expect_get_headers_after()
+            .returning(move |_, _, _, _| Ok(response_headers.clone()));
         chain_store_handle
             .expect_get_template_merkle_branches()
             .times(2)
             .returning(move |_| Ok(stored_branch.clone()));
 
         handle_getheaders(
-            vec![block1.block_hash()],
-            block2.block_hash(),
+            GetShareHeaders::new(vec![block1.block_hash()], block2.block_hash(), None),
             chain_store_handle,
             1u32,
             swarm_tx,
@@ -146,6 +161,48 @@ mod tests {
                 assert_eq!(batch.branch_count(), 1);
                 assert_eq!(batch.branch(0), branch.as_slice());
                 assert_eq!(batch.branch(1), branch.as_slice());
+            }
+            _ => panic!("Expected SwarmSend::Response with ShareHeaders message"),
+        }
+    }
+
+    /// A request from a 1.1.0 peer is served by the uncapped walk, with the
+    /// requester's resume point, locator and stop passed through unchanged.
+    #[tokio::test]
+    async fn test_handle_getheaders_v1_1_request_passes_resume_point() {
+        let mut chain_store_handle = ChainStoreHandle::default();
+        let (swarm_tx, mut swarm_rx) = mpsc::channel::<SwarmSend<u32>>(1);
+
+        let locator_block = TestShareBlockBuilder::new().nonce(1).build();
+        let resume_block = TestShareBlockBuilder::new().nonce(2).build();
+        let served_block = TestShareBlockBuilder::new().nonce(3).build();
+        let locator = vec![locator_block.block_hash()];
+        let resume_hash = resume_block.block_hash();
+        let response_headers = vec![served_block.header.clone()];
+
+        let expected_locator = locator.clone();
+        chain_store_handle
+            .expect_get_headers_after()
+            .withf(move |requested_locator, resume_after, stop, limit| {
+                requested_locator == expected_locator.as_slice()
+                    && *resume_after == Some(resume_hash)
+                    && *stop == BlockHash::all_zeros()
+                    && *limit == MAX_HEADERS_IN_RESPONSE
+            })
+            .times(1)
+            .returning(move |_, _, _, _| Ok(response_headers.clone()));
+        chain_store_handle
+            .expect_get_template_merkle_branches()
+            .returning(|_| Ok(Vec::new()));
+
+        let request = GetShareHeaders::new(locator, BlockHash::all_zeros(), Some(resume_hash));
+        handle_getheaders(request, chain_store_handle, 1u32, swarm_tx)
+            .await
+            .unwrap();
+
+        match swarm_rx.recv().await {
+            Some(SwarmSend::Response(_, Message::ShareHeaders(batch))) => {
+                assert_eq!(batch.headers().to_vec(), vec![served_block.header]);
             }
             _ => panic!("Expected SwarmSend::Response with ShareHeaders message"),
         }
@@ -167,8 +224,8 @@ mod tests {
 
         // Set up mock expectations
         chain_store_handle
-            .expect_get_headers_for_locator()
-            .returning(move |_, _, _| Ok(Vec::new()));
+            .expect_get_headers_after()
+            .returning(move |_, _, _, _| Ok(Vec::new()));
         chain_store_handle
             .expect_get_template_merkle_branches()
             .returning(|_| Ok(Vec::new()));
@@ -177,8 +234,7 @@ mod tests {
         drop(swarm_rx);
 
         let result = handle_getheaders(
-            block_hashes,
-            stop_block_hash,
+            GetShareHeaders::new(block_hashes, stop_block_hash, None),
             chain_store_handle,
             response_channel,
             swarm_tx,

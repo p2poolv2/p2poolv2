@@ -664,6 +664,38 @@ derives a root whose header fails proof of work. `MAX_HEADERS_IN_RESPONSE`
 (900) is sized so the worst case still fits `MAX_P2P_MESSAGE_SIZE`: a distinct
 16-deep branch per header with its root included.
 
+### Header sync paging and protocol versions
+
+The request-response protocol is versioned (`ProtocolVersion` in
+`node/behaviour/request_response.rs`). A node registers `1.1.0` and `1.0.0`,
+newest first. Every request opens its own stream and multistream-select
+negotiates the version for that stream, so two current nodes speak 1.1.0 and a
+current node falls back to 1.0.0 with a v0.18 peer. The codec reads and writes
+each message in its stream's version; only `GetShareHeaders` differs. The Noise
+prologue and Identify use `network_prologue()`, frozen at the v0.18 string, so
+old and new nodes still connect. Share chain isolation comes from the chain and
+genesis segments of these strings, not from the version.
+
+A server answers `GetShareHeaders` by the version it arrived on:
+
+- **1.0.0** (`get_headers_for_locator`): from `MAX_UNCLES_DEPTH` heights below
+  the first known locator hash, whole heights, each truncated to the 20
+  smallest hashes (`MAX_BLOCKS_PER_HEIGHT`). A v0.18 receiver expects this.
+  At a height with more than 20 blocks the chain block can sort out while its
+  child is served, so such a receiver cannot sync past that height.
+- **1.1.0** (`get_headers_after`): every block that is not `Pending` or
+  `Invalid`, heights ascending and hashes ascending within a height, with no
+  per-height cap. A page stops at exactly `MAX_HEADERS_IN_RESPONSE`, even
+  inside a height. The request's `resume_after` (the last header of the
+  previous page) continues right after it; a resume point the server does not
+  know or no longer serves falls back to the locator.
+
+The receiver keeps asking while pages are full and fetches bodies after a short
+or empty page. It accepts any number of blocks at a height; each one is proof
+of work at pool difficulty, so serving them all costs an attacker real work and
+only slows sync in proportion. A sibling that arrives at an already paged
+height is picked up by the deeper-locator retry when its child shows up.
+
 ### Uncle selection vs uncle acceptance
 
 These are deliberately different rules, and the asymmetry is intentional.
