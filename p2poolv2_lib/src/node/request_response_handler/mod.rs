@@ -396,7 +396,7 @@ impl<C: Send + Sync + 'static> RequestResponseHandler<C> {
 mod tests {
     use super::*;
     use crate::node::SwarmSend;
-    use crate::node::messages::{GetData, InventoryMessage, Message};
+    use crate::node::messages::{GetData, GetShareHeaders, InventoryMessage, Message};
     use crate::node::p2p_message_handlers::receivers::block_receiver::create_block_receiver_channel;
     use crate::node::request_sender::MockRequestSender;
     #[mockall_double::double]
@@ -782,7 +782,7 @@ mod tests {
         let result = handler.dispatch_request(
             peer_id,
             ConnectionId::new_unchecked(1),
-            Message::GetShareHeaders(block_hashes, stop_block_hash),
+            Message::GetShareHeaders(GetShareHeaders::new(block_hashes, stop_block_hash)),
             response_tx,
             &mut MockRequestSender::new(),
         );

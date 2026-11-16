@@ -62,7 +62,7 @@ pub async fn handle_inventory<C: Send + Sync>(
 #[cfg(test)]
 mod tests {
     use super::ChainStoreHandle;
-    use crate::node::messages::InventoryMessage;
+    use crate::node::messages::{GetShareHeaders, InventoryMessage};
     use crate::node::p2p_message_handlers::receivers::inventory::handle_inventory;
     use crate::node::{Message, SwarmSend};
     use crate::test_utils::TestShareBlockBuilder;
@@ -116,7 +116,14 @@ mod tests {
 
         let message = swarm_rx.recv().await.unwrap();
         match message {
-            SwarmSend::Request(sent_peer, Message::GetShareHeaders(locator, stop_hash)) => {
+            SwarmSend::Request(
+                sent_peer,
+                Message::GetShareHeaders(GetShareHeaders {
+                    locator,
+                    stop: stop_hash,
+                    ..
+                }),
+            ) => {
                 assert_eq!(sent_peer, peer_id);
                 assert_eq!(locator, vec![BlockHash::all_zeros()]);
                 assert_eq!(stop_hash, BlockHash::all_zeros());

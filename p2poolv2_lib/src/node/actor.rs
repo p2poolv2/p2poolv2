@@ -533,7 +533,7 @@ impl NodeActor {
                         Some(msg) => {
                             // The sync-retry interval lives in this scope, so the
                             // reset stays here rather than in the handler.
-                            if matches!(msg, SwarmSend::Request(_, Message::GetShareHeaders(_, _))) {
+                            if matches!(msg, SwarmSend::Request(_, Message::GetShareHeaders(_))) {
                                 sync_retry_interval.reset();
                             }
                             self.on_swarm_send(msg);

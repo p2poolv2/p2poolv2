@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+use crate::node::behaviour::request_response::ProtocolVersion;
 use crate::node::p2p_message_handlers::MAX_HEADERS_IN_RESPONSE;
 use crate::shares::coinbase_proof::MAX_COINBASE_MERKLE_BRANCH_LENGTH;
 use crate::shares::share_block::{ShareBlock, ShareHeader, Txids};
@@ -67,7 +68,7 @@ mod getdata_discriminants {
 pub enum Message {
     Inventory(InventoryMessage),
     NotFound(GetData),
-    GetShareHeaders(Vec<BlockHash>, BlockHash),
+    GetShareHeaders(GetShareHeaders),
     GetShareBlocks(Vec<BlockHash>, BlockHash),
     ShareHeaders(ShareHeaderBatch),
     ShareBlock(ShareBlock),
@@ -81,6 +82,104 @@ pub enum Message {
     /// queues. Ideally we need to build our own stream protocol for
     /// libp2p. Something, we don't want to take on now.
     Ack,
+}
+
+/// Request for the share headers that follow a block locator.
+///
+/// The wire layout depends on the protocol version of the stream that carries
+/// it: 1.0.0 encodes only `locator` and `stop`; 1.1.0 also encodes
+/// `resume_after`. See [`Message::consensus_encode_with_version`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GetShareHeaders {
+    /// Block locator, newest first.
+    pub locator: Vec<BlockHash>,
+    /// Hash to stop serving at; all zeros for no stop.
+    pub stop: BlockHash,
+    /// Header after which to resume serving, in the order the server serves
+    /// headers within a height. Carried only on 1.1.0 and dropped when
+    /// encoding for 1.0.0, whose servers do not understand it.
+    pub resume_after: Option<BlockHash>,
+    /// Protocol version of the stream the request arrived on, so the server
+    /// can answer in a form the requester understands. Set when decoding and
+    /// never encoded. A locally built request carries the newest version.
+    pub protocol_version: ProtocolVersion,
+}
+
+impl GetShareHeaders {
+    /// Request the headers after `locator`, up to `stop`, with no resume
+    /// point.
+    pub fn new(locator: Vec<BlockHash>, stop: BlockHash) -> Self {
+        Self {
+            locator,
+            stop,
+            resume_after: None,
+            protocol_version: ProtocolVersion::V1_1,
+        }
+    }
+
+    /// Encode the fields `version` carries on the wire.
+    fn consensus_encode_with_version<W: Write + ?Sized>(
+        &self,
+        version: ProtocolVersion,
+        w: &mut W,
+    ) -> Result<usize, bitcoin::io::Error> {
+        let mut len = self.locator.consensus_encode(w)?;
+        len += self.stop.consensus_encode(w)?;
+        match version {
+            ProtocolVersion::V1_0 => {}
+            ProtocolVersion::V1_1 => len += encode_optional_blockhash(&self.resume_after, w)?,
+        }
+        Ok(len)
+    }
+
+    /// Decode the fields `version` carries and record `version` as the
+    /// stream's protocol version.
+    fn consensus_decode_with_version<R: Read + ?Sized>(
+        version: ProtocolVersion,
+        r: &mut R,
+    ) -> Result<Self, encode::Error> {
+        let locator = Vec::<BlockHash>::consensus_decode(r)?;
+        let stop = BlockHash::consensus_decode(r)?;
+        let resume_after = match version {
+            ProtocolVersion::V1_0 => None,
+            ProtocolVersion::V1_1 => decode_optional_blockhash(r)?,
+        };
+        Ok(Self {
+            locator,
+            stop,
+            resume_after,
+            protocol_version: version,
+        })
+    }
+}
+
+/// Encode an optional hash as a presence byte (0 or 1) followed by the hash
+/// when present.
+fn encode_optional_blockhash<W: Write + ?Sized>(
+    blockhash: &Option<BlockHash>,
+    w: &mut W,
+) -> Result<usize, bitcoin::io::Error> {
+    match blockhash {
+        None => 0u8.consensus_encode(w),
+        Some(hash) => {
+            let len = 1u8.consensus_encode(w)?;
+            Ok(len + hash.consensus_encode(w)?)
+        }
+    }
+}
+
+/// Decode an optional hash written by [`encode_optional_blockhash`].
+/// Rejects any presence byte other than 0 or 1.
+fn decode_optional_blockhash<R: Read + ?Sized>(
+    r: &mut R,
+) -> Result<Option<BlockHash>, encode::Error> {
+    match u8::consensus_decode(r)? {
+        0 => Ok(None),
+        1 => Ok(Some(BlockHash::consensus_decode(r)?)),
+        _ => Err(encode::Error::ParseFailed(
+            "Invalid optional blockhash presence byte",
+        )),
+    }
 }
 
 /// Handshake data exchanged when a connection is established.
@@ -101,16 +200,26 @@ pub struct RawMessage {
     pub payload_len: u32,
     /// Checksum: first 4 bytes of SHA256d(payload)
     pub checksum: [u8; 4],
+    /// Protocol version the payload is encoded for; `payload_len` and
+    /// `checksum` are computed over that encoding.
+    pub protocol_version: ProtocolVersion,
 }
 
 impl RawMessage {
-    /// Create a new RawMessage from a Message
+    /// Create a new RawMessage from a Message, encoded for the newest
+    /// protocol version.
     /// Automatically computes payload_len and checksum
     pub fn new(payload: Message) -> Self {
+        Self::new_with_version(ProtocolVersion::V1_1, payload)
+    }
+
+    /// Create a new RawMessage from a Message encoded for `protocol_version`.
+    /// Automatically computes payload_len and checksum over that encoding.
+    pub fn new_with_version(protocol_version: ProtocolVersion, payload: Message) -> Self {
         // Encode payload to calculate length and checksum
         let mut engine = sha256d::Hash::engine();
         let payload_len = payload
-            .consensus_encode(&mut engine)
+            .consensus_encode_with_version(protocol_version, &mut engine)
             .expect("engine doesn't error");
         let payload_len = u32::try_from(payload_len).expect("payload length fits in u32");
 
@@ -122,6 +231,7 @@ impl RawMessage {
             payload,
             payload_len,
             checksum,
+            protocol_version,
         }
     }
 
@@ -151,7 +261,7 @@ impl Message {
         match self {
             Message::Inventory(_) => "Inventory",
             Message::NotFound(_) => "NotFound",
-            Message::GetShareHeaders(_, _) => "GetShareHeaders",
+            Message::GetShareHeaders(_) => "GetShareHeaders",
             Message::GetShareBlocks(_, _) => "GetShareBlocks",
             Message::ShareHeaders(_) => "ShareHeaders",
             Message::ShareBlock(_) => "ShareBlock",
@@ -347,8 +457,16 @@ impl Decodable for ShareHeaderBatch {
     }
 }
 
-impl Encodable for Message {
-    fn consensus_encode<W: Write + ?Sized>(&self, w: &mut W) -> Result<usize, bitcoin::io::Error> {
+impl Message {
+    /// Encode the message in the layout `version` uses on the wire.
+    ///
+    /// Only `GetShareHeaders` differs between versions today; every other
+    /// message encodes the same for all versions.
+    pub fn consensus_encode_with_version<W: Write + ?Sized>(
+        &self,
+        version: ProtocolVersion,
+        w: &mut W,
+    ) -> Result<usize, bitcoin::io::Error> {
         use message_discriminants::*;
         match self {
             Message::Inventory(inv) => {
@@ -361,10 +479,9 @@ impl Encodable for Message {
                 len += get_data.consensus_encode(w)?;
                 Ok(len)
             }
-            Message::GetShareHeaders(hashes, stop) => {
+            Message::GetShareHeaders(request) => {
                 let mut len = GET_SHARE_HEADERS.consensus_encode(w)?;
-                len += hashes.consensus_encode(w)?;
-                len += stop.consensus_encode(w)?;
+                len += request.consensus_encode_with_version(version, w)?;
                 Ok(len)
             }
             Message::GetShareBlocks(hashes, stop) => {
@@ -405,18 +522,20 @@ impl Encodable for Message {
             }
         }
     }
-}
 
-impl Decodable for Message {
-    fn consensus_decode<R: Read + ?Sized>(r: &mut R) -> Result<Self, encode::Error> {
+    /// Decode a message in the layout `version` uses on the wire. A decoded
+    /// `GetShareHeaders` records `version` as its stream's protocol version.
+    pub fn consensus_decode_with_version<R: Read + ?Sized>(
+        version: ProtocolVersion,
+        r: &mut R,
+    ) -> Result<Self, encode::Error> {
         use message_discriminants::*;
         let disc = u8::consensus_decode(r)?;
         match disc {
             INVENTORY => Ok(Message::Inventory(InventoryMessage::consensus_decode(r)?)),
             NOT_FOUND => Ok(Message::NotFound(GetData::consensus_decode(r)?)),
             GET_SHARE_HEADERS => Ok(Message::GetShareHeaders(
-                Vec::<BlockHash>::consensus_decode(r)?,
-                BlockHash::consensus_decode(r)?,
+                GetShareHeaders::consensus_decode_with_version(version, r)?,
             )),
             GET_SHARE_BLOCKS => Ok(Message::GetShareBlocks(
                 Vec::<BlockHash>::consensus_decode(r)?,
@@ -440,16 +559,35 @@ impl Decodable for Message {
     }
 }
 
+/// Encodes for the newest protocol version. Streams encode for their
+/// negotiated version through [`Message::consensus_encode_with_version`].
+impl Encodable for Message {
+    fn consensus_encode<W: Write + ?Sized>(&self, w: &mut W) -> Result<usize, bitcoin::io::Error> {
+        self.consensus_encode_with_version(ProtocolVersion::V1_1, w)
+    }
+}
+
+/// Decodes the newest protocol version's layout. Streams decode their
+/// negotiated version through [`Message::consensus_decode_with_version`].
+impl Decodable for Message {
+    fn consensus_decode<R: Read + ?Sized>(r: &mut R) -> Result<Self, encode::Error> {
+        Self::consensus_decode_with_version(ProtocolVersion::V1_1, r)
+    }
+}
+
 impl Encodable for RawMessage {
     fn consensus_encode<W: Write + ?Sized>(&self, w: &mut W) -> Result<usize, bitcoin::io::Error> {
         let mut len = 0;
         len += self.payload_len.consensus_encode(w)?;
         len += self.checksum.consensus_encode(w)?;
-        len += self.payload.consensus_encode(w)?;
+        len += self
+            .payload
+            .consensus_encode_with_version(self.protocol_version, w)?;
         Ok(len)
     }
 }
 
+/// Decodes the newest protocol version's layout.
 impl Decodable for RawMessage {
     fn consensus_decode<R: Read + ?Sized>(r: &mut R) -> Result<Self, encode::Error> {
         // Read header
@@ -481,6 +619,7 @@ impl Decodable for RawMessage {
             payload_len,
             checksum: expected_checksum,
             payload,
+            protocol_version: ProtocolVersion::V1_1,
         })
     }
 }
@@ -682,8 +821,8 @@ mod tests {
     }
 
     #[test]
-    fn test_message_get_share_headers_roundtrip() {
-        let hashes = vec![
+    fn test_get_share_headers_v1_1_roundtrip_with_resume_point() {
+        let locator = vec![
             BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
                 .unwrap(),
             BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb6")
@@ -692,19 +831,127 @@ mod tests {
         let stop =
             BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7")
                 .unwrap();
+        let mut request = GetShareHeaders::new(locator, stop);
+        request.resume_after = Some(
+            BlockHash::from_str("a3fbd2a0e62c42446e4e6d18dab3a479ebc84c279757450e019eafc89dfc1a62")
+                .unwrap(),
+        );
+        let message = Message::GetShareHeaders(request);
 
-        let msg = Message::GetShareHeaders(hashes.clone(), stop);
         let mut encoded = Vec::new();
-        msg.consensus_encode(&mut encoded).unwrap();
+        message
+            .consensus_encode_with_version(ProtocolVersion::V1_1, &mut encoded)
+            .unwrap();
+        let decoded =
+            Message::consensus_decode_with_version(ProtocolVersion::V1_1, &mut &encoded[..])
+                .unwrap();
 
-        let decoded = Message::consensus_decode(&mut &encoded[..]).unwrap();
-        match decoded {
-            Message::GetShareHeaders(decoded_hashes, decoded_stop) => {
-                assert_eq!(decoded_hashes, hashes);
-                assert_eq!(decoded_stop, stop);
-            }
-            _ => panic!("Expected GetShareHeaders variant"),
-        }
+        assert_eq!(decoded, message);
+    }
+
+    #[test]
+    fn test_get_share_headers_v1_1_roundtrip_without_resume_point() {
+        let locator = vec![
+            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+                .unwrap(),
+        ];
+        let message =
+            Message::GetShareHeaders(GetShareHeaders::new(locator, BlockHash::all_zeros()));
+
+        let mut encoded = Vec::new();
+        message
+            .consensus_encode_with_version(ProtocolVersion::V1_1, &mut encoded)
+            .unwrap();
+        let decoded =
+            Message::consensus_decode_with_version(ProtocolVersion::V1_1, &mut &encoded[..])
+                .unwrap();
+
+        assert_eq!(decoded, message);
+    }
+
+    /// A v0.18 server decodes exactly discriminant, locator and stop. Encoding
+    /// for 1.0.0 must produce those bytes and nothing else, dropping the
+    /// resume point the old server would not understand.
+    #[test]
+    fn test_get_share_headers_v1_0_encoding_matches_legacy_layout() {
+        let locator = vec![
+            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+                .unwrap(),
+        ];
+        let stop =
+            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7")
+                .unwrap();
+        let mut request = GetShareHeaders::new(locator.clone(), stop);
+        request.resume_after = Some(
+            BlockHash::from_str("a3fbd2a0e62c42446e4e6d18dab3a479ebc84c279757450e019eafc89dfc1a62")
+                .unwrap(),
+        );
+
+        let mut encoded = Vec::new();
+        Message::GetShareHeaders(request)
+            .consensus_encode_with_version(ProtocolVersion::V1_0, &mut encoded)
+            .unwrap();
+
+        let mut legacy = Vec::new();
+        message_discriminants::GET_SHARE_HEADERS
+            .consensus_encode(&mut legacy)
+            .unwrap();
+        locator.consensus_encode(&mut legacy).unwrap();
+        stop.consensus_encode(&mut legacy).unwrap();
+        assert_eq!(encoded, legacy);
+    }
+
+    /// A request from a v0.18 peer decodes with no resume point and records
+    /// the 1.0.0 stream it arrived on, so the server answers the old way.
+    #[test]
+    fn test_get_share_headers_v1_0_decode_records_stream_version() {
+        let locator = vec![
+            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+                .unwrap(),
+        ];
+        let stop =
+            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb7")
+                .unwrap();
+        let mut legacy = Vec::new();
+        message_discriminants::GET_SHARE_HEADERS
+            .consensus_encode(&mut legacy)
+            .unwrap();
+        locator.consensus_encode(&mut legacy).unwrap();
+        stop.consensus_encode(&mut legacy).unwrap();
+
+        let decoded =
+            Message::consensus_decode_with_version(ProtocolVersion::V1_0, &mut &legacy[..])
+                .unwrap();
+
+        assert_eq!(
+            decoded,
+            Message::GetShareHeaders(GetShareHeaders {
+                locator,
+                stop,
+                resume_after: None,
+                protocol_version: ProtocolVersion::V1_0,
+            })
+        );
+    }
+
+    #[test]
+    fn test_get_share_headers_v1_1_rejects_invalid_resume_presence_byte() {
+        let mut encoded = Vec::new();
+        message_discriminants::GET_SHARE_HEADERS
+            .consensus_encode(&mut encoded)
+            .unwrap();
+        Vec::<BlockHash>::new()
+            .consensus_encode(&mut encoded)
+            .unwrap();
+        BlockHash::all_zeros()
+            .consensus_encode(&mut encoded)
+            .unwrap();
+        2u8.consensus_encode(&mut encoded).unwrap();
+
+        let result =
+            Message::consensus_decode_with_version(ProtocolVersion::V1_1, &mut &encoded[..]);
+
+        assert!(result.is_err());
     }
 
     #[test]

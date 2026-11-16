@@ -4,6 +4,7 @@
 
 use crate::node::Message;
 use crate::node::SwarmSend;
+use crate::node::messages::GetShareHeaders;
 #[cfg(test)]
 #[mockall_double::double]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -30,7 +31,10 @@ pub fn build_getheaders_message(
 ) -> Result<Message, StoreError> {
     let locator = chain_store_handle.build_locator(depth)?;
     let stop_block_hash: BlockHash = BlockHash::all_zeros();
-    Ok(Message::GetShareHeaders(locator, stop_block_hash))
+    Ok(Message::GetShareHeaders(GetShareHeaders::new(
+        locator,
+        stop_block_hash,
+    )))
 }
 
 /// Send a getheaders request to the peer over `swarm_tx`.
@@ -86,7 +90,11 @@ mod tests {
         if let Some(SwarmSend::Request(received_peer_id, message)) = swarm_rx.recv().await {
             assert_eq!(received_peer_id, peer_id);
             match message {
-                Message::GetShareHeaders(locator, stop_hash) => {
+                Message::GetShareHeaders(GetShareHeaders {
+                    locator,
+                    stop: stop_hash,
+                    ..
+                }) => {
                     assert_eq!(locator, test_locator);
                     assert_eq!(
                         stop_hash,

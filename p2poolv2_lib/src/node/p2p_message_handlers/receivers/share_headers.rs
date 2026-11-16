@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use crate::node::messages::ShareHeaderBatch;
+use crate::node::messages::{GetShareHeaders, ShareHeaderBatch};
 use crate::node::p2p_message_handlers::MAX_HEADERS_IN_RESPONSE;
 use crate::node::p2p_message_handlers::senders::send_getheaders;
 use crate::node::request_response_handler::block_fetcher::{BlockFetcherEvent, BlockFetcherHandle};
@@ -608,7 +608,8 @@ async fn request_next_headers<C: Send + Sync>(
         "Requesting more share headers, locator={last_block_hash}, batch_size={}",
         share_headers.len(),
     );
-    let getheaders_request = Message::GetShareHeaders(vec![last_block_hash], stop_block_hash);
+    let getheaders_request =
+        Message::GetShareHeaders(GetShareHeaders::new(vec![last_block_hash], stop_block_hash));
     if let Err(send_error) = swarm_tx
         .send(SwarmSend::Request(peer_id, getheaders_request))
         .await
@@ -966,7 +967,14 @@ mod tests {
             .try_recv()
             .expect("expected a follow-up getheaders request");
         match swarm_message {
-            SwarmSend::Request(sent_peer_id, Message::GetShareHeaders(locator, stop_hash)) => {
+            SwarmSend::Request(
+                sent_peer_id,
+                Message::GetShareHeaders(GetShareHeaders {
+                    locator,
+                    stop: stop_hash,
+                    ..
+                }),
+            ) => {
                 assert_eq!(sent_peer_id, peer_id);
                 assert_eq!(locator, vec![expected_last_hash]);
                 assert_eq!(stop_hash, BlockHash::all_zeros());
@@ -1787,7 +1795,7 @@ mod tests {
         // Should have sent a getheaders request
         let message = swarm_rx.try_recv().expect("expected a getheaders retry");
         match message {
-            SwarmSend::Request(sent_peer, Message::GetShareHeaders(_, _)) => {
+            SwarmSend::Request(sent_peer, Message::GetShareHeaders(_)) => {
                 assert_eq!(sent_peer, peer_id);
             }
             other => panic!("expected GetShareHeaders, got: {other:?}"),

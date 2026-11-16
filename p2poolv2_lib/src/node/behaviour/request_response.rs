@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use bitcoin::consensus::{Decodable, Encodable};
+use bitcoin::consensus::Encodable;
 use bitcoin::hashes::{Hash, sha256d};
 use libp2p::futures::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use libp2p::request_response::{Codec, OutboundFailure};
@@ -161,7 +161,9 @@ impl AsRef<str> for P2PoolRequestResponseProtocol {
 pub struct ConsensusCodec;
 
 impl ConsensusCodec {
-    async fn read_message<T>(&self, io: &mut T) -> io::Result<Message>
+    /// Read one framed message, decoding the payload in the layout of the
+    /// stream's protocol `version`.
+    async fn read_message<T>(&self, version: ProtocolVersion, io: &mut T) -> io::Result<Message>
     where
         T: AsyncRead + Unpin + Send,
     {
@@ -207,17 +209,24 @@ impl ConsensusCodec {
             ));
         }
 
-        let message = Message::consensus_decode(&mut &payload_bytes[..])
+        let message = Message::consensus_decode_with_version(version, &mut &payload_bytes[..])
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
 
         Ok(message)
     }
 
-    async fn write_message<T>(&self, io: &mut T, msg: Message) -> io::Result<()>
+    /// Write one framed message, encoding the payload in the layout of the
+    /// stream's protocol `version`.
+    async fn write_message<T>(
+        &self,
+        version: ProtocolVersion,
+        io: &mut T,
+        msg: Message,
+    ) -> io::Result<()>
     where
         T: AsyncWrite + Unpin + Send,
     {
-        let raw_msg = RawMessage::new(msg);
+        let raw_msg = RawMessage::new_with_version(version, msg);
         let mut bytes = Vec::new();
         raw_msg
             .consensus_encode(&mut bytes)
@@ -231,46 +240,50 @@ impl Codec for ConsensusCodec {
     type Request = Message;
     type Response = Message;
 
-    async fn read_request<T>(&mut self, _: &Self::Protocol, io: &mut T) -> io::Result<Self::Request>
+    async fn read_request<T>(
+        &mut self,
+        protocol: &Self::Protocol,
+        io: &mut T,
+    ) -> io::Result<Self::Request>
     where
         T: AsyncRead + Unpin + Send,
     {
-        self.read_message(io).await
+        self.read_message(protocol.version(), io).await
     }
 
     async fn read_response<T>(
         &mut self,
-        _: &Self::Protocol,
+        protocol: &Self::Protocol,
         io: &mut T,
     ) -> io::Result<Self::Response>
     where
         T: AsyncRead + Unpin + Send,
     {
-        self.read_message(io).await
+        self.read_message(protocol.version(), io).await
     }
 
     async fn write_request<T>(
         &mut self,
-        _: &Self::Protocol,
+        protocol: &Self::Protocol,
         io: &mut T,
         req: Self::Request,
     ) -> io::Result<()>
     where
         T: AsyncWrite + Unpin + Send,
     {
-        self.write_message(io, req).await
+        self.write_message(protocol.version(), io, req).await
     }
 
     async fn write_response<T>(
         &mut self,
-        _: &Self::Protocol,
+        protocol: &Self::Protocol,
         io: &mut T,
         res: Self::Response,
     ) -> io::Result<()>
     where
         T: AsyncWrite + Unpin + Send,
     {
-        self.write_message(io, res).await
+        self.write_message(protocol.version(), io, res).await
     }
 }
 
@@ -291,11 +304,17 @@ pub enum RequestResponseError {
 #[cfg(test)]
 mod tests {
     use super::{
-        GENESIS_TAG_LEN, ProtocolVersion, kad_protocol_string, network_prologue,
-        request_response_protocol_string,
+        ConsensusCodec, GENESIS_TAG_LEN, P2PoolRequestResponseProtocol, ProtocolVersion,
+        kad_protocol_string, network_prologue, request_response_protocol_string,
     };
     use crate::config::Chain;
+    use crate::node::messages::{GetShareHeaders, Message};
     use crate::shares::share_block::ShareBlock;
+    use bitcoin::BlockHash;
+    use bitcoin::hashes::Hash;
+    use libp2p::futures::io::Cursor;
+    use libp2p::request_response::Codec;
+    use std::str::FromStr;
 
     /// The prologue must stay byte-identical to the string v0.18 nodes use,
     /// or the Noise handshake between old and new nodes fails.
@@ -393,5 +412,74 @@ mod tests {
             request_response_protocol_string(Chain::Signet, genesis_hash, ProtocolVersion::V1_1),
             format!("/p2pool/signet/{expected_tag}/1.1.0")
         );
+    }
+
+    /// On a 1.0.0 stream the codec writes the legacy request layout, so the
+    /// resume point is not carried, and the reading side records the 1.0.0
+    /// stream on the decoded request.
+    #[tokio::test]
+    async fn test_codec_v1_0_stream_drops_resume_point_and_records_version() {
+        let genesis_hash = ShareBlock::build_genesis_for_network(Chain::Signet)
+            .unwrap()
+            .block_hash();
+        let protocol =
+            P2PoolRequestResponseProtocol::new(Chain::Signet, genesis_hash, ProtocolVersion::V1_0);
+        let locator_hash =
+            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+                .unwrap();
+        let mut request = GetShareHeaders::new(vec![locator_hash], BlockHash::all_zeros());
+        request.resume_after = Some(
+            BlockHash::from_str("a3fbd2a0e62c42446e4e6d18dab3a479ebc84c279757450e019eafc89dfc1a62")
+                .unwrap(),
+        );
+        let mut codec = ConsensusCodec;
+        let mut stream = Cursor::new(Vec::new());
+
+        codec
+            .write_request(&protocol, &mut stream, Message::GetShareHeaders(request))
+            .await
+            .unwrap();
+        stream.set_position(0);
+        let decoded = codec.read_request(&protocol, &mut stream).await.unwrap();
+
+        assert_eq!(
+            decoded,
+            Message::GetShareHeaders(GetShareHeaders {
+                locator: vec![locator_hash],
+                stop: BlockHash::all_zeros(),
+                resume_after: None,
+                protocol_version: ProtocolVersion::V1_0,
+            })
+        );
+    }
+
+    /// On a 1.1.0 stream the resume point survives the round trip.
+    #[tokio::test]
+    async fn test_codec_v1_1_stream_carries_resume_point() {
+        let genesis_hash = ShareBlock::build_genesis_for_network(Chain::Signet)
+            .unwrap()
+            .block_hash();
+        let protocol =
+            P2PoolRequestResponseProtocol::new(Chain::Signet, genesis_hash, ProtocolVersion::V1_1);
+        let locator_hash =
+            BlockHash::from_str("0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5")
+                .unwrap();
+        let mut request = GetShareHeaders::new(vec![locator_hash], BlockHash::all_zeros());
+        request.resume_after = Some(
+            BlockHash::from_str("a3fbd2a0e62c42446e4e6d18dab3a479ebc84c279757450e019eafc89dfc1a62")
+                .unwrap(),
+        );
+        let message = Message::GetShareHeaders(request);
+        let mut codec = ConsensusCodec;
+        let mut stream = Cursor::new(Vec::new());
+
+        codec
+            .write_request(&protocol, &mut stream, message.clone())
+            .await
+            .unwrap();
+        stream.set_position(0);
+        let decoded = codec.read_request(&protocol, &mut stream).await.unwrap();
+
+        assert_eq!(decoded, message);
     }
 }

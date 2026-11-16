@@ -48,10 +48,10 @@ pub async fn handle_request<C: Send + Sync, T: TimeProvider + Send + Sync>(
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     debug!("Received request {} from peer: {}", ctx.request, ctx.peer);
     match ctx.request {
-        Message::GetShareHeaders(block_hashes, stop_block_hash) => {
+        Message::GetShareHeaders(request) => {
             handle_getheaders(
-                block_hashes,
-                stop_block_hash,
+                request.locator,
+                request.stop,
                 ctx.chain_store_handle,
                 ctx.response_channel,
                 ctx.swarm_tx,
@@ -224,7 +224,7 @@ pub async fn handle_response<C: Send + Sync>(
 mod tests {
     use super::*;
     use crate::node::SwarmSend;
-    use crate::node::messages::InventoryMessage;
+    use crate::node::messages::{GetShareHeaders, InventoryMessage};
     use crate::node::p2p_message_handlers::receivers::block_receiver::create_block_receiver_channel;
     use crate::node::request_response_handler::block_fetcher::BlockFetcherHandle;
     use crate::node::request_response_handler::block_fetcher::create_block_fetcher_channel;
@@ -286,7 +286,7 @@ mod tests {
 
         let ctx = RequestContext {
             peer: peer_id,
-            request: Message::GetShareHeaders(block_hashes, stop_block_hash),
+            request: Message::GetShareHeaders(GetShareHeaders::new(block_hashes, stop_block_hash)),
             chain_store_handle,
             response_channel,
             swarm_tx,
@@ -414,7 +414,7 @@ mod tests {
             panic!("Expected SwarmSend::Response with Ack message");
         }
 
-        if let Some(SwarmSend::Request(sent_peer, Message::GetShareHeaders(_, _))) =
+        if let Some(SwarmSend::Request(sent_peer, Message::GetShareHeaders(_))) =
             swarm_rx.recv().await
         {
             assert_eq!(sent_peer, peer_id);
@@ -804,7 +804,14 @@ mod tests {
 
         let getheaders_message = swarm_rx.recv().await.unwrap();
         match getheaders_message {
-            SwarmSend::Request(sent_peer, Message::GetShareHeaders(locator, stop_hash)) => {
+            SwarmSend::Request(
+                sent_peer,
+                Message::GetShareHeaders(GetShareHeaders {
+                    locator,
+                    stop: stop_hash,
+                    ..
+                }),
+            ) => {
                 assert_eq!(sent_peer, peer_id);
                 assert_eq!(locator, vec![BlockHash::all_zeros()]);
                 assert_eq!(stop_hash, BlockHash::all_zeros());
