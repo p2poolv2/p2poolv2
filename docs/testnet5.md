@@ -74,6 +74,27 @@ curl -s https://lapis.erisian.com.au/chain.json | jq -r '.blocks[].block' |
 
 ## P2Poolv2
 
+### Getting a share chain address
+
+Testnet5 uses testnet4's address formats, so the encoder takes `testnet4`
+and the result starts with `tp2pool1`:
+
+```sh
+ADDR=$(bitcoin-cli -testnet5 getnewaddress "p2pool share owner" bech32m)
+bitcoin-cli -testnet5 getaddressinfo "$ADDR"    # check "ismine" and "solvable"
+bitcoin-cli -testnet5 getaddressinfo "$ADDR" | jq -r .witness_program \
+  | p2poolv2_cli address --network testnet4
+```
+
+Use the address either on the node, as `[stratum] miner_address` in the
+config, or from the miner, as the stratum password `p2p=tp2pool1...`.
+`p2p=<address>` alone is 71 characters, so check your miner firmware does
+not truncate the password field.
+
+See "Getting a share chain address" in the README for the details.
+
+### Configuration
+
 Start from `config.sample.toml` and set at least:
 
 ```toml
