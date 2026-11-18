@@ -20,8 +20,8 @@ const CALL_RETRIES: u8 = 0;
 /// Errors produced when reading the chain identity from an Electrum server.
 #[derive(Debug, thiserror::Error)]
 pub enum ElectrumError {
-    /// The URL does not use the Electrum `tcp://` or `ssl://` scheme.
-    #[error("Electrum URL must be tcp://HOST:PORT or ssl://HOST:PORT")]
+    /// The URL does not use the plain TCP Electrum `tcp://` scheme.
+    #[error("Electrum URL must be tcp://HOST:PORT")]
     InvalidUrl,
     /// The Electrum server serves a different network than the one requested.
     #[error(
@@ -54,8 +54,8 @@ struct P2PoolFeatures {
 /// Read the network and share chain genesis hash of a P2Poolv2 Electrum
 /// server, failing unless the network is `expected`.
 pub fn fetch_chain_identity(url: &str, expected: Network) -> Result<ChainIdentity, ElectrumError> {
-    //* Accept only Electrum URLs, and allow a single time-limited attempt.
-    if !url.starts_with("tcp://") && !url.starts_with("ssl://") {
+    //* Accept only plain TCP Electrum URLs, and allow a single time-limited attempt.
+    if !url.starts_with("tcp://") {
         return Err(ElectrumError::InvalidUrl);
     }
     let config = ConfigBuilder::new()
@@ -85,6 +85,14 @@ mod tests {
     fn fetch_rejects_a_non_electrum_url_before_connecting() {
         assert!(matches!(
             fetch_chain_identity("http://127.0.0.1:50001", Network::Signet),
+            Err(ElectrumError::InvalidUrl)
+        ));
+    }
+
+    #[test]
+    fn fetch_rejects_an_ssl_url() {
+        assert!(matches!(
+            fetch_chain_identity("ssl://127.0.0.1:50002", Network::Signet),
             Err(ElectrumError::InvalidUrl)
         ));
     }
