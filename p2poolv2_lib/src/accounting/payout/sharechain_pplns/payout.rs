@@ -132,7 +132,7 @@ mod tests {
     use std::collections::HashSet;
 
     fn make_test_config() -> crate::config::StratumConfig<crate::config::Parsed> {
-        StratumConfig::new_for_test_default().parse().unwrap()
+        StratumConfig::default().parse().unwrap()
     }
 
     /// An empty window is an error the notifier turns into a node shutdown, not

@@ -324,7 +324,7 @@ mod tests {
 
         let pool_difficulty =
             pool_difficulty::PoolDifficulty::new(genesis_header.bits, genesis_header.time, 0);
-        let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
+        let stratum_config = StratumConfig::default().parse().unwrap();
 
         // The payout anchor cannot be resolved, which is persistent: the mining
         // base does not move while confirmation is stalled.
@@ -394,7 +394,7 @@ mod tests {
             .expect_get_share_height_and_time()
             .returning(|_| Ok((0, genesis_for_tests().header.time)));
 
-        let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
+        let stratum_config = StratumConfig::default().parse().unwrap();
 
         let test_distribution = vec![OutputPair {
             address: "bcrt1qe2qaq0e8qlp425pxytrakala7725dynwhknufr"
@@ -487,7 +487,7 @@ mod tests {
             .returning(|_| Ok((0, genesis_for_tests().header.time)));
 
         // Setup config and tracker
-        let stratum_config = StratumConfig::new_for_test_default().parse().unwrap();
+        let stratum_config = StratumConfig::default().parse().unwrap();
         let tracker_handle = start_tracker_actor();
         let miner_pubkey: CompressedPublicKey =
             "020202020202020202020202020202020202020202020202020202020202020202"
