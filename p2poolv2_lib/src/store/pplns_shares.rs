@@ -43,7 +43,12 @@ impl Store {
 
     /// Get PPLNS shares with filtering support using timestamp-based keys for efficient range queries
     /// Deserializes SimplePplnsShare from DB (btcaddress/workername are skipped during serialization)
-    /// and enriches with btcaddress from user store
+    /// and enriches with btcaddress from user store.
+    /// `start_time` and `end_time` are unix seconds. Values too large to
+    /// convert to microseconds saturate to the far future, so a huge
+    /// `end_time` means no upper bound and a huge `start_time` matches nothing.
+    /// At most `limit` entries are read from the database, or
+    /// `INITIAL_SHARE_VEC_CAPACITY` (100,000) when `limit` is `None`.
     pub fn get_pplns_shares_filtered(
         &self,
         limit: Option<usize>,
@@ -53,12 +58,14 @@ impl Store {
         let pplns_share_cf = self.db.cf_handle(&ColumnFamily::Share).unwrap();
 
         // Convert end_time to microseconds, default to current time if not specified
-        let effective_end_time = end_time.map(|t| t * 1_000_000).unwrap_or_else(|| {
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_micros() as u64
-        });
+        let effective_end_time = end_time
+            .map(|t| t.saturating_mul(1_000_000))
+            .unwrap_or_else(|| {
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_micros() as u64
+            });
 
         let mut read_opts = rocksdb::ReadOptions::default();
         // Avoid polluting the block cache with scan data -- this range scan
@@ -67,7 +74,7 @@ impl Store {
 
         // Set lower bound for start_time if specified (exclusive lower bound)
         if let Some(start) = start_time {
-            let start_micros = start * 1_000_000;
+            let start_micros = start.saturating_mul(1_000_000);
             // Create boundary key with minimum user_id and seq for lower bound
             let start_key = SimplePplnsShare::make_key(start_micros, 0, 0);
             read_opts.set_iterate_lower_bound(start_key);
@@ -266,5 +273,54 @@ mod tests {
         let result = store.get_pplns_shares_filtered(Some(10), Some(1500), Some(2500));
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].n_time, 2000);
+    }
+
+    #[test]
+    fn test_get_pplns_shares_filtered_maximum_end_time_returns_shares() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let user_id = store.add_user("addr1".to_string()).unwrap();
+        let share = SimplePplnsShare::new(
+            user_id,
+            100,
+            "addr1".to_string(),
+            "worker1".to_string(),
+            1000,
+            "job".to_string(),
+            "extra".to_string(),
+            "nonce".to_string(),
+        );
+        store.add_pplns_share(share).unwrap();
+
+        //* An end time whose microsecond conversion overflows u64 saturates
+        //* to the far future instead of panicking or wrapping.
+        let result = store.get_pplns_shares_filtered(Some(10), None, Some(u64::MAX));
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].n_time, 1000);
+    }
+
+    #[test]
+    fn test_get_pplns_shares_filtered_maximum_start_time_returns_no_shares() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let user_id = store.add_user("addr1".to_string()).unwrap();
+        let share = SimplePplnsShare::new(
+            user_id,
+            100,
+            "addr1".to_string(),
+            "worker1".to_string(),
+            1000,
+            "job".to_string(),
+            "extra".to_string(),
+            "nonce".to_string(),
+        );
+        store.add_pplns_share(share).unwrap();
+
+        //* A start time whose microsecond conversion overflows u64 saturates
+        //* to the far future, past every stored share.
+        let result = store.get_pplns_shares_filtered(Some(10), Some(u64::MAX), None);
+        assert!(result.is_empty());
     }
 }

@@ -13,7 +13,6 @@ use axum::{
     response::Response,
     routing::{delete, get, post},
 };
-use chrono::DateTime;
 use p2poolv2_lib::monitoring_events::MonitoringEventSender;
 use p2poolv2_lib::node::actor::NodeHandle;
 use p2poolv2_lib::stratum::work::tracker::{JobTracker, parse_coinbase};
@@ -25,7 +24,7 @@ use p2poolv2_lib::{
 };
 use serde::Deserialize;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::oneshot;
 use tower_http::cors::CorsLayer;
@@ -72,8 +71,10 @@ impl FromRef<AppState> for AppConfig {
 #[derive(Deserialize)]
 pub struct PplnsQuery {
     limit: Option<u32>,
-    start_time: Option<String>,
-    end_time: Option<String>,
+    /// Unix seconds. Defaults to 0.
+    start_time: Option<u64>,
+    /// Unix seconds. Defaults to the current time.
+    end_time: Option<u64>,
 }
 
 /// Build the axum router with REST routes (protected by auth middleware)
@@ -404,7 +405,9 @@ async fn unblock_ip(
     Ok(Json(serde_json::json!({"unblocked": body.ip})))
 }
 
-/// Returns PPLNS shares with optional time filtering and limit.
+/// Returns PPLNS shares with optional time filtering and limit. The
+/// `start_time` and `end_time` query parameters are unix seconds; axum
+/// rejects non-numeric values with 400 before this handler runs.
 async fn pplns_shares(
     State(state): State<Arc<AppState>>,
     Query(query): Query<PplnsQuery>,
@@ -418,32 +421,16 @@ async fn pplns_shares(
         )));
     }
 
-    // Convert ISO 8601 strings to Unix timestamps
-    let start_time = match query.start_time.as_ref() {
-        Some(s) => match DateTime::parse_from_rfc3339(s) {
-            Ok(dt) => dt.timestamp() as u64,
-            Err(_) => {
-                return Err(ApiError::BadRequest(
-                    "Invalid start_time format, expected RFC 3339".into(),
-                ));
-            }
-        },
-        None => 0,
-    };
+    let start_time = query.start_time.unwrap_or(0);
 
-    let end_time = match query.end_time.as_ref() {
-        Some(s) => match DateTime::parse_from_rfc3339(s) {
-            Ok(dt) => dt.timestamp() as u64,
-            Err(_) => {
-                return Err(ApiError::BadRequest(
-                    "Invalid end_time format, expected RFC 3339".into(),
-                ));
-            }
-        },
+    let end_time = match query.end_time {
+        Some(unix_seconds) => unix_seconds,
         None => {
             // Default to current time
-            let now = chrono::Utc::now();
-            now.timestamp() as u64
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|error| ApiError::ServerError(error.to_string()))?
+                .as_secs()
         }
     };
 
@@ -827,8 +814,10 @@ mod tests {
 
         let query = Query(PplnsQuery {
             limit: None,
-            start_time: Some("2025-01-02T00:00:00Z".to_string()),
-            end_time: Some("2025-01-01T00:00:00Z".to_string()),
+            // 2025-01-02T00:00:00Z
+            start_time: Some(1_735_776_000),
+            // 2025-01-01T00:00:00Z
+            end_time: Some(1_735_689_600),
         });
 
         let result = pplns_shares(State(state), query).await;

@@ -14,7 +14,6 @@ use p2poolv2_lib::address_display::{DagEntryDisplay, ShareInfoDisplay};
 use p2poolv2_lib::store::Store;
 use p2poolv2_lib::store::dag_store::{DagEntry, MAX_UNCLES_DEPTH};
 use p2poolv2_lib::store::writer::StoreError;
-use p2poolv2_lib::utils::time_provider::format_timestamp;
 use serde::Serialize;
 use serde_json::Value;
 use std::error::Error;
@@ -332,12 +331,6 @@ fn short(s: &str, n: usize) -> &str {
     &s[..s.len().min(n)]
 }
 
-/// Format a unix timestamp as HH:MM:SS UTC.
-fn format_ts_hms(timestamp: u32) -> String {
-    let dt = chrono::DateTime::from_timestamp(timestamp as i64, 0).unwrap_or_default();
-    dt.format("%H:%M:%S").to_string()
-}
-
 /// Format compact target bits as an integer difficulty value.
 fn format_difficulty(bits: bitcoin::CompactTarget) -> String {
     let target = bitcoin::Target::from(bits);
@@ -366,10 +359,10 @@ fn print_shares_dot(shares: &[ShareInfo], graph_name: &str, network: Option<Netw
         let bitcoin_miner = short(&share.miner_bitcoin_address, 10);
         let miner = short_miner_address(&share.miner_address, network);
         let diff = format_difficulty(share.bits);
-        let ts = format_ts_hms(share.timestamp);
         let label = format!(
-            "{id}|h:{height}|{bitcoin_miner}|{miner}|{diff}|{ts}",
-            height = share.height
+            "{id}|h:{height}|{bitcoin_miner}|{miner}|{diff}|{timestamp}",
+            height = share.height,
+            timestamp = share.timestamp
         );
         println!("    \"{hash}\" [label=\"{label}\", fillcolor=\"#a8d5ba\"];");
     }
@@ -381,12 +374,14 @@ fn print_shares_dot(shares: &[ShareInfo], graph_name: &str, network: Option<Netw
             let id = short(&hash, 5);
             let bitcoin_miner = short(&uncle.miner_bitcoin_address, 10);
             let miner = short_miner_address(&uncle.miner_address, network);
-            let ts = format_ts_hms(uncle.timestamp);
             let height_str = uncle
                 .height
                 .map(|h| format!("h:{h}"))
                 .unwrap_or_else(|| "h:?".to_string());
-            let label = format!("{id}|{height_str}|{bitcoin_miner}|{miner}|{ts}");
+            let label = format!(
+                "{id}|{height_str}|{bitcoin_miner}|{miner}|{timestamp}",
+                timestamp = uncle.timestamp
+            );
             println!("    \"{hash}\" [label=\"{label}\", fillcolor=\"#f4a582\"];");
         }
     }
@@ -513,7 +508,8 @@ struct BitcoinHeaderOutput {
     version: i32,
     prev_blockhash: String,
     merkle_root: String,
-    time: String,
+    /// Unix seconds.
+    time: u32,
     bits: String,
     nonce: u32,
 }
@@ -531,7 +527,8 @@ struct ShareLookupOutput {
     miner_address: String,
     share_witness_root: String,
     bits: String,
-    time: String,
+    /// Unix seconds.
+    time: u32,
     bitcoin_header: BitcoinHeaderOutput,
     template_merkle_branches_count: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -572,7 +569,7 @@ fn build_share_output(
         version: bitcoin_header.version.to_consensus(),
         prev_blockhash: bitcoin_header.prev_blockhash.to_string(),
         merkle_root: bitcoin_header.merkle_root.to_string(),
-        time: format_timestamp(bitcoin_header.time as u64),
+        time: bitcoin_header.time,
         bits: format!("{:#x}", bitcoin_header.bits.to_consensus()),
         nonce: bitcoin_header.nonce,
     };
@@ -613,7 +610,7 @@ fn build_share_output(
         miner_address: miner_address_display(&share_header.miner_address, network),
         share_witness_root: share_header.coinbase_proof.share_witness_root.to_string(),
         bits: format!("{:#x}", share_header.bits.to_consensus()),
-        time: format_timestamp(share_header.time as u64),
+        time: share_header.time,
         bitcoin_header: bitcoin_header_output,
         template_merkle_branches_count,
         transactions: transaction_ids,
