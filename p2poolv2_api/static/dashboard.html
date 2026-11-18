@@ -301,6 +301,82 @@
               <p>No shares found.</p>
             </template>
           </article>
+
+          <article>
+            <header>
+              <h3>
+                Found Bitcoin Blocks
+                <small
+                  x-show="foundBlocksTotal > 0"
+                  x-text="'(' + foundBlocksTotal + ' total)'"
+                ></small>
+              </h3>
+            </header>
+
+            <template x-if="foundBlocksError">
+              <p
+                role="alert"
+                style="color: var(--pico-del-color)"
+                x-text="foundBlocksError"
+              ></p>
+            </template>
+
+            <template x-if="foundBlocks.length > 0">
+              <div class="overflow-auto">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Bitcoin Height</th>
+                      <th>Bitcoin Blockhash</th>
+                      <th>Bitcoin Address</th>
+                      <th>Share</th>
+                      <th>Time</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <template
+                      x-for="block in foundBlocks"
+                      :key="block.bitcoin_blockhash"
+                    >
+                      <tr>
+                        <td x-text="block.bitcoin_height"></td>
+                        <td>
+                          <template x-if="explorerBlockUrl(block.bitcoin_blockhash)">
+                            <a
+                              :href="explorerBlockUrl(block.bitcoin_blockhash)"
+                              target="_blank"
+                              rel="noopener"
+                              ><code
+                                x-text="formatBlockhash(block.bitcoin_blockhash)"
+                              ></code
+                            ></a>
+                          </template>
+                          <template x-if="!explorerBlockUrl(block.bitcoin_blockhash)">
+                            <code
+                              x-text="formatBlockhash(block.bitcoin_blockhash)"
+                            ></code>
+                          </template>
+                        </td>
+                        <td>
+                          <code
+                            x-text="formatAddress(block.miner_bitcoin_address)"
+                          ></code>
+                        </td>
+                        <td>
+                          <code x-text="formatHash(block.share_blockhash)"></code>
+                        </td>
+                        <td x-text="formatTimestamp(block.bitcoin_time)"></td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
+            </template>
+
+            <template x-if="foundBlocks.length === 0 && !foundBlocksError">
+              <p>No bitcoin blocks found yet.</p>
+            </template>
+          </article>
         </div>
       </template>
 

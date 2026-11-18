@@ -36,6 +36,7 @@ token suitable for the config file.
 - [GET /shares](#get-shares) -- Confirmed shares by height range
 - [GET /candidates](#get-candidates) -- Candidate shares by height range
 - [GET /share](#get-share) -- Look up a share by hash or height
+- [GET /found_blocks](#get-found_blocks) -- Bitcoin blocks found by the pool
 - [GET /share_headers](#get-share_headers) -- Raw share headers by height range
 - [GET /peers](#get-peers) -- Connected peers
 - [GET /pplns_shares](#get-pplns_shares) -- PPLNS accounting data
@@ -103,6 +104,31 @@ objects (each with `blockhash`, `prev_blockhash`, `miner_address`,
 Returns candidate (unconfirmed) shares and their uncle blockhashes for
 a height range. Same query parameters and response shape as `/shares`,
 but operates on the candidate chain.
+
+### GET /found_blocks
+
+Returns the most recent bitcoin blocks found by the pool, highest
+bitcoin height first. A block is recorded when the share carrying it
+is confirmed and is never removed, so the list can include blocks
+since orphaned on the bitcoin chain.
+
+**Query parameters:**
+
+| Parameter | Type     | Default | Description                                   |
+|-----------|----------|---------|-----------------------------------------------|
+| `num`     | `number` | 10      | Number of most recent found blocks (max 100)  |
+
+**Response fields:**
+
+| Field          | Type     | Description                                        |
+|----------------|----------|----------------------------------------------------|
+| `network`      | `string` | Bitcoin chain name as bitcoind spells it           |
+| `total`        | `number` | Total number of bitcoin blocks found by the pool   |
+| `found_blocks` | `array`  | List of found block objects                        |
+
+Each found block object contains: `bitcoin_height`,
+`bitcoin_blockhash`, `share_blockhash`, `bitcoin_time` (bitcoin header
+time, unix seconds) and `miner_bitcoin_address`.
 
 ### GET /share
 

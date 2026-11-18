@@ -51,6 +51,19 @@ function formatDifficulty(value) {
     return formatted + suffixes[tier];
 }
 
+// Block explorer base URLs keyed by the bitcoind chain name reported by
+// /found_blocks. Chains without a public explorer are left out.
+var EXPLORER_BASE_URLS = {
+    main: "https://mempool.space",
+    test: "https://mempool.space/testnet",
+    testnet4: "https://mempool.space/testnet4",
+    signet: "https://mempool.space/signet",
+    testnet5: "https://rbitcoin.space/testnet5",
+};
+
+// How often to refresh the found blocks list, in milliseconds.
+var FOUND_BLOCKS_REFRESH_INTERVAL_MS = 60000;
+
 function dashboard() {
     return {
         menuOpen: false,
@@ -67,6 +80,11 @@ function dashboard() {
         sharesError: "",
         sharesPage: 0,
         sharesPerPage: 10,
+        foundBlocks: [],
+        foundBlocksTotal: 0,
+        foundBlocksNetwork: "",
+        foundBlocksError: "",
+        foundBlocksTimer: null,
         selectedShare: null,
         selectedUncle: null,
         websocket: null,
@@ -84,6 +102,7 @@ function dashboard() {
                     this.authenticated = true;
                     this.checking = false;
                     this.fetchShares();
+                    this.startFoundBlocksRefresh();
                     this.connectWebSocket();
                     return;
                 }
@@ -122,6 +141,7 @@ function dashboard() {
                 this.authenticated = true;
                 this.password = "";
                 this.fetchShares();
+                this.startFoundBlocksRefresh();
                 this.connectWebSocket();
             } catch (err) {
                 this.error = "Connection failed: " + err.message;
@@ -241,6 +261,7 @@ function dashboard() {
                         this.credentials = "";
                         this.error = "Session expired. Please login again.";
                         this.closeWebSocket();
+                        this.stopFoundBlocksRefresh();
                         return;
                     }
                     this.chainError =
@@ -279,6 +300,58 @@ function dashboard() {
             }
         },
 
+        startFoundBlocksRefresh() {
+            this.stopFoundBlocksRefresh();
+            this.fetchFoundBlocks();
+            this.foundBlocksTimer = setInterval(
+                () => this.fetchFoundBlocks(),
+                FOUND_BLOCKS_REFRESH_INTERVAL_MS,
+            );
+        },
+
+        stopFoundBlocksRefresh() {
+            if (this.foundBlocksTimer) {
+                clearInterval(this.foundBlocksTimer);
+                this.foundBlocksTimer = null;
+            }
+        },
+
+        async fetchFoundBlocks() {
+            try {
+                var response = await fetch("/found_blocks?num=20", {
+                    headers: { Authorization: "Basic " + this.credentials },
+                });
+
+                if (!response.ok) {
+                    this.foundBlocksError =
+                        "Failed to fetch found blocks: " + response.status;
+                    return;
+                }
+
+                var data = await response.json();
+                this.foundBlocks = data.found_blocks;
+                this.foundBlocksTotal = data.total;
+                this.foundBlocksNetwork = data.network;
+                this.foundBlocksError = "";
+            } catch (err) {
+                this.foundBlocksError = "Connection failed: " + err.message;
+            }
+        },
+
+        explorerBlockUrl(blockhash) {
+            var base = EXPLORER_BASE_URLS[this.foundBlocksNetwork];
+            if (!base) return "";
+            return base + "/block/" + blockhash;
+        },
+
+        // Bitcoin blockhashes start with a long run of zeros, so show the
+        // head and the tail to keep blocks distinguishable.
+        formatBlockhash(hash) {
+            if (!hash) return "N/A";
+            if (hash.length <= 20) return hash;
+            return hash.substring(0, 8) + "..." + hash.slice(-8);
+        },
+
         formatHash(hash) {
             if (!hash) return "N/A";
             if (hash.length <= 12) return hash;
@@ -311,6 +384,11 @@ function dashboard() {
 
         logout() {
             this.closeWebSocket();
+            this.stopFoundBlocksRefresh();
+            this.foundBlocks = [];
+            this.foundBlocksTotal = 0;
+            this.foundBlocksNetwork = "";
+            this.foundBlocksError = "";
             this.authenticated = false;
             this.credentials = "";
             this.chainInfo = null;
