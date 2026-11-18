@@ -6,6 +6,7 @@ pub mod accounting;
 pub use p2poolv2_wallet as address;
 pub mod auth;
 pub mod command;
+pub mod forks;
 pub use p2poolv2_config as config;
 pub mod address_display;
 pub mod logging;

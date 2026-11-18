@@ -780,8 +780,8 @@ mod tests {
     use super::P2PoolBehaviourEvent;
     use super::dns_or_tcp_transport;
     use crate::config::{
-        ApiConfig, Chain, Config, ElectrumConfig, LoggingConfig, NetworkConfig, StoreConfig,
-        StratumConfig,
+        ApiConfig, Chain, Config, ElectrumConfig, ForksConfig, LoggingConfig, NetworkConfig,
+        StoreConfig, StratumConfig,
     };
     use crate::monitoring_events::create_monitoring_event_channel;
     use crate::node::Node;
@@ -858,6 +858,7 @@ mod tests {
                 cors_allowed: false,
             },
             electrum: ElectrumConfig::default(),
+            forks: ForksConfig::default(),
         };
         config.network = network_config;
 
@@ -972,6 +973,7 @@ mod tests {
                 cors_allowed: false,
             },
             electrum: ElectrumConfig::default(),
+            forks: ForksConfig::default(),
         }
     }
 

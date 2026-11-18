@@ -122,3 +122,11 @@ port = 46884
 # hostname = "127.0.0.1"
 # port = 50001
 # max_connections = 64
+
+# Share chain fork activation heights. Each network has defaults compiled
+# into the node; a value here overrides the default for this node only. Every
+# node on a network must use the same heights or the network splits, so leave
+# this section out unless you run a private or test network. The node logs a
+# warning for every override.
+# [forks]
+# capped_coinbase_height = 60000
