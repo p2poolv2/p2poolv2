@@ -604,6 +604,23 @@ pub struct Config {
     pub api: ApiConfig,
     #[serde(default)]
     pub electrum: ElectrumConfig,
+    #[serde(default)]
+    pub forks: ForksConfig,
+}
+
+/// Optional overrides of the share chain fork activation heights.
+///
+/// The defaults for each network live in code, in `p2poolv2_lib::forks`. A
+/// value set here replaces that default for this node only. Every node on a
+/// network must use the same heights, or nodes disagree on share validity and
+/// the network splits, so the node logs a warning for each override. Leave
+/// the `[forks]` section out to use the defaults.
+#[derive(Debug, Deserialize, Clone, Default, PartialEq, Eq)]
+pub struct ForksConfig {
+    /// Share chain height from which the coinbase carries at most a fixed
+    /// number of miner outputs, paid by the raffled tail split.
+    #[serde(default)]
+    pub capped_coinbase_height: Option<u32>,
 }
 
 #[allow(dead_code)]
@@ -1010,6 +1027,37 @@ mod tests {
         assert_eq!(electrum.hostname, "127.0.0.2");
         assert_eq!(electrum.port, 50101);
         assert_eq!(electrum.max_connections, 8);
+    }
+
+    /// The sample config leaves `[forks]` commented out, so the node uses the
+    /// fork heights compiled in for its network.
+    #[test]
+    fn forks_default_to_no_overrides_when_section_absent() {
+        let config = Config::load("../config.sample.toml").unwrap();
+        assert_eq!(config.forks, ForksConfig::default());
+        assert_eq!(config.forks.capped_coinbase_height, None);
+    }
+
+    #[test]
+    fn forks_section_values_are_parsed() {
+        let forks: ForksConfig = config::Config::builder()
+            .add_source(config::File::from_str(
+                "capped_coinbase_height = 1234\n",
+                config::FileFormat::Toml,
+            ))
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+        assert_eq!(forks.capped_coinbase_height, Some(1234));
+    }
+
+    #[test]
+    fn env_override_sets_capped_coinbase_height() {
+        with_var("P2POOL_FORKS__CAPPED_COINBASE_HEIGHT", Some("4321"), || {
+            let config = Config::load("../config.sample.toml").unwrap();
+            assert_eq!(config.forks.capped_coinbase_height, Some(4321));
+        });
     }
 
     #[test]

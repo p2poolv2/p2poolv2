@@ -44,6 +44,9 @@ Read `docs/architecture/` when working in the relevant area:
 - `metrics.md` -- Prometheus exposition, metric sources, Grafana panels
 - `address-format.md` -- share chain address encoding, parser rules,
   test vectors, and how a miner supplies one over stratum
+- `forks.md` -- consensus changes activated at a share chain height:
+  per-network fork files, config overrides with a warning, how to add a
+  fork
 - `mine-on-bitcoin-chain.md` -- bitcoin prevhash handling: share
   messages carry bitcoin headers (outside the share hash), and a share is
   paid only if its bitcoin prev is within one block of the paying share's

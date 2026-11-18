@@ -19,6 +19,7 @@ use p2poolv2_lib::accounting::payout::build_payout_for_mode;
 use p2poolv2_lib::accounting::payout::simple_pplns::share_worker::PplnsShareWorker;
 use p2poolv2_lib::accounting::stats::metrics;
 use p2poolv2_lib::config::Config;
+use p2poolv2_lib::forks::build_fork_schedule;
 use p2poolv2_lib::monitoring_events::create_monitoring_event_channel;
 use p2poolv2_lib::node::actor::NodeHandle;
 use p2poolv2_lib::pool_difficulty::PoolDifficulty;
@@ -257,6 +258,7 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
 
     let stratum_config = config.stratum.clone().parse().unwrap();
     let network = stratum_config.network();
+    build_fork_schedule(stratum_config.chain, &config.forks);
     let bitcoinrpc_config = config.bitcoinrpc.clone();
 
     let (stratum_shutdown_tx, stratum_shutdown_rx) = tokio::sync::oneshot::channel();
