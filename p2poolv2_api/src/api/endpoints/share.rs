@@ -13,7 +13,6 @@ use p2poolv2_lib::address::witness_program_codec::to_address_string;
 use p2poolv2_lib::shares::chain::chain_store_handle::ChainStoreHandle;
 use p2poolv2_lib::store::dag_store::MAX_UNCLES_DEPTH;
 use p2poolv2_lib::store::writer::StoreError;
-use p2poolv2_lib::utils::time_provider::format_timestamp;
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -36,7 +35,8 @@ pub struct BitcoinHeaderOutput {
     pub version: i32,
     pub prev_blockhash: String,
     pub merkle_root: String,
-    pub time: String,
+    /// Unix seconds.
+    pub time: u32,
     pub bits: String,
     pub nonce: u32,
 }
@@ -55,7 +55,8 @@ pub struct ShareLookupOutput {
     pub miner_address: String,
     pub share_witness_root: String,
     pub bits: String,
-    pub time: String,
+    /// Unix seconds.
+    pub time: u32,
     pub bitcoin_header: BitcoinHeaderOutput,
     pub template_merkle_branches_count: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -112,7 +113,7 @@ fn build_share_output(
         version: bitcoin_header.version.to_consensus(),
         prev_blockhash: bitcoin_header.prev_blockhash.to_string(),
         merkle_root: bitcoin_header.merkle_root.to_string(),
-        time: format_timestamp(bitcoin_header.time as u64),
+        time: bitcoin_header.time,
         bits: format!("{:#x}", bitcoin_header.bits.to_consensus()),
         nonce: bitcoin_header.nonce,
     };
@@ -159,7 +160,7 @@ fn build_share_output(
         miner_address: to_address_string(&share_header.miner_address, network),
         share_witness_root: share_header.coinbase_proof.share_witness_root.to_string(),
         bits: format!("{:#x}", share_header.bits.to_consensus()),
-        time: format_timestamp(share_header.time as u64),
+        time: share_header.time,
         bitcoin_header: bitcoin_header_output,
         template_merkle_branches_count,
         transactions: transaction_ids,

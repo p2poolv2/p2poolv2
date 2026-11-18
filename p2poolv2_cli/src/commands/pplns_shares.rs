@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use crate::commands::api_client::ApiClient;
-use chrono::DateTime;
 use p2poolv2_lib::config::ApiConfig;
 use std::error::Error;
 
@@ -19,17 +18,11 @@ pub async fn execute(
     let mut path = format!("/pplns_shares?limit={limit}");
 
     if let Some(timestamp) = start_time {
-        let rfc3339 = DateTime::from_timestamp(timestamp as i64, 0)
-            .ok_or_else(|| format!("Invalid start_time timestamp: {timestamp}"))?
-            .to_rfc3339();
-        path.push_str(&format!("&start_time={rfc3339}"));
+        path.push_str(&format!("&start_time={timestamp}"));
     }
 
     if let Some(timestamp) = end_time {
-        let rfc3339 = DateTime::from_timestamp(timestamp as i64, 0)
-            .ok_or_else(|| format!("Invalid end_time timestamp: {timestamp}"))?
-            .to_rfc3339();
-        path.push_str(&format!("&end_time={rfc3339}"));
+        path.push_str(&format!("&end_time={timestamp}"));
     }
 
     let response: serde_json::Value = api_client.get_json(&path).await?;
@@ -77,13 +70,15 @@ mod tests {
 
         Mock::given(method("GET"))
             .and(path("/pplns_shares"))
+            .and(query_param("limit", "10"))
+            .and(query_param("start_time", "1700000000"))
+            .and(query_param("end_time", "1700100000"))
             .respond_with(ResponseTemplate::new(200).set_body_raw(r#"[]"#, "application/json"))
             .expect(1)
             .mount(&mock_server)
             .await;
 
         let api_config = make_api_config(mock_server.address().port());
-        // 1700000000 -> 2023-11-14T22:13:20+00:00
         let result = execute(&api_config, 10, Some(1_700_000_000), Some(1_700_100_000)).await;
         assert!(result.is_ok());
     }

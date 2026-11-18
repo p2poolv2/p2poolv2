@@ -118,20 +118,26 @@ Look up a single share by blockhash or by height.
 
 **Response:** JSON array of share detail objects. Each object includes:
 
-| Field                       | Type            | Description                               |
-|-----------------------------|-----------------|-------------------------------------------|
-| `blockhash`                 | `string`        | Share blockhash                           |
-| `height`                    | `number\|null`  | Share height                              |
-| `status`                    | `string`        | Validation status of the share            |
-| `parent`                    | `string`        | Parent share blockhash                    |
-| `uncles`                    | `array`         | Uncle blockhashes                         |
-| `miner_address`             | `string`        | Miner bitcoin address                     |
-| `merkle_root`               | `string`        | Share merkle root                         |
-| `bits`                      | `string`        | Compact target (hex)                      |
-| `time`                      | `string`        | Human-readable timestamp                  |
-| `bitcoin_header`            | `object`        | Embedded Bitcoin block header             |
-| `template_merkle_branches_count` | `number`   | Depth of the template merkle branch path  |
-| `transactions`              | `array\|null`   | Transaction IDs (only when `full=true`)   |
+| Field                            | Type           | Description                                                        |
+|----------------------------------|----------------|--------------------------------------------------------------------|
+| `blockhash`                      | `string`       | Share blockhash                                                    |
+| `height`                         | `number\|null` | Share height                                                       |
+| `validation_status`              | `string`       | `Pending`, `HeaderValid`, `Invalid`, `BlockValid` or `Unknown`     |
+| `chain`                          | `string`       | `None`, `Candidate`, `Confirmed` or `Unknown`                      |
+| `parent`                         | `string`       | Parent share blockhash                                             |
+| `uncles`                         | `array`        | Uncle blockhashes                                                  |
+| `miner_bitcoin_address`          | `string`       | Bitcoin address receiving the miner's PPLNS payout                 |
+| `miner_address`                  | `string`       | Share chain address owning the share coinbase output               |
+| `share_witness_root`             | `string`       | Share witness root committed in the coinbase proof                 |
+| `bits`                           | `string`       | Compact share target (hex)                                         |
+| `time`                           | `number`       | Share time, unix seconds                                           |
+| `bitcoin_header`                 | `object`       | Embedded bitcoin block header (see below)                          |
+| `template_merkle_branches_count` | `number`       | Depth of the template merkle branch path                           |
+| `transactions`                   | `array`        | Transaction IDs; only present when `full=true` and not pruned      |
+| `pruned`                         | `boolean`      | Only present, as `true`, when `full=true` and the body was pruned  |
+
+`bitcoin_header` contains `block_hash`, `version`, `prev_blockhash`,
+`merkle_root`, `time` (unix seconds), `bits` (hex) and `nonce`.
 
 ### GET /share_headers
 
@@ -175,9 +181,11 @@ time filtering.
 
 | Parameter    | Type     | Default       | Description                                  |
 |--------------|----------|---------------|----------------------------------------------|
-| `limit`      | `number` | 100           | Max shares to return (1-1000)                |
-| `start_time` | `string` | epoch (0)     | RFC 3339 timestamp for range start           |
-| `end_time`   | `string` | current time  | RFC 3339 timestamp for range end             |
+| `limit`      | `number` | 100           | Max shares to return (1-100)                 |
+| `start_time` | `number` | epoch (0)     | Unix seconds for range start                 |
+| `end_time`   | `number` | current time  | Unix seconds for range end                   |
+
+Example: `/pplns_shares?start_time=1760730000&end_time=1760730600&limit=10`
 
 ### WebSocket /ws
 

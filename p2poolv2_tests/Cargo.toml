@@ -37,5 +37,4 @@ tracing = { workspace = true }
 libp2p = { workspace = true }
 reqwest = { workspace = true, features = ["json", "blocking"] }
 bitcoindrpc = { workspace = true, features = ["test-utils"] }
-chrono.workspace = true
 test-log = { workspace = true }

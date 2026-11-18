@@ -11,6 +11,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Testnet5 DNS seed `seed.p2pool.testnet5.roose.io`.
 
+### Changed
+
+- The `/pplns_shares` API endpoint takes `start_time` and `end_time` as unix
+  seconds instead of RFC 3339 strings, e.g.
+  `/pplns_shares?start_time=1760730000&end_time=1760730600`. Clients sending
+  RFC 3339 strings now get 400 Bad Request.
+- The `/share` API endpoint returns `time` and `bitcoin_header.time` as unix
+  seconds instead of a formatted UTC string, matching `/shares` and the
+  WebSocket events.
+- The CLI share lookup prints `time` and `bitcoin_header.time` as unix
+  seconds instead of a formatted UTC string, and `shares --dot` and
+  `candidates --dot` labels show unix seconds instead of `HH:MM:SS`.
+
+### Removed
+
+- The `chrono` dependency, which is unmaintained (RUSTSEC-2026-0543).
+
 ## [v0.18.0] - 2026-11-14
 
 This release moves testnet5 from the rehearsal chain to the final BIP 95

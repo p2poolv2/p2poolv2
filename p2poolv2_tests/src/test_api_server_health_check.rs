@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use base64::Engine;
-use chrono::{TimeZone, Utc};
 use p2poolv2_api::api::error::ApiError;
 use p2poolv2_api::start_api_server;
 use p2poolv2_lib::accounting::{
@@ -261,16 +260,10 @@ async fn test_pplns_shares_endpoint_get_all() -> Result<(), ApiError> {
         .await
         .map_err(|e| ApiError::ServerError(e.to_string()))?;
 
-    let share1_timestamp = Utc
-        .with_ymd_and_hms(2025, 10, 17, 19, 40, 0)
-        .single()
-        .unwrap()
-        .timestamp() as u64;
-    let share2_timestamp = Utc
-        .with_ymd_and_hms(2025, 10, 17, 19, 50, 0)
-        .single()
-        .unwrap()
-        .timestamp() as u64;
+    // 2025-10-17T19:40:00Z
+    let share1_timestamp: u64 = 1_760_730_000;
+    // 2025-10-17T19:50:00Z
+    let share2_timestamp: u64 = 1_760_730_600;
 
     let shares = vec![
         SimplePplnsShare::new(
@@ -304,13 +297,15 @@ async fn test_pplns_shares_endpoint_get_all() -> Result<(), ApiError> {
 
     let client = Client::new();
 
-    let start_iso = "2025-10-17T19:39:59Z";
-    let end_iso = "2025-10-17T19:55:00Z";
+    // 2025-10-17T19:39:59Z
+    let start_time: u64 = 1_760_729_999;
+    // 2025-10-17T19:55:00Z
+    let end_time: u64 = 1_760_730_900;
 
     // Test: Get all shares
     let response = client
         .get(format!(
-            "http://127.0.0.1:{actual_port}/pplns_shares?start_time={start_iso}&end_time={end_iso}&limit=10",
+            "http://127.0.0.1:{actual_port}/pplns_shares?start_time={start_time}&end_time={end_time}&limit=10",
         ))
         .send()
         .await
@@ -375,16 +370,10 @@ async fn test_pplns_shares_endpoint_limit() -> Result<(), ApiError> {
         .await
         .map_err(|e| ApiError::ServerError(e.to_string()))?;
 
-    let t1 = Utc
-        .with_ymd_and_hms(2025, 10, 17, 19, 40, 0)
-        .single()
-        .unwrap()
-        .timestamp() as u64;
-    let t2 = Utc
-        .with_ymd_and_hms(2025, 10, 17, 19, 50, 0)
-        .single()
-        .unwrap()
-        .timestamp() as u64;
+    // 2025-10-17T19:40:00Z
+    let t1: u64 = 1_760_730_000;
+    // 2025-10-17T19:50:00Z
+    let t2: u64 = 1_760_730_600;
 
     let shares = vec![
         SimplePplnsShare::new(
@@ -484,16 +473,10 @@ async fn test_pplns_shares_endpoint_time_filter() -> Result<(), ApiError> {
         .await
         .map_err(|e| ApiError::ServerError(e.to_string()))?;
 
-    let share1_timestamp = Utc
-        .with_ymd_and_hms(2025, 10, 17, 19, 40, 0)
-        .single()
-        .unwrap()
-        .timestamp() as u64;
-    let share2_timestamp = Utc
-        .with_ymd_and_hms(2025, 10, 17, 19, 50, 0)
-        .single()
-        .unwrap()
-        .timestamp() as u64;
+    // 2025-10-17T19:40:00Z
+    let share1_timestamp: u64 = 1_760_730_000;
+    // 2025-10-17T19:50:00Z
+    let share2_timestamp: u64 = 1_760_730_600;
 
     let shares = vec![
         SimplePplnsShare::new(
@@ -530,7 +513,8 @@ async fn test_pplns_shares_endpoint_time_filter() -> Result<(), ApiError> {
     // Test: Time filtering
     let response = client
         .get(format!(
-            "http://127.0.0.1:{actual_port}/pplns_shares?start_time=2025-10-17T19:40:01Z&end_time=2025-10-17T19:50:00Z",
+            "http://127.0.0.1:{actual_port}/pplns_shares?start_time={}&end_time={share2_timestamp}",
+            share1_timestamp + 1
         ))
         .send()
         .await

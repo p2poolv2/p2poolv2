@@ -26,7 +26,6 @@ sha2 = { workspace = true }
 hex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-chrono = { workspace = true }
 subtle = "2"
 tower-http = { version = "0.7", features = ["fs", "cors"] }
 
