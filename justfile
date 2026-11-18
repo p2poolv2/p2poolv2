@@ -97,6 +97,32 @@ preflight: clippy
 deny:
     cargo deny check licenses bans sources
 
+# Every active key in the sample configs has a type comment, and the two samples' comments are identical
+check-configs:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for file in config.sample.toml config-docker.sample.toml; do
+        awk '
+            /^#/ && /^\#[[:space:]]*\[/ { block = ""; next }
+            /^#/ && /^#[[:space:]]*[A-Za-z_][A-Za-z_0-9]* =/ {
+                if (block !~ /\(/) { printf "Missing comment for: %s\n", $2; bad = 1 }
+                block = ""; next
+            }
+            /^#/ { block = block $0 "\n"; next }
+            /^[A-Za-z_][A-Za-z_0-9]* =/ {
+                if (block !~ /\(/) { printf "Missing comment for: %s\n", $1; bad = 1 }
+                block = ""; next
+            }
+            /^\[/ { block = ""; next }
+            { block = "" }
+            END { if (bad) exit 1 }
+        ' "$file"
+    done
+    diff <(grep -E '^\s*#' config.sample.toml) <(grep -E '^\s*#' config-docker.sample.toml) >/dev/null || {
+        echo "Error: *sample.toml files diverge"; exit 1
+    }
+    echo "sample configs OK"
+
 # Check dependencies against the RustSec advisory database. Informational: the
 # CI job for this is non-blocking, because a newly published advisory should not
 # stop an unrelated merge.
