@@ -193,7 +193,13 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
     let sig_handle = setup_signal_handler(exit_sender.clone());
 
     let genesis = ShareBlock::build_genesis_for_network(config.stratum.chain).unwrap();
-    let store = Arc::new(Store::new(config.store.path.clone(), false).unwrap());
+    let store = match Store::new(config.store.path.clone(), false) {
+        Ok(store) => Arc::new(store),
+        Err(error) => {
+            error!("Failed to open store at {}: {error}", config.store.path);
+            return Err(ExitCode::FAILURE);
+        }
+    };
 
     let (write_tx, write_rx) = write_channel();
     let store_writer = StoreWriter::new(store.clone(), write_rx);

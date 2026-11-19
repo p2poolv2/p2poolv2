@@ -4,14 +4,18 @@
 
 //! Database maintenance commands that operate directly on the RocksDB store.
 //!
-//! These commands require `--db-path` and open the store in read-write mode.
-//! The node must be stopped before running these commands.
+//! These commands require `--db-path`. Commands that change the store open
+//! it in read-write mode, which also migrates it to the current schema
+//! version; `version` opens it read-only. The node must be stopped before
+//! running these commands.
 
 use super::DbCommands;
+use super::db_query::open_store;
 use bitcoin::BlockHash;
 use p2poolv2_lib::store::Store;
 use p2poolv2_lib::store::block_tx_metadata::{ChainMembership, Status};
 use p2poolv2_lib::store::dag_store::MAX_BLOCKS_PER_HEIGHT;
+use p2poolv2_lib::store::migrations::{CURRENT_SCHEMA_VERSION, StoredSchemaVersion};
 use p2poolv2_lib::store::writer::StoreError;
 use std::error::Error;
 
@@ -23,10 +27,24 @@ fn open_store_readwrite(db_path: &str) -> Result<Store, Box<dyn Error>> {
 
 /// Dispatch a db subcommand.
 pub fn execute(command: &DbCommands, db_path: &str) -> Result<(), Box<dyn Error>> {
-    let store = open_store_readwrite(db_path)?;
     match command {
-        DbCommands::CleanupDenseHeights => cleanup_dense_heights(&store),
+        DbCommands::CleanupDenseHeights => cleanup_dense_heights(&open_store_readwrite(db_path)?),
+        DbCommands::Version => print_schema_version(&open_store(db_path)?),
     }
+}
+
+/// Print the store's schema version next to the one this binary uses.
+///
+/// The store is opened read-only, which fails if store version
+/// doesn't match version in code. So a successful open prints
+/// matching versions or an empty store.
+fn print_schema_version(store: &Store) -> Result<(), Box<dyn Error>> {
+    match store.schema_version()? {
+        StoredSchemaVersion::Version(version) => println!("Store schema version: {version}"),
+        StoredSchemaVersion::Fresh => println!("Store schema version: none (empty store)"),
+    }
+    println!("Binary schema version: {CURRENT_SCHEMA_VERSION}");
+    Ok(())
 }
 
 /// Whether any block that references `blockhash` as an uncle is still one the
