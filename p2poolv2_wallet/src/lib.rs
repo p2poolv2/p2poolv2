@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! Sharechain addresses.
+//! Sharechain addresses and persistent descriptor wallets.
 //!
 //! A share chain address identifies the owner of a share coinbase output. It
 //! is deliberately not a bitcoin address: shares are traded for bitcoin UTXOs,
@@ -31,9 +31,6 @@
 //!   path spend on each chain with no HTLC script and no preimage published.
 //!   Witness version 0 would force HTLC scripts, and therefore P2WSH and 32
 //!   byte programs, so it does not even avoid the wider format.
-//! * A single output type keeps a single swap protocol. Supporting both would
-//!   split the share chain into shares that trade via adaptor signatures and
-//!   shares that need HTLCs, and every downstream tool would carry both paths.
 //! * Ark is taproot only.
 //!
 //! That restriction lives in [`Address::from_witness_program`], not in the
@@ -71,11 +68,13 @@
 //! included, will decode a share address quite happily. Any code deciding
 //! whether a string is a bitcoin address must check the HRP, not merely that it
 //! parses as segwit.
-//!
-//! This module never generates, stores or handles a private key. The node only
-//! needs the address to build a share coinbase output.
 
+#[cfg(feature = "wallet")]
+pub mod wallet;
 pub mod witness_program_codec;
+
+#[cfg(feature = "wallet")]
+pub use wallet::{ChainIdentity, Keychain, Wallet, WalletError};
 
 use bitcoin::bech32::primitives::decode::{PaddingError, SegwitHrpstringError};
 use bitcoin::bech32::{Hrp, segwit};
