@@ -69,7 +69,7 @@ pub async fn handle_share_block(
     }
 
     // If new block not in store, run minimal PoW check for dos prevention
-    if let Err(validation_error) = share_validator.validate_share_header(&share_block.header) {
+    if let Err(validation_error) = share_validator.validate_header_on_arrival(&share_block.header) {
         warn!("Rejecting share block {block_hash} with invalid header: {validation_error}");
         return Err(format!("Invalid share header: {validation_error}").into());
     }
@@ -179,7 +179,7 @@ mod tests {
 
         let mut mock_validator = MockDefaultShareValidator::default();
         mock_validator
-            .expect_validate_share_header()
+            .expect_validate_header_on_arrival()
             .returning(|_| Ok(()));
         mock_validator
             .expect_validate_coinbase_proof()
@@ -334,7 +334,7 @@ mod tests {
 
         let mut mock_validator = MockDefaultShareValidator::default();
         mock_validator
-            .expect_validate_share_header()
+            .expect_validate_header_on_arrival()
             .returning(|_| {
                 Err(ValidationError::consensus(
                     "Insufficient work: block hash does not meet share target",
@@ -407,7 +407,7 @@ mod tests {
 
         let mut mock_validator = MockDefaultShareValidator::default();
         mock_validator
-            .expect_validate_share_header()
+            .expect_validate_header_on_arrival()
             .returning(|_| Ok(()));
         mock_validator
             .expect_validate_coinbase_proof()
@@ -471,7 +471,7 @@ mod tests {
 
         let mut mock_validator = MockDefaultShareValidator::default();
         mock_validator
-            .expect_validate_share_header()
+            .expect_validate_header_on_arrival()
             .returning(|_| Ok(()));
         mock_validator
             .expect_validate_coinbase_proof()
@@ -526,7 +526,7 @@ mod tests {
 
         let mut mock_validator = MockDefaultShareValidator::default();
         mock_validator
-            .expect_validate_share_header()
+            .expect_validate_header_on_arrival()
             .returning(|_| Ok(()));
         mock_validator
             .expect_validate_coinbase_proof()
