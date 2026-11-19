@@ -19,6 +19,7 @@ pub mod block_tx_metadata;
 pub mod column_families;
 pub mod dag_store;
 pub mod found_block;
+pub mod migrations;
 pub mod organise;
 mod pplns_shares;
 pub mod prune_blocks;
@@ -124,7 +125,13 @@ impl Store {
         opts
     }
 
-    /// Create a new share store
+    /// Open the share store at `path`, creating it if missing.
+    ///
+    /// A writable open brings the store to the current schema version first,
+    /// running any pending migrations (`migrations::ensure_current`). A
+    /// read-only open cannot migrate, so it fails unless the store is already
+    /// at the current version. Either way, no caller ever sees a store laid
+    /// out for another version.
     pub fn new(path: String, read_only: bool) -> Result<Self, StoreError> {
         // Point-lookup CFs get bloom filters to speed up existence checks
         // and reject negative lookups without disk I/O.
@@ -236,6 +243,11 @@ impl Store {
         } else {
             DB::open_cf_descriptors(&db_options, path.clone(), cfs)?
         };
+        if read_only {
+            migrations::check_current(&db)?;
+        } else {
+            migrations::ensure_current(&db)?;
+        }
         let store = Self {
             path,
             db,
@@ -250,6 +262,12 @@ impl Store {
     /// An associated function as batch is not obtained from db
     pub fn get_write_batch() -> rocksdb::WriteBatch {
         rocksdb::WriteBatch::default()
+    }
+
+    /// The store's schema version. `Store::new` has already brought it to
+    /// `migrations::CURRENT_SCHEMA_VERSION`, unless the store is fresh.
+    pub fn schema_version(&self) -> Result<migrations::StoredSchemaVersion, StoreError> {
+        migrations::read_stored_schema_version(&self.db)
     }
 
     /// Commit a write batch earlier obtained using get batch

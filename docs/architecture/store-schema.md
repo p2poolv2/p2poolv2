@@ -313,11 +313,14 @@ Secondary index for looking up users by Bitcoin address.
 
 ### 13. `Metadata` - General Metadata
 
-Reserved for general metadata storage.
+Store-wide values that belong to no block.
 
-| Key | Value |
-|-----|-------|
-| TBD | TBD   |
+| Key              | Value                              |
+|------------------|------------------------------------|
+| `schema_version` | store layout version, u32 big-endian |
+
+`schema_version` is written by `store::migrations` when a store is created
+or migrated. See `store-migrations.md`.
 
 ---
 

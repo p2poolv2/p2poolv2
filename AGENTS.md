@@ -36,6 +36,8 @@ Read `docs/architecture/` when working in the relevant area:
 - `async-flow.md` -- worker tasks, channel topology, backpressure
 - `store-schema.md` -- RocksDB column families, key encoding, merge ops
 - `store-architecture.md` -- read/write separation, StoreWriter thread
+- `store-migrations.md` -- schema version in the `Metadata` CF, automatic
+  migration in `Store::new`, one atomic batch per migration, how to add one
 - `pruning.md` -- two-zone validation, output expiry, and block body
   pruning (derived boundaries, pruner, reorg depth limit, decisions)
 - `payout-distribution.md` -- how a found block's coinbase is split:
