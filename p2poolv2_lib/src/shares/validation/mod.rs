@@ -262,13 +262,6 @@ pub fn check_pplns_zone(
 /// pool difficulty, and timestamps. Use `DefaultShareValidator` for
 /// the production implementation.
 pub trait ShareValidator {
-    /// Validate the share header with minimum difficulty checks only.
-    ///
-    /// Verifies uncle count and that the declared target meets the pool
-    /// minimum difficulty floor. Does not require parent lookup.
-    /// Full pool difficulty validation happens in validate_share_block.
-    fn validate_share_header(&self, share_header: &ShareHeader) -> Result<(), ValidationError>;
-
     /// Validate that the bitcoin header in the share header meets the pool difficulty.
     ///
     /// Also validates that the advertised bits in the share header match
@@ -329,7 +322,7 @@ pub trait ShareValidator {
     ///    of the previous 11 share-chain ancestors (median time past).
     /// 2. Share `header.time` must not be more than `MAX_FUTURE_TIME_SECS`
     ///    seconds ahead of the local clock. This is also checked on arrival
-    ///    by `validate_header_minimum_difficulty`; a failure here is
+    ///    by `validate_header_on_arrival`; a failure here is
     ///    `Recoverable` (only reachable if the clock moved backwards), never
     ///    a reason to mark the share Invalid.
     fn validate_timestamp(
@@ -367,21 +360,23 @@ pub trait ShareValidator {
         pplns_window: Arc<RwLock<PplnsWindow>>,
     ) -> Result<(), ValidationError>;
 
-    /// Validate a share header meets minimum pool difficulty without requiring parent.
+    /// Validate a share header when it arrives, before it is stored or relayed.
     ///
-    /// Checks uncle count, that header's meets the header's own
-    /// declared bits target, and that the declared target is no easier than
-    /// MAX_POOL_TARGET. This is the anti-spam gate for header sync and broadcast
-    /// validation -- cheap and requires no store lookups.
+    /// The gate every arriving header passes: per header at header sync, and
+    /// at the block admission gate in `handle_share_block`. Cheap, with no
+    /// parent or store lookups; full pool difficulty and chain-context
+    /// validation happen later, once the block is stored.
+    ///
+    /// Checks donation and fee, the miner address, uncle count, that header's
+    /// meets the header's own declared bits target, and that the declared
+    /// target is no easier than MAX_POOL_TARGET.
     ///
     /// Also refuses a header more than `MAX_FUTURE_TIME_SECS` ahead of the
     /// local clock, with a `Recoverable` error, so a far-future share is
     /// never stored or relayed and its descendants cannot be built on the
     /// easy ASERT target its time would give them.
-    fn validate_header_minimum_difficulty(
-        &self,
-        share_header: &ShareHeader,
-    ) -> Result<(), ValidationError>;
+    fn validate_header_on_arrival(&self, share_header: &ShareHeader)
+    -> Result<(), ValidationError>;
 
     /// Validate that the header's share commitment ends the coinbase of its
     /// bitcoin block, using the header's `CoinbaseProof` and `branch`, the
@@ -390,7 +385,7 @@ pub trait ShareValidator {
     /// This is what binds a header to its proof of work: without it one
     /// bitcoin header replays under unlimited share fields. It needs no store,
     /// body or PPLNS read, so it runs at the DoS gates beside
-    /// `validate_header_minimum_difficulty` -- header sync and block receipt
+    /// `validate_header_on_arrival` -- header sync and block receipt
     /// -- as well as in block validation.
     fn validate_coinbase_proof(
         &self,
@@ -409,7 +404,7 @@ pub trait ShareValidator {
     /// txid does not cover.
     ///
     /// Part of the ddos prevention gate alongside
-    /// `validate_header_minimum_difficulty` and `validate_block_size`: a block's
+    /// `validate_header_on_arrival` and `validate_block_size`: a block's
     /// identity is its header hash, so without this a peer can attach arbitrary
     /// transactions -- up to `BLOCK_TXS_SIZE_LIMIT` of them -- to a block whose
     /// hash says nothing about them, and have the result buffered and stored.
@@ -424,7 +419,7 @@ pub trait ShareValidator {
     /// The bitcoin coinbase counts because it is carried and buffered with
     /// the block, and a miner can make it as large as a message allows.
     ///
-    /// Part of the ddos prevention gate alongside `validate_header_minimum_difficulty`:
+    /// Part of the ddos prevention gate alongside `validate_header_on_arrival`:
     /// it reads only the block itself, so it can run before the block is
     /// buffered or stored. Without it the only size bound on an
     /// incoming block is the transport's `MAX_P2P_MESSAGE_SIZE`, letting one
@@ -1083,10 +1078,6 @@ impl DefaultShareValidator {
 }
 
 impl ShareValidator for DefaultShareValidator {
-    fn validate_share_header(&self, share_header: &ShareHeader) -> Result<(), ValidationError> {
-        self.validate_header_minimum_difficulty(share_header)
-    }
-
     fn validate_coinbase_proof(
         &self,
         share_header: &ShareHeader,
@@ -1242,7 +1233,7 @@ impl ShareValidator for DefaultShareValidator {
         Ok(())
     }
 
-    fn validate_header_minimum_difficulty(
+    fn validate_header_on_arrival(
         &self,
         share_header: &ShareHeader,
     ) -> Result<(), ValidationError> {
@@ -1489,11 +1480,6 @@ mockall::mock! {
     }
 
     impl ShareValidator for DefaultShareValidator {
-        fn validate_share_header(
-            &self,
-            share_header: &ShareHeader,
-        ) -> Result<(), ValidationError>;
-
         fn validate_with_pool_difficulty(
             &self,
             share_header: &ShareHeader,
@@ -1538,7 +1524,7 @@ mockall::mock! {
             pplns_window: Arc<RwLock<PplnsWindow>>,
         ) -> Result<(), ValidationError>;
 
-        fn validate_header_minimum_difficulty(
+        fn validate_header_on_arrival(
             &self,
             share_header: &ShareHeader,
         ) -> Result<(), ValidationError>;
@@ -1676,7 +1662,7 @@ mod tests {
     /// A far-future header is refused on arrival, before it can be stored or
     /// relayed, and the refusal is not a reason to mark it Invalid.
     #[test]
-    fn test_validate_header_minimum_difficulty_rejects_far_future_header() {
+    fn test_validate_header_on_arrival_rejects_far_future_header() {
         let header = TestShareBlockBuilder::new().build().header;
         let mut time_provider = TestTimeProvider::new(SystemTime::now());
         time_provider.set_since_epoch(u64::from(header.time) - (MAX_FUTURE_TIME_SECS + 1));
@@ -1685,9 +1671,7 @@ mod tests {
             Arc::new(time_provider),
         );
 
-        let error = validator
-            .validate_header_minimum_difficulty(&header)
-            .unwrap_err();
+        let error = validator.validate_header_on_arrival(&header).unwrap_err();
 
         assert_eq!(error.kind(), FailureKind::Recoverable);
         assert!(
@@ -2584,7 +2568,7 @@ mod tests {
     /// of work, so a bitcoin header replayed under another parent is rejected
     /// at the gate.
     ///
-    /// `validate_header_minimum_difficulty` reads only the uncle count, the
+    /// `validate_header_on_arrival` reads only the uncle count, the
     /// declared bits and `bitcoin_header.block_hash()`, so it cannot tell the
     /// two apart. `validate_coinbase_proof` rebuilds the commitment from the
     /// share fields and checks it ends the coinbase the bitcoin header commits
@@ -2719,12 +2703,12 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_share_header_fails_for_too_many_uncles() {
+    fn test_validate_header_on_arrival_rejects_too_many_uncles_in_fixture() {
         let test_data = load_share_headers_test_data();
         let header: ShareHeader =
             serde_json::from_value(test_data["too_many_uncles_header"].clone()).unwrap();
 
-        let error = validator().validate_share_header(&header).unwrap_err();
+        let error = validator().validate_header_on_arrival(&header).unwrap_err();
         assert!(error.to_string().contains("Too many uncles"));
     }
 
@@ -4770,13 +4754,11 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_header_minimum_difficulty_rejects_donation_above_maximum() {
+    fn test_validate_header_on_arrival_rejects_donation_above_maximum() {
         let mut header = TestShareBlockBuilder::new().build().header;
         header.donation = Some(10_001);
 
-        let error = validator()
-            .validate_header_minimum_difficulty(&header)
-            .unwrap_err();
+        let error = validator().validate_header_on_arrival(&header).unwrap_err();
 
         assert_eq!(error.kind(), FailureKind::Consensus);
         assert!(error.to_string().contains("donation"));
@@ -4784,13 +4766,11 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_header_minimum_difficulty_rejects_fee_above_maximum() {
+    fn test_validate_header_on_arrival_rejects_fee_above_maximum() {
         let mut header = TestShareBlockBuilder::new().build().header;
         header.fee = Some(10_001);
 
-        let error = validator()
-            .validate_header_minimum_difficulty(&header)
-            .unwrap_err();
+        let error = validator().validate_header_on_arrival(&header).unwrap_err();
 
         assert_eq!(error.kind(), FailureKind::Consensus);
         assert!(error.to_string().contains("fee"));
@@ -4798,14 +4778,12 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_header_minimum_difficulty_does_not_reject_maximum_cuts() {
+    fn test_validate_header_on_arrival_does_not_reject_maximum_cuts() {
         let mut header = TestShareBlockBuilder::new().build().header;
         header.donation = Some(10_000);
         header.fee = Some(10_000);
 
-        let error = validator()
-            .validate_header_minimum_difficulty(&header)
-            .unwrap_err();
+        let error = validator().validate_header_on_arrival(&header).unwrap_err();
 
         // The synthetic header still fails its target check, which shows the
         // cut check accepted exactly 100%.
@@ -4818,11 +4796,11 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_header_minimum_difficulty_rejects_easy_target() {
+    fn test_validate_header_on_arrival_rejects_easy_target() {
         let share = TestShareBlockBuilder::new().build();
         // Default test shares use 0x1b4188f5 (genesis max target) which is
         // easier than MAX_POOL_TARGET (0x1b384bd7)
-        let result = validator().validate_header_minimum_difficulty(&share.header);
+        let result = validator().validate_header_on_arrival(&share.header);
         assert!(result.is_err());
         assert!(
             result
@@ -4835,12 +4813,12 @@ mod tests {
     // Asserts PoW rejection, which the `sim` feature deliberately disables.
     #[cfg(not(feature = "sim"))]
     #[test]
-    fn test_validate_header_minimum_difficulty_rejects_invalid_pow() {
+    fn test_validate_header_on_arrival_rejects_invalid_pow() {
         let mut header = TestShareBlockBuilder::new().build().header;
         // Set bits to MAX_POOL_TARGET -- the bitcoin block hash from the
         // default test builder does not meet this target.
         header.bits = CompactTarget::from_consensus(MAX_POOL_TARGET);
-        let result = validator().validate_header_minimum_difficulty(&header);
+        let result = validator().validate_header_on_arrival(&header);
         assert!(result.is_err());
         assert!(
             result
@@ -4851,11 +4829,11 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_header_minimum_difficulty_rejects_too_many_uncles() {
+    fn test_validate_header_on_arrival_rejects_too_many_uncles() {
         let mut header = TestShareBlockBuilder::new().build().header;
         header.bits = CompactTarget::from_consensus(MAX_POOL_TARGET);
         header.uncles = vec![BlockHash::all_zeros(); MAX_UNCLES + 1];
-        let result = validator().validate_header_minimum_difficulty(&header);
+        let result = validator().validate_header_on_arrival(&header);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Too many uncles"),);
     }

@@ -357,7 +357,7 @@ fn validate_dag_connectivity_and_difficulty(
         HashMap::with_capacity(share_headers.len() + 1);
 
     for (position, header) in share_headers.iter().enumerate() {
-        share_validator.validate_header_minimum_difficulty(header)?;
+        share_validator.validate_header_on_arrival(header)?;
         share_validator.validate_coinbase_proof(header, header_batch.branch(position))?;
 
         let parent_hash = header.prev_share_blockhash;
@@ -659,7 +659,7 @@ mod tests {
 
     fn setup_minimum_difficulty_mock(mock_validator: &mut MockDefaultShareValidator) {
         mock_validator
-            .expect_validate_header_minimum_difficulty()
+            .expect_validate_header_on_arrival()
             .returning(|_| Ok(()));
         mock_validator
             .expect_validate_coinbase_proof()
@@ -732,7 +732,7 @@ mod tests {
 
         let mut mock_validator = MockDefaultShareValidator::default();
         mock_validator
-            .expect_validate_header_minimum_difficulty()
+            .expect_validate_header_on_arrival()
             .returning(|_| Ok(()));
         mock_validator
             .expect_validate_coinbase_proof()

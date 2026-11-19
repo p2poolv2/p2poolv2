@@ -668,11 +668,10 @@ derives a root whose header fails proof of work. `MAX_HEADERS_IN_RESPONSE`
 
 A share whose `time` is more than `MAX_FUTURE_TIME_SECS` (120 s) ahead of the
 local clock is refused when it arrives, by `check_not_too_far_in_future`
-inside `validate_header_minimum_difficulty`:
+inside `validate_header_on_arrival`:
 
 - at header sync, per header, before the batch is organised;
-- at the block admission gate in `handle_share_block`, via
-  `validate_share_header`, before buffering.
+- at the block admission gate in `handle_share_block`, before buffering.
 
 The refusal is `Recoverable`, never a reason to mark the share Invalid. The
 verdict depends on the local clock, so nodes whose clocks differ must not
