@@ -317,23 +317,41 @@ function dashboard() {
         },
 
         async fetchFoundBlocks() {
+            //* A response that arrives after logout or a re-login belongs to
+            //* a finished session, so it must not repopulate the list.
+            var requestCredentials = this.credentials;
+            var isStale = () =>
+                !this.authenticated || this.credentials !== requestCredentials;
+
             try {
                 var response = await fetch("/found_blocks?num=20", {
-                    headers: { Authorization: "Basic " + this.credentials },
+                    headers: { Authorization: "Basic " + requestCredentials },
                 });
 
+                if (isStale()) return;
+
                 if (!response.ok) {
+                    if (response.status === 401) {
+                        this.authenticated = false;
+                        this.credentials = "";
+                        this.error = "Session expired. Please login again.";
+                        this.closeWebSocket();
+                        this.stopFoundBlocksRefresh();
+                        return;
+                    }
                     this.foundBlocksError =
                         "Failed to fetch found blocks: " + response.status;
                     return;
                 }
 
                 var data = await response.json();
+                if (isStale()) return;
                 this.foundBlocks = data.found_blocks;
                 this.foundBlocksTotal = data.total;
                 this.foundBlocksNetwork = data.network;
                 this.foundBlocksError = "";
             } catch (err) {
+                if (isStale()) return;
                 this.foundBlocksError = "Connection failed: " + err.message;
             }
         },

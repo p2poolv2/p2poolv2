@@ -73,21 +73,19 @@ pub(crate) async fn found_blocks(
         )));
     }
 
-    let all_found_blocks = state
+    let (total, latest_found_blocks) = state
         .chain_store_handle
-        .get_found_blocks()
+        .get_latest_found_blocks(num as usize)
         .map_err(|error| ApiError::ServerError(format!("Failed to get found blocks: {error}")))?;
 
-    let found_blocks = all_found_blocks
+    let found_blocks = latest_found_blocks
         .iter()
-        .rev()
-        .take(num as usize)
         .map(FoundBlockResponse::from)
         .collect();
 
     Ok(Json(FoundBlocksResponse {
         network: state.app_config.chain.as_str(),
-        total: all_found_blocks.len(),
+        total,
         found_blocks,
     }))
 }
@@ -204,8 +202,19 @@ mod tests {
             .prev_share_blockhash(first_share.block_hash().to_string())
             .nonce(0xe9695793)
             .build();
-        second_share.header.bitcoin_header = genesis_block(Network::Regtest).header;
+        //* A distinct bitcoin header, so blockhash and time tell the
+        //* newest entry apart from the first. Nonce 0 at this time
+        //* meets the regtest target.
+        let mut second_bitcoin_header = genesis_block(Network::Regtest).header;
+        second_bitcoin_header.time += 600;
+        second_bitcoin_header.nonce = 0;
+        second_share.header.bitcoin_header = second_bitcoin_header;
         second_share.header.bitcoin_height = 101;
+        assert!(second_share.header.meets_bitcoin_difficulty());
+        assert_ne!(
+            second_bitcoin_header.block_hash(),
+            first_share.header.bitcoin_header.block_hash()
+        );
         state
             .chain_store_handle
             .add_share_block_and_organise_header(second_share.clone())

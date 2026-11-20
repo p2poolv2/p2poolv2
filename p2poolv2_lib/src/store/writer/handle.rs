@@ -176,6 +176,15 @@ impl StoreHandle {
         self.store.get_found_blocks()
     }
 
+    /// Get the total number of found bitcoin blocks and the `limit` most
+    /// recent ones, highest bitcoin height first.
+    pub fn get_latest_found_blocks(
+        &self,
+        limit: usize,
+    ) -> Result<(usize, Vec<FoundBlock>), StoreError> {
+        self.store.get_latest_found_blocks(limit)
+    }
+
     /// Get the confirmed blockhash at a specific height.
     pub fn get_confirmed_at_height(&self, height: u32) -> Result<BlockHash, StoreError> {
         self.store.get_confirmed_at_height(height)
@@ -428,6 +437,7 @@ mockall::mock! {
         pub fn get_chain_tip(&self) -> Result<BlockHash, StoreError>;
         pub fn get_total_work(&self) -> Result<Work, StoreError>;
         pub fn get_found_blocks(&self) -> Result<Vec<FoundBlock>, StoreError>;
+        pub fn get_latest_found_blocks(&self, limit: usize) -> Result<(usize, Vec<FoundBlock>), StoreError>;
         pub fn get_confirmed_at_height(&self, height: u32) -> Result<BlockHash, StoreError>;
         pub fn get_pplns_shares(&self) -> Vec<SimplePplnsShare>;
         pub fn get_pplns_shares_filtered(&self, limit: Option<usize>, start_time: Option<u64>, end_time: Option<u64>) -> Vec<SimplePplnsShare>;

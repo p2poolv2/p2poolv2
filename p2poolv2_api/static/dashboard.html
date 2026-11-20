@@ -336,7 +336,7 @@
                   <tbody>
                     <template
                       x-for="block in foundBlocks"
-                      :key="block.bitcoin_blockhash"
+                      :key="block.bitcoin_height + ':' + block.bitcoin_blockhash"
                     >
                       <tr>
                         <td x-text="block.bitcoin_height"></td>

@@ -148,6 +148,34 @@ impl Store {
         }
         Ok(found_blocks)
     }
+
+    /// Return the total number of found bitcoin blocks and the `limit`
+    /// most recent ones, highest bitcoin height first.
+    ///
+    /// Walks the keys from the end so only the returned entries are
+    /// decoded; the rest are counted without reading their values.
+    pub fn get_latest_found_blocks(
+        &self,
+        limit: usize,
+    ) -> Result<(usize, Vec<FoundBlock>), StoreError> {
+        let column_family = self.db.cf_handle(&ColumnFamily::FoundBlocks).unwrap();
+        let mut iterator = self.db.raw_iterator_cf(&column_family);
+        let mut latest_found_blocks = Vec::with_capacity(limit);
+        let mut total = 0;
+        iterator.seek_to_last();
+        while let Some(key) = iterator.key() {
+            if latest_found_blocks.len() < limit {
+                let value = iterator.value().ok_or_else(|| {
+                    StoreError::Serialization(format!("Found block value missing for {key:?}"))
+                })?;
+                latest_found_blocks.push(decode_found_block(key, value)?);
+            }
+            total += 1;
+            iterator.prev();
+        }
+        iterator.status()?;
+        Ok((total, latest_found_blocks))
+    }
 }
 
 /// Decode a FoundBlocks entry from its key and value bytes.
@@ -311,6 +339,64 @@ mod tests {
         let found_blocks = store.get_found_blocks().unwrap();
         assert_eq!(found_blocks.len(), 1);
         assert_eq!(found_blocks[0].share_blockhash, share.block_hash());
+    }
+
+    #[test]
+    fn test_get_latest_found_blocks_empty_store() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+
+        let (total, latest_found_blocks) = store.get_latest_found_blocks(10).unwrap();
+
+        assert_eq!(total, 0);
+        assert!(latest_found_blocks.is_empty());
+    }
+
+    #[test]
+    fn test_get_latest_found_blocks_returns_newest_first_and_counts_all() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
+        let mut batch = Store::get_write_batch();
+        store.setup_genesis(&genesis, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        //* Three confirmed shares carry bitcoin blocks at heights 100,
+        //* 101 and 102; the height prefix keeps their keys distinct.
+        let mut share1 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(genesis.block_hash().to_string())
+            .nonce(0xe9695792)
+            .build();
+        share1.header.bitcoin_header = genesis_block(bitcoin::Network::Regtest).header;
+        share1.header.bitcoin_height = 100;
+        store.push_to_confirmed_chain(&share1).unwrap();
+
+        let mut share2 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share1.block_hash().to_string())
+            .nonce(0xe9695793)
+            .build();
+        share2.header.bitcoin_header = genesis_block(bitcoin::Network::Regtest).header;
+        share2.header.bitcoin_height = 101;
+        store.push_to_confirmed_chain(&share2).unwrap();
+
+        let mut share3 = TestShareBlockBuilder::new()
+            .prev_share_blockhash(share2.block_hash().to_string())
+            .nonce(0xe9695794)
+            .build();
+        share3.header.bitcoin_header = genesis_block(bitcoin::Network::Regtest).header;
+        share3.header.bitcoin_height = 102;
+        store.push_to_confirmed_chain(&share3).unwrap();
+
+        let (total, latest_found_blocks) = store.get_latest_found_blocks(2).unwrap();
+
+        //* The total counts the undecoded oldest entry too; the list
+        //* holds only the two newest, highest height first.
+        assert_eq!(total, 3);
+        assert_eq!(latest_found_blocks.len(), 2);
+        assert_eq!(latest_found_blocks[0].bitcoin_height, 102);
+        assert_eq!(latest_found_blocks[0].share_blockhash, share3.block_hash());
+        assert_eq!(latest_found_blocks[1].bitcoin_height, 101);
+        assert_eq!(latest_found_blocks[1].share_blockhash, share2.block_hash());
     }
 
     #[test]
