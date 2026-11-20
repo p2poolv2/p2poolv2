@@ -192,6 +192,12 @@ height of the oldest coinbase ancestor in the output's spending chain.
 - Coinbase outputs: `coinbase_root_height = block_height`
 - Spending tx outputs: `coinbase_root_height = min(coinbase_root_height
   of all inputs)`
+- The coinbase is the transaction at index 0, by position. A
+  coinbase-shaped transaction at a later index is a copy of another
+  block's coinbase (a share can carry one before validation rejects it).
+  It writes no outputs, so it cannot change the height the block whose
+  coinbase it is records, whichever block arrives first. Every output
+  row is therefore a function of its txid, and rewriting it is harmless.
 
 Computed at write time in `add_sharechain_txs`. In-block spending
 chains (output created and spent within the same block) use a

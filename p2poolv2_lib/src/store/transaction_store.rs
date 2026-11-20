@@ -484,6 +484,15 @@ impl Store {
     /// `block_height` is used to set `coinbase_root_height` on outputs:
     /// coinbase outputs get the block height directly, spending tx
     /// outputs get the minimum coinbase_root_height across their inputs.
+    ///
+    /// The coinbase is `transactions[0]`, by position, and also
+    /// shape. A coinbase-shaped transaction at a later index is a
+    /// copy of another block's coinbase, which a share can carry
+    /// before validation rejects it; it writes no outputs, so it can
+    /// never change the `coinbase_root_height` for the original
+    /// coinbase.  With that rule in place every output row is a
+    /// function of its txid alone, so rewriting one never results in
+    /// root height of a previous tx being changed.
     pub(crate) fn add_sharechain_txs(
         &self,
         transactions: &[ShareTransaction],
@@ -498,7 +507,7 @@ impl Store {
         let mut batch_heights: HashMap<String, u32> =
             HashMap::with_capacity(transactions.len() * 2);
 
-        for tx in transactions {
+        for (position, tx) in transactions.iter().enumerate() {
             let txid = tx.compute_txid();
             let metadata = self.add_tx_metadata(txid, tx, false, batch)?;
             txs_metadata.push(metadata);
@@ -512,23 +521,26 @@ impl Store {
                 batch.put_cf::<&[u8], Vec<u8>>(&inputs_cf, input_key.as_ref(), serialized);
             }
 
-            let is_coinbase = tx.0.is_coinbase();
-            let coinbase_root_height = if is_coinbase {
-                block_height
-            } else {
-                self.min_coinbase_root_height_for_inputs(tx, &outputs_cf, &batch_heights)?
-            };
-
-            for (i, output) in tx.output.iter().enumerate() {
-                let output_key = outpoint_key(&txid, i as u32);
-                batch_heights.insert(output_key.clone(), coinbase_root_height);
-                let stored = StoredTxOut {
-                    tx_out: output.clone(),
-                    is_coinbase,
-                    coinbase_root_height,
+            let is_coinbase = position == 0 && tx.0.is_coinbase();
+            //* Write outputs, unless this is a coinbase-shaped copy after index 0
+            if position == 0 || !tx.0.is_coinbase() {
+                let coinbase_root_height = if is_coinbase {
+                    block_height
+                } else {
+                    self.min_coinbase_root_height_for_inputs(tx, &outputs_cf, &batch_heights)?
                 };
-                let serialized = consensus::serialize(&stored);
-                batch.put_cf::<&[u8], Vec<u8>>(&outputs_cf, output_key.as_ref(), serialized);
+
+                for (i, output) in tx.output.iter().enumerate() {
+                    let output_key = outpoint_key(&txid, i as u32);
+                    batch_heights.insert(output_key.clone(), coinbase_root_height);
+                    let stored = StoredTxOut {
+                        tx_out: output.clone(),
+                        is_coinbase,
+                        coinbase_root_height,
+                    };
+                    let serialized = consensus::serialize(&stored);
+                    batch.put_cf::<&[u8], Vec<u8>>(&outputs_cf, output_key.as_ref(), serialized);
+                }
             }
         }
         Ok(txs_metadata)
@@ -1248,7 +1260,7 @@ impl Store {
 mod tests {
     use super::*;
     use crate::store::block_tx_metadata::{BlockMetadata, ChainMembership, Status};
-    use crate::test_utils::TestShareBlockBuilder;
+    use crate::test_utils::{TestShareBlockBuilder, coinbase_outpoint, test_funding_transaction};
     use bitcoin::hashes::Hash;
     use bitcoin::pow::Work;
     use tempfile::tempdir;
@@ -1335,6 +1347,102 @@ mod tests {
 
         assert_eq!(transaction, block.transactions[0].0);
         assert_eq!(output_origins.len(), transaction.output.len());
+        assert_eq!(
+            output_origins[0],
+            OutputOrigin {
+                is_coinbase: true,
+                coinbase_root_height: 7,
+            }
+        );
+    }
+
+    /// A share Y may carry a copy of another share X's coinbase after its own.
+    /// The copy is coinbase-shaped, but only the block whose coinbase it is
+    /// may set its outputs' `coinbase_root_height`.
+    #[test]
+    fn test_coinbase_copy_in_later_block_keeps_original_coinbase_root_height() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let original = TestShareBlockBuilder::new().nonce(1).build();
+        let copier = TestShareBlockBuilder::new().nonce(2).build();
+        let original_coinbase = original.transactions[0].clone();
+        let original_coinbase_txid = original_coinbase.compute_txid();
+        assert_ne!(
+            copier.transactions[0].compute_txid(),
+            original_coinbase_txid
+        );
+
+        //* Store X at height 7, then Y at height 9 carrying X's coinbase at index 1
+        let mut batch = Store::get_write_batch();
+        store
+            .add_sharechain_txs(&original.transactions, 7, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_sharechain_txs(
+                &[copier.transactions[0].clone(), original_coinbase],
+                9,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        //* X's coinbase outputs still carry X's height, not Y's
+        let (_transaction, output_origins) = store
+            .get_tx_with_output_origins(&original_coinbase_txid)
+            .unwrap();
+        assert_eq!(
+            output_origins[0],
+            OutputOrigin {
+                is_coinbase: true,
+                coinbase_root_height: 7,
+            }
+        );
+    }
+
+    /// Y can reach a node before X does. The copy must not claim X's coinbase
+    /// outputs then either, or X could never set them.
+    #[test]
+    fn test_coinbase_copy_stored_first_writes_no_outputs() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let original = TestShareBlockBuilder::new().nonce(1).build();
+        let copier = TestShareBlockBuilder::new().nonce(2).build();
+        let original_coinbase = original.transactions[0].clone();
+        let original_coinbase_txid = original_coinbase.compute_txid();
+        assert_ne!(
+            copier.transactions[0].compute_txid(),
+            original_coinbase_txid
+        );
+
+        //* Store Y at height 9 carrying X's coinbase at index 1, before X exists
+        let mut batch = Store::get_write_batch();
+        store
+            .add_sharechain_txs(
+                &[copier.transactions[0].clone(), original_coinbase],
+                9,
+                &mut batch,
+            )
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+
+        //* No output row exists for X's coinbase until X is stored
+        let missing = store.get_output(&original_coinbase_txid, 0);
+        assert!(
+            matches!(missing, Err(StoreError::NotFound(_))),
+            "unexpected: {missing:?}"
+        );
+
+        //* Storing X at height 7 then gives its outputs X's height
+        let mut batch = Store::get_write_batch();
+        store
+            .add_sharechain_txs(&original.transactions, 7, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+        let (_transaction, output_origins) = store
+            .get_tx_with_output_origins(&original_coinbase_txid)
+            .unwrap();
         assert_eq!(
             output_origins[0],
             OutputOrigin {
@@ -1462,17 +1570,16 @@ mod tests {
         };
         let funding_txid_3 = funding_tx_3.compute_txid();
 
+        //* Each funding coinbase is stored as its own block's transactions, at index 0
         let mut batch = Store::get_write_batch();
         store
-            .add_sharechain_txs(
-                &[
-                    ShareTransaction(funding_tx_1),
-                    ShareTransaction(funding_tx_2),
-                    ShareTransaction(funding_tx_3),
-                ],
-                1,
-                &mut batch,
-            )
+            .add_sharechain_txs(&[ShareTransaction(funding_tx_1)], 1, &mut batch)
+            .unwrap();
+        store
+            .add_sharechain_txs(&[ShareTransaction(funding_tx_2)], 1, &mut batch)
+            .unwrap();
+        store
+            .add_sharechain_txs(&[ShareTransaction(funding_tx_3)], 1, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
 
@@ -2462,20 +2569,7 @@ mod tests {
         store.setup_genesis(&genesis, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
-        let funding_tx = Transaction {
-            version: bitcoin::transaction::Version::ONE,
-            lock_time: bitcoin::absolute::LockTime::ZERO,
-            input: vec![bitcoin::TxIn {
-                previous_output: bitcoin::OutPoint::null(),
-                script_sig: bitcoin::ScriptBuf::new(),
-                sequence: bitcoin::Sequence::MAX,
-                witness: bitcoin::Witness::new(),
-            }],
-            output: vec![bitcoin::TxOut {
-                value: bitcoin::Amount::from_sat(50_000),
-                script_pubkey: bitcoin::ScriptBuf::new(),
-            }],
-        };
+        let funding_tx = test_funding_transaction(coinbase_outpoint(&genesis), 50_000);
         let funding_txid = funding_tx.compute_txid();
         let source_block = TestShareBlockBuilder::new()
             .nonce(0xdd01)
@@ -2541,20 +2635,7 @@ mod tests {
         store.setup_genesis(&genesis, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
-        let funding_tx = Transaction {
-            version: bitcoin::transaction::Version::ONE,
-            lock_time: bitcoin::absolute::LockTime::ZERO,
-            input: vec![bitcoin::TxIn {
-                previous_output: bitcoin::OutPoint::null(),
-                script_sig: bitcoin::ScriptBuf::new(),
-                sequence: bitcoin::Sequence::MAX,
-                witness: bitcoin::Witness::new(),
-            }],
-            output: vec![bitcoin::TxOut {
-                value: bitcoin::Amount::from_sat(50_000),
-                script_pubkey: bitcoin::ScriptBuf::new(),
-            }],
-        };
+        let funding_tx = test_funding_transaction(coinbase_outpoint(&genesis), 50_000);
         let funding_txid = funding_tx.compute_txid();
         let source_block = TestShareBlockBuilder::new()
             .nonce(0xde01)

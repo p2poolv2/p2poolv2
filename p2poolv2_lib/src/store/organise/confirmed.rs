@@ -620,7 +620,9 @@ mod tests {
     use crate::shares::share_block::{ShareTransaction, Txids};
     use crate::store::block_tx_metadata::Status;
     use crate::store::script_history::{ScriptHistoryEntry, script_hash};
-    use crate::test_utils::{PUBKEY_2G, TestShareBlockBuilder};
+    use crate::test_utils::{
+        PUBKEY_2G, TestShareBlockBuilder, coinbase_outpoint, test_funding_transaction,
+    };
     use bitcoin::hashes::Hash;
     use tempfile::tempdir;
 
@@ -2481,20 +2483,7 @@ mod tests {
         // that exists only in it, so the reorg takes that source off the
         // confirmed chain. (Every builder block shares one coinbase txid, so a
         // coinbase cannot serve as a source unique to one block.)
-        let funding_tx = bitcoin::Transaction {
-            version: bitcoin::transaction::Version::ONE,
-            lock_time: bitcoin::absolute::LockTime::ZERO,
-            input: vec![bitcoin::TxIn {
-                previous_output: bitcoin::OutPoint::new(bitcoin::Txid::all_zeros(), u32::MAX),
-                script_sig: bitcoin::ScriptBuf::new(),
-                sequence: bitcoin::Sequence::MAX,
-                witness: bitcoin::Witness::new(),
-            }],
-            output: vec![bitcoin::TxOut {
-                value: bitcoin::Amount::from_sat(4_242),
-                script_pubkey: bitcoin::ScriptBuf::new(),
-            }],
-        };
+        let funding_tx = test_funding_transaction(coinbase_outpoint(&genesis), 4_242);
         let source_outpoint = bitcoin::OutPoint::new(funding_tx.compute_txid(), 0);
         let share_a = TestShareBlockBuilder::new()
             .prev_share_blockhash(genesis.block_hash().to_string())
@@ -2629,20 +2618,7 @@ mod tests {
 
         // A funding transaction that exists only in share_a, so the reorg takes
         // its source off the confirmed chain.
-        let funding_tx = bitcoin::Transaction {
-            version: bitcoin::transaction::Version::ONE,
-            lock_time: bitcoin::absolute::LockTime::ZERO,
-            input: vec![bitcoin::TxIn {
-                previous_output: bitcoin::OutPoint::new(bitcoin::Txid::all_zeros(), u32::MAX),
-                script_sig: bitcoin::ScriptBuf::new(),
-                sequence: bitcoin::Sequence::MAX,
-                witness: bitcoin::Witness::new(),
-            }],
-            output: vec![bitcoin::TxOut {
-                value: bitcoin::Amount::from_sat(5_353),
-                script_pubkey: bitcoin::ScriptBuf::new(),
-            }],
-        };
+        let funding_tx = test_funding_transaction(coinbase_outpoint(&genesis), 5_353);
         let source_outpoint = bitcoin::OutPoint::new(funding_tx.compute_txid(), 0);
         let share_a = TestShareBlockBuilder::new()
             .prev_share_blockhash(genesis.block_hash().to_string())
@@ -2806,20 +2782,7 @@ mod tests {
         // fork_1 carries the funding output; fork_2 spends it. Both were
         // confirmed together before being reorged out, which is why fork_2
         // passed validate_prevouts at ingest.
-        let funding_tx = bitcoin::Transaction {
-            version: bitcoin::transaction::Version::ONE,
-            lock_time: bitcoin::absolute::LockTime::ZERO,
-            input: vec![bitcoin::TxIn {
-                previous_output: bitcoin::OutPoint::new(bitcoin::Txid::all_zeros(), u32::MAX),
-                script_sig: bitcoin::ScriptBuf::new(),
-                sequence: bitcoin::Sequence::MAX,
-                witness: bitcoin::Witness::new(),
-            }],
-            output: vec![bitcoin::TxOut {
-                value: bitcoin::Amount::from_sat(7_777),
-                script_pubkey: bitcoin::ScriptBuf::new(),
-            }],
-        };
+        let funding_tx = test_funding_transaction(coinbase_outpoint(&genesis), 7_777);
         let source_outpoint = bitcoin::OutPoint::new(funding_tx.compute_txid(), 0);
         let fork_1 = TestShareBlockBuilder::new()
             .prev_share_blockhash(genesis.block_hash().to_string())

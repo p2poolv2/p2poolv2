@@ -416,7 +416,6 @@ mod tests {
     use crate::test_utils::{
         PUBKEY_2G, TestShareBlockBuilder, build_confirmed_test_chain, confirm_test_block,
         genesis_for_tests, make_test_share_program, setup_test_chain_store_handle,
-        test_funding_transaction,
     };
     use bitcoin::{Amount, OutPoint, ScriptBuf, Sequence, TxIn, TxOut, Witness};
     use bitcoin::{absolute::LockTime, transaction::Version};
@@ -428,9 +427,9 @@ mod tests {
     fn page_keeps_every_row_of_a_height_past_max_rows() {
         let scripthash = script_hash(&ScriptBuf::new_witness_program(&make_test_share_program(1)));
         let txids = [
-            test_funding_transaction(1).compute_txid(),
-            test_funding_transaction(2).compute_txid(),
-            test_funding_transaction(3).compute_txid(),
+            Txid::from_byte_array([1; 32]),
+            Txid::from_byte_array([2; 32]),
+            Txid::from_byte_array([3; 32]),
         ];
         let rows: Vec<HistoryRow> = vec![
             Ok((
@@ -476,7 +475,7 @@ mod tests {
         let scripthash = script_hash(&ScriptBuf::new_witness_program(&make_test_share_program(1)));
         let rows: Vec<HistoryRow> = vec![Ok((
             history_key(&scripthash, 5, 0).into_boxed_slice(),
-            Box::from(test_funding_transaction(1).compute_txid().to_byte_array()),
+            Box::from(Txid::from_byte_array([1; 32]).to_byte_array()),
         ))];
 
         let page = collect_history_page(rows.into_iter(), 0).unwrap();
@@ -519,13 +518,20 @@ mod tests {
         let payout_history = store.get_script_history(&payout, 1, 10).unwrap();
         let commitment_history = store.get_script_history(&commitment, 0, 10).unwrap();
 
+        //* Block 1's funding transaction spends the genesis payout, which has the same script
         assert_eq!(
             payout_history,
             ScriptHistoryPage {
-                entries: vec![ScriptHistoryEntry {
-                    height: 1,
-                    txid: coinbase.compute_txid(),
-                }],
+                entries: vec![
+                    ScriptHistoryEntry {
+                        height: 1,
+                        txid: coinbase.compute_txid(),
+                    },
+                    ScriptHistoryEntry {
+                        height: 1,
+                        txid: blocks[1].transactions[1].0.compute_txid(),
+                    },
+                ],
                 has_more: false,
             }
         );
@@ -570,6 +576,10 @@ mod tests {
                 ScriptHistoryEntry {
                     height: 1,
                     txid: blocks[1].transactions[0].0.compute_txid(),
+                },
+                ScriptHistoryEntry {
+                    height: 1,
+                    txid: blocks[1].transactions[1].0.compute_txid(),
                 },
                 ScriptHistoryEntry {
                     height: 2,
@@ -746,7 +756,7 @@ mod tests {
                 .iter()
                 .map(|entry| entry.height)
                 .collect::<Vec<_>>(),
-            vec![0, 1]
+            vec![0, 1, 1]
         );
         assert!(first_page.has_more);
         assert_eq!(
@@ -790,14 +800,15 @@ mod tests {
         let store = chain_store_handle.store_handle().store();
         let payout = script_hash(&spent_coinbase.output[0].script_pubkey);
 
-        let page = store.get_script_history(&payout, 0, 3).unwrap();
+        //* Block 1's funding spend adds a second row at height 1, so a page of four fills at height 2
+        let page = store.get_script_history(&payout, 0, 4).unwrap();
 
         assert_eq!(
             page.entries
                 .iter()
                 .map(|entry| entry.height)
                 .collect::<Vec<_>>(),
-            vec![0, 1, 2, 2]
+            vec![0, 1, 1, 2, 2]
         );
         assert!(!page.has_more);
     }
@@ -983,7 +994,7 @@ mod tests {
                 .iter()
                 .map(|entry| entry.height)
                 .collect::<Vec<_>>(),
-            vec![0, 1, 2, 3]
+            vec![0, 1, 1, 2, 3]
         );
     }
 
@@ -1134,6 +1145,10 @@ mod tests {
                     txid: spent_coinbase.compute_txid(),
                 },
                 ScriptHistoryEntry {
+                    height: 1,
+                    txid: blocks[1].transactions[1].0.compute_txid(),
+                },
+                ScriptHistoryEntry {
                     height: 2,
                     txid: spending_transaction.compute_txid(),
                 },
@@ -1167,10 +1182,16 @@ mod tests {
                 .get_script_history(&spent_payout, 1, 10)
                 .unwrap()
                 .entries,
-            vec![ScriptHistoryEntry {
-                height: 1,
-                txid: spent_coinbase.compute_txid(),
-            }]
+            vec![
+                ScriptHistoryEntry {
+                    height: 1,
+                    txid: spent_coinbase.compute_txid(),
+                },
+                ScriptHistoryEntry {
+                    height: 1,
+                    txid: blocks[1].transactions[1].0.compute_txid(),
+                },
+            ]
         );
         assert!(
             store

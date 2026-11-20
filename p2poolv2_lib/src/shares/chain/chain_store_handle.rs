@@ -1163,7 +1163,7 @@ mod tests {
     use crate::store::script_history::{ScriptHistoryEntry, ScriptHistoryPage, script_hash};
     use crate::store::writer::StoreError;
     use crate::test_utils::{
-        TestShareBlockBuilder, build_confirmed_test_chain, genesis_for_tests,
+        TestShareBlockBuilder, build_confirmed_test_chain, funding_outpoint, genesis_for_tests,
         setup_test_chain_store_handle, test_funding_transaction,
     };
     use bitcoin::BlockHash;
@@ -2301,7 +2301,7 @@ mod tests {
         let blocks = build_confirmed_test_chain(&chain_store_handle, 2).await;
         let unconfirmed = TestShareBlockBuilder::new()
             .prev_share_blockhash(blocks[2].block_hash().to_string())
-            .add_transaction(test_funding_transaction(99))
+            .add_transaction(test_funding_transaction(funding_outpoint(&blocks[2]), 99))
             .build();
         chain_store_handle
             .add_share_block_and_organise_header(unconfirmed.clone())
@@ -2356,6 +2356,10 @@ mod tests {
                         txid: blocks[1].transactions[0].0.compute_txid(),
                     },
                     ScriptHistoryEntry {
+                        height: 1,
+                        txid: blocks[1].transactions[1].0.compute_txid(),
+                    },
+                    ScriptHistoryEntry {
                         height: 2,
                         txid: blocks[2].transactions[0].0.compute_txid(),
                     },
@@ -2365,8 +2369,10 @@ mod tests {
         );
     }
 
-    /// Both the start height and the page size reach the store: the page
-    /// starts at height 1, holds one entry, and reports the row after it.
+    /// Both the start height and the page size reach the store: a page of one
+    /// row starting at height 1 holds that height's two rows (block 1's
+    /// coinbase and its funding spend of the genesis payout), since a page
+    /// only ends at a height boundary, and reports the row after them.
     #[tokio::test]
     async fn test_get_script_history_passes_start_height_and_max_rows() {
         let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
@@ -2380,10 +2386,16 @@ mod tests {
         assert_eq!(
             history,
             ScriptHistoryPage {
-                entries: vec![ScriptHistoryEntry {
-                    height: 1,
-                    txid: blocks[1].transactions[0].0.compute_txid(),
-                }],
+                entries: vec![
+                    ScriptHistoryEntry {
+                        height: 1,
+                        txid: blocks[1].transactions[0].0.compute_txid(),
+                    },
+                    ScriptHistoryEntry {
+                        height: 1,
+                        txid: blocks[1].transactions[1].0.compute_txid(),
+                    },
+                ],
                 has_more: true,
             }
         );

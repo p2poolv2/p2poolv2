@@ -220,6 +220,7 @@ mod tests {
             json!([
                 {"height": 0, "tx_hash": (blocks[0].transactions[0].0.compute_txid().to_string())},
                 {"height": 1, "tx_hash": (blocks[1].transactions[0].0.compute_txid().to_string())},
+                {"height": 1, "tx_hash": (blocks[1].transactions[1].0.compute_txid().to_string())},
                 {"height": 2, "tx_hash": (blocks[2].transactions[0].0.compute_txid().to_string())},
             ])
         );
@@ -264,6 +265,7 @@ mod tests {
             json!([
                 {"height": 0, "tx_hash": (blocks[0].transactions[0].0.compute_txid().to_string())},
                 {"height": 1, "tx_hash": (blocks[1].transactions[0].0.compute_txid().to_string())},
+                {"height": 1, "tx_hash": (blocks[1].transactions[1].0.compute_txid().to_string())},
             ])
         );
     }
@@ -307,9 +309,10 @@ mod tests {
         let blocks = build_current_test_chain(&chain_store_handle, 2).await;
         let scripthash = electrum_scripthash(&blocks[1].transactions[0].0.output[0].script_pubkey);
 
-        let history = history_page(&chain_store_handle, &json!([scripthash]), 3).unwrap();
+        //* Coinbases at heights 0 to 2, plus block 1's funding spend of the genesis payout
+        let history = history_page(&chain_store_handle, &json!([scripthash]), 4).unwrap();
 
-        assert_eq!(history.as_array().unwrap().len(), 3);
+        assert_eq!(history.as_array().unwrap().len(), 4);
     }
 
     #[tokio::test]
@@ -340,6 +343,7 @@ mod tests {
             json!([
                 {"height": 0, "tx_hash": (blocks[0].transactions[0].0.compute_txid().to_string())},
                 {"height": 1, "tx_hash": (blocks[1].transactions[0].0.compute_txid().to_string())},
+                {"height": 1, "tx_hash": (blocks[1].transactions[1].0.compute_txid().to_string())},
             ])
         );
         assert_eq!(
@@ -447,9 +451,10 @@ mod tests {
         let blocks = build_current_test_chain(&chain_store_handle, 2).await;
         let scripthash = script_hash(&blocks[1].transactions[0].0.output[0].script_pubkey);
         let joined_entries = format!(
-            "{}:0:{}:1:{}:2:",
+            "{}:0:{}:1:{}:1:{}:2:",
             blocks[0].transactions[0].0.compute_txid(),
             blocks[1].transactions[0].0.compute_txid(),
+            blocks[1].transactions[1].0.compute_txid(),
             blocks[2].transactions[0].0.compute_txid(),
         );
 

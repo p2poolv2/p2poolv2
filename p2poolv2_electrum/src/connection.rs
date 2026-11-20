@@ -259,7 +259,7 @@ mod tests {
     use bitcoin::consensus::encode::serialize_hex;
     use p2poolv2_lib::store::script_history::script_hash;
     use p2poolv2_lib::test_utils::{
-        TestShareBlockBuilder, build_confirmed_test_chain, confirm_test_block,
+        TestShareBlockBuilder, build_confirmed_test_chain, confirm_test_block, funding_outpoint,
         setup_test_chain_store_handle, test_funding_transaction,
     };
     use serde_json::json;
@@ -428,7 +428,7 @@ mod tests {
         let next_block = TestShareBlockBuilder::new()
             .prev_share_blockhash(blocks[2].block_hash().to_string())
             .time(blocks[2].header.time + 1)
-            .add_transaction(test_funding_transaction(3))
+            .add_transaction(test_funding_transaction(funding_outpoint(&blocks[2]), 3))
             .build();
         confirm_test_block(&chain_store_handle, &next_block).await;
         let next_tip = read_tip(&chain_store_handle).unwrap();
@@ -547,7 +547,7 @@ mod tests {
         let next_block = TestShareBlockBuilder::new()
             .prev_share_blockhash(blocks[2].block_hash().to_string())
             .time(blocks[2].header.time + 1)
-            .add_transaction(test_funding_transaction(3))
+            .add_transaction(test_funding_transaction(funding_outpoint(&blocks[2]), 3))
             .build();
         confirm_test_block(&chain_store_handle, &next_block).await;
         tip_sender.send_replace(Some(Arc::new(read_tip(&chain_store_handle).unwrap())));
@@ -589,7 +589,7 @@ mod tests {
         let next_block = TestShareBlockBuilder::new()
             .prev_share_blockhash(blocks[2].block_hash().to_string())
             .time(blocks[2].header.time + 1)
-            .add_transaction(test_funding_transaction(3))
+            .add_transaction(test_funding_transaction(funding_outpoint(&blocks[2]), 3))
             .build();
         confirm_test_block(&chain_store_handle, &next_block).await;
         let next_tip = read_tip(&chain_store_handle).unwrap();

@@ -13,13 +13,15 @@
 //! by a single `organise_block`, which is what lets a conflict between two
 //! already-validated blocks reach the confirmation path.
 
-use bitcoin::hashes::Hash;
 use p2poolv2_lib::pool_difficulty::PoolDifficulty;
 use p2poolv2_lib::shares::chain::chain_store_handle::ChainStoreHandle;
 use p2poolv2_lib::shares::share_block::ShareBlock;
 use p2poolv2_lib::shares::validation::{DefaultShareValidator, ShareValidator};
 use p2poolv2_lib::store::block_tx_metadata::Status;
-use p2poolv2_lib::test_utils::{TestShareBlockBuilder, setup_test_chain_store_handle};
+use p2poolv2_lib::test_utils::{
+    TestShareBlockBuilder, coinbase_outpoint, setup_test_chain_store_handle,
+    test_funding_transaction,
+};
 
 /// Base timestamp for received blocks; each block advances it.
 const FIRST_BLOCK_TIME: u32 = 1_700_000_000;
@@ -32,26 +34,6 @@ fn spending_transaction(previous_output: bitcoin::OutPoint, value: u64) -> bitco
         lock_time: bitcoin::absolute::LockTime::ZERO,
         input: vec![bitcoin::TxIn {
             previous_output,
-            script_sig: bitcoin::ScriptBuf::new(),
-            sequence: bitcoin::Sequence::MAX,
-            witness: bitcoin::Witness::new(),
-        }],
-        output: vec![bitcoin::TxOut {
-            value: bitcoin::Amount::from_sat(value),
-            script_pubkey: bitcoin::ScriptBuf::new(),
-        }],
-    }
-}
-
-/// A coinbase-shaped transaction, used to give a block an output that no other
-/// block provides. Every builder block shares one coinbase txid, so a block's
-/// own coinbase cannot serve as a source unique to it.
-fn funding_transaction(value: u64) -> bitcoin::Transaction {
-    bitcoin::Transaction {
-        version: bitcoin::transaction::Version::ONE,
-        lock_time: bitcoin::absolute::LockTime::ZERO,
-        input: vec![bitcoin::TxIn {
-            previous_output: bitcoin::OutPoint::new(bitcoin::Txid::all_zeros(), u32::MAX),
             script_sig: bitcoin::ScriptBuf::new(),
             sequence: bitcoin::Sequence::MAX,
             witness: bitcoin::Witness::new(),
@@ -289,7 +271,7 @@ async fn test_reorg_rejects_fork_block_spending_reorged_out_source() {
         .unwrap();
 
     // The confirmed block carries a funding output that exists only in it.
-    let funding_tx = funding_transaction(7_777);
+    let funding_tx = test_funding_transaction(coinbase_outpoint(&genesis), 7_777);
     let source_outpoint = bitcoin::OutPoint::new(funding_tx.compute_txid(), 0);
     let confirmed_block = TestShareBlockBuilder::new()
         .prev_share_blockhash(genesis.block_hash().to_string())

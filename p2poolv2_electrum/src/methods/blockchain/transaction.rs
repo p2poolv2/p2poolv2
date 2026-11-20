@@ -232,8 +232,8 @@ mod tests {
     use bitcoin::{Amount, OutPoint, ScriptBuf, Sequence, Witness};
     use p2poolv2_lib::address::Address;
     use p2poolv2_lib::test_utils::{
-        TestShareBlockBuilder, build_confirmed_test_chain, make_test_share_address,
-        setup_test_chain_store_handle, test_funding_transaction,
+        TestShareBlockBuilder, build_confirmed_test_chain, funding_outpoint,
+        make_test_share_address, setup_test_chain_store_handle, test_funding_transaction,
     };
 
     #[tokio::test]
@@ -326,7 +326,7 @@ mod tests {
         let unconfirmed = TestShareBlockBuilder::new()
             .prev_share_blockhash(blocks[2].block_hash().to_string())
             .time(blocks[2].header.time)
-            .add_transaction(test_funding_transaction(99))
+            .add_transaction(test_funding_transaction(funding_outpoint(&blocks[2]), 99))
             .build();
         chain_store_handle
             .add_share_block_and_organise_header(unconfirmed.clone())

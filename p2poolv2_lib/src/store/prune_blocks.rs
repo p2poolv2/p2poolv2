@@ -317,7 +317,7 @@ mod tests {
     use crate::store::block_tx_metadata::{BlockMetadata, ChainMembership, Status};
     use crate::test_utils::{
         TestShareBlockBuilder, build_confirmed_test_chain, confirm_test_block,
-        setup_test_chain_store_handle, test_funding_transaction,
+        setup_test_chain_store_handle,
     };
     use bitcoin::OutPoint;
     use bitcoin::hashes::Hash;
@@ -520,7 +520,7 @@ mod tests {
     async fn test_prune_deletes_transaction_only_a_pruned_block_holds() {
         let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
         let blocks = build_confirmed_test_chain(&chain_store_handle, 8).await;
-        let txid = test_funding_transaction(3).compute_txid();
+        let txid = blocks[3].transactions[1].compute_txid();
         let store = chain_store_handle.store_handle().store();
         let inputs_cf = store.db.cf_handle(&ColumnFamily::Inputs).unwrap();
         assert!(store.get_tx_metadata(&txid).is_ok());
@@ -556,7 +556,7 @@ mod tests {
     async fn test_prune_keeps_transaction_a_kept_block_also_holds() {
         let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
         let blocks = build_confirmed_test_chain(&chain_store_handle, 5).await;
-        let shared_transaction = test_funding_transaction(2);
+        let shared_transaction = blocks[2].transactions[1].0.clone();
         let shared_txid = shared_transaction.compute_txid();
         let kept_block = TestShareBlockBuilder::new()
             .prev_share_blockhash(blocks[5].block_hash().to_string())
@@ -581,7 +581,7 @@ mod tests {
     async fn test_prune_deletes_spends_recorded_against_pruned_outputs() {
         let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
         let blocks = build_confirmed_test_chain(&chain_store_handle, 1).await;
-        let funding_txid = test_funding_transaction(1).compute_txid();
+        let funding_txid = blocks[1].transactions[1].compute_txid();
         let spending_transaction = bitcoin::Transaction {
             version: bitcoin::transaction::Version::ONE,
             lock_time: bitcoin::absolute::LockTime::ZERO,
@@ -835,9 +835,9 @@ mod tests {
     #[tokio::test]
     async fn test_prune_keeps_transaction_whose_other_referencer_has_no_metadata() {
         let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
-        build_confirmed_test_chain(&chain_store_handle, 8).await;
+        let blocks = build_confirmed_test_chain(&chain_store_handle, 8).await;
         let store = chain_store_handle.store_handle().store();
-        let txid = test_funding_transaction(3).compute_txid();
+        let txid = blocks[3].transactions[1].compute_txid();
         let unknown_blockhash = BlockHash::from_byte_array([0x42; 32]);
         let txids_blocks_cf = store.db.cf_handle(&ColumnFamily::TxidsBlocks).unwrap();
         let mut batch = Store::get_write_batch();

@@ -23,7 +23,8 @@ use p2poolv2_lib::shares::chain::chain_store_handle::ChainStoreHandle;
 use p2poolv2_lib::shares::share_block::ShareBlock;
 use p2poolv2_lib::store::script_history::script_hash;
 use p2poolv2_lib::test_utils::{
-    TestShareBlockBuilder, confirm_test_block, genesis_for_tests, test_funding_transaction,
+    TestShareBlockBuilder, chain_funding_source, confirm_test_block, genesis_for_tests,
+    test_funding_transaction,
 };
 use serde_json::Value;
 use std::io;
@@ -86,7 +87,10 @@ pub(crate) async fn build_current_test_chain(
         let block = TestShareBlockBuilder::new()
             .prev_share_blockhash(blocks[height - 1].block_hash().to_string())
             .time(now_secs - (length - height) as u32)
-            .add_transaction(test_funding_transaction(height as u64))
+            .add_transaction(test_funding_transaction(
+                chain_funding_source(&blocks, height),
+                height as u64,
+            ))
             .build();
         confirm_test_block(chain_store_handle, &block).await;
         blocks.push(block);
