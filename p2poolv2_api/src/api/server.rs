@@ -112,6 +112,7 @@ fn build_router(app_state: Arc<AppState>, app_config: AppConfig) -> Router {
         .route("/candidates", get(endpoints::candidates::candidates))
         .route("/share", get(endpoints::share::share))
         .route("/dag", get(endpoints::dag::dag))
+        .route("/found_blocks", get(endpoints::found_blocks::found_blocks))
         .route("/transaction", get(endpoints::transaction::transaction))
         .route(
             "/share_headers",
