@@ -10,7 +10,15 @@ use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Instant;
+use tokio::sync::broadcast;
 use tracing::warn;
+
+/// Capacity of the disconnect broadcast channel.
+///
+/// Small on purpose: a subscriber that falls behind loses events and must
+/// reconcile against the tracker's own state, so the buffer only needs to
+/// cover bursts of simultaneous disconnects.
+const DISCONNECT_BROADCAST_CAPACITY: usize = 256;
 
 /// Ping failures, as reported by libp2p, after which a connection is treated as
 /// unresponsive and closed.
@@ -136,10 +144,14 @@ pub(crate) struct ConnectionTracker {
     ping_failures_total: u64,
     /// Connections closed for failing ping, for P2P health metrics.
     connections_closed_unresponsive_total: u64,
+    /// Broadcasts the last `remaining_connections == 0` disconnect per peer,
+    /// so subscribers can react to a peer leaving instead of polling.
+    disconnect_tx: broadcast::Sender<PeerId>,
 }
 
 impl ConnectionTracker {
     pub(crate) fn new(blocked_ips: BlockedIps) -> Self {
+        let (disconnect_tx, _) = broadcast::channel(DISCONNECT_BROADCAST_CAPACITY);
         Self {
             connected_peers: HashMap::new(),
             dial_peer_ids: HashMap::new(),
@@ -148,6 +160,7 @@ impl ConnectionTracker {
             connections_total: 0,
             ping_failures_total: 0,
             connections_closed_unresponsive_total: 0,
+            disconnect_tx,
         }
     }
 
@@ -208,7 +221,16 @@ impl ConnectionTracker {
     pub(crate) fn handle_closed(&mut self, peer_id: &PeerId, remaining_connections: u32) {
         if remaining_connections == 0 {
             self.connected_peers.remove(peer_id);
+            // A lagged consumer skips older events; its pending requests use
+            // their own timeout to retire when the disconnect event is lost.
+            let _ = self.disconnect_tx.send(*peer_id);
         }
+    }
+
+    /// Subscribe to per-peer disconnect broadcasts. The receiver observes a
+    /// `PeerId` when the tracker forgets that peer's last connection.
+    pub(crate) fn subscribe_disconnect(&self) -> broadcast::Receiver<PeerId> {
+        self.disconnect_tx.subscribe()
     }
 
     /// Dial addresses whose peer is currently connected, in either direction.
@@ -404,6 +426,49 @@ mod tests {
         tracker.handle_closed(&peer_id, 0);
         assert_eq!(tracker.connected_peers.len(), 0);
         assert_eq!(tracker.connected_dial_addresses().len(), 0);
+    }
+
+    #[test]
+    fn test_last_connection_close_broadcasts_disconnect() {
+        let mut tracker = ConnectionTracker::new(BlockedIps::default());
+        let peer_id = PeerId::random();
+        let mut disconnect_rx = tracker.subscribe_disconnect();
+        let endpoint = make_dialer_endpoint("/ip4/1.2.3.4/tcp/46884");
+
+        tracker.handle_established(peer_id, &endpoint);
+        tracker.handle_closed(&peer_id, 0);
+
+        assert_eq!(disconnect_rx.try_recv().unwrap(), peer_id);
+    }
+
+    #[test]
+    fn test_partial_connection_close_does_not_broadcast_disconnect() {
+        let mut tracker = ConnectionTracker::new(BlockedIps::default());
+        let peer_id = PeerId::random();
+        let mut disconnect_rx = tracker.subscribe_disconnect();
+        let endpoint = make_dialer_endpoint("/ip4/1.2.3.4/tcp/46884");
+
+        tracker.handle_established(peer_id, &endpoint);
+        tracker.handle_established(peer_id, &endpoint);
+
+        tracker.handle_closed(&peer_id, 1);
+
+        assert!(
+            disconnect_rx.try_recv().is_err(),
+            "a peer with a connection still open is not disconnected"
+        );
+    }
+
+    #[test]
+    fn test_disconnect_close_without_subscriber_does_not_panic() {
+        let mut tracker = ConnectionTracker::new(BlockedIps::default());
+        let peer_id = PeerId::random();
+        let endpoint = make_dialer_endpoint("/ip4/1.2.3.4/tcp/46884");
+
+        tracker.handle_established(peer_id, &endpoint);
+        tracker.handle_closed(&peer_id, 0);
+
+        assert_eq!(tracker.connected_peer_count(), 0);
     }
 
     /// Closing one of two connections to a peer released its dial

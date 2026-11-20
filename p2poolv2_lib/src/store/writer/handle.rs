@@ -109,6 +109,11 @@ impl StoreHandle {
         self.store.get_share(blockhash)
     }
 
+    /// Get a transaction from the store.
+    pub fn get_tx(&self, txid: &bitcoin::Txid) -> Result<bitcoin::Transaction, StoreError> {
+        self.store.get_tx(txid)
+    }
+
     /// Get the share at the current chain tip.
     pub fn get_share_at_tip(&self) -> Option<ShareBlock> {
         self.store.get_share_at_tip()
@@ -417,6 +422,7 @@ mockall::mock! {
         // Direct reads
         pub fn share_block_exists(&self, blockhash: &BlockHash) -> bool;
         pub fn get_share(&self, blockhash: &BlockHash) -> Option<ShareBlock>;
+        pub fn get_tx(&self, txid: &bitcoin::Txid) -> Result<bitcoin::Transaction, StoreError>;
         pub fn get_share_at_tip(&self) -> Option<ShareBlock>;
         pub fn get_share_headers(&self, blockhashes: &[BlockHash]) -> Result<Vec<(BlockHash, ShareHeader)>, StoreError>;
         pub fn get_share_header(&self, blockhash: &BlockHash) -> Result<Option<ShareHeader>, StoreError>;

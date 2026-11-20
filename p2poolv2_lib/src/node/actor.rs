@@ -16,7 +16,7 @@ use crate::node::Node;
 use crate::node::SwarmSend;
 use crate::node::dns_seeds;
 use crate::node::emission_worker::EmissionWorker;
-use crate::node::messages::Message;
+use crate::node::messages::{GetData, Message};
 use crate::node::organise_worker::{OrganiseWorker, create_organise_channel};
 use crate::node::p2p_health::P2pHealth;
 use crate::node::p2p_message_handlers::receivers::block_receiver::{
@@ -26,6 +26,10 @@ use crate::node::p2p_message_handlers::senders::build_getheaders_message;
 use crate::node::p2p_message_handlers::senders::send_share_block_broadcast;
 use crate::node::request_response_handler::block_fetcher::{
     BlockFetcher, create_block_fetcher_channel,
+};
+use crate::node::request_response_handler::tx_fetch::{
+    TxFetchDispatch, TxFetchError, TxFetchEvent, TxFetchHandle, TxFetchReceiver, TxFetcher,
+    create_tx_fetcher_channel,
 };
 use crate::node::request_sender::RequestSender;
 use crate::node::response_worker::{ResponseWorker, create_response_worker_channel};
@@ -44,6 +48,7 @@ use crate::shares::validation::{DefaultShareValidator, ShareValidator};
 use crate::stratum::emission::EmissionReceiver;
 use crate::stratum::work::notify::NotifySender;
 use bitcoin::BlockHash;
+use libp2p::PeerId;
 use libp2p::futures::StreamExt;
 use libp2p::request_response::ResponseChannel;
 use std::collections::HashMap;
@@ -51,9 +56,10 @@ use std::error::Error;
 use std::ops::ControlFlow;
 use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::sync::broadcast;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 /// NodeHandle provides an interface to interact with a Node running in a separate task
 #[derive(Clone)]
@@ -61,6 +67,9 @@ use tracing::{debug, error, info};
 pub struct NodeHandle {
     // The channel to send commands to the Node Actor
     command_tx: mpsc::Sender<Command>,
+    /// Handle to the transaction fetcher actor, exposing transport-only
+    /// transaction requests to callers outside the node event loop.
+    tx_fetch_handle: TxFetchHandle,
 }
 
 #[allow(dead_code)]
@@ -76,6 +85,7 @@ impl NodeHandle {
         pplns_window: Arc<RwLock<PplnsWindow>>,
     ) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error + Send + Sync>> {
         let (command_tx, command_rx) = mpsc::channel::<Command>(32);
+        let (tx_fetch_handle, tx_fetch_rx) = create_tx_fetcher_channel();
         let (node_actor, stopping_rx) = NodeActor::new(
             config,
             chain_store_handle,
@@ -85,6 +95,8 @@ impl NodeHandle {
             monitoring_event_sender,
             notify_tx,
             pplns_window,
+            tx_fetch_handle.clone(),
+            tx_fetch_rx,
         )
         .unwrap();
 
@@ -92,7 +104,13 @@ impl NodeHandle {
             node_actor.run().await;
         });
 
-        Ok((Self { command_tx }, stopping_rx))
+        Ok((
+            Self {
+                command_tx,
+                tx_fetch_handle,
+            },
+            stopping_rx,
+        ))
     }
 
     /// Get a list of connected peers
@@ -103,6 +121,25 @@ impl NodeHandle {
             Ok(peers) => Ok(peers),
             Err(e) => Err(e.into()),
         }
+    }
+
+    /// Request a share-chain transaction from `peer`.
+    ///
+    /// One flight per txid: duplicate requests join the flight and receive
+    /// the same outcome, whichever peer the flight is asking. With `None`,
+    /// an existing flight is joined; with no flight, no peer is asked and
+    /// the request resolves with [`TxFetchError::Unavailable`].
+    pub async fn request_transaction(
+        &self,
+        txid: bitcoin::Txid,
+        peer: Option<libp2p::PeerId>,
+    ) -> Result<bitcoin::Transaction, TxFetchError> {
+        let response_rx = self.tx_fetch_handle.request(txid, peer).await?;
+        response_rx.await.map_err(|recv_error| {
+            TxFetchError::Unavailable(format!(
+                "transaction fetcher dropped the pending request: {recv_error}"
+            ))
+        })?
     }
 
     /// Shutdown the node
@@ -175,6 +212,9 @@ impl NodeHandle {
 #[cfg(any(test, feature = "test-utils"))]
 impl NodeHandle {
     /// Create a stub NodeHandle for tests that responds to commands with defaults.
+    ///
+    /// The stub carries no transaction fetcher, so `request_transaction`
+    /// answers [`TxFetchError::Unavailable`].
     pub fn new_for_test() -> Self {
         let (command_tx, mut command_rx) = mpsc::channel::<Command>(32);
         tokio::spawn(async move {
@@ -211,13 +251,18 @@ impl NodeHandle {
                 }
             }
         });
-        Self { command_tx }
+        Self {
+            command_tx,
+            tx_fetch_handle: create_tx_fetcher_channel().0,
+        }
     }
 
     /// Create a stub NodeHandle for tests pre-loaded with a set of generated peers.
     ///
     /// Returns the handle and the string representations of the generated peer IDs
     /// so callers can assert on expected values without depending on libp2p directly.
+    /// The stub carries no transaction fetcher, so `request_transaction`
+    /// answers [`TxFetchError::Unavailable`].
     pub fn new_for_test_with_peer_count(count: usize) -> (Self, Vec<String>) {
         use crate::node::connection_tracker::{ConnectionDirection, PeerInfoResponse};
 
@@ -274,7 +319,13 @@ impl NodeHandle {
                 }
             }
         });
-        (Self { command_tx }, peer_id_strings)
+        (
+            Self {
+                command_tx,
+                tx_fetch_handle: create_tx_fetcher_channel().0,
+            },
+            peer_id_strings,
+        )
     }
 }
 
@@ -305,6 +356,9 @@ enum StopReason {
     /// The actor stopped on its own: a worker failed or a channel closed.
     Fatal,
 }
+
+/// Capacity of the `TxFetcher` -> tx dispatch task channel.
+const TX_DISPATCH_CHANNEL_CAPACITY: usize = 1024;
 
 /// NodeActor runs the Node in a separate task and handles all its events
 struct NodeActor {
@@ -338,6 +392,8 @@ impl NodeActor {
         monitoring_event_sender: MonitoringEventSender,
         notify_tx: NotifySender,
         pplns_window: Arc<RwLock<PplnsWindow>>,
+        tx_fetch_handle: TxFetchHandle,
+        tx_fetch_rx: TxFetchReceiver,
     ) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error>> {
         // Create organise channel
         let (organise_tx, organise_rx) = create_organise_channel();
@@ -382,7 +438,17 @@ impl NodeActor {
             monitoring_event_sender.clone(),
             share_validator.clone(),
             response_worker_tx,
+            tx_fetch_handle.clone(),
         )?;
+
+        // Disconnects reach the transaction fetcher through this broadcast;
+        // the forwarder below subscribes once and relays each event.
+        let disconnect_rx = node.connection_tracker.subscribe_disconnect();
+
+        // The fetcher asks the dispatcher below to place its GetData::Txid
+        // requests on the wire; the dispatcher owns the swarm send.
+        let (tx_dispatch_tx, tx_dispatch_rx) =
+            mpsc::channel::<TxFetchDispatch>(TX_DISPATCH_CHANNEL_CAPACITY);
 
         // Spawn organise worker
         let organise_worker = OrganiseWorker::new(
@@ -455,6 +521,7 @@ impl NodeActor {
             chain_store_handle.clone(),
             node.swarm_tx.clone(),
             block_fetcher_tx_for_response,
+            tx_fetch_handle.clone(),
             validation_tx_for_response,
             block_receiver_tx_for_response,
             share_validator.clone(),
@@ -468,6 +535,37 @@ impl NodeActor {
             })
             .id();
         worker_names.insert(response_id, "Response worker");
+
+        // Spawn transaction fetcher
+        let tx_fetcher = TxFetcher::new(tx_fetch_rx, tx_dispatch_tx);
+        let tx_fetcher_id = workers
+            .spawn(async move {
+                tx_fetcher.run().await;
+                Ok(())
+            })
+            .id();
+        worker_names.insert(tx_fetcher_id, "Transaction fetcher");
+
+        // Forward ConnectionTracker disconnect broadcasts to the fetcher.
+        let disconnect_forwarder_id = workers
+            .spawn(run_tx_disconnect_forwarder(
+                disconnect_rx,
+                tx_fetch_handle.clone(),
+            ))
+            .id();
+        worker_names.insert(
+            disconnect_forwarder_id,
+            "Transaction fetch disconnect forwarder",
+        );
+
+        // Convert the fetcher's dispatch events into swarm requests.
+        let tx_dispatcher_id = workers
+            .spawn(run_tx_fetch_dispatcher(
+                tx_dispatch_rx,
+                node.swarm_tx.clone(),
+            ))
+            .id();
+        worker_names.insert(tx_dispatcher_id, "Transaction fetch dispatcher");
 
         // Spawn emission worker - turns stratum shares into share blocks
         let emission_worker = EmissionWorker::new(
@@ -803,6 +901,55 @@ impl NodeActor {
     }
 }
 
+/// Relay ConnectionTracker disconnect broadcasts to the transaction fetcher.
+///
+/// Lagged events are skipped; requests to peers whose disconnect event was
+/// skipped resolve through the fetcher's request timeout.
+async fn run_tx_disconnect_forwarder(
+    mut disconnect_rx: broadcast::Receiver<PeerId>,
+    tx_fetch_handle: TxFetchHandle,
+) -> Result<(), String> {
+    loop {
+        match disconnect_rx.recv().await {
+            Ok(peer) => {
+                if let Err(send_error) = tx_fetch_handle.try_send(TxFetchEvent::PeerRemoved(peer)) {
+                    warn!(
+                        "Failed to forward peer disconnect to transaction fetcher for {peer}: {send_error}"
+                    );
+                }
+            }
+            Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                warn!("Transaction fetch disconnect forwarder skipped {skipped} events");
+            }
+            Err(broadcast::error::RecvError::Closed) => return Ok(()),
+        }
+    }
+}
+
+/// Convert the transaction fetcher's dispatch events into swarm requests.
+///
+/// The fetcher never touches the swarm; this task owns the awaited send on
+/// `swarm_tx`. The actor loop drains `swarm_tx` every iteration, so the
+/// send has bounded backpressure and closes no awaited-send cycle.
+async fn run_tx_fetch_dispatcher(
+    mut tx_dispatch_rx: mpsc::Receiver<TxFetchDispatch>,
+    swarm_tx: mpsc::Sender<SwarmSend<ResponseChannel<Message>>>,
+) -> Result<(), String> {
+    while let Some(dispatch) = tx_dispatch_rx.recv().await {
+        match dispatch {
+            TxFetchDispatch::SendRequest { peer, txid } => {
+                let _ = swarm_tx
+                    .send(SwarmSend::Request(
+                        peer,
+                        Message::GetData(GetData::Txid(txid)),
+                    ))
+                    .await;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// True when the confirmed tip changed since `last_seen`. A reorg changes the tip
 /// hash, so it counts as progress. Without a baseline (`None`) there is nothing
 /// to compare against, so it is not progress and the sync retry still fires.
@@ -819,9 +966,33 @@ mod tests {
     use tokio::sync::mpsc;
 
     #[tokio::test]
+    async fn test_tx_disconnect_forwarder_continues_after_lag() {
+        let (disconnect_tx, disconnect_rx) = tokio::sync::broadcast::channel(1);
+        let skipped_peer = PeerId::random();
+        let delivered_peer = PeerId::random();
+        disconnect_tx.send(skipped_peer).unwrap();
+        disconnect_tx.send(delivered_peer).unwrap();
+        drop(disconnect_tx);
+
+        let (tx_fetch_handle, mut tx_fetch_rx) = create_tx_fetcher_channel();
+        run_tx_disconnect_forwarder(disconnect_rx, tx_fetch_handle)
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            tx_fetch_rx.try_recv(),
+            Ok(TxFetchEvent::PeerRemoved(peer)) if peer == delivered_peer
+        ));
+        assert!(tx_fetch_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
     async fn test_node_handle_get_pplns_shares_sends_correct_command() {
         let (command_tx, mut command_rx) = mpsc::channel(32);
-        let node_handle = NodeHandle { command_tx };
+        let node_handle = NodeHandle {
+            command_tx,
+            tx_fetch_handle: create_tx_fetcher_channel().0,
+        };
 
         let query = GetPplnsShareQuery {
             limit: 42,
@@ -867,7 +1038,10 @@ mod tests {
         let (command_tx, command_rx) = mpsc::channel(1);
         drop(command_rx); // Close the receiver to cause send error
 
-        let node_handle = NodeHandle { command_tx };
+        let node_handle = NodeHandle {
+            command_tx,
+            tx_fetch_handle: create_tx_fetcher_channel().0,
+        };
 
         let query = GetPplnsShareQuery {
             limit: 10,
