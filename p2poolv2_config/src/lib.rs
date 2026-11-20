@@ -7,6 +7,9 @@ use bitcoin::{Address, Network};
 use bitcoindrpc::BitcoinRpcConfig;
 use p2poolv2_wallet::Address as ShareAddress;
 use serde::Deserialize;
+#[cfg(any(test, feature = "test-utils"))]
+use serde::Serialize;
+use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::str::FromStr;
 
@@ -71,9 +74,9 @@ const MAX_CUT_BASIS_POINTS: u16 = 10_000;
 /// P2Poolv2 mode runs the full share chain with ASERT difficulty and
 /// P2P networking.  Hydrapool mode runs a standalone PPLNS pool where
 /// the share chain ASERT difficulty is not enforced.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
-#[derive(Default)]
+#[cfg_attr(any(test, feature = "test-utils"), derive(Serialize))]
 pub enum PoolMode {
     /// Full P2Poolv2 share chain mode (default)
     #[serde(alias = "P2Poolv2", alias = "p2poolv2")]
@@ -94,6 +97,7 @@ pub struct Parsed;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(bound(deserialize = "State: Default"))]
+#[cfg_attr(any(test, feature = "test-utils"), derive(Serialize))]
 pub struct StratumConfig<State = Raw> {
     /// The hostname for the Stratum server
     pub hostname: String,
@@ -130,7 +134,10 @@ pub struct StratumConfig<State = Raw> {
     #[serde(rename = "network", deserialize_with = "deserialize_chain")]
     pub chain: Chain,
     /// The version mask to use for version-rolling
-    #[serde(deserialize_with = "deserialize_version_mask")]
+    #[serde(
+        deserialize_with = "deserialize_version_mask",
+        serialize_with = "serialize_version_mask"
+    )]
     pub version_mask: i32,
     /// Test config to ignore difficulty
     pub ignore_difficulty: Option<bool>,
@@ -312,11 +319,10 @@ impl StratumConfig<Parsed> {
 }
 
 #[cfg(any(test, feature = "test-utils"))]
-impl StratumConfig<Raw> {
+impl Default for StratumConfig<Raw> {
     /// Helper for tests to create a basic StratumConfig
-    /// Uses regtest network by default with a valid regtest address
-    pub fn new_for_test_default() -> Self {
-        StratumConfig {
+    fn default() -> Self {
+        Self {
             hostname: "127.0.0.1".to_string(),
             port: 3333,
             start_difficulty: 1,
@@ -364,7 +370,16 @@ where
     i32::from_str_radix(&hex_string, 16).map_err(serde::de::Error::custom)
 }
 
+#[cfg(any(test, feature = "test-utils"))]
+fn serialize_version_mask<S>(version_mask: &i32, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(&format!("{:x}", *version_mask as u32))
+}
+
 #[derive(Debug, Deserialize, Clone)]
+#[cfg_attr(any(test, feature = "test-utils"), derive(Serialize))]
 pub struct NetworkConfig {
     pub listen_address: String,
     /// Peers to dial at startup and reconnect to with backoff. Optional;
@@ -434,6 +449,7 @@ impl Default for NetworkConfig {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[cfg_attr(any(test, feature = "test-utils"), derive(Serialize))]
 pub struct StoreConfig {
     pub path: String,
     /// Time-to-live for PPLNS shares (in days)
@@ -445,11 +461,22 @@ fn default_wait_for_chain_sync() -> bool {
     true
 }
 
+#[cfg(any(test, feature = "test-utils"))]
+impl Default for StoreConfig {
+    fn default() -> Self {
+        Self {
+            path: Default::default(),
+            pplns_ttl_days: default_pplns_ttl_days(),
+        }
+    }
+}
+
 fn default_pplns_ttl_days() -> u64 {
     7
 }
 
 #[derive(Debug, Deserialize, Default, Clone)]
+#[cfg_attr(any(test, feature = "test-utils"), derive(Serialize))]
 pub struct LoggingConfig {
     /// Log to file if specified
     pub file: Option<String>,
@@ -477,6 +504,7 @@ fn default_stats_dir() -> String {
 }
 
 #[derive(Deserialize, Clone)]
+#[cfg_attr(any(test, feature = "test-utils"), derive(Default, Serialize))]
 pub struct ApiConfig {
     /// The hostname for the API server
     pub hostname: String,
@@ -515,6 +543,7 @@ impl std::fmt::Debug for ApiConfig {
 /// TLS or client authentication. It is off unless the `[electrum]` section
 /// enables it.
 #[derive(Debug, Deserialize, Clone)]
+#[cfg_attr(any(test, feature = "test-utils"), derive(Serialize))]
 pub struct ElectrumConfig {
     /// Start the Electrum server with the node
     #[serde(default)]
@@ -617,6 +646,7 @@ pub struct SimConfig {
 /// The network config switches to defaults if not provided. This is
 /// the case for standalone PPLNS pools like Hydrapool.
 #[derive(Debug, Deserialize, Clone)]
+#[cfg_attr(any(test, feature = "test-utils"), derive(Default, Serialize))]
 #[allow(dead_code)]
 pub struct Config {
     #[serde(default)]
@@ -640,6 +670,7 @@ pub struct Config {
 /// the network splits, so the node logs a warning for each override. Leave
 /// the `[forks]` section out to use the defaults.
 #[derive(Debug, Deserialize, Clone, Default, PartialEq, Eq)]
+#[cfg_attr(any(test, feature = "test-utils"), derive(Serialize))]
 pub struct ForksConfig {
     /// Share chain height from which the coinbase carries at most a fixed
     /// number of miner outputs, paid by the raffled tail split.
@@ -647,8 +678,8 @@ pub struct ForksConfig {
     pub capped_coinbase_height: Option<u32>,
 }
 
-#[allow(dead_code)]
 impl Config {
+    /// Configuration loaded from file in storage overridden by environment variables (if any).
     pub fn load(path: &str) -> Result<Self, config::ConfigError> {
         config::Config::builder()
             .add_source(config::File::with_name(path))
@@ -656,6 +687,21 @@ impl Config {
             // With a single-underscore separator, P2POOL_STORE_PPLNS_TTL_DAYS
             // addresses store.pplns.ttl.days, which does not exist, and the
             // override is silently discarded. See the env_override tests.
+            .add_source(
+                config::Environment::with_prefix("P2POOL")
+                    .prefix_separator("_")
+                    .separator("__"),
+            )
+            .build()?
+            .try_deserialize()
+    }
+
+    /// Default config overridden by environment variables (if any).
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn load_env() -> Result<Self, config::ConfigError> {
+        let content = serde_json::to_string(&Config::default()).unwrap();
+        config::Config::builder()
+            .add_source(config::File::from_str(&content, config::FileFormat::Json))
             .add_source(
                 config::Environment::with_prefix("P2POOL")
                     .prefix_separator("_")
@@ -834,8 +880,8 @@ mod tests {
 
     #[test]
     fn test_config_builder() {
-        let config = Config::load("../config.sample.toml").unwrap();
-        let config = config
+        let config = Config::load_env()
+            .unwrap()
             .with_listen_address("127.0.0.1:8080".to_string())
             .with_dial_peers(vec![
                 "peer1.example.com".to_string(),
@@ -915,9 +961,7 @@ mod tests {
 
     #[test]
     fn test_config_store_background_settings() {
-        let config = Config::load("../config.sample.toml")
-            .unwrap()
-            .with_pplns_ttl_days(9);
+        let config = Config::load_env().unwrap().with_pplns_ttl_days(9);
 
         assert_eq!(config.store.pplns_ttl_days, 9);
     }
@@ -1207,7 +1251,7 @@ mod tests {
             Some("http://bitcoin-from-env:8332"),
             || {
                 // Load config from file first
-                let config = Config::load("../config.sample.toml").unwrap();
+                let config = Config::load_env().unwrap();
 
                 // Check that the environment variable overrides the config file value
                 assert_eq!(config.bitcoinrpc.url, "http://bitcoin-from-env:8332");
@@ -1231,9 +1275,11 @@ mod tests {
     /// through a configured address; it has to be checked on its own.
     #[test]
     fn parse_rejects_a_network_with_no_share_address_prefix() {
-        let mut config = StratumConfig::<Raw>::new_for_test_default();
-        config.chain = Chain::Testnet3;
-        config.mode = PoolMode::P2poolv2;
+        let config = StratumConfig::<Raw> {
+            chain: Chain::Testnet3,
+            mode: PoolMode::P2poolv2,
+            ..Default::default()
+        };
         assert!(config.miner_address.is_none());
 
         let error = config.parse().expect_err("testnet v3 has no share prefix");
@@ -1248,10 +1294,12 @@ mod tests {
     /// must not be held to a rule that does not apply to it.
     #[test]
     fn parse_allows_an_unusable_network_in_hydrapool_mode() {
-        let mut config = StratumConfig::<Raw>::new_for_test_default();
-        config.chain = Chain::Testnet3;
-        config.mode = PoolMode::Hydrapool;
-        config.miner_address = None;
+        let config = StratumConfig::<Raw> {
+            chain: Chain::Testnet3,
+            mode: PoolMode::Hydrapool,
+            miner_address: None,
+            ..Default::default()
+        };
 
         assert!(config.parse().is_ok());
     }
@@ -1259,7 +1307,7 @@ mod tests {
     #[test]
     fn test_pool_signature_option() {
         // Test with None
-        let config = StratumConfig::<Raw>::new_for_test_default();
+        let config = StratumConfig::<Raw>::default();
         assert_eq!(config.pool_signature, None);
 
         // Test parsing preserves pool_signature
@@ -1267,8 +1315,10 @@ mod tests {
         assert_eq!(parsed.pool_signature, None);
 
         // Test with Some value
-        let mut config_with_sig = StratumConfig::<Raw>::new_for_test_default();
-        config_with_sig.pool_signature = Some("MyPool/1.0".to_string());
+        let config_with_sig = StratumConfig::<Raw> {
+            pool_signature: Some("MyPool/1.0".to_string()),
+            ..Default::default()
+        };
         assert_eq!(
             config_with_sig.pool_signature,
             Some("MyPool/1.0".to_string())
@@ -1282,16 +1332,20 @@ mod tests {
         );
 
         // Test sig length limit
-        let mut config_with_sig = StratumConfig::<Raw>::new_for_test_default();
-        config_with_sig.pool_signature = Some("MyPool/1.0 and some more bytes....".to_string());
+        let config_with_sig = StratumConfig::<Raw> {
+            pool_signature: Some("MyPool/1.0 and some more bytes....".to_string()),
+            ..Default::default()
+        };
         assert_err!(config_with_sig.parse());
     }
 
     #[test]
     fn test_parse_fails_donation_address_without_amount() {
-        let mut config = StratumConfig::<Raw>::new_for_test_default();
-        config.donation_address = Some("tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string());
-        config.donation = None;
+        let config = StratumConfig::<Raw> {
+            donation_address: Some("tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string()),
+            donation: None,
+            ..Default::default()
+        };
         let result = config.parse();
         assert_err!(&result);
         assert!(
@@ -1304,9 +1358,11 @@ mod tests {
 
     #[test]
     fn test_parse_fails_donation_amount_without_address() {
-        let mut config = StratumConfig::<Raw>::new_for_test_default();
-        config.donation_address = None;
-        config.donation = Some(50);
+        let config = StratumConfig::<Raw> {
+            donation_address: None,
+            donation: Some(50),
+            ..Default::default()
+        };
         let result = config.parse();
         assert_err!(&result);
         assert!(
@@ -1319,9 +1375,11 @@ mod tests {
 
     #[test]
     fn test_parse_fails_fee_address_without_amount() {
-        let mut config = StratumConfig::<Raw>::new_for_test_default();
-        config.fee_address = Some("tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string());
-        config.fee = None;
+        let config = StratumConfig::<Raw> {
+            fee_address: Some("tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string()),
+            fee: None,
+            ..Default::default()
+        };
         let result = config.parse();
         assert_err!(&result);
         assert!(result.unwrap_err().message.contains("fee_address and fee"));
@@ -1329,9 +1387,11 @@ mod tests {
 
     #[test]
     fn test_parse_fails_fee_amount_without_address() {
-        let mut config = StratumConfig::<Raw>::new_for_test_default();
-        config.fee_address = None;
-        config.fee = Some(200);
+        let config = StratumConfig::<Raw> {
+            fee_address: None,
+            fee: Some(200),
+            ..Default::default()
+        };
         let result = config.parse();
         assert_err!(&result);
         assert!(result.unwrap_err().message.contains("fee_address and fee"));
@@ -1339,9 +1399,11 @@ mod tests {
 
     #[test]
     fn test_parse_succeeds_with_both_donation_fields() {
-        let mut config = StratumConfig::<Raw>::new_for_test_default();
-        config.donation_address = Some("tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string());
-        config.donation = Some(50);
+        let config = StratumConfig::<Raw> {
+            donation_address: Some("tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string()),
+            donation: Some(50),
+            ..Default::default()
+        };
         let parsed = config.parse().unwrap();
         assert!(parsed.donation_address_parsed.is_some());
         assert_eq!(parsed.donation, Some(50));
@@ -1349,9 +1411,11 @@ mod tests {
 
     #[test]
     fn test_parse_succeeds_with_both_fee_fields() {
-        let mut config = StratumConfig::<Raw>::new_for_test_default();
-        config.fee_address = Some("tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string());
-        config.fee = Some(200);
+        let config = StratumConfig::<Raw> {
+            fee_address: Some("tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string()),
+            fee: Some(200),
+            ..Default::default()
+        };
         let parsed = config.parse().unwrap();
         assert!(parsed.fee_address_parsed.is_some());
         assert_eq!(parsed.fee, Some(200));
@@ -1359,9 +1423,11 @@ mod tests {
 
     #[test]
     fn test_parse_fails_donation_above_maximum() {
-        let mut config = StratumConfig::<Raw>::new_for_test_default();
-        config.donation_address = Some("tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string());
-        config.donation = Some(10_001);
+        let config = StratumConfig::<Raw> {
+            donation_address: Some("tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string()),
+            donation: Some(10_001),
+            ..Default::default()
+        };
 
         let error = config.parse().unwrap_err();
 
@@ -1374,9 +1440,11 @@ mod tests {
 
     #[test]
     fn test_parse_fails_fee_above_maximum() {
-        let mut config = StratumConfig::<Raw>::new_for_test_default();
-        config.fee_address = Some("tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string());
-        config.fee = Some(10_001);
+        let config = StratumConfig::<Raw> {
+            fee_address: Some("tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string()),
+            fee: Some(10_001),
+            ..Default::default()
+        };
 
         let error = config.parse().unwrap_err();
 
@@ -1389,11 +1457,14 @@ mod tests {
 
     #[test]
     fn test_parse_succeeds_with_maximum_donation_and_fee() {
-        let mut config = StratumConfig::<Raw>::new_for_test_default();
-        config.donation_address = Some("tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string());
-        config.donation = Some(10_000);
-        config.fee_address = Some("tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string());
-        config.fee = Some(10_000);
+        let address = "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string();
+        let config = StratumConfig::<Raw> {
+            donation_address: Some(address.clone()),
+            donation: Some(10_000),
+            fee_address: Some(address),
+            fee: Some(10_000),
+            ..Default::default()
+        };
 
         let parsed = config.parse().unwrap();
 
@@ -1403,7 +1474,7 @@ mod tests {
 
     #[test]
     fn test_parse_succeeds_with_neither_donation_nor_fee() {
-        let config = StratumConfig::<Raw>::new_for_test_default();
+        let config = StratumConfig::<Raw>::default();
         assert!(config.donation_address.is_none());
         assert!(config.donation.is_none());
         assert!(config.fee_address.is_none());
@@ -1421,14 +1492,16 @@ mod tests {
 
     #[test]
     fn test_pool_mode_defaults_to_p2poolv2_in_test_helper() {
-        let config = StratumConfig::<Raw>::new_for_test_default();
+        let config = StratumConfig::<Raw>::default();
         assert_eq!(config.mode, PoolMode::P2poolv2);
     }
 
     #[test]
     fn test_pool_mode_survives_parse() {
-        let mut config = StratumConfig::<Raw>::new_for_test_default();
-        config.mode = PoolMode::Hydrapool;
+        let config = StratumConfig::<Raw> {
+            mode: PoolMode::Hydrapool,
+            ..Default::default()
+        };
         let parsed = config.parse().unwrap();
         assert_eq!(parsed.mode, PoolMode::Hydrapool);
     }
@@ -1451,8 +1524,10 @@ mod miner_address_tests {
     /// covering p2poolv2 even if that default ever changes.
     #[test]
     fn absent_miner_address_parses_to_none() {
-        let mut config = StratumConfig::<Raw>::new_for_test_default();
-        config.mode = PoolMode::P2poolv2;
+        let config = StratumConfig::<Raw> {
+            mode: PoolMode::P2poolv2,
+            ..Default::default()
+        };
 
         let parsed = config.parse().unwrap();
         assert!(parsed.miner_address().is_none());
@@ -1461,8 +1536,10 @@ mod miner_address_tests {
 
     #[test]
     fn valid_miner_address_is_parsed_and_exposed() {
-        let mut config = StratumConfig::<Raw>::new_for_test_default();
-        config.miner_address = Some(SIGNET_ADDRESS.to_string());
+        let config = StratumConfig::<Raw> {
+            miner_address: Some(SIGNET_ADDRESS.to_string()),
+            ..Default::default()
+        };
 
         let parsed = config.parse().unwrap();
 
@@ -1478,8 +1555,10 @@ mod miner_address_tests {
     /// pool to an address the operator cannot use.
     #[test]
     fn miner_address_for_another_network_is_rejected() {
-        let mut config = StratumConfig::<Raw>::new_for_test_default();
-        config.miner_address = Some(TESTNET4_ADDRESS.to_string());
+        let config = StratumConfig::<Raw> {
+            miner_address: Some(TESTNET4_ADDRESS.to_string()),
+            ..Default::default()
+        };
 
         let error = config.parse().unwrap_err();
 
@@ -1494,10 +1573,12 @@ mod miner_address_tests {
     /// address and a `tp2pool` share address both parse on it.
     #[test]
     fn testnet5_accepts_testnet_bootstrap_and_testnet4_share_address() {
-        let mut config = StratumConfig::<Raw>::new_for_test_default();
-        config.chain = Chain::Testnet5;
-        config.mode = PoolMode::P2poolv2;
-        config.miner_address = Some(TESTNET4_ADDRESS.to_string());
+        let config = StratumConfig::<Raw> {
+            chain: Chain::Testnet5,
+            mode: PoolMode::P2poolv2,
+            miner_address: Some(TESTNET4_ADDRESS.to_string()),
+            ..Default::default()
+        };
 
         let parsed = config.parse().unwrap();
 
@@ -1516,8 +1597,10 @@ mod miner_address_tests {
 
     #[test]
     fn malformed_miner_address_is_rejected() {
-        let mut config = StratumConfig::<Raw>::new_for_test_default();
-        config.miner_address = Some("not-a-share-address".to_string());
+        let config = StratumConfig::<Raw> {
+            miner_address: Some("not-a-share-address".to_string()),
+            ..Default::default()
+        };
 
         let error = config.parse().unwrap_err();
 
@@ -1532,8 +1615,10 @@ mod miner_address_tests {
     /// prevent, so it must fail loudly at startup.
     #[test]
     fn bitcoin_address_as_miner_address_is_rejected() {
-        let mut config = StratumConfig::<Raw>::new_for_test_default();
-        config.miner_address = Some("tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string());
+        let config = StratumConfig::<Raw> {
+            miner_address: Some("tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string()),
+            ..Default::default()
+        };
 
         assert!(config.parse().is_err());
     }
@@ -1541,9 +1626,11 @@ mod miner_address_tests {
     /// Hydrapool builds no share commitment, so the field could never be used.
     #[test]
     fn miner_address_with_hydrapool_mode_is_rejected() {
-        let mut config = StratumConfig::<Raw>::new_for_test_default();
-        config.miner_address = Some(SIGNET_ADDRESS.to_string());
-        config.mode = PoolMode::Hydrapool;
+        let config = StratumConfig::<Raw> {
+            miner_address: Some(SIGNET_ADDRESS.to_string()),
+            mode: PoolMode::Hydrapool,
+            ..Default::default()
+        };
 
         let error = config.parse().unwrap_err();
 
@@ -1556,17 +1643,21 @@ mod miner_address_tests {
 
     #[test]
     fn hydrapool_without_a_miner_address_still_parses() {
-        let mut config = StratumConfig::<Raw>::new_for_test_default();
-        config.mode = PoolMode::Hydrapool;
+        let config = StratumConfig::<Raw> {
+            mode: PoolMode::Hydrapool,
+            ..Default::default()
+        };
 
         assert!(config.parse().is_ok());
     }
 
     #[test]
     fn miner_address_with_p2poolv2_mode_is_accepted() {
-        let mut config = StratumConfig::<Raw>::new_for_test_default();
-        config.miner_address = Some(SIGNET_ADDRESS.to_string());
-        config.mode = PoolMode::P2poolv2;
+        let config = StratumConfig::<Raw> {
+            miner_address: Some(SIGNET_ADDRESS.to_string()),
+            mode: PoolMode::P2poolv2,
+            ..Default::default()
+        };
 
         assert!(config.parse().is_ok());
     }

@@ -842,11 +842,11 @@ mod tests {
                 pplns_ttl_days: 3,
             },
 
-            stratum: StratumConfig::new_for_test_default(),
+            stratum: StratumConfig::default(),
             logging: LoggingConfig {
                 console: Some(true),
-                level: "info".to_string(),
                 file: Some("./p2pool.log".to_string()),
+                level: "info".to_string(),
                 stats_dir: "./logs/stats".to_string(),
             },
             api: ApiConfig {
@@ -957,7 +957,7 @@ mod tests {
                 path: "test_chain.db".to_string(),
                 pplns_ttl_days: 3,
             },
-            stratum: StratumConfig::new_for_test_default(),
+            stratum: StratumConfig::default(),
             logging: LoggingConfig {
                 console: Some(true),
                 level: "info".to_string(),
