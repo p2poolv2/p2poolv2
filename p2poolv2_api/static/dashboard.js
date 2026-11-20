@@ -82,6 +82,7 @@ function dashboard() {
         sharesPerPage: 10,
         foundBlocks: [],
         foundBlocksTotal: 0,
+        foundBlocksTotalCapped: false,
         foundBlocksNetwork: "",
         foundBlocksError: "",
         foundBlocksTimer: null,
@@ -348,6 +349,7 @@ function dashboard() {
                 if (isStale()) return;
                 this.foundBlocks = data.found_blocks;
                 this.foundBlocksTotal = data.total;
+                this.foundBlocksTotalCapped = data.total_capped;
                 this.foundBlocksNetwork = data.network;
                 this.foundBlocksError = "";
             } catch (err) {
@@ -405,6 +407,7 @@ function dashboard() {
             this.stopFoundBlocksRefresh();
             this.foundBlocks = [];
             this.foundBlocksTotal = 0;
+            this.foundBlocksTotalCapped = false;
             this.foundBlocksNetwork = "";
             this.foundBlocksError = "";
             this.authenticated = false;

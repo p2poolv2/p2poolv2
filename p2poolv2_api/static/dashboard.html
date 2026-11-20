@@ -308,7 +308,7 @@
                 Found Bitcoin Blocks
                 <small
                   x-show="foundBlocksTotal > 0"
-                  x-text="'(' + foundBlocksTotal + ' total)'"
+                  x-text="'(' + foundBlocksTotal + (foundBlocksTotalCapped ? '+' : '') + ' total)'"
                 ></small>
               </h3>
             </header>

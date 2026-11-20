@@ -14,7 +14,7 @@ use crate::config::PoolMode;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::store::block_tx_metadata::{BlockMetadata, Status};
 use crate::store::dag_store::{BlockValidSearch, ShareDag, UncleInfo};
-use crate::store::found_block::FoundBlock;
+use crate::store::found_block::{FoundBlock, LatestFoundBlocks};
 use crate::store::prune_blocks::{PruneStats, get_range_to_prune};
 use crate::store::script_history::{ScriptHash, ScriptHistoryPage};
 use crate::store::transaction_store::{OutputOrigin, PrevoutCheck};
@@ -471,13 +471,14 @@ impl ChainStoreHandle {
         self.store_handle.get_found_blocks()
     }
 
-    /// Get the total number of found bitcoin blocks and the `limit` most
-    /// recent ones, highest bitcoin height first.
+    /// Get the `limit` most recent found bitcoin blocks, highest bitcoin
+    /// height first, with a count of entries bounded by `scan_limit`.
     pub fn get_latest_found_blocks(
         &self,
         limit: usize,
-    ) -> Result<(usize, Vec<FoundBlock>), StoreError> {
-        self.store_handle.get_latest_found_blocks(limit)
+        scan_limit: usize,
+    ) -> Result<LatestFoundBlocks, StoreError> {
+        self.store_handle.get_latest_found_blocks(limit, scan_limit)
     }
 
     /// Get the confirmed blockhash at the height
@@ -1111,7 +1112,7 @@ mockall::mock! {
         pub fn get_share_headers(&self, share_hashes: &[BlockHash]) -> Result<Vec<(BlockHash, ShareHeader)>, StoreError>;
         pub fn get_share_header(&self, share_hash: &BlockHash) -> Result<ShareHeader, StoreError>;
         pub fn get_found_blocks(&self) -> Result<Vec<FoundBlock>, StoreError>;
-        pub fn get_latest_found_blocks(&self, limit: usize) -> Result<(usize, Vec<FoundBlock>), StoreError>;
+        pub fn get_latest_found_blocks(&self, limit: usize, scan_limit: usize) -> Result<LatestFoundBlocks, StoreError>;
         pub fn get_headers_for_locator(&self, block_hashes: &[BlockHash], stop_block_hash: &BlockHash, limit: usize) -> Result<Vec<ShareHeader>, StoreError>;
         pub fn get_headers_after(&self, locator: &[BlockHash], resume_after: Option<BlockHash>, stop_block_hash: &BlockHash, limit: usize) -> Result<Vec<ShareHeader>, StoreError>;
         pub fn get_blockhashes_for_locator(&self, locator: &[BlockHash], stop_block_hash: &BlockHash, max_blockhashes: usize) -> Result<Vec<BlockHash>, StoreError>;

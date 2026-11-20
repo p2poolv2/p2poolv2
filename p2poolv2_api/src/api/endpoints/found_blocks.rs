@@ -15,6 +15,10 @@ use std::sync::Arc;
 /// Maximum number of found blocks that can be requested in a single query.
 const MAX_NUM_FOUND_BLOCKS_IN_RESPONSE: u32 = 100;
 
+/// Maximum number of found block entries walked per request, to bound
+/// the store scan as the list grows.
+const MAX_FOUND_BLOCKS_SCAN: usize = 1000;
+
 /// Query parameters for the /found_blocks endpoint.
 #[derive(Deserialize)]
 pub struct FoundBlocksQuery {
@@ -50,8 +54,12 @@ pub struct FoundBlocksResponse {
     /// Bitcoin chain name as bitcoind spells it, so clients can pick a
     /// block explorer.
     pub network: &'static str,
-    /// Total number of bitcoin blocks found by the pool.
+    /// Total number of bitcoin blocks found by the pool, counted up to
+    /// MAX_FOUND_BLOCKS_SCAN.
     pub total: usize,
+    /// True when more found blocks exist than were counted, so `total`
+    /// is a lower bound.
+    pub total_capped: bool,
     /// The most recent found blocks, highest bitcoin height first.
     pub found_blocks: Vec<FoundBlockResponse>,
 }
@@ -73,19 +81,21 @@ pub(crate) async fn found_blocks(
         )));
     }
 
-    let (total, latest_found_blocks) = state
+    let latest_found_blocks = state
         .chain_store_handle
-        .get_latest_found_blocks(num as usize)
+        .get_latest_found_blocks(num as usize, MAX_FOUND_BLOCKS_SCAN)
         .map_err(|error| ApiError::ServerError(format!("Failed to get found blocks: {error}")))?;
 
     let found_blocks = latest_found_blocks
+        .found_blocks
         .iter()
         .map(FoundBlockResponse::from)
         .collect();
 
     Ok(Json(FoundBlocksResponse {
         network: state.app_config.chain.as_str(),
-        total,
+        total: latest_found_blocks.counted,
+        total_capped: latest_found_blocks.scan_limit_reached,
         found_blocks,
     }))
 }
@@ -163,6 +173,7 @@ mod tests {
 
         assert_eq!(response.network, "signet");
         assert_eq!(response.total, 0);
+        assert!(!response.total_capped);
         assert!(response.found_blocks.is_empty());
     }
 
@@ -231,6 +242,7 @@ mod tests {
         let response = found_blocks(State(state), Query(query)).await.unwrap().0;
 
         assert_eq!(response.total, 2);
+        assert!(!response.total_capped);
         assert_eq!(response.found_blocks.len(), 1);
         let newest = &response.found_blocks[0];
         assert_eq!(newest.bitcoin_height, 101);

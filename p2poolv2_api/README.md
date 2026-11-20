@@ -123,7 +123,8 @@ since orphaned on the bitcoin chain.
 | Field          | Type     | Description                                        |
 |----------------|----------|----------------------------------------------------|
 | `network`      | `string` | Bitcoin chain name as bitcoind spells it           |
-| `total`        | `number` | Total number of bitcoin blocks found by the pool   |
+| `total`        | `number` | Total number of bitcoin blocks found by the pool, counted up to 1000 |
+| `total_capped` | `bool`   | True when more than 1000 blocks exist, so `total` is a lower bound |
 | `found_blocks` | `array`  | List of found block objects                        |
 
 Each found block object contains: `bitcoin_height`,

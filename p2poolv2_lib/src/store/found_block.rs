@@ -40,6 +40,19 @@ pub struct FoundBlock {
     pub miner_bitcoin_address: String,
 }
 
+/// The most recent found blocks and a bounded count of all entries, as
+/// returned by `Store::get_latest_found_blocks`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LatestFoundBlocks {
+    /// The most recent found blocks, highest bitcoin height first
+    pub found_blocks: Vec<FoundBlock>,
+    /// Number of entries counted, at most the scan limit
+    pub counted: usize,
+    /// True when more entries exist beyond the scan limit, so `counted`
+    /// is a lower bound rather than the total
+    pub scan_limit_reached: bool,
+}
+
 /// The value half of a FoundBlocks entry, encoded with bitcoin consensus
 /// encoding.
 struct FoundBlockValue {
@@ -149,32 +162,42 @@ impl Store {
         Ok(found_blocks)
     }
 
-    /// Return the total number of found bitcoin blocks and the `limit`
-    /// most recent ones, highest bitcoin height first.
+    /// Return the `limit` most recent found bitcoin blocks, highest
+    /// bitcoin height first, with a count of entries bounded by
+    /// `scan_limit`.
     ///
     /// Walks the keys from the end so only the returned entries are
-    /// decoded; the rest are counted without reading their values.
+    /// decoded; the rest are counted without reading their values. The
+    /// walk stops after `scan_limit` keys, so the cost of a call is
+    /// bounded however many blocks have been found.
     pub fn get_latest_found_blocks(
         &self,
         limit: usize,
-    ) -> Result<(usize, Vec<FoundBlock>), StoreError> {
+        scan_limit: usize,
+    ) -> Result<LatestFoundBlocks, StoreError> {
         let column_family = self.db.cf_handle(&ColumnFamily::FoundBlocks).unwrap();
         let mut iterator = self.db.raw_iterator_cf(&column_family);
-        let mut latest_found_blocks = Vec::with_capacity(limit);
-        let mut total = 0;
+        let mut found_blocks = Vec::with_capacity(limit.min(scan_limit));
+        let mut counted = 0;
         iterator.seek_to_last();
-        while let Some(key) = iterator.key() {
-            if latest_found_blocks.len() < limit {
+        while counted < scan_limit
+            && let Some(key) = iterator.key()
+        {
+            if found_blocks.len() < limit {
                 let value = iterator.value().ok_or_else(|| {
                     StoreError::Serialization(format!("Found block value missing for {key:?}"))
                 })?;
-                latest_found_blocks.push(decode_found_block(key, value)?);
+                found_blocks.push(decode_found_block(key, value)?);
             }
-            total += 1;
+            counted += 1;
             iterator.prev();
         }
         iterator.status()?;
-        Ok((total, latest_found_blocks))
+        Ok(LatestFoundBlocks {
+            found_blocks,
+            counted,
+            scan_limit_reached: iterator.valid(),
+        })
     }
 }
 
@@ -346,14 +369,15 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
-        let (total, latest_found_blocks) = store.get_latest_found_blocks(10).unwrap();
+        let latest_found_blocks = store.get_latest_found_blocks(10, 1000).unwrap();
 
-        assert_eq!(total, 0);
-        assert!(latest_found_blocks.is_empty());
+        assert_eq!(latest_found_blocks.counted, 0);
+        assert!(!latest_found_blocks.scan_limit_reached);
+        assert!(latest_found_blocks.found_blocks.is_empty());
     }
 
     #[test]
-    fn test_get_latest_found_blocks_returns_newest_first_and_counts_all() {
+    fn test_get_latest_found_blocks_returns_newest_first_and_bounds_count_by_scan_limit() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
         let genesis = TestShareBlockBuilder::new().nonce(0xe9695791).build();
@@ -387,16 +411,36 @@ mod tests {
         share3.header.bitcoin_height = 102;
         store.push_to_confirmed_chain(&share3).unwrap();
 
-        let (total, latest_found_blocks) = store.get_latest_found_blocks(2).unwrap();
+        let latest_found_blocks = store.get_latest_found_blocks(2, 1000).unwrap();
 
-        //* The total counts the undecoded oldest entry too; the list
+        //* The count includes the undecoded oldest entry too; the list
         //* holds only the two newest, highest height first.
-        assert_eq!(total, 3);
-        assert_eq!(latest_found_blocks.len(), 2);
-        assert_eq!(latest_found_blocks[0].bitcoin_height, 102);
-        assert_eq!(latest_found_blocks[0].share_blockhash, share3.block_hash());
-        assert_eq!(latest_found_blocks[1].bitcoin_height, 101);
-        assert_eq!(latest_found_blocks[1].share_blockhash, share2.block_hash());
+        assert_eq!(latest_found_blocks.counted, 3);
+        assert!(!latest_found_blocks.scan_limit_reached);
+        assert_eq!(latest_found_blocks.found_blocks.len(), 2);
+        assert_eq!(latest_found_blocks.found_blocks[0].bitcoin_height, 102);
+        assert_eq!(
+            latest_found_blocks.found_blocks[0].share_blockhash,
+            share3.block_hash()
+        );
+        assert_eq!(latest_found_blocks.found_blocks[1].bitcoin_height, 101);
+        assert_eq!(
+            latest_found_blocks.found_blocks[1].share_blockhash,
+            share2.block_hash()
+        );
+
+        //* A scan limit below the entry count stops the walk early and
+        //* flags that more entries remain.
+        let capped = store.get_latest_found_blocks(2, 2).unwrap();
+        assert_eq!(capped.counted, 2);
+        assert!(capped.scan_limit_reached);
+        assert_eq!(capped.found_blocks, latest_found_blocks.found_blocks);
+
+        //* A scan limit equal to the entry count walks every entry, so
+        //* nothing remains and the count is exact.
+        let exact = store.get_latest_found_blocks(2, 3).unwrap();
+        assert_eq!(exact.counted, 3);
+        assert!(!exact.scan_limit_reached);
     }
 
     #[test]
