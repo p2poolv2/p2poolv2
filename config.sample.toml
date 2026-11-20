@@ -1,47 +1,64 @@
 [network]
+# The address for the network to listen on (String, Multiaddr)
 listen_address = "/ip4/127.0.0.1/tcp/6884"
-# Peers to dial at startup and keep reconnecting to. Optional: leave it
-# out to find peers through the DNS seeds alone. Hostnames work too, as
-# /dns4/, /dns6/ or /dns/ addresses; only hostnames listed here are ever
-# dialed, never ones learned from peers.
+# Peers to dial at startup and keep reconnecting to (Array of String, Multiaddr)
 # dial_peers = ["/ip4/203.0.113.1/tcp/6884", "/dns4/peer.example.com/tcp/6884"]
-# Fall back to the built-in DNS seeds for this network when no peer is
-# connected. Seeds are queried at startup without dial_peers, or 10s
-# after startup when dial_peers are set but none connected. Set false
-# to rely only on dial_peers.
+# Fall back to the built-in DNS seeds for this network when no peer is connected (bool, defaults to true)
 # dns_seed = true
+# Maximum number of pending incoming connections (u32)
 max_pending_incoming = 10
+# Maximum number of pending outgoing connections (u32)
 max_pending_outgoing = 10
+# Maximum number of established incoming connections (u32)
 max_established_incoming = 50
+# Maximum number of established outgoing connections (u32)
 max_established_outgoing = 50
-# Two, not one: room for an inbound and an outbound connection when two
-# nodes dial each other at once. More only duplicates traffic -- libp2p
-# multiplexes every protocol over a single connection.
+# Maximum number of established connections per peer (u32) - for an inbound and an outbound connection
 max_established_per_peer = 2
+# Maximum number of workbase messages per second (u32)
 max_workbase_per_second = 10
+# Maximum number of user workbase messages per second (u32)
 max_userworkbase_per_second = 10
+# Maximum number of mining share messages per second (u32)
 max_miningshare_per_second = 100
+# Maximum number of inventory messages per second (u32)
 max_inventory_per_second = 100
+# Maximum number of transaction messages per second (u32)
 max_transaction_per_second = 100
+# Maximum number of requests per second (u64)
 max_requests_per_second = 100
-dial_timeout_secs = 30
-# Optional external address for nodes behind NAT. If set, this address
-# is advertised to peers instead of auto-detecting from identify observations.
+# IP addresses to block from connecting; connections are dropped (Array of String)
+# blocked_ips = ["203.0.113.7"]
+# Optional external address for nodes behind NAT; advertised to peers instead of auto-detecting (String, Multiaddr)
 # external_address = "/ip4/203.0.113.1/tcp/6884"
+# Dial timeout in seconds (u64)
+dial_timeout_secs = 30
 
 [store]
+# Path to the store database file (String)
 path = "./store.db"
+# Time-to-live for PPLNS shares (u64, in days, defaults to 7)
 pplns_ttl_days = 7
 
 [stratum]
+# The hostname for the Stratum server (String)
 hostname = "0.0.0.0"
+# The port for the Stratum server (u16)
 port = 3333
+# The start difficulty for all miners that connect to the server (u64)
 start_difficulty = 10000
+# The minimum difficulty for the pool (u64)
 minimum_difficulty = 100
+# The maximum difficulty for the pool; commented out means not enforced (Option<u64>)
+# maximum_difficulty = 1000
+# Test-only option to ignore difficulty checks (Option<bool>)
+# ignore_difficulty = false
+# The address for solo mining payouts (Option<String>, Bitcoin address)
 solo_address = "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk"
 # Pool operating mode: "p2poolv2" (share chain) or "hydrapool"
 # (standalone PPLNS, no share chain). Default p2poolv2.
 # mode = "p2poolv2"
+# miner_address (Option<String>, share chain address)
 # Share chain address owning every share this node mines. In p2poolv2
 # mode a share needs an owner, so a miner that does not send
 # p2p=<address> in its stratum password gets this address instead.
@@ -58,69 +75,73 @@ solo_address = "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk"
 # different p2p=<address> is rejected as a conflict. Set this only if you
 # want every share to belong to the node.
 # miner_address = "sp2pool1..."
-# The bitcoin address to use for first jobs when there are no shares
+# The bitcoin address to use for first jobs when there are no shares (String, Bitcoin address)
 bootstrap_address = "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk"
-# Any donation amount for developers to be sent to donation address. Default no donation.
+# The donation address for developers (Option<String>, Bitcoin address)
 # donation_address = "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk"
-# In basis points, 1% = 100 basis points. Default 0
+# The donation basis points, 1% = 100 basis points (Option<u16>)
 # donation = 0
-# Any fee amount for node/hydrapool provider to be sent to fee address. Default no fee.
+# The fee address (Option<String>, Bitcoin address)
 # fee_address = "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk"
-# In basis points, 1% = 100 basis points. Default 0
+# The fee basis points, 1% = 100 basis points (Option<u16>)
 # fee = 0
+# The ZMQ publisher address for block hashes. Set this to the same bitcoind value (String)
 zmqpubhashblock = "tcp://127.0.0.1:28332"
-# The network can be "main", "testnet4", "testnet5", "signet" or "regtest"
+# The network can be "main", "testnet4", "testnet5", "signet" or "regtest" (String)
 network = "signet"
-# Use BIP 320 mask for version rolling (see https://github.com/bitcoin/bips/blob/master/bip-0320.mediawiki)
+# Use BIP 320 mask for version rolling (i32, hex string, see https://github.com/bitcoin/bips/blob/master/bip-0320.mediawiki)
 version_mask = "1fffe000"
-# The PPLNS payout window is fixed for the network, not configured: each
-# coinbase pays the last 120,960 shares (about two weeks at the 10 second
-# share target), weighted by share difficulty.
-# Add a pool signature, if you want. Comment out the line if you want
-# to mine anonymous blocks. This signature is only used to show others
-# how large your pool is, if you are running private, there is no need
-# to add a pool signature. Maximum length 16 bytes.
-# It only tags the coinbases this node builds. It is not part of consensus:
-# peers read each block's signature from its own coinbase, so nodes with
-# different signatures, or none, still accept each other's shares.
+# Optional pool signature to include in coinbase. Comment for anonymous blocks. (Option<String>, max 16 bytes)
 pool_signature = "P2Poolv2"
 # Maximum concurrent stratum connections (default: 90% of OS file descriptor limit)
 # max_connections = 1000
+# Wait for the share chain to be current before accepting miners (bool, defaults to true)
+# wait_for_chain_sync = true
 
 [bitcoinrpc]
 # RPC credentials are loaded from env vars
+# The URL for the Bitcoin RPC server (String)
 url = "http://127.0.0.1:38332"
+# The username for Bitcoin RPC authentication (String)
 username = "p2pool"
+# The password for Bitcoin RPC authentication (String)
 password = "p2pool"
 
 [logging]
-# Specify a file path for the log file, if no log file is specified, console logging will be used
+# Log to file if specified (Option<String>, file path)
 file = "./logs/p2pool.log"
+# Log to stdout if true (Option<bool>)
 console = true
+# Log level - overwritten by RUST_LOG (String, e.g., "info", "debug", "warn", "error", defaults to "info")
 level = "info"
-# Pool, user and worker stats are dumped for consumption by stats tools
+# Directory for stats (String, directory path, defaults to "./logs/stats")
 stats_dir = "./logs/stats"
 
 [api]
+# The hostname for the API server (String)
 hostname = "127.0.0.1"
+# The port for the API server (u16)
 port = 46884
-# Optional authentication credentials
+# Optional authentication username (Option<String>)
 # auth_user = "admin"
-# auth_token is of the format salt:password-hmac. Use can p2poolv2_cli gen-auth to generate a token.
+# Optional authentication token (Option<String>, format: salt:password-hmac)
+# Use p2poolv2_cli gen-auth to generate a token
 # auth_token = "your_secret_token"
-# auth_password is the raw password for p2poolv2_cli client auth only. Do not set on server config.
+# Optional raw password for CLI client authentication (not used by server)
 # auth_password = "your_password"
 # Enable permissive CORS (careful with this; allows any origin)
 # cors_allowed = false
 
-# Electrum wallet server: Electrum JSON-RPC over plain TCP, serving the share
-# chain queries to your own wallet. Off unless enabled. It binds localhost and has no
-# TLS or client authentication. Configure remote access or TLS using (SSH tunnel, Tor, stunnel.
-# A publicly reachable listener is not supported.
+# Electrum wallet server: Electrum JSON-RPC over plain TCP for your own
+# wallet; binds localhost, no TLS or auth (use SSH tunnel/Tor/stunnel).
 # [electrum]
+# Start the Electrum server with the node (bool, defaults to false)
 # enabled = false
+# The hostname the Electrum server binds to (String, defaults to "127.0.0.1")
 # hostname = "127.0.0.1"
+# The port the Electrum server binds to (u16, defaults to 50001)
 # port = 50001
+# Maximum number of concurrent wallet connections (u32, defaults to 64)
 # max_connections = 64
 
 # Share chain fork activation heights. Each network has defaults compiled
@@ -129,4 +150,5 @@ port = 46884
 # this section out unless you run a private or test network. The node logs a
 # warning for every override.
 # [forks]
+# Height from which the coinbase carries at most a fixed number of miner outputs (Option<u32>, default compiled in)
 # capped_coinbase_height = 60000

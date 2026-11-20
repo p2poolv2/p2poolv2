@@ -19,7 +19,7 @@ _default:
     set -euo pipefail
 
     [ -f docker/.env ] || cp -v docker/.env.sample docker/.env
-    [ -f config-dev.toml ] || cp -v config.toml config-dev.toml
+    [ -f config-dev.toml ] || cp -v config.sample.toml config-dev.toml
 
     echo 'Edit the ./config-dev.toml file for your specific needs'
     echo 'You can easily run a local cluster with `just compose`'
@@ -96,6 +96,32 @@ preflight: clippy
 # the merge. Run `just advisories` for those.
 deny:
     cargo deny check licenses bans sources
+
+# Every active key in the sample configs has a type comment, and the two samples' comments are identical
+check-configs:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for file in config.sample.toml config-docker.sample.toml; do
+        awk '
+            /^#/ && /^\#[[:space:]]*\[/ { block = ""; next }
+            /^#/ && /^#[[:space:]]*[A-Za-z_][A-Za-z_0-9]* =/ {
+                if (block !~ /\(/) { printf "Missing comment for: %s\n", $2; bad = 1 }
+                block = ""; next
+            }
+            /^#/ { block = block $0 "\n"; next }
+            /^[A-Za-z_][A-Za-z_0-9]* =/ {
+                if (block !~ /\(/) { printf "Missing comment for: %s\n", $1; bad = 1 }
+                block = ""; next
+            }
+            /^\[/ { block = ""; next }
+            { block = "" }
+            END { if (bad) exit 1 }
+        ' "$file"
+    done
+    diff <(grep -E '^\s*#' config.sample.toml) <(grep -E '^\s*#' config-docker.sample.toml) >/dev/null || {
+        echo "Error: *sample.toml files diverge"; exit 1
+    }
+    echo "sample configs OK"
 
 # Check dependencies against the RustSec advisory database. Informational: the
 # CI job for this is non-blocking, because a newly published advisory should not
