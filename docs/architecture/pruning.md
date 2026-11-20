@@ -155,6 +155,9 @@ relative to the candidate tip:
 - Uncle validity
 - Block size
 - Transaction count
+- No coinbase-shaped transaction after index 0 (a copy of another
+  share's coinbase); both tiers run this, so such a block is Invalid at
+  any depth
 
 Skips: coinbase structure, merkle root, witness commitment,
 transaction structure, script verification, prevout validation, MTP,
