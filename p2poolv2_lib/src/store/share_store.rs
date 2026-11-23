@@ -15,7 +15,7 @@ use bitcoin::Transaction;
 use bitcoin::TxMerkleNode;
 use bitcoin::consensus::{self, Encodable, encode};
 use std::collections::{HashMap, HashSet};
-use tracing::debug;
+use tracing::{debug, error};
 
 impl Store {
     /// Add a share to the store.
@@ -283,7 +283,8 @@ impl Store {
     /// Get a share from the store by reconstructing it from the Header CF
     /// and transaction CFs.
     ///
-    /// Returns None if the header, txids or bitcoin coinbase are missing.
+    /// Returns None if the header, txids or bitcoin coinbase are missing,
+    /// or if any transaction row is missing or unreadable (logged).
     pub fn get_share(&self, blockhash: &BlockHash) -> Option<ShareBlock> {
         let header = match self.get_share_header(blockhash) {
             Ok(Some(header)) => header,
@@ -292,11 +293,13 @@ impl Store {
         if !self.share_block_exists(blockhash) {
             return None;
         }
-        let transactions: Vec<ShareTransaction> = self
-            .get_txs_for_blockhash(blockhash)
-            .into_iter()
-            .map(ShareTransaction)
-            .collect();
+        let transactions: Vec<ShareTransaction> = match self.get_txs_for_blockhash(blockhash) {
+            Ok(transactions) => transactions.into_iter().map(ShareTransaction).collect(),
+            Err(error) => {
+                error!("Share block {blockhash} has unreadable transactions: {error}");
+                return None;
+            }
+        };
         let template_merkle_branches = self.get_template_merkle_branches(blockhash).ok()?;
         let bitcoin_coinbase = self.get_bitcoin_coinbase(blockhash).ok()??;
         Some(ShareBlock {
@@ -663,7 +666,7 @@ impl Store {
 mod tests {
     use super::*;
     use crate::store::block_tx_metadata::{BlockMetadata, ChainMembership, Status};
-    use crate::test_utils::TestShareBlockBuilder;
+    use crate::test_utils::{TestShareBlockBuilder, coinbase_outpoint, test_funding_transaction};
     use bitcoin::TxMerkleNode;
     use bitcoin::Work;
     use bitcoin::hashes::Hash;
@@ -1092,6 +1095,40 @@ mod tests {
         let share = result.unwrap();
         assert_eq!(share.transactions.len(), num_txs);
         assert_eq!(share.transactions, txs);
+    }
+
+    /// A block whose transaction row is gone must not rebuild without that
+    /// transaction: the short body no longer matches its header.
+    #[test]
+    fn test_get_share_returns_none_when_a_transaction_row_is_missing() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let source = TestShareBlockBuilder::new().nonce(1).build();
+        let spend = test_funding_transaction(coinbase_outpoint(&source), 1_000);
+        let spend_txid = spend.compute_txid();
+        let block = TestShareBlockBuilder::new()
+            .nonce(2)
+            .add_transaction(spend)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&source, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&block, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+        assert_eq!(
+            store.get_share(&block.block_hash()).unwrap().transactions,
+            block.transactions
+        );
+
+        //* Drop the spend's Tx row, as a prune racing the read would
+        let tx_cf = store.db.cf_handle(&ColumnFamily::Tx).unwrap();
+        store
+            .db
+            .delete_cf(&tx_cf, spend_txid.as_ref() as &[u8])
+            .unwrap();
+
+        assert!(store.get_share(&block.block_hash()).is_none());
     }
 
     #[test]

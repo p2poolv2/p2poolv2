@@ -922,10 +922,14 @@ impl Store {
 
     /// Get transactions for a blockhash from the BlockTxids column
     /// family. Looks up the txids index, then reconstructs each
-    /// transaction from the Tx/Inputs/Outputs CFs.
-    pub fn get_txs_for_blockhash(&self, blockhash: &BlockHash) -> Vec<Transaction> {
+    /// transaction from the Tx/Inputs/Outputs CFs. Empty when the block
+    /// has no body stored; `NotFound` if any transaction row is missing.
+    pub fn get_txs_for_blockhash(
+        &self,
+        blockhash: &BlockHash,
+    ) -> Result<Vec<Transaction>, StoreError> {
         let txids = self.get_txids_for_blockhash(blockhash);
-        txids.0.iter().flat_map(|txid| self.get_tx(txid)).collect()
+        txids.0.iter().map(|txid| self.get_tx(txid)).collect()
     }
 
     /// Get a transaction from the store using a provided txid.
