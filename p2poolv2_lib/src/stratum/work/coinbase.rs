@@ -32,6 +32,10 @@ pub(crate) const LOCKTIME_LENGTH: usize = 4;
 /// Sequence for coinbase
 const BIP54_COINBASE_SEQUENCE: Sequence = Sequence(0xffff_fffe);
 
+/// BIP54 makes a transaction invalid when its serialization without witness
+/// is exactly this many bytes.
+const BIP54_FORBIDDEN_TRANSACTION_SIZE: usize = 64;
+
 /// Script of the commitment output: OP_RETURN, OP_PUSHBYTES_32, then the
 /// 32-byte share commitment hash.
 const COMMITMENT_SCRIPT_LENGTH: usize = 2 + 32;
@@ -185,6 +189,11 @@ fn append_commitment_outputs(coinbase: &mut Transaction, commitment_hash: &sha25
 /// in the scriptSig. When `None`, the separator placeholder is left in
 /// place (used by the stratum server before split_coinbase).
 ///
+/// The coinbase follows BIP54 on every network: nLockTime is `height - 1`,
+/// the input's nSequence is non-final, and a coinbase that would serialize
+/// to 64 bytes without witness is an error. Both fields sit in the bytes
+/// after the extranonce, so a miner cannot change them.
+///
 /// When `commitment_hash` is provided, the coinbase ends with a padding output
 /// and the commitment output (`commitment_output`), padded so the bytes before
 /// the commitment output are a whole number of SHA256 blocks. The commitment
@@ -248,6 +257,11 @@ pub(crate) fn build_bitcoin_coinbase_transaction(
     };
     if let Some(hash) = commitment_hash {
         append_commitment_outputs(&mut coinbase_tx, &hash);
+    }
+    if coinbase_tx.base_size() == BIP54_FORBIDDEN_TRANSACTION_SIZE {
+        return Err(WorkError {
+            message: "Coinbase serializes to 64 bytes, forbidden by BIP54".into(),
+        });
     }
     Ok(coinbase_tx)
 }
@@ -540,6 +554,99 @@ mod tests {
         let output = &coinbase.output[0];
         assert_eq!(output.value, value);
         assert_eq!(output.script_pubkey, addr.script_pubkey());
+    }
+
+    #[test]
+    fn test_smallest_coinbase_is_larger_than_bip54_forbidden_size() {
+        // Smallest inputs the builder accepts: height 1 (one-byte push),
+        // one flags byte, empty pool signature, no witness commitment, no
+        // share commitment, and a single P2WPKH payout (the shortest
+        // standard script).
+        let address = parse_address(
+            "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
+            bitcoin::Network::Bitcoin,
+        )
+        .unwrap();
+        let coinbase = build_bitcoin_coinbase_transaction(
+            Version(2),
+            &[OutputPair {
+                address,
+                amount: Amount::from_sat(1),
+            }],
+            1,
+            PushBytesBuf::from(&[0u8]),
+            None,
+            &[],
+            None,
+            0,
+            Some(&[0u8; EXTRANONCE1_SIZE + EXTRANONCE2_SIZE]),
+        )
+        .unwrap();
+
+        assert!(coinbase.base_size() > BIP54_FORBIDDEN_TRANSACTION_SIZE);
+    }
+
+    #[test]
+    fn test_smallest_coinbase_with_empty_extranonce_is_larger_than_bip54_forbidden_size() {
+        let address = parse_address(
+            "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
+            bitcoin::Network::Bitcoin,
+        )
+        .unwrap();
+        let coinbase = build_bitcoin_coinbase_transaction(
+            Version(2),
+            &[OutputPair {
+                address,
+                amount: Amount::from_sat(1),
+            }],
+            1,
+            PushBytesBuf::from(&[0u8]),
+            None,
+            &[],
+            None,
+            0,
+            Some(&[]),
+        )
+        .unwrap();
+
+        assert!(coinbase.base_size() > BIP54_FORBIDDEN_TRANSACTION_SIZE);
+    }
+
+    #[test]
+    fn test_split_coinbase_puts_bip54_sequence_and_locktime_in_coinbase2() {
+        let address = parse_address(
+            "1HpRF3JgafxaqjhMEjLNbevpRVvAp15t3A",
+            bitcoin::Network::Bitcoin,
+        )
+        .unwrap();
+        let height: i64 = 840_000;
+        let coinbase = build_bitcoin_coinbase_transaction(
+            Version(2),
+            &[OutputPair {
+                address,
+                amount: Amount::from_str("3.125 BTC").unwrap(),
+            }],
+            height,
+            PushBytesBuf::from(&[0u8]),
+            None,
+            &[],
+            None,
+            0,
+            None,
+        )
+        .unwrap();
+
+        let (_coinbase1, coinbase2) = split_coinbase(&coinbase).unwrap();
+        let coinbase2_bytes = Vec::from_hex(&coinbase2).unwrap();
+
+        // coinbase2 starts with the nsecs push (9 bytes) and the empty pool
+        // signature push (1 byte), then the input's sequence.
+        assert_eq!(&coinbase2_bytes[10..14], &[0xfe, 0xff, 0xff, 0xff]);
+        // The locktime is the last 4 bytes: height - 1, little endian.
+        assert_eq!(
+            &coinbase2_bytes[coinbase2_bytes.len() - LOCKTIME_LENGTH..],
+            &(height as u32 - 1).to_le_bytes()
+        );
     }
 
     #[test]
