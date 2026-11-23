@@ -211,13 +211,17 @@ impl ChainStoreHandle {
         self.store_handle.get_output(txid, vout)
     }
 
-    /// Get a transaction and each output's coinbase origin, in output
-    /// order. See `Store::get_tx_with_output_origins`.
-    pub fn get_tx_with_output_origins(
+    /// Get transaction `txid` as block `blockhash` holds it, and each
+    /// output's coinbase origin, in output order. See
+    /// `Store::get_tx_with_output_origins_in_block`.
+    pub fn get_tx_with_output_origins_in_block(
         &self,
+        blockhash: &BlockHash,
         txid: &bitcoin::Txid,
     ) -> Result<(bitcoin::Transaction, Vec<OutputOrigin>), StoreError> {
-        self.store_handle.store().get_tx_with_output_origins(txid)
+        self.store_handle
+            .store()
+            .get_tx_with_output_origins_in_block(blockhash, txid)
     }
 
     /// The confirmed block containing `txid`, with its height, or `None`
@@ -1092,7 +1096,7 @@ mockall::mock! {
         pub fn check_prevouts(&self, outpoints: &[bitcoin::OutPoint], spending_height: u32, min_coinbase_root_height: u32, coinbase_maturity: usize) -> Result<PrevoutCheck, StoreError>;
         pub fn all_block_and_uncle_data_available(&self, blockhashes: &[BlockHash], prune_height: u32) -> Result<bool, StoreError>;
         pub fn get_output(&self, txid: &bitcoin::Txid, vout: u32) -> Result<bitcoin::TxOut, StoreError>;
-        pub fn get_tx_with_output_origins(&self, txid: &bitcoin::Txid) -> Result<(bitcoin::Transaction, Vec<OutputOrigin>), StoreError>;
+        pub fn get_tx_with_output_origins_in_block(&self, blockhash: &BlockHash, txid: &bitcoin::Txid) -> Result<(bitcoin::Transaction, Vec<OutputOrigin>), StoreError>;
         pub fn get_confirmed_block_for_txid(&self, txid: &bitcoin::Txid) -> Result<Option<(BlockHash, u32)>, StoreError>;
         pub fn get_script_history(&self, scripthash: &ScriptHash, start_height: u32, max_rows: usize) -> Result<ScriptHistoryPage, StoreError>;
         pub fn share_block_exists(&self, blockhash: &BlockHash) -> bool;
@@ -2331,6 +2335,78 @@ mod tests {
             .unwrap();
 
         assert_eq!(confirmed, None);
+    }
+
+    /// With no confirmed block holding it, a lookup by txid serves the
+    /// transaction from a block that is not Invalid.
+    #[tokio::test]
+    async fn test_get_tx_serves_a_transaction_an_unconfirmed_block_holds() {
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let blocks = build_confirmed_test_chain(&chain_store_handle, 1).await;
+        let spend = test_funding_transaction(funding_outpoint(&blocks[1]), 2);
+        let unconfirmed = TestShareBlockBuilder::new()
+            .prev_share_blockhash(blocks[1].block_hash().to_string())
+            .add_transaction(spend.clone())
+            .build();
+        chain_store_handle
+            .add_share_block_and_organise_header(unconfirmed)
+            .await
+            .unwrap();
+
+        let served = chain_store_handle
+            .store_handle()
+            .store()
+            .get_tx(&spend.compute_txid())
+            .unwrap();
+
+        assert_eq!(served, spend);
+    }
+
+    /// A transaction that only an Invalid block holds is not served.
+    #[tokio::test]
+    async fn test_get_tx_does_not_serve_a_transaction_only_an_invalid_block_holds() {
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let blocks = build_confirmed_test_chain(&chain_store_handle, 1).await;
+        let spend = test_funding_transaction(funding_outpoint(&blocks[1]), 2);
+        let invalid_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(blocks[1].block_hash().to_string())
+            .add_transaction(spend.clone())
+            .build();
+
+        //* Store the block, then mark it Invalid
+        chain_store_handle
+            .add_share_block_and_organise_header(invalid_block.clone())
+            .await
+            .unwrap();
+        chain_store_handle
+            .mark_invalid(invalid_block.block_hash())
+            .await
+            .unwrap();
+
+        let result = chain_store_handle
+            .store_handle()
+            .store()
+            .get_tx(&spend.compute_txid());
+
+        assert!(
+            matches!(result, Err(StoreError::NotFound(_))),
+            "unexpected: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_tx_with_output_origins_in_block_rejects_a_block_without_the_transaction() {
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let blocks = build_confirmed_test_chain(&chain_store_handle, 2).await;
+        let coinbase_txid = blocks[1].transactions[0].0.compute_txid();
+
+        let result = chain_store_handle
+            .get_tx_with_output_origins_in_block(&blocks[2].block_hash(), &coinbase_txid);
+
+        assert!(
+            matches!(result, Err(StoreError::NotFound(_))),
+            "unexpected: {result:?}"
+        );
     }
 
     #[tokio::test]

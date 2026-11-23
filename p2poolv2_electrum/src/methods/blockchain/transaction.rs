@@ -56,7 +56,7 @@ pub(crate) fn transaction_get(
     let verbose = parse_verbose(param(params, 1, "verbose"))?;
     let location = confirmed_location(chain_store_handle, &txid)?;
     let (transaction, output_origins) = chain_store_handle
-        .get_tx_with_output_origins(&txid)
+        .get_tx_with_output_origins_in_block(&location.blockhash, &txid)
         .map_err(|error| match error {
             StoreError::NotFound(_) => transaction_not_found(&txid),
             error => store_read_error(error),

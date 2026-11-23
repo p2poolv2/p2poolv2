@@ -6,7 +6,7 @@ use super::{ColumnFamily, Store, writer::StoreError};
 use crate::shares::share_block::{
     ShareTransaction, SpendingPrevouts, Txids, extract_spending_prevouts,
 };
-use crate::store::block_tx_metadata::{ChainMembership, TxMetadata};
+use crate::store::block_tx_metadata::{ChainMembership, Status, TxMetadata};
 use bitcoin::consensus::{self, Decodable, Encodable, encode};
 use bitcoin::{BlockHash, OutPoint, Transaction, Txid};
 use rocksdb::WriteBatch;
@@ -929,29 +929,95 @@ impl Store {
         blockhash: &BlockHash,
     ) -> Result<Vec<Transaction>, StoreError> {
         let txids = self.get_txids_for_blockhash(blockhash);
-        txids.0.iter().map(|txid| self.get_tx(txid)).collect()
+        txids
+            .0
+            .iter()
+            .map(|txid| {
+                self.get_tx_with_output_origins_by_txid(txid)
+                    .map(|(transaction, _output_origins)| transaction)
+            })
+            .collect()
     }
 
-    /// Get a transaction from the store using a provided txid.
+    /// Get the transaction with `txid` from the block that holds it: the
+    /// confirmed one, else the first block holding it that is not Invalid
+    /// (see `find_block_for_txid`).
     ///
-    /// Returns `NotFound` if the transaction, or any of its input or
-    /// output rows, is missing (for example removed by the pruner after
-    /// the metadata read). See `get_tx_with_output_origins`.
-    pub fn get_tx(&self, txid: &bitcoin::Txid) -> Result<Transaction, StoreError> {
+    /// Returns `NotFound` if no such block holds it, or if any of its rows is
+    /// missing (for example removed by the pruner after the lookup).
+    pub fn get_tx(&self, txid: &Txid) -> Result<Transaction, StoreError> {
         self.get_tx_with_output_origins(txid)
             .map(|(transaction, _output_origins)| transaction)
     }
 
-    /// Get a transaction together with each output's `OutputOrigin` (the
-    /// coinbase flag and `coinbase_root_height` that `Transaction` drops),
-    /// in output order.
+    /// Same as `get_tx`, but also returns, for each output in order, its
+    /// `OutputOrigin`: whether it is a coinbase output and its
+    /// `coinbase_root_height`, which `Transaction` does not carry.
+    ///
+    /// The transaction is read from the confirmed block that holds `txid`,
+    /// else from the first block holding it that is not Invalid. Returns
+    /// `NotFound` if no such block holds it, or if any of its rows is
+    /// missing.
+    pub fn get_tx_with_output_origins(
+        &self,
+        txid: &Txid,
+    ) -> Result<(Transaction, Vec<OutputOrigin>), StoreError> {
+        let blockhash = self
+            .find_block_for_txid(txid)?
+            .ok_or_else(|| StoreError::NotFound(format!("No block holds transaction {txid}")))?;
+        self.get_tx_with_output_origins_in_block(&blockhash, txid)
+    }
+
+    /// The block to serve transaction `txid` from: the confirmed block
+    /// holding it, else the first block holding it that is not Invalid, or
+    /// `None`.
+    ///
+    /// A transaction held only by Invalid blocks, or by no block, is not
+    /// served.
+    pub(crate) fn find_block_for_txid(&self, txid: &Txid) -> Result<Option<BlockHash>, StoreError> {
+        let blockhashes = self.get_blockhashes_for_txid(txid)?;
+        if blockhashes.is_empty() {
+            return Ok(None);
+        }
+        let candidates = self.get_block_metadata_batch(&blockhashes)?;
+        let confirmed = candidates
+            .iter()
+            .find(|(_blockhash, metadata)| metadata.chain == ChainMembership::Confirmed);
+        let chosen = confirmed.or_else(|| {
+            candidates
+                .iter()
+                .find(|(_blockhash, metadata)| metadata.status != Status::Invalid)
+        });
+        Ok(chosen.map(|(blockhash, _metadata)| *blockhash))
+    }
+
+    /// Get the transaction with `txid` as block `blockhash` holds it, with
+    /// each output's `OutputOrigin`. `NotFound` if the block holds no such
+    /// transaction or any of its rows is missing.
+    pub fn get_tx_with_output_origins_in_block(
+        &self,
+        blockhash: &BlockHash,
+        txid: &Txid,
+    ) -> Result<(Transaction, Vec<OutputOrigin>), StoreError> {
+        if !self.get_txids_for_blockhash(blockhash).0.contains(txid) {
+            return Err(StoreError::NotFound(format!(
+                "Block {blockhash} holds no transaction {txid}"
+            )));
+        }
+        self.get_tx_with_output_origins_by_txid(txid)
+    }
+
+    /// Get the transaction rows stored under `txid` together with each
+    /// output's `OutputOrigin` (the coinbase flag and `coinbase_root_height`
+    /// that `Transaction` drops), in output order. Does not check which
+    /// block holds the transaction; see `get_tx` for that.
     ///
     /// Loads the tx metadata, then each input (with its witness) and each
     /// output row. Returns `NotFound` if any row is missing, so a prune
     /// that interleaves with the reads surfaces as an error, never a panic.
-    pub fn get_tx_with_output_origins(
+    pub(crate) fn get_tx_with_output_origins_by_txid(
         &self,
-        txid: &bitcoin::Txid,
+        txid: &Txid,
     ) -> Result<(Transaction, Vec<OutputOrigin>), StoreError> {
         let tx_metadata = self.get_tx_metadata(txid)?;
 
@@ -1302,7 +1368,10 @@ mod tests {
 
         assert_eq!(metadata.len(), block.transactions.len());
         for tx_meta in &metadata {
-            let tx = store.get_tx(&tx_meta.txid).unwrap();
+            let tx = store
+                .get_tx_with_output_origins_by_txid(&tx_meta.txid)
+                .unwrap()
+                .0;
             assert_eq!(tx.compute_txid(), tx_meta.txid);
         }
     }
@@ -1326,7 +1395,7 @@ mod tests {
             .delete_cf(&outputs_cf, outpoint_key(&txid, 0))
             .unwrap();
 
-        let result = store.get_tx(&txid);
+        let result = store.get_tx_with_output_origins_by_txid(&txid);
 
         assert!(
             matches!(result, Err(StoreError::NotFound(_))),
@@ -1346,8 +1415,9 @@ mod tests {
         store.commit_batch(batch).unwrap();
         let coinbase_txid = metadata[0].txid;
 
-        let (transaction, output_origins) =
-            store.get_tx_with_output_origins(&coinbase_txid).unwrap();
+        let (transaction, output_origins) = store
+            .get_tx_with_output_origins_by_txid(&coinbase_txid)
+            .unwrap();
 
         assert_eq!(transaction, block.transactions[0].0);
         assert_eq!(output_origins.len(), transaction.output.len());
@@ -1394,7 +1464,7 @@ mod tests {
 
         //* X's coinbase outputs still carry X's height, not Y's
         let (_transaction, output_origins) = store
-            .get_tx_with_output_origins(&original_coinbase_txid)
+            .get_tx_with_output_origins_by_txid(&original_coinbase_txid)
             .unwrap();
         assert_eq!(
             output_origins[0],
@@ -1445,7 +1515,7 @@ mod tests {
             .unwrap();
         store.commit_batch(batch).unwrap();
         let (_transaction, output_origins) = store
-            .get_tx_with_output_origins(&original_coinbase_txid)
+            .get_tx_with_output_origins_by_txid(&original_coinbase_txid)
             .unwrap();
         assert_eq!(
             output_origins[0],
@@ -1473,7 +1543,7 @@ mod tests {
             .delete_cf(&inputs_cf, outpoint_key(&txid, 0))
             .unwrap();
 
-        let result = store.get_tx(&txid);
+        let result = store.get_tx_with_output_origins_by_txid(&txid);
 
         assert!(
             matches!(result, Err(StoreError::NotFound(_))),
@@ -2760,6 +2830,29 @@ mod tests {
         assert!(result.is_err());
     }
 
+    /// Rows that no block holds, for example left behind for the pruner,
+    /// are not served by txid.
+    #[test]
+    fn test_get_tx_does_not_serve_a_transaction_no_block_holds() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let block = TestShareBlockBuilder::new().build();
+        let txid = block.transactions[0].compute_txid();
+        let mut batch = Store::get_write_batch();
+        store
+            .add_sharechain_txs(&block.transactions, 1, &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
+        assert!(store.get_tx_with_output_origins_by_txid(&txid).is_ok());
+
+        let result = store.get_tx(&txid);
+
+        assert!(
+            matches!(result, Err(StoreError::NotFound(_))),
+            "unexpected: {result:?}"
+        );
+    }
+
     #[test]
     fn test_store_retrieve_txids_by_blockhash_index() {
         let temp_dir = tempdir().unwrap();
@@ -3014,8 +3107,14 @@ mod tests {
         let tx1_id = tx1.compute_txid();
         let tx2_id = tx2.compute_txid();
 
-        assert_eq!(store.get_tx(&tx1_id).unwrap(), tx1);
-        assert_eq!(store.get_tx(&tx2_id).unwrap(), tx2);
+        assert_eq!(
+            store.get_tx_with_output_origins_by_txid(&tx1_id).unwrap().0,
+            tx1
+        );
+        assert_eq!(
+            store.get_tx_with_output_origins_by_txid(&tx2_id).unwrap().0,
+            tx2
+        );
     }
 
     #[test]
@@ -3073,7 +3172,7 @@ mod tests {
 
         assert_eq!(res[0].txid, txid);
 
-        let stored_tx = store.get_tx(&txid).unwrap();
+        let stored_tx = store.get_tx_with_output_origins_by_txid(&txid).unwrap().0;
         assert_eq!(stored_tx.version, tx.version);
         assert_eq!(stored_tx.lock_time, tx.lock_time);
         assert_eq!(stored_tx.input.len(), 1);
@@ -3148,7 +3247,9 @@ mod tests {
             .unwrap();
         store.db.write(batch).unwrap();
 
-        let (stored_tx, output_origins) = store.get_tx_with_output_origins(&spending_txid).unwrap();
+        let (stored_tx, output_origins) = store
+            .get_tx_with_output_origins_by_txid(&spending_txid)
+            .unwrap();
 
         assert_eq!(stored_tx, spending_tx);
         assert_eq!(
