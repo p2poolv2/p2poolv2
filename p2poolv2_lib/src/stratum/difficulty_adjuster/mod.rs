@@ -380,7 +380,13 @@ impl DifficultyAdjusterTrait for DifficultyAdjuster {
             if self.last_decay_timestamp.is_none() {
                 self.last_decay_timestamp = Some(current_timestamp);
             }
-            self.unaccounted_shares += self.current_difficulty;
+            self.unaccounted_shares = self
+                .unaccounted_shares
+                .checked_add(self.current_difficulty)
+                .unwrap_or_else(|| {
+                    tracing::warn!("unaccounted_shares would overflow u64; capping at u64::MAX");
+                    u64::MAX
+                });
             debug!("Skipping update, last decay was too recent.");
             return Err("Last decay was too recent".into());
         }
@@ -391,7 +397,15 @@ impl DifficultyAdjusterTrait for DifficultyAdjuster {
     }
 
     fn account_for_unaccounted_shares(&mut self) -> u64 {
-        let difficulty = self.current_difficulty + self.unaccounted_shares;
+        let difficulty = self
+            .current_difficulty
+            .checked_add(self.unaccounted_shares)
+            .unwrap_or_else(|| {
+                tracing::warn!(
+                    "accounting unaccounted_shares would overflow u64; capping at u64::MAX"
+                );
+                u64::MAX
+            });
         debug!(
             "Total difficulty unaccounted for: {} = current_difficulty {} + unaccounted_shares {}",
             difficulty, self.current_difficulty, self.unaccounted_shares
@@ -436,6 +450,17 @@ impl DifficultyAdjusterTrait for DifficultyAdjuster {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn huge_start_difficulty_with_rapid_shares_does_not_overflow() {
+        // No maximum difficulty configured, like the sample config.
+        let mut adjuster = DifficultyAdjuster::new(u64::MAX, 1, None);
+        let now = std::time::SystemTime::now();
+        // args: share_diff, job_id, suggested_difficulty, timestamp
+        for job_id in 0..3u64 {
+            adjuster.record_share_submission(1, job_id, None, now);
+        }
+    }
 
     #[test]
     fn test_new_difficulty_adjuster() {
