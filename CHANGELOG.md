@@ -23,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The CLI share lookup prints `time` and `bitcoin_header.time` as unix
   seconds instead of a formatted UTC string, and `shares --dot` and
   `candidates --dot` labels show unix seconds instead of `HH:MM:SS`.
+- The node stops mining on a block template that marks required (`!`
+  prefix) a rule P2Poolv2 does not implement, and logs an error naming the
+  rule, instead of building blocks that may be invalid.
 
 ### Removed
 
