@@ -48,6 +48,21 @@ pub fn build_coinbase_from_components(
         .map_err(|_e| Error::InvalidParams("Failed to decode coinbase transaction".into()))
 }
 
+/// Check the miner's extranonce2 is the size announced in `mining.subscribe`.
+///
+/// A different size shifts every coinbase byte after it, so the miner could
+/// otherwise change which bytes are read as the BIP54 nSequence and
+/// nLockTime.
+fn check_enonce2_length(enonce2: &str) -> Result<(), Error> {
+    if enonce2.len() == EXTRANONCE2_SIZE * 2 {
+        Ok(())
+    } else {
+        Err(Error::InvalidParams(format!(
+            "extranonce2 must be {EXTRANONCE2_SIZE} bytes"
+        )))
+    }
+}
+
 /// Check the miner's ntime makes a header bitcoind can accept.
 ///
 /// `mintime` is the template's lower bound: it covers the median time past
@@ -115,12 +130,7 @@ pub fn validate_bitcoin_difficulty(
         .as_ref()
         .ok_or_else(|| Error::InvalidParams("Missing enonce2".into()))?
         .as_str();
-
-    if enonce2.len() != EXTRANONCE2_SIZE * 2 {
-        return Err(Error::InvalidParams(format!(
-            "extranonce2 must be {EXTRANONCE2_SIZE} bytes"
-        )));
-    }
+    check_enonce2_length(enonce2)?;
 
     // build coinbase from submission
     let coinbase =
@@ -250,5 +260,20 @@ mod tests {
     #[test]
     fn test_check_ntime_upper_bound_does_not_overflow() {
         assert!(check_ntime(u32::MAX, 1_000, u32::MAX - 1).is_ok());
+    }
+
+    #[test]
+    fn test_check_enonce2_length_accepts_subscribed_size() {
+        assert!(check_enonce2_length("0000000000000000").is_ok());
+    }
+
+    #[test]
+    fn test_check_enonce2_length_rejects_short_enonce2() {
+        assert!(check_enonce2_length("00000000").is_err());
+    }
+
+    #[test]
+    fn test_check_enonce2_length_rejects_long_enonce2() {
+        assert!(check_enonce2_length("000000000000000000").is_err());
     }
 }
