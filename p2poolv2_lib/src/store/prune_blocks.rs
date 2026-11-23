@@ -9,15 +9,15 @@
 //! data; nothing is persisted. See `docs/architecture/pruning.md`.
 
 use crate::accounting::payout::sharechain_pplns::pplns_window::{PRUNE_DEPTH, PRUNE_INTERVAL};
-use crate::shares::share_block::Txids;
 use crate::store::Store;
 use crate::store::column_families::ColumnFamily;
 use crate::store::transaction_store::{
-    BITCOIN_TXIDS_SUFFIX, BLOCK_TXIDS_SUFFIX, outpoint_key, txids_key,
+    BITCOIN_TXIDS_SUFFIX, BLOCK_TXIDS_SUFFIX, BlockTransactionIds, input_key, outpoint_key,
+    txids_key,
 };
 use crate::store::writer::StoreError;
 use bitcoin::consensus::{self, encode};
-use bitcoin::{BlockHash, Txid};
+use bitcoin::{BlockHash, Txid, Wtxid};
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 
@@ -29,8 +29,15 @@ const FIRST_PRUNABLE_HEIGHT: u32 = 1;
 pub struct PruneStats {
     /// Blocks whose bodies were deleted.
     pub blocks: usize,
-    /// Transactions deleted because no kept block references them.
+    /// Transactions (by wtxid) deleted because no kept block holds them.
     pub transactions: usize,
+}
+
+/// What pruning deletes: the metadata and inputs of `wtxids`, and the
+/// outputs, spends and `TxidsBlocks` entry of `txids`.
+struct DeletableTransactions {
+    wtxids: Vec<Wtxid>,
+    txids: HashSet<Txid>,
 }
 
 impl PruneStats {
@@ -146,10 +153,11 @@ impl Store {
     /// uncles included, into `batch`.
     ///
     /// Headers, metadata, merkle branches and found blocks are kept. A
-    /// transaction is deleted only when no block at or above `to` references
-    /// it; otherwise its `TxidsBlocks` list is rewritten without the pruned
-    /// blocks. The candidate index entries in the range are deleted too, so
-    /// the caller must only prune below the confirmed tip.
+    /// transaction is deleted, every witness copy of it, only when no block
+    /// at or above `to` references its txid; otherwise its `TxidsBlocks` list
+    /// is rewritten without the pruned blocks. The candidate index entries in
+    /// the range are deleted too, so the caller must only prune below the
+    /// confirmed tip.
     pub(crate) fn prune_block_bodies_chunk(
         &self,
         from: u32,
@@ -167,14 +175,14 @@ impl Store {
             .into_iter()
             .flat_map(|(_height, blockhashes)| blockhashes)
             .collect();
-        let bodies = self.get_block_txids_present(&blockhashes)?;
+        let bodies = self.get_block_transaction_ids_present(&blockhashes)?;
 
-        //* Delete the transactions no kept block references
-        let deletable_txids = self.release_txids_of_pruned_blocks(&bodies, to, batch)?;
-        self.delete_transactions(&deletable_txids, batch)?;
+        //* Delete the transactions that are no longer in any block
+        let deletable = self.release_transactions_of_pruned_blocks(&bodies, to, batch)?;
+        self.delete_transactions(&deletable, batch)?;
 
         //* Delete the per-block body keys and the candidate index entries
-        for (blockhash, _txids) in &bodies {
+        for (blockhash, _block_ids) in &bodies {
             self.delete_block_body_keys(blockhash, batch);
         }
         for height in from..to {
@@ -183,16 +191,17 @@ impl Store {
 
         Ok(PruneStats {
             blocks: bodies.len(),
-            transactions: deletable_txids.len(),
+            transactions: deletable.wtxids.len(),
         })
     }
 
-    /// The sharechain txids of each block in `blockhashes` that has a body,
-    /// read with one `multi_get_cf`. Blocks held header-only are omitted.
-    fn get_block_txids_present(
+    /// The sharechain transaction ids of each block in `blockhashes` that
+    /// has a body, read with one `multi_get_cf`. Blocks held header-only are
+    /// omitted.
+    fn get_block_transaction_ids_present(
         &self,
         blockhashes: &[BlockHash],
-    ) -> Result<Vec<(BlockHash, Vec<Txid>)>, StoreError> {
+    ) -> Result<Vec<(BlockHash, BlockTransactionIds)>, StoreError> {
         let block_txids_cf = self.db.cf_handle(&ColumnFamily::BlockTxids).unwrap();
         let keys: Vec<_> = blockhashes
             .iter()
@@ -202,36 +211,54 @@ impl Store {
         let mut bodies = Vec::with_capacity(blockhashes.len());
         for (blockhash, result) in blockhashes.iter().zip(results) {
             if let Some(bytes) = result? {
-                let txids: Txids = encode::deserialize(&bytes).map_err(|error| {
-                    StoreError::Serialization(format!(
-                        "Failed to deserialize txids for block {blockhash}: {error}"
-                    ))
-                })?;
-                bodies.push((*blockhash, txids.0));
+                let block_ids: BlockTransactionIds =
+                    encode::deserialize(&bytes).map_err(|error| {
+                        StoreError::Serialization(format!(
+                            "Failed to deserialize transaction ids for block {blockhash}: {error}"
+                        ))
+                    })?;
+                bodies.push((*blockhash, block_ids));
             }
         }
         Ok(bodies)
     }
 
     /// Drop the pruned blocks from the `TxidsBlocks` list of every txid they
-    /// hold, and return the txids no block at or above `to` references.
+    /// hold, and return what no block at or above `to` still needs.
     ///
-    /// A referencing block with no metadata or no height is treated as
-    /// kept, so a transaction is never deleted on missing information.
-    fn release_txids_of_pruned_blocks(
+    /// A txid no kept block references loses its outputs and every wtxid
+    /// the pruned blocks hold for it. A txid some kept block references keeps
+    /// its outputs and all those wtxids. A referencing block with no metadata
+    /// or no height counts as kept, so nothing is deleted on missing
+    /// information.
+    fn release_transactions_of_pruned_blocks(
         &self,
-        bodies: &[(BlockHash, Vec<Txid>)],
+        bodies: &[(BlockHash, BlockTransactionIds)],
         to: u32,
         batch: &mut rocksdb::WriteBatch,
-    ) -> Result<Vec<Txid>, StoreError> {
-        let txid_count = bodies.iter().map(|(_blockhash, txids)| txids.len()).sum();
-        let mut seen = HashSet::with_capacity(txid_count);
-        let txids: Vec<Txid> = bodies
+    ) -> Result<DeletableTransactions, StoreError> {
+        //* Collect each pruned txid once, with the distinct wtxids the pruned blocks hold for it
+        let transaction_count = bodies
             .iter()
-            .flat_map(|(_blockhash, txids)| txids.iter().copied())
-            .filter(|txid| seen.insert(*txid))
-            .collect();
+            .map(|(_blockhash, block_ids)| block_ids.0.len())
+            .sum();
+        let mut pruned_wtxids: HashMap<Txid, Vec<Wtxid>> =
+            HashMap::with_capacity(transaction_count);
+        let mut txids: Vec<Txid> = Vec::with_capacity(transaction_count);
+        for ids in bodies
+            .iter()
+            .flat_map(|(_blockhash, block_ids)| block_ids.0.iter())
+        {
+            let wtxids = pruned_wtxids.entry(ids.txid).or_insert_with(|| {
+                txids.push(ids.txid);
+                Vec::with_capacity(1)
+            });
+            if !wtxids.contains(&ids.wtxid) {
+                wtxids.push(ids.wtxid);
+            }
+        }
 
+        //* Find the kept referencers of each txid and rewrite its TxidsBlocks list
         let referencers = self.get_blockhashes_for_all_txids(&txids)?;
         let referencing_blockhashes: Vec<BlockHash> =
             referencers.iter().flatten().copied().collect();
@@ -242,7 +269,10 @@ impl Store {
             .collect();
 
         let txids_blocks_cf = self.db.cf_handle(&ColumnFamily::TxidsBlocks).unwrap();
-        let mut deletable = Vec::with_capacity(txids.len());
+        let mut deletable = DeletableTransactions {
+            wtxids: Vec::with_capacity(transaction_count),
+            txids: HashSet::with_capacity(txids.len()),
+        };
         for (txid, blockhashes) in txids.iter().zip(referencers) {
             let kept: Vec<BlockHash> = blockhashes
                 .iter()
@@ -253,7 +283,8 @@ impl Store {
                 })
                 .collect();
             if kept.is_empty() {
-                deletable.push(*txid);
+                deletable.txids.insert(*txid);
+                deletable.wtxids.extend(pruned_wtxids[txid].iter().copied());
             } else if kept.len() < blockhashes.len() {
                 batch.put_cf(
                     &txids_blocks_cf,
@@ -265,11 +296,15 @@ impl Store {
         Ok(deletable)
     }
 
-    /// Delete each transaction's metadata, inputs, outputs, the spends
-    /// recorded against its outputs, and its `TxidsBlocks` entry.
+    /// Delete the metadata and inputs of each deletable wtxid, and for each
+    /// deletable txid its outputs, the spends recorded against them, and its
+    /// `TxidsBlocks` entry.
+    ///
+    /// Every deletable txid has all its wtxids deletable too, so its output
+    /// count is read from one of their metadata rows.
     fn delete_transactions(
         &self,
-        txids: &[Txid],
+        deletable: &DeletableTransactions,
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<(), StoreError> {
         let tx_cf = self.db.cf_handle(&ColumnFamily::Tx).unwrap();
@@ -278,18 +313,23 @@ impl Store {
         let spends_index_cf = self.db.cf_handle(&ColumnFamily::SpendsIndex).unwrap();
         let txids_blocks_cf = self.db.cf_handle(&ColumnFamily::TxidsBlocks).unwrap();
 
-        for metadata in self.get_metadata_for_txids(txids)? {
-            let txid = metadata.txid;
+        let metadatas = self.get_metadata_for_wtxids(&deletable.wtxids)?;
+        let mut outputs_deleted: HashSet<Txid> = HashSet::with_capacity(deletable.txids.len());
+        for (wtxid, metadata) in deletable.wtxids.iter().zip(metadatas) {
             for index in 0..metadata.input_count {
-                batch.delete_cf(&inputs_cf, outpoint_key(&txid, index));
+                batch.delete_cf(&inputs_cf, input_key(wtxid, index));
             }
-            for index in 0..metadata.output_count {
-                let key = outpoint_key(&txid, index);
-                batch.delete_cf(&outputs_cf, &key);
-                batch.delete_cf(&spends_index_cf, &key);
+            batch.delete_cf(&tx_cf, wtxid.as_ref() as &[u8]);
+
+            let txid = metadata.txid;
+            if deletable.txids.contains(&txid) && outputs_deleted.insert(txid) {
+                for index in 0..metadata.output_count {
+                    let key = outpoint_key(&txid, index);
+                    batch.delete_cf(&outputs_cf, &key);
+                    batch.delete_cf(&spends_index_cf, &key);
+                }
+                batch.delete_cf(&txids_blocks_cf, txid.as_ref() as &[u8]);
             }
-            batch.delete_cf(&tx_cf, txid.as_ref() as &[u8]);
-            batch.delete_cf(&txids_blocks_cf, txid.as_ref() as &[u8]);
         }
         Ok(())
     }
@@ -521,32 +561,34 @@ mod tests {
         let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
         let blocks = build_confirmed_test_chain(&chain_store_handle, 8).await;
         let txid = blocks[3].transactions[1].compute_txid();
+        let wtxid = blocks[3].transactions[1].compute_wtxid();
         let store = chain_store_handle.store_handle().store();
         let inputs_cf = store.db.cf_handle(&ColumnFamily::Inputs).unwrap();
-        assert!(store.get_tx_metadata(&txid).is_ok());
+        assert!(store.get_tx_metadata(&wtxid).is_ok());
         assert!(
             store
                 .db
-                .get_cf(&inputs_cf, outpoint_key(&txid, 0))
+                .get_cf(&inputs_cf, input_key(&wtxid, 0))
                 .unwrap()
                 .is_some()
         );
 
         chain_store_handle.prune_block_bodies(1, 6).await.unwrap();
 
-        assert!(store.get_tx_metadata(&txid).is_err());
+        assert!(store.get_tx_metadata(&wtxid).is_err());
         assert!(store.get_output(&txid, 0).is_err());
         assert!(
             store
                 .db
-                .get_cf(&inputs_cf, outpoint_key(&txid, 0))
+                .get_cf(&inputs_cf, input_key(&wtxid, 0))
                 .unwrap()
                 .is_none()
         );
         assert!(store.get_blockhashes_for_txid(&txid).unwrap().is_empty());
         assert!(
             store
-                .get_txids_for_blockhash(&blocks[3].block_hash())
+                .get_block_transaction_ids(&blocks[3].block_hash())
+                .unwrap()
                 .0
                 .is_empty()
         );
@@ -558,6 +600,7 @@ mod tests {
         let blocks = build_confirmed_test_chain(&chain_store_handle, 5).await;
         let shared_transaction = blocks[2].transactions[1].0.clone();
         let shared_txid = shared_transaction.compute_txid();
+        let shared_wtxid = shared_transaction.compute_wtxid();
         let kept_block = TestShareBlockBuilder::new()
             .prev_share_blockhash(blocks[5].block_hash().to_string())
             .time(1_700_000_006)
@@ -569,7 +612,7 @@ mod tests {
 
         let store = chain_store_handle.store_handle().store();
         assert!(!store.share_block_exists(&blocks[2].block_hash()));
-        assert!(store.get_tx_metadata(&shared_txid).is_ok());
+        assert!(store.get_tx_metadata(&shared_wtxid).is_ok());
         assert!(store.get_output(&shared_txid, 0).is_ok());
         assert_eq!(
             store.get_blockhashes_for_txid(&shared_txid).unwrap(),
@@ -838,6 +881,7 @@ mod tests {
         let blocks = build_confirmed_test_chain(&chain_store_handle, 8).await;
         let store = chain_store_handle.store_handle().store();
         let txid = blocks[3].transactions[1].compute_txid();
+        let wtxid = blocks[3].transactions[1].compute_wtxid();
         let unknown_blockhash = BlockHash::from_byte_array([0x42; 32]);
         let txids_blocks_cf = store.db.cf_handle(&ColumnFamily::TxidsBlocks).unwrap();
         let mut batch = Store::get_write_batch();
@@ -850,7 +894,7 @@ mod tests {
 
         chain_store_handle.prune_block_bodies(1, 6).await.unwrap();
 
-        assert!(store.get_tx_metadata(&txid).is_ok());
+        assert!(store.get_tx_metadata(&wtxid).is_ok());
         assert_eq!(
             store.get_blockhashes_for_txid(&txid).unwrap(),
             vec![unknown_blockhash]

@@ -7,8 +7,9 @@ use crate::shares::share_block::{
     ShareTransaction, SpendingPrevouts, Txids, extract_spending_prevouts,
 };
 use crate::store::block_tx_metadata::{ChainMembership, Status, TxMetadata};
+use bitcoin::consensus::encode::VarInt;
 use bitcoin::consensus::{self, Decodable, Encodable, encode};
-use bitcoin::{BlockHash, OutPoint, Transaction, Txid};
+use bitcoin::{BlockHash, OutPoint, Transaction, Txid, Wtxid};
 use rocksdb::WriteBatch;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -17,7 +18,7 @@ use tracing::debug;
 /// Serialized outpoint size: 32B for Txid hash, 4B for index
 const OUTPOINT_SIZE: usize = 36;
 
-/// Key suffix of a block's sharechain txids in the `BlockTxids` CF.
+/// Key suffix of a block's sharechain transaction ids in the `BlockTxids` CF.
 pub(crate) const BLOCK_TXIDS_SUFFIX: &[u8] = b"_txids";
 
 /// Key suffix of a block's bitcoin txids in the `BitcoinTxids` CF. Nothing
@@ -32,10 +33,94 @@ pub(crate) fn txids_key(blockhash: &BlockHash, suffix: &[u8]) -> Vec<u8> {
     key
 }
 
-/// Key of input or output `index` of `txid` in the `Inputs`, `Outputs` and
-/// `SpendsIndex` CFs.
+/// Key of output `index` of `txid` in the `Outputs` and `SpendsIndex` CFs.
 pub(crate) fn outpoint_key(txid: &Txid, index: u32) -> String {
     format!("{txid}:{index}")
+}
+
+/// Key of input `index` of the transaction with `wtxid` in the `Inputs` CF.
+///
+/// Inputs carry the witness, which the txid leaves out, so they are keyed
+/// by wtxid: two transactions with one txid and different witnesses keep
+/// separate rows.
+pub(crate) fn input_key(wtxid: &Wtxid, index: u32) -> String {
+    format!("{wtxid}:{index}")
+}
+
+/// The two ids of one transaction. The txid finds its outputs and the
+/// blocks that hold it; the wtxid finds its metadata and inputs, which a
+/// copy with another witness must not share.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TransactionIds {
+    pub txid: Txid,
+    pub wtxid: Wtxid,
+}
+
+impl Encodable for TransactionIds {
+    fn consensus_encode<W: bitcoin::io::Write + ?Sized>(
+        &self,
+        writer: &mut W,
+    ) -> Result<usize, bitcoin::io::Error> {
+        let mut length = self.txid.consensus_encode(writer)?;
+        length += self.wtxid.consensus_encode(writer)?;
+        Ok(length)
+    }
+}
+
+impl Decodable for TransactionIds {
+    fn consensus_decode<R: bitcoin::io::Read + ?Sized>(
+        reader: &mut R,
+    ) -> Result<Self, bitcoin::consensus::encode::Error> {
+        let txid = Txid::consensus_decode(reader)?;
+        let wtxid = Wtxid::consensus_decode(reader)?;
+        Ok(TransactionIds { txid, wtxid })
+    }
+}
+
+/// The ids of a block's sharechain transactions in block order: the value
+/// of the block's key in the `BlockTxids` CF.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BlockTransactionIds(pub Vec<TransactionIds>);
+
+impl BlockTransactionIds {
+    /// The txids, in block order.
+    pub fn txids(&self) -> Vec<Txid> {
+        self.0.iter().map(|ids| ids.txid).collect()
+    }
+
+    /// The wtxids, in block order.
+    pub fn wtxids(&self) -> Vec<Wtxid> {
+        self.0.iter().map(|ids| ids.wtxid).collect()
+    }
+}
+
+impl Encodable for BlockTransactionIds {
+    fn consensus_encode<W: bitcoin::io::Write + ?Sized>(
+        &self,
+        writer: &mut W,
+    ) -> Result<usize, bitcoin::io::Error> {
+        let mut length = VarInt(self.0.len() as u64).consensus_encode(writer)?;
+        for ids in &self.0 {
+            length += ids.consensus_encode(writer)?;
+        }
+        Ok(length)
+    }
+}
+
+impl Decodable for BlockTransactionIds {
+    fn consensus_decode_from_finite_reader<R: bitcoin::io::Read + ?Sized>(
+        reader: &mut R,
+    ) -> Result<Self, bitcoin::consensus::encode::Error> {
+        let count = VarInt::consensus_decode_from_finite_reader(reader)?.0;
+        //* Cap the preallocation; a corrupt count runs out of data instead
+        let max_capacity =
+            bitcoin::consensus::encode::MAX_VEC_SIZE / std::mem::size_of::<TransactionIds>();
+        let mut all_ids = Vec::with_capacity(core::cmp::min(count as usize, max_capacity));
+        for _ in 0..count {
+            all_ids.push(TransactionIds::consensus_decode_from_finite_reader(reader)?);
+        }
+        Ok(BlockTransactionIds(all_ids))
+    }
 }
 
 /// A TxOut stored in the Outputs CF together with a flag indicating
@@ -469,10 +554,13 @@ impl Store {
         }
     }
 
-    /// Store share chain transactions in the store.
+    /// Store share chain transactions in the store, and return each one's
+    /// ids in the order given.
     ///
     /// Writes transaction metadata, each input, and each output into
-    /// their respective column families. This function is pure tx
+    /// their respective column families. Metadata and inputs are keyed by
+    /// wtxid, so a transaction carried with another witness, which has the
+    /// same txid, never overwrites them; outputs are keyed by txid. This function is pure tx
     /// storage and does not touch the `SpendsIndex` -- chain-state
     /// bookkeeping of spends is the responsibility of the confirmation
     /// path (`put_confirmed_entry` / `remove_spends_for_block`).
@@ -498,10 +586,10 @@ impl Store {
         transactions: &[ShareTransaction],
         block_height: u32,
         batch: &mut rocksdb::WriteBatch,
-    ) -> Result<Vec<TxMetadata>, StoreError> {
+    ) -> Result<Vec<TransactionIds>, StoreError> {
         let inputs_cf = self.db.cf_handle(&ColumnFamily::Inputs).unwrap();
         let outputs_cf = self.db.cf_handle(&ColumnFamily::Outputs).unwrap();
-        let mut txs_metadata = Vec::new();
+        let mut all_ids = Vec::with_capacity(transactions.len());
         // Track coinbase_root_height for outputs written in this batch
         // so in-block spending chains can look up earlier outputs.
         let mut batch_heights: HashMap<String, u32> =
@@ -509,11 +597,12 @@ impl Store {
 
         for (position, tx) in transactions.iter().enumerate() {
             let txid = tx.compute_txid();
-            let metadata = self.add_tx_metadata(txid, tx, false, batch)?;
-            txs_metadata.push(metadata);
+            let wtxid = tx.compute_wtxid();
+            self.add_tx_metadata(txid, wtxid, tx, false, batch)?;
+            all_ids.push(TransactionIds { txid, wtxid });
 
             for (i, input) in tx.input.iter().enumerate() {
-                let input_key = outpoint_key(&txid, i as u32);
+                let input_key = input_key(&wtxid, i as u32);
                 let stored = StoredTxIn {
                     tx_in: input.clone(),
                 };
@@ -543,7 +632,7 @@ impl Store {
                 }
             }
         }
-        Ok(txs_metadata)
+        Ok(all_ids)
     }
 
     /// Compute the minimum coinbase_root_height across all inputs of a
@@ -589,17 +678,17 @@ impl Store {
     /// We only validate what is dependent on the chain state. Once valid, the txid is never made invalid.
     pub(crate) fn mark_transaction_valid(
         &self,
-        txid: &Txid,
+        wtxid: &Wtxid,
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<TxMetadata, StoreError> {
         // mark tx metadata as validated
-        let mut tx_metadata = self.get_tx_metadata(txid)?;
+        let mut tx_metadata = self.get_tx_metadata(wtxid)?;
         tx_metadata.validated = true;
 
         let mut serialized = Vec::new();
         tx_metadata.consensus_encode(&mut serialized)?;
         let tx_cf = self.db.cf_handle(&ColumnFamily::Tx).unwrap();
-        batch.put_cf::<&[u8], Vec<u8>>(&tx_cf, txid.as_ref(), serialized);
+        batch.put_cf::<&[u8], Vec<u8>>(&tx_cf, wtxid.as_ref(), serialized);
 
         Ok(tx_metadata)
     }
@@ -715,15 +804,17 @@ impl Store {
         }
     }
 
-    /// Store transaction metadata
+    /// Store transaction metadata under the transaction's wtxid. The
+    /// metadata carries the txid, which its output rows are keyed by.
     pub(crate) fn add_tx_metadata(
         &self,
         txid: bitcoin::Txid,
+        wtxid: Wtxid,
         tx: &Transaction,
         validated: bool,
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<TxMetadata, StoreError> {
-        debug!("Adding tx metadata for txid {txid}");
+        debug!("Adding tx metadata for txid {txid} wtxid {wtxid}");
         let tx_metadata = TxMetadata {
             txid,
             version: tx.version,
@@ -736,7 +827,7 @@ impl Store {
         let tx_cf = self.db.cf_handle(&ColumnFamily::Tx).unwrap();
         let mut tx_metadata_serialized = Vec::new();
         tx_metadata.consensus_encode(&mut tx_metadata_serialized)?;
-        batch.put_cf::<&[u8], Vec<u8>>(&tx_cf, txid.as_ref(), tx_metadata_serialized);
+        batch.put_cf::<&[u8], Vec<u8>>(&tx_cf, wtxid.as_ref(), tx_metadata_serialized);
         Ok(tx_metadata)
     }
 
@@ -867,76 +958,68 @@ impl Store {
         Ok(all_blockhashes)
     }
 
-    /// Add the list of transaction IDs to the batch
-    /// Transactions themselves are stored in add_txs, here we just store the association between block and txids
-    pub(crate) fn add_block_to_txids_index(
+    /// Write `block_ids`, the ids of the block's sharechain transactions in
+    /// block order, as the block's `BlockTxids` entry. Transactions
+    /// themselves are stored by `add_sharechain_txs`.
+    pub(crate) fn add_block_transaction_ids(
         &self,
         blockhash: &BlockHash,
-        txids: &Txids,
+        block_ids: &BlockTransactionIds,
         batch: &mut rocksdb::WriteBatch,
-        bytes_suffix: &[u8],
-        column_family: ColumnFamily,
     ) -> Result<(), StoreError> {
-        let blockhash_bytes = txids_key(blockhash, bytes_suffix);
-
-        let mut serialized_txids = Vec::new();
-        txids.consensus_encode(&mut serialized_txids)?;
-        let block_txids_cf = self.db.cf_handle(&column_family).unwrap();
-        batch.put_cf::<&[u8], Vec<u8>>(&block_txids_cf, blockhash_bytes.as_ref(), serialized_txids);
+        let mut serialized = Vec::new();
+        block_ids.consensus_encode(&mut serialized)?;
+        let block_txids_cf = self.db.cf_handle(&ColumnFamily::BlockTxids).unwrap();
+        batch.put_cf::<&[u8], Vec<u8>>(
+            &block_txids_cf,
+            txids_key(blockhash, BLOCK_TXIDS_SUFFIX).as_ref(),
+            serialized,
+        );
         Ok(())
     }
 
-    /// Get all transaction IDs for a given block hash from the
-    /// BlockTxids column family.
-    pub fn get_txids_for_blockhash(&self, blockhash: &BlockHash) -> Txids {
-        let blockhash_bytes = txids_key(blockhash, BLOCK_TXIDS_SUFFIX);
-
+    /// The ids of `blockhash`'s sharechain transactions in block order, read
+    /// from the `BlockTxids` CF. Empty when the block has no body stored.
+    pub fn get_block_transaction_ids(
+        &self,
+        blockhash: &BlockHash,
+    ) -> Result<BlockTransactionIds, StoreError> {
         let block_txids_cf = self.db.cf_handle(&ColumnFamily::BlockTxids).unwrap();
-        match self
-            .db
-            .get_cf::<&[u8]>(&block_txids_cf, blockhash_bytes.as_ref())
-        {
-            Ok(Some(serialized_txids)) => match encode::deserialize(&serialized_txids) {
-                Ok(t) => t,
-                Err(_) => {
-                    tracing::warn!("Error reading txids for blockhash");
-                    Txids(Vec::new())
-                }
-            },
-            _ => Txids(Vec::new()),
+        match self.db.get_cf::<&[u8]>(
+            &block_txids_cf,
+            txids_key(blockhash, BLOCK_TXIDS_SUFFIX).as_ref(),
+        )? {
+            Some(bytes) => encode::deserialize(&bytes).map_err(|error| {
+                StoreError::Serialization(format!(
+                    "Failed to deserialize transaction ids for block {blockhash}: {error}"
+                ))
+            }),
+            None => Ok(BlockTransactionIds::default()),
         }
     }
 
-    /// Get the validation status of a transaction from the store
-    pub(crate) fn get_tx_metadata(&self, txid: &bitcoin::Txid) -> Result<TxMetadata, StoreError> {
+    /// Get the metadata of the transaction with `wtxid`.
+    pub(crate) fn get_tx_metadata(&self, wtxid: &Wtxid) -> Result<TxMetadata, StoreError> {
         let tx_cf = self.db.cf_handle(&ColumnFamily::Tx).unwrap();
-        match self.db.get_cf::<&[u8]>(&tx_cf, txid.as_ref())? {
+        match self.db.get_cf::<&[u8]>(&tx_cf, wtxid.as_ref())? {
             Some(tx_metadata) => encode::deserialize(&tx_metadata).map_err(|_| {
                 StoreError::Serialization("Failed to deserialize tx metadata".to_string())
             }),
             None => Err(StoreError::NotFound(format!(
-                "Transaction metadata not found for txid: {txid}"
+                "Transaction metadata not found for wtxid: {wtxid}"
             ))),
         }
     }
 
-    /// Get transactions for a blockhash from the BlockTxids column
-    /// family. Looks up the txids index, then reconstructs each
-    /// transaction from the Tx/Inputs/Outputs CFs. Empty when the block
+    /// Get the sharechain transactions of `blockhash` in block order, each
+    /// exactly as the block holds it, witness included. Empty when the block
     /// has no body stored; `NotFound` if any transaction row is missing.
     pub fn get_txs_for_blockhash(
         &self,
         blockhash: &BlockHash,
     ) -> Result<Vec<Transaction>, StoreError> {
-        let txids = self.get_txids_for_blockhash(blockhash);
-        txids
-            .0
-            .iter()
-            .map(|txid| {
-                self.get_tx_with_output_origins_by_txid(txid)
-                    .map(|(transaction, _output_origins)| transaction)
-            })
-            .collect()
+        let block_ids = self.get_block_transaction_ids(blockhash)?;
+        self.get_txs(&block_ids.wtxids())
     }
 
     /// Get the transaction with `txid` from the block that holds it: the
@@ -972,8 +1055,10 @@ impl Store {
     /// holding it, else the first block holding it that is not Invalid, or
     /// `None`.
     ///
-    /// A transaction held only by Invalid blocks, or by no block, is not
-    /// served.
+    /// Blocks that hold one txid can hold different witnesses for it. A
+    /// confirmed or still valid block's copy is the one to serve, never an
+    /// Invalid block's. A transaction held only by Invalid blocks, or by no
+    /// block, is not served.
     pub(crate) fn find_block_for_txid(&self, txid: &Txid) -> Result<Option<BlockHash>, StoreError> {
         let blockhashes = self.get_blockhashes_for_txid(txid)?;
         if blockhashes.is_empty() {
@@ -991,35 +1076,39 @@ impl Store {
         Ok(chosen.map(|(blockhash, _metadata)| *blockhash))
     }
 
-    /// Get the transaction with `txid` as block `blockhash` holds it, with
-    /// each output's `OutputOrigin`. `NotFound` if the block holds no such
-    /// transaction or any of its rows is missing.
+    /// Get the transaction with `txid` exactly as block `blockhash` holds it,
+    /// with each output's `OutputOrigin`. `NotFound` if the block holds no
+    /// such transaction or any of its rows is missing.
     pub fn get_tx_with_output_origins_in_block(
         &self,
         blockhash: &BlockHash,
         txid: &Txid,
     ) -> Result<(Transaction, Vec<OutputOrigin>), StoreError> {
-        if !self.get_txids_for_blockhash(blockhash).0.contains(txid) {
-            return Err(StoreError::NotFound(format!(
-                "Block {blockhash} holds no transaction {txid}"
-            )));
-        }
-        self.get_tx_with_output_origins_by_txid(txid)
+        let wtxid = self
+            .get_block_transaction_ids(blockhash)?
+            .0
+            .iter()
+            .find(|ids| ids.txid == *txid)
+            .map(|ids| ids.wtxid)
+            .ok_or_else(|| {
+                StoreError::NotFound(format!("Block {blockhash} holds no transaction {txid}"))
+            })?;
+        self.get_tx_with_output_origins_by_wtxid(&wtxid)
     }
 
-    /// Get the transaction rows stored under `txid` together with each
-    /// output's `OutputOrigin` (the coinbase flag and `coinbase_root_height`
-    /// that `Transaction` drops), in output order. Does not check which
-    /// block holds the transaction; see `get_tx` for that.
+    /// Get the transaction with `wtxid` together with each output's
+    /// `OutputOrigin` (the coinbase flag and `coinbase_root_height` that
+    /// `Transaction` drops), in output order.
     ///
     /// Loads the tx metadata, then each input (with its witness) and each
-    /// output row. Returns `NotFound` if any row is missing, so a prune
-    /// that interleaves with the reads surfaces as an error, never a panic.
-    pub(crate) fn get_tx_with_output_origins_by_txid(
+    /// output row, the outputs by the txid the metadata carries. Returns
+    /// `NotFound` if any row is missing, so a prune that interleaves with
+    /// the reads surfaces as an error, never a panic.
+    pub(crate) fn get_tx_with_output_origins_by_wtxid(
         &self,
-        txid: &Txid,
+        wtxid: &Wtxid,
     ) -> Result<(Transaction, Vec<OutputOrigin>), StoreError> {
-        let tx_metadata = self.get_tx_metadata(txid)?;
+        let tx_metadata = self.get_tx_metadata(wtxid)?;
 
         debug!("Transaction metadata: {:?}", tx_metadata);
 
@@ -1030,7 +1119,7 @@ impl Store {
         let mut output_origins = Vec::with_capacity(tx_metadata.output_count as usize);
 
         for i in 0..tx_metadata.input_count {
-            let input_key = outpoint_key(txid, i);
+            let input_key = input_key(wtxid, i);
             let input = self
                 .db
                 .get_cf::<&[u8]>(&inputs_cf, input_key.as_ref())?
@@ -1045,7 +1134,7 @@ impl Store {
             inputs.push(input);
         }
         for i in 0..tx_metadata.output_count {
-            let output_key = outpoint_key(txid, i);
+            let output_key = outpoint_key(&tx_metadata.txid, i);
             let output = self
                 .db
                 .get_cf::<&[u8]>(&outputs_cf, output_key.as_ref())?
@@ -1074,25 +1163,28 @@ impl Store {
         Ok((transaction, output_origins))
     }
 
-    /// Batch load `TxMetadata` for a list of txids via a single
+    /// Batch load `TxMetadata` for a list of wtxids via a single
     /// `multi_get_cf` on the `Tx` column family. Result order matches
-    /// the input order. Errors on any missing txid.
-    pub(crate) fn get_metadata_for_txids(
+    /// the input order. Errors on any missing wtxid.
+    pub(crate) fn get_metadata_for_wtxids(
         &self,
-        txids: &[Txid],
+        wtxids: &[Wtxid],
     ) -> Result<Vec<TxMetadata>, StoreError> {
-        if txids.is_empty() {
+        if wtxids.is_empty() {
             return Ok(Vec::new());
         }
         let tx_cf = self.db.cf_handle(&ColumnFamily::Tx).unwrap();
-        let keys: Vec<(_, &[u8])> = txids.iter().map(|txid| (&tx_cf, txid.as_ref())).collect();
+        let keys: Vec<(_, &[u8])> = wtxids
+            .iter()
+            .map(|wtxid| (&tx_cf, wtxid.as_ref()))
+            .collect();
         let results = self.db.multi_get_cf(keys);
-        let mut metadatas: Vec<TxMetadata> = Vec::with_capacity(txids.len());
+        let mut metadatas: Vec<TxMetadata> = Vec::with_capacity(wtxids.len());
         for (index, result) in results.into_iter().enumerate() {
             let bytes = result?.ok_or_else(|| {
                 StoreError::NotFound(format!(
-                    "Transaction metadata not found for txid: {}",
-                    txids[index]
+                    "Transaction metadata not found for wtxid: {}",
+                    wtxids[index]
                 ))
             })?;
             let metadata: TxMetadata = encode::deserialize(&bytes).map_err(|_| {
@@ -1103,24 +1195,23 @@ impl Store {
         Ok(metadatas)
     }
 
-    /// Batch load transaction inputs for every `(txid, metadata)` pair
+    /// Batch load transaction inputs for every `(wtxid, metadata)` pair
     /// via a single `multi_get_cf` on the `Inputs` column family. Returns
-    /// a per-tx `Vec<TxIn>` in the same order as `txids`. `txids` and
+    /// a per-tx `Vec<TxIn>` in the same order as `wtxids`. `wtxids` and
     /// `metadatas` must have the same length.
     pub(crate) fn get_inputs(
         &self,
-        txids: &[Txid],
+        wtxids: &[Wtxid],
         metadatas: &[TxMetadata],
     ) -> Result<Vec<Vec<bitcoin::TxIn>>, StoreError> {
         let inputs_cf = self.db.cf_handle(&ColumnFamily::Inputs).unwrap();
         let mut keys: Vec<String> = Vec::new();
         // Use offsets to track inputs for various txids to avoid using hashmap here
-        let mut offsets: Vec<usize> = Vec::with_capacity(txids.len() + 1);
+        let mut offsets: Vec<usize> = Vec::with_capacity(wtxids.len() + 1);
         offsets.push(0);
-        for (index, metadata) in metadatas.iter().enumerate() {
-            let txid = &txids[index];
+        for (wtxid, metadata) in wtxids.iter().zip(metadatas) {
             for input_index in 0..metadata.input_count {
-                keys.push(outpoint_key(txid, input_index));
+                keys.push(input_key(wtxid, input_index));
             }
             offsets.push(keys.len());
         }
@@ -1142,31 +1233,28 @@ impl Store {
         }
 
         // group the offset based inputs for each txid
-        let mut grouped: Vec<Vec<bitcoin::TxIn>> = Vec::with_capacity(txids.len());
-        for index in 0..txids.len() {
+        let mut grouped: Vec<Vec<bitcoin::TxIn>> = Vec::with_capacity(wtxids.len());
+        for index in 0..wtxids.len() {
             grouped.push(decoded[offsets[index]..offsets[index + 1]].to_vec());
         }
         Ok(grouped)
     }
 
-    /// Batch load transaction outputs for every `(txid, metadata)` pair
-    /// via a single `multi_get_cf` on the `Outputs` column family.
-    /// Returns a per-tx `Vec<TxOut>` in the same order as `txids`.
-    /// `txids` and `metadatas` must have the same length.
+    /// Batch load transaction outputs for every metadata, by the txid it
+    /// carries, via a single `multi_get_cf` on the `Outputs` column family.
+    /// Returns a per-tx `Vec<TxOut>` in the same order as `metadatas`.
     pub(crate) fn get_outputs(
         &self,
-        txids: &[Txid],
         metadatas: &[TxMetadata],
     ) -> Result<Vec<Vec<bitcoin::TxOut>>, StoreError> {
         let outputs_cf = self.db.cf_handle(&ColumnFamily::Outputs).unwrap();
         let mut keys: Vec<String> = Vec::new();
         // Use offsets to track ouputs for various txids to avoid using hashmap here
-        let mut offsets: Vec<usize> = Vec::with_capacity(txids.len() + 1);
+        let mut offsets: Vec<usize> = Vec::with_capacity(metadatas.len() + 1);
         offsets.push(0);
-        for (index, metadata) in metadatas.iter().enumerate() {
-            let txid = &txids[index];
+        for metadata in metadatas {
             for output_index in 0..metadata.output_count {
-                keys.push(outpoint_key(txid, output_index));
+                keys.push(outpoint_key(&metadata.txid, output_index));
             }
             offsets.push(keys.len());
         }
@@ -1188,26 +1276,26 @@ impl Store {
         }
 
         // group the offset based outputs for each txid
-        let mut grouped: Vec<Vec<bitcoin::TxOut>> = Vec::with_capacity(txids.len());
-        for index in 0..txids.len() {
+        let mut grouped: Vec<Vec<bitcoin::TxOut>> = Vec::with_capacity(metadatas.len());
+        for index in 0..metadatas.len() {
             grouped.push(decoded[offsets[index]..offsets[index + 1]].to_vec());
         }
         Ok(grouped)
     }
 
-    /// Batch load transactions for a list of txids.
+    /// Batch load transactions for a list of wtxids.
     ///
-    /// Composes `get_metadata_for_txids`, `get_inputs`, and
+    /// Composes `get_metadata_for_wtxids`, `get_inputs`, and
     /// `get_outputs`: three `multi_get_cf` calls total, one per column
     /// family, independent of how many transactions are requested.
-    pub(crate) fn get_txs(&self, txids: &[Txid]) -> Result<Vec<Transaction>, StoreError> {
-        if txids.is_empty() {
+    pub(crate) fn get_txs(&self, wtxids: &[Wtxid]) -> Result<Vec<Transaction>, StoreError> {
+        if wtxids.is_empty() {
             return Ok(Vec::new());
         }
-        let metadatas = self.get_metadata_for_txids(txids)?;
-        let inputs = self.get_inputs(txids, &metadatas)?;
-        let outputs = self.get_outputs(txids, &metadatas)?;
-        let mut txs = Vec::with_capacity(txids.len());
+        let metadatas = self.get_metadata_for_wtxids(wtxids)?;
+        let inputs = self.get_inputs(wtxids, &metadatas)?;
+        let outputs = self.get_outputs(&metadatas)?;
+        let mut txs = Vec::with_capacity(wtxids.len());
         for (metadata, (tx_inputs, tx_outputs)) in
             metadatas.into_iter().zip(inputs.into_iter().zip(outputs))
         {
@@ -1221,18 +1309,14 @@ impl Store {
         Ok(txs)
     }
 
-    /// Get transactions by blockhash index for sharechain transactions
+    /// Get the sharechain transactions of `blockhash` in block order, each
+    /// exactly as the block holds it.
     pub(crate) fn get_txs_by_blockhash_index(
         &self,
         blockhash: &BlockHash,
     ) -> Result<Vec<ShareTransaction>, StoreError> {
-        let txids = self.get_txids_for_blockhash(blockhash);
-        let txs = self.get_txs(&txids.0)?;
-        let mut share_txs = Vec::with_capacity(txs.len());
-        for tx in txs {
-            share_txs.push(ShareTransaction(tx));
-        }
-        Ok(share_txs)
+        let txs = self.get_txs_for_blockhash(blockhash)?;
+        Ok(txs.into_iter().map(ShareTransaction).collect())
     }
 
     /// Re-validate one about-to-be-confirmed block's prevouts against committed
@@ -1367,12 +1451,12 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         assert_eq!(metadata.len(), block.transactions.len());
-        for tx_meta in &metadata {
-            let tx = store
-                .get_tx_with_output_origins_by_txid(&tx_meta.txid)
-                .unwrap()
-                .0;
-            assert_eq!(tx.compute_txid(), tx_meta.txid);
+        for ids in &metadata {
+            let (tx, _output_origins) = store
+                .get_tx_with_output_origins_by_wtxid(&ids.wtxid)
+                .unwrap();
+            assert_eq!(tx.compute_txid(), ids.txid);
+            assert_eq!(tx.compute_wtxid(), ids.wtxid);
         }
     }
 
@@ -1395,7 +1479,7 @@ mod tests {
             .delete_cf(&outputs_cf, outpoint_key(&txid, 0))
             .unwrap();
 
-        let result = store.get_tx_with_output_origins_by_txid(&txid);
+        let result = store.get_tx_with_output_origins_by_wtxid(&metadata[0].wtxid);
 
         assert!(
             matches!(result, Err(StoreError::NotFound(_))),
@@ -1413,10 +1497,10 @@ mod tests {
             .add_sharechain_txs(&block.transactions, 7, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
-        let coinbase_txid = metadata[0].txid;
+        let coinbase_wtxid = metadata[0].wtxid;
 
         let (transaction, output_origins) = store
-            .get_tx_with_output_origins_by_txid(&coinbase_txid)
+            .get_tx_with_output_origins_by_wtxid(&coinbase_wtxid)
             .unwrap();
 
         assert_eq!(transaction, block.transactions[0].0);
@@ -1464,7 +1548,7 @@ mod tests {
 
         //* X's coinbase outputs still carry X's height, not Y's
         let (_transaction, output_origins) = store
-            .get_tx_with_output_origins_by_txid(&original_coinbase_txid)
+            .get_tx_with_output_origins_by_wtxid(&original.transactions[0].compute_wtxid())
             .unwrap();
         assert_eq!(
             output_origins[0],
@@ -1515,7 +1599,7 @@ mod tests {
             .unwrap();
         store.commit_batch(batch).unwrap();
         let (_transaction, output_origins) = store
-            .get_tx_with_output_origins_by_txid(&original_coinbase_txid)
+            .get_tx_with_output_origins_by_wtxid(&original.transactions[0].compute_wtxid())
             .unwrap();
         assert_eq!(
             output_origins[0],
@@ -1536,14 +1620,14 @@ mod tests {
             .add_sharechain_txs(&block.transactions, 1, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
-        let txid = metadata[0].txid;
+        let wtxid = metadata[0].wtxid;
         let inputs_cf = store.db.cf_handle(&ColumnFamily::Inputs).unwrap();
         store
             .db
-            .delete_cf(&inputs_cf, outpoint_key(&txid, 0))
+            .delete_cf(&inputs_cf, input_key(&wtxid, 0))
             .unwrap();
 
-        let result = store.get_tx_with_output_origins_by_txid(&txid);
+        let result = store.get_tx_with_output_origins_by_wtxid(&wtxid);
 
         assert!(
             matches!(result, Err(StoreError::NotFound(_))),
@@ -1694,8 +1778,8 @@ mod tests {
                 script_pubkey: bitcoin::ScriptBuf::new(),
             }],
         };
-        let txid_a = tx_a.compute_txid();
-        let txid_b = tx_b.compute_txid();
+        let wtxid_a = tx_a.compute_wtxid();
+        let wtxid_b = tx_b.compute_wtxid();
 
         let mut batch = Store::get_write_batch();
         store
@@ -1710,25 +1794,24 @@ mod tests {
             .unwrap();
         store.commit_batch(batch).unwrap();
 
-        let loaded = store.get_txs(&[txid_a, txid_b]).unwrap();
+        let loaded = store.get_txs(&[wtxid_a, wtxid_b]).unwrap();
         assert_eq!(loaded.len(), 2);
         assert_eq!(loaded[0], tx_a);
         assert_eq!(loaded[1], tx_b);
 
         // Order of the request drives the order of the result.
-        let reversed = store.get_txs(&[txid_b, txid_a]).unwrap();
+        let reversed = store.get_txs(&[wtxid_b, wtxid_a]).unwrap();
         assert_eq!(reversed[0], tx_b);
         assert_eq!(reversed[1], tx_a);
     }
 
     #[test]
-    fn test_get_txs_errors_when_any_txid_unknown() {
+    fn test_get_txs_errors_when_any_wtxid_unknown() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
 
-        let unknown_txid: bitcoin::Txid =
-            bitcoin::hashes::sha256d::Hash::from_byte_array([0x99; 32]).into();
-        let result = store.get_txs(&[unknown_txid]);
+        let unknown_wtxid = Wtxid::from_byte_array([0x99; 32]);
+        let result = store.get_txs(&[unknown_wtxid]);
         assert!(result.is_err());
     }
 
@@ -2843,7 +2926,11 @@ mod tests {
             .add_sharechain_txs(&block.transactions, 1, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
-        assert!(store.get_tx_with_output_origins_by_txid(&txid).is_ok());
+        assert!(
+            store
+                .get_tx_with_output_origins_by_wtxid(&block.transactions[0].compute_wtxid())
+                .is_ok()
+        );
 
         let result = store.get_tx(&txid);
 
@@ -2865,8 +2952,8 @@ mod tests {
         store.commit_batch(batch).unwrap();
 
         // Verify block -> txids index (forward lookup)
-        let txids = store.get_txids_for_blockhash(&blockhash);
-        assert_eq!(txids.0.len(), block.transactions.len());
+        let block_ids = store.get_block_transaction_ids(&blockhash).unwrap();
+        assert_eq!(block_ids.0.len(), block.transactions.len());
 
         // Verify txid -> block index (reverse lookup via add_txids_to_blocks_index)
         for tx in &block.transactions {
@@ -3029,7 +3116,7 @@ mod tests {
 
         let mut batch = Store::get_write_batch();
         let txid = tx.compute_txid();
-        let result = store.add_tx_metadata(txid, &tx, false, &mut batch);
+        let result = store.add_tx_metadata(txid, tx.compute_wtxid(), &tx, false, &mut batch);
         store.commit_batch(batch).unwrap();
 
         assert!(result.is_ok());
@@ -3053,23 +3140,26 @@ mod tests {
         };
 
         let txid = tx.compute_txid();
+        let wtxid = tx.compute_wtxid();
 
         // Add tx metadata first
         let mut batch = Store::get_write_batch();
-        store.add_tx_metadata(txid, &tx, false, &mut batch).unwrap();
+        store
+            .add_tx_metadata(txid, wtxid, &tx, false, &mut batch)
+            .unwrap();
         store.commit_batch(batch).unwrap();
 
         // Verify it's not validated
-        let metadata = store.get_tx_metadata(&txid).unwrap();
+        let metadata = store.get_tx_metadata(&wtxid).unwrap();
         assert!(!metadata.validated);
 
         // Mark as valid
         let mut batch = Store::get_write_batch();
-        store.mark_transaction_valid(&txid, &mut batch).unwrap();
+        store.mark_transaction_valid(&wtxid, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
 
         // Verify it's now validated
-        let metadata = store.get_tx_metadata(&txid).unwrap();
+        let metadata = store.get_tx_metadata(&wtxid).unwrap();
         assert!(metadata.validated);
     }
 
@@ -3104,17 +3194,8 @@ mod tests {
         store.db.write(batch).unwrap();
 
         // Verify transactions were stored correctly by retrieving them by txid
-        let tx1_id = tx1.compute_txid();
-        let tx2_id = tx2.compute_txid();
-
-        assert_eq!(
-            store.get_tx_with_output_origins_by_txid(&tx1_id).unwrap().0,
-            tx1
-        );
-        assert_eq!(
-            store.get_tx_with_output_origins_by_txid(&tx2_id).unwrap().0,
-            tx2
-        );
+        assert_eq!(store.get_txs(&[tx1.compute_wtxid()]).unwrap(), vec![tx1]);
+        assert_eq!(store.get_txs(&[tx2.compute_wtxid()]).unwrap(), vec![tx2]);
     }
 
     #[test]
@@ -3172,7 +3253,9 @@ mod tests {
 
         assert_eq!(res[0].txid, txid);
 
-        let stored_tx = store.get_tx_with_output_origins_by_txid(&txid).unwrap().0;
+        let (stored_tx, _output_origins) = store
+            .get_tx_with_output_origins_by_wtxid(&res[0].wtxid)
+            .unwrap();
         assert_eq!(stored_tx.version, tx.version);
         assert_eq!(stored_tx.lock_time, tx.lock_time);
         assert_eq!(stored_tx.input.len(), 1);
@@ -3240,7 +3323,6 @@ mod tests {
                 },
             ],
         };
-        let spending_txid = spending_tx.compute_txid();
         let mut batch = rocksdb::WriteBatch::default();
         store
             .add_sharechain_txs(&[ShareTransaction(spending_tx.clone())], 2, &mut batch)
@@ -3248,7 +3330,7 @@ mod tests {
         store.db.write(batch).unwrap();
 
         let (stored_tx, output_origins) = store
-            .get_tx_with_output_origins_by_txid(&spending_txid)
+            .get_tx_with_output_origins_by_wtxid(&spending_tx.compute_wtxid())
             .unwrap();
 
         assert_eq!(stored_tx, spending_tx);

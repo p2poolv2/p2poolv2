@@ -187,8 +187,10 @@ mod tests {
         let (state, _temp_dir) = build_test_state().await;
         let store = state.chain_store_handle.store_handle().store();
         let genesis_hash = state.chain_store_handle.get_chain_tip().unwrap();
-        let txids = store.get_txids_for_blockhash(&genesis_hash);
-        let txid = txids.0[0];
+        let txid = store
+            .get_block_transaction_ids(&genesis_hash)
+            .unwrap()
+            .txids()[0];
 
         let query = Query(TransactionQuery {
             txid: txid.to_string(),
@@ -208,8 +210,10 @@ mod tests {
         let (state, _temp_dir) = build_test_state().await;
         let store = state.chain_store_handle.store_handle().store();
         let genesis_hash = state.chain_store_handle.get_chain_tip().unwrap();
-        let txids = store.get_txids_for_blockhash(&genesis_hash);
-        let txid = txids.0[0];
+        let txid = store
+            .get_block_transaction_ids(&genesis_hash)
+            .unwrap()
+            .txids()[0];
 
         let query = Query(TransactionQuery {
             txid: txid.to_string(),

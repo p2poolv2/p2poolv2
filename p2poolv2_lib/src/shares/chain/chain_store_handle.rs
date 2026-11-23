@@ -1167,8 +1167,8 @@ mod tests {
     use crate::store::script_history::{ScriptHistoryEntry, ScriptHistoryPage, script_hash};
     use crate::store::writer::StoreError;
     use crate::test_utils::{
-        TestShareBlockBuilder, build_confirmed_test_chain, funding_outpoint, genesis_for_tests,
-        setup_test_chain_store_handle, test_funding_transaction,
+        TestShareBlockBuilder, build_confirmed_test_chain, confirm_test_block, funding_outpoint,
+        genesis_for_tests, setup_test_chain_store_handle, test_funding_transaction,
     };
     use bitcoin::BlockHash;
     use bitcoin::hashes::Hash;
@@ -2323,6 +2323,129 @@ mod tests {
             .unwrap();
 
         assert_eq!(confirmed, None);
+    }
+
+    /// A block off the confirmed chain can carry a confirmed transaction with
+    /// another witness, under the same txid. It can never be confirmed too:
+    /// its copy spends the same outputs. A lookup by txid serves the confirmed
+    /// block's copy, whether the other copies were stored before or after it.
+    #[tokio::test]
+    async fn test_get_tx_serves_the_confirmed_blocks_copy() {
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let blocks = build_confirmed_test_chain(&chain_store_handle, 1).await;
+        let confirmed_copy = test_funding_transaction(funding_outpoint(&blocks[1]), 2);
+        let mut earlier_copy = confirmed_copy.clone();
+        earlier_copy.input[0].witness.push([0x42u8; 4]);
+        let mut later_copy = confirmed_copy.clone();
+        later_copy.input[0].witness.push([0x43u8; 4]);
+        let earlier = TestShareBlockBuilder::new()
+            .prev_share_blockhash(blocks[1].block_hash().to_string())
+            .nonce(1)
+            .add_transaction(earlier_copy)
+            .build();
+        let confirmed = TestShareBlockBuilder::new()
+            .prev_share_blockhash(blocks[1].block_hash().to_string())
+            .nonce(2)
+            .work(2)
+            .add_transaction(confirmed_copy.clone())
+            .build();
+        let later = TestShareBlockBuilder::new()
+            .prev_share_blockhash(blocks[1].block_hash().to_string())
+            .nonce(3)
+            .add_transaction(later_copy)
+            .build();
+        let txid = confirmed_copy.compute_txid();
+
+        //* Store one other copy's block, confirm the heavier block, then store another copy's block
+        chain_store_handle
+            .add_share_block_and_organise_header(earlier.clone())
+            .await
+            .unwrap();
+        confirm_test_block(&chain_store_handle, &confirmed).await;
+        chain_store_handle
+            .add_share_block_and_organise_header(later.clone())
+            .await
+            .unwrap();
+        let store = chain_store_handle.store_handle().store();
+        assert_eq!(
+            store.get_blockhashes_for_txid(&txid).unwrap(),
+            vec![
+                earlier.block_hash(),
+                confirmed.block_hash(),
+                later.block_hash()
+            ]
+        );
+        assert_eq!(
+            chain_store_handle
+                .get_confirmed_block_for_txid(&txid)
+                .unwrap(),
+            Some((confirmed.block_hash(), 2))
+        );
+
+        let served = store.get_tx(&txid).unwrap();
+
+        assert_eq!(served, confirmed_copy);
+    }
+
+    /// With no confirmed block, a lookup by txid skips an Invalid block's
+    /// copies for one from a block that is not Invalid, whether the Invalid
+    /// blocks were stored before or after it.
+    #[tokio::test]
+    async fn test_get_tx_skips_an_invalid_blocks_copy() {
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let blocks = build_confirmed_test_chain(&chain_store_handle, 1).await;
+        let honest_copy = test_funding_transaction(funding_outpoint(&blocks[1]), 2);
+        let mut earlier_altered_copy = honest_copy.clone();
+        earlier_altered_copy.input[0].witness.push([0x42u8; 4]);
+        let mut later_altered_copy = honest_copy.clone();
+        later_altered_copy.input[0].witness.push([0x43u8; 4]);
+        let earlier_invalid_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(blocks[1].block_hash().to_string())
+            .nonce(1)
+            .add_transaction(earlier_altered_copy)
+            .build();
+        let honest_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(blocks[1].block_hash().to_string())
+            .nonce(2)
+            .add_transaction(honest_copy.clone())
+            .build();
+        let later_invalid_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(blocks[1].block_hash().to_string())
+            .nonce(3)
+            .add_transaction(later_altered_copy)
+            .build();
+
+        //* Store an altered copy's block and mark it Invalid, then the honest one
+        chain_store_handle
+            .add_share_block_and_organise_header(earlier_invalid_block.clone())
+            .await
+            .unwrap();
+        chain_store_handle
+            .mark_invalid(earlier_invalid_block.block_hash())
+            .await
+            .unwrap();
+        chain_store_handle
+            .add_share_block_and_organise_header(honest_block)
+            .await
+            .unwrap();
+
+        //* Store another altered copy's block last and mark it Invalid
+        chain_store_handle
+            .add_share_block_and_organise_header(later_invalid_block.clone())
+            .await
+            .unwrap();
+        chain_store_handle
+            .mark_invalid(later_invalid_block.block_hash())
+            .await
+            .unwrap();
+
+        let served = chain_store_handle
+            .store_handle()
+            .store()
+            .get_tx(&honest_copy.compute_txid())
+            .unwrap();
+
+        assert_eq!(served, honest_copy);
     }
 
     #[tokio::test]
