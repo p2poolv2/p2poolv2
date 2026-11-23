@@ -39,7 +39,7 @@ jobs:
         with:
           toolchain: ${{ env.RUSTUP_TOOLCHAIN }}
 
-      - uses: taiki-e/install-action@682ce6c3c696a4cd5168a05f98e51aa02b877941 # v2.89.1
+      - uses: taiki-e/install-action@ab49d3c64680143e184118bed66a46419fc15519 # v2.90.5
         with:
           tool: cargo-fuzz@0.13.2
 
