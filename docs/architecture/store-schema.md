@@ -265,9 +265,9 @@ height then position order. See `store/script_history.rs`.
 
 ### Pruning
 
-`Tx`, `Inputs`, `Outputs`, `TxidsBlocks` and `SpendsIndex` rows are deleted
-with a pruned block unless a kept block still includes the txid; `Tx` and
-`Inputs` go for every wtxid the pruned blocks hold for that txid.
+`Tx` and `Inputs` rows are deleted with a pruned block unless a kept block
+holds the same wtxid. `Outputs`, `TxidsBlocks` and `SpendsIndex` rows are
+deleted unless a kept block still includes the txid.
 `BlockTxids`, `BitcoinTxids`, `BitcoinCoinbase` and candidate `BlockHeight`
 entries are deleted below the prune target. `ScriptHistory` is not pruned:
 its compaction filter drops rows at spendable depth (section 9d). Headers, metadata, the block
