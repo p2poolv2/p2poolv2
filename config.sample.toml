@@ -1,5 +1,5 @@
 [network]
-listen_address = "/ip4/127.0.0.1/tcp/6884"
+listen_address = "/ip4/0.0.0.0/tcp/6884"
 # Peers to dial at startup and keep reconnecting to. Optional: leave it
 # out to find peers through the DNS seeds alone. Hostnames work too, as
 # /dns4/, /dns6/ or /dns/ addresses; only hostnames listed here are ever
@@ -36,9 +36,9 @@ pplns_ttl_days = 7
 [stratum]
 hostname = "0.0.0.0"
 port = 3333
-start_difficulty = 10000
+start_difficulty = 1000
 minimum_difficulty = 100
-solo_address = "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk"
+# solo_address = "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk"
 # Pool operating mode: "p2poolv2" (share chain) or "hydrapool"
 # (standalone PPLNS, no share chain). Default p2poolv2.
 # mode = "p2poolv2"

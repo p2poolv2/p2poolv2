@@ -323,11 +323,11 @@ impl Default for StratumConfig<Raw> {
     /// Helper for tests to create a basic StratumConfig
     fn default() -> Self {
         Self {
-            hostname: "127.0.0.1".to_string(),
+            hostname: "0.0.0.0".to_string(),
             port: 3333,
-            start_difficulty: 1,
-            minimum_difficulty: 1,
-            maximum_difficulty: Some(1000),
+            start_difficulty: 1000,
+            minimum_difficulty: 100,
+            maximum_difficulty: None,
             solo_address: None,
             zmqpubhashblock: "tcp://127.0.0.1:28332".to_string(),
             bootstrap_address: "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string(),
@@ -339,7 +339,7 @@ impl Default for StratumConfig<Raw> {
             chain: Chain::Signet,
             version_mask: DEFAULT_VERSION_MASK,
             ignore_difficulty: None,
-            pool_signature: None,
+            pool_signature: Some("P2Poolv2".to_string()),
             max_connections: None,
             wait_for_chain_sync: true,
             mode: PoolMode::default(),
@@ -422,7 +422,7 @@ fn default_dns_seed() -> bool {
 impl Default for NetworkConfig {
     fn default() -> Self {
         Self {
-            listen_address: "".to_string(),
+            listen_address: "/ip4/0.0.0.0/tcp/6884".to_string(),
             dial_peers: vec![],
             max_pending_incoming: 10,
             max_pending_outgoing: 10,
@@ -465,6 +465,7 @@ fn default_wait_for_chain_sync() -> bool {
 impl Default for StoreConfig {
     fn default() -> Self {
         Self {
+            // Empty for tests
             path: Default::default(),
             pplns_ttl_days: default_pplns_ttl_days(),
         }
@@ -475,7 +476,7 @@ fn default_pplns_ttl_days() -> u64 {
     7
 }
 
-#[derive(Debug, Deserialize, Default, Clone)]
+#[derive(Debug, Deserialize, Clone)]
 #[cfg_attr(any(test, feature = "test-utils"), derive(Serialize))]
 pub struct LoggingConfig {
     /// Log to file if specified
@@ -491,6 +492,20 @@ pub struct LoggingConfig {
     pub console: Option<bool>,
 }
 
+impl Default for LoggingConfig {
+    /// Mirrors the serde field defaults, so serializing `Default` and
+    /// omitting the keys from a file produce the same config.
+    fn default() -> Self {
+        Self {
+            // Empty for tests
+            file: None,
+            level: default_log_level(),
+            stats_dir: default_stats_dir(),
+            console: default_log_console(),
+        }
+    }
+}
+
 fn default_log_console() -> Option<bool> {
     Some(true)
 }
@@ -504,7 +519,7 @@ fn default_stats_dir() -> String {
 }
 
 #[derive(Deserialize, Clone)]
-#[cfg_attr(any(test, feature = "test-utils"), derive(Default, Serialize))]
+#[cfg_attr(any(test, feature = "test-utils"), derive(Serialize))]
 pub struct ApiConfig {
     /// The hostname for the API server
     pub hostname: String,
@@ -519,6 +534,20 @@ pub struct ApiConfig {
     /// Enable permissive CORS for the API server
     #[serde(default)]
     pub cors_allowed: bool,
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+impl Default for ApiConfig {
+    fn default() -> Self {
+        Self {
+            hostname: "127.0.0.1".to_string(),
+            port: 46884,
+            auth_user: None,
+            auth_token: None,
+            auth_password: None,
+            cors_allowed: false,
+        }
+    }
 }
 
 /// Custom Debug to redact password
@@ -959,6 +988,56 @@ mod tests {
         assert_eq!(config.store.pplns_ttl_days, 7);
     }
 
+    /// The sample config baked into this crate must be exactly what
+    /// serializing `Config::default()` produces, so the two can never drift.
+    /// Filesystem paths and bitcoinrpc details are operator-local and ignored.
+    #[test]
+    fn sample_config_matches_serialized_default() {
+        let sample: Config = config::Config::builder()
+            .add_source(config::File::from_str(
+                include_str!("../../config.sample.toml"),
+                config::FileFormat::Toml,
+            ))
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+        let mut sample_value = serde_json::to_value(&sample).unwrap();
+        let mut default_value = serde_json::to_value(Config::default()).unwrap();
+
+        // remove path values - machine specific
+        sample_value["store"]
+            .as_object_mut()
+            .unwrap()
+            .remove("path");
+        default_value["store"]
+            .as_object_mut()
+            .unwrap()
+            .remove("path");
+        sample_value["logging"]
+            .as_object_mut()
+            .unwrap()
+            .remove("file");
+        default_value["logging"]
+            .as_object_mut()
+            .unwrap()
+            .remove("file");
+        sample_value["logging"]
+            .as_object_mut()
+            .unwrap()
+            .remove("stats_dir");
+        default_value["logging"]
+            .as_object_mut()
+            .unwrap()
+            .remove("stats_dir");
+
+        // remove bitcoinrpc - operator connection details
+        sample_value.as_object_mut().unwrap().remove("bitcoinrpc");
+        default_value.as_object_mut().unwrap().remove("bitcoinrpc");
+
+        assert_eq!(sample_value, default_value);
+    }
+
     #[test]
     fn test_config_store_background_settings() {
         let config = Config::load_env().unwrap().with_pplns_ttl_days(9);
@@ -1262,7 +1341,7 @@ mod tests {
     #[test]
     fn test_default_network_config() {
         let config = NetworkConfig::default();
-        assert!(config.listen_address.is_empty());
+        assert_eq!(config.listen_address, "/ip4/0.0.0.0/tcp/6884");
     }
 
     /// A share address belongs to a network exactly when its prefix is the one
@@ -1307,8 +1386,10 @@ mod tests {
     #[test]
     fn test_pool_signature_option() {
         // Test with None
-        let config = StratumConfig::<Raw>::default();
-        assert_eq!(config.pool_signature, None);
+        let config = StratumConfig::<Raw> {
+            pool_signature: None,
+            ..Default::default()
+        };
 
         // Test parsing preserves pool_signature
         let parsed = config.parse().unwrap();

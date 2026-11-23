@@ -14,11 +14,11 @@ use std::str::FromStr;
 /// string). `bitcoin_network` gives the rust-bitcoin network for everything
 /// else, such as address validation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-// Testnet3 serializes as "test" to match FromStr; a plain derive would emit variant names
 #[cfg_attr(any(test, feature = "test-utils"), derive(serde::Serialize))]
 #[cfg_attr(any(test, feature = "test-utils"), serde(rename_all = "lowercase"))]
 pub enum Chain {
     Main,
+    // Testnet3 serializes as "test" to match FromStr; a plain derive would emit variant names
     #[cfg_attr(any(test, feature = "test-utils"), serde(rename = "test"))]
     Testnet3,
     Testnet4,
