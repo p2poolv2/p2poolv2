@@ -77,13 +77,15 @@
 //!   it matches what the migration produced, which catches a migration that
 //!   creates data the normal code paths do not.
 
+mod key_by_wtxid;
+
 use crate::store::column_families::ColumnFamily;
 use crate::store::writer::StoreError;
 use rocksdb::{DB, WriteBatch};
 use tracing::info;
 
 /// The schema version this binary reads and writes.
-pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+pub const CURRENT_SCHEMA_VERSION: u32 = 2;
 
 /// The version of a store written before schema versioning existed. Such a
 /// store has data but no `SCHEMA_VERSION_KEY`.
@@ -121,7 +123,11 @@ pub(crate) struct Migration {
 /// Every migration, in order. Each `to_version` is one more than the
 /// previous, starting at `UNVERSIONED_SCHEMA_VERSION + 1` and ending at
 /// `CURRENT_SCHEMA_VERSION`.
-const MIGRATIONS: &[Migration] = &[];
+const MIGRATIONS: &[Migration] = &[Migration {
+    to_version: 2,
+    name: "key share transactions by wtxid",
+    run: key_by_wtxid::run,
+}];
 
 /// The schema version a store is at, as found when it is opened.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -309,6 +315,20 @@ fn has_genesis(db: &DB) -> Result<bool, StoreError> {
         .is_some())
 }
 
+/// One raw row of a column family: its key and value.
+#[cfg(test)]
+type KeyValue = (Box<[u8]>, Box<[u8]>);
+
+/// Every key and value of `column_family`, in key order, for migration tests
+/// that compare a column family's whole contents.
+#[cfg(test)]
+fn column_family_contents(db: &DB, column_family: ColumnFamily) -> Vec<KeyValue> {
+    let handle = db.cf_handle(&column_family).unwrap();
+    db.iterator_cf(&handle, rocksdb::IteratorMode::Start)
+        .map(|entry| entry.unwrap())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -403,31 +423,28 @@ mod tests {
         assert_eq!(read_schema_version_key(&store.db).unwrap(), Some(2));
     }
 
-    /// A pre-versioning store at the current version needs no migration but
-    /// still gets its version written on the next writable open.
+    /// A pre-versioning store already at the target version needs no
+    /// migration but still gets its version written.
     #[test]
     fn test_unversioned_store_without_pending_migrations_is_stamped() {
         let temp_dir = tempdir().unwrap();
-        let path = temp_dir.path().to_str().unwrap().to_string();
-        {
-            //* Write a pre-versioning store: a genesis, no version stamp.
-            let store = Store::new(path.clone(), false).unwrap();
-            let metadata_cf = store.db.cf_handle(&ColumnFamily::Metadata).unwrap();
-            store
-                .db
-                .delete_cf(&metadata_cf, SCHEMA_VERSION_KEY)
-                .unwrap();
-            let mut batch = Store::get_write_batch();
-            store
-                .setup_genesis(&genesis_for_tests(), &mut batch)
-                .unwrap();
-            store.commit_batch(batch).unwrap();
-        }
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        //* Simulate a pre-versioning store: a genesis, no version stamp.
+        let metadata_cf = store.db.cf_handle(&ColumnFamily::Metadata).unwrap();
+        store
+            .db
+            .delete_cf(&metadata_cf, SCHEMA_VERSION_KEY)
+            .unwrap();
+        let mut batch = Store::get_write_batch();
+        store
+            .setup_genesis(&genesis_for_tests(), &mut batch)
+            .unwrap();
+        store.commit_batch(batch).unwrap();
 
-        let reopened = Store::new(path, false).unwrap();
+        ensure_version(&store.db, &[], UNVERSIONED_SCHEMA_VERSION).unwrap();
 
         assert_eq!(
-            read_schema_version_key(&reopened.db).unwrap(),
+            read_schema_version_key(&store.db).unwrap(),
             Some(UNVERSIONED_SCHEMA_VERSION)
         );
     }
@@ -438,6 +455,7 @@ mod tests {
     fn test_failing_migration_leaves_store_and_version_unchanged() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        write_schema_version(&store.db, 1).unwrap();
         let migrations = [Migration {
             to_version: 2,
             name: "write marker then fail",
@@ -458,6 +476,7 @@ mod tests {
     fn test_failing_second_migration_keeps_first() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        write_schema_version(&store.db, 1).unwrap();
         let migrations = [
             Migration {
                 to_version: 2,

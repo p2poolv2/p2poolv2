@@ -10,6 +10,8 @@ the design and remain consistent with the design choices.**
 # Chain Store RocksDB Schema
 
 This document captures the RocksDB storage schema used by `Store` and `ChainStore` in P2Poolv2.
+It describes schema version 2 (`CURRENT_SCHEMA_VERSION`); see `store-migrations.md`
+for how older stores are migrated.
 
 ## Overview
 
