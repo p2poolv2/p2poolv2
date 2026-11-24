@@ -5,7 +5,8 @@
 //! Descriptor wallet commands.
 //!
 //! Each wallet is a SQLite file at `<datadir>/<network>/<name>.sqlite`. The
-//! default wallet is saved with its network in `<datadir>/wallet.toml`.
+//! default wallet, used when `--wallet` is not given, is saved with its
+//! network in `<datadir>/wallet.toml`.
 
 use crate::commands::{WalletCommands, WalletDefaultCommands};
 use clap::{Args, ValueHint};
@@ -19,7 +20,8 @@ use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
 
-/// Network used when none is given.
+/// Network used when none is given and the selected wallet is not the
+/// default wallet.
 const DEFAULT_CHAIN: Chain = Chain::Testnet5;
 
 /// Data directory under the home directory, used when none is given.
@@ -60,7 +62,12 @@ struct WalletSettingsFile {
 #[derive(Args, Debug)]
 pub struct DatadirArgs {
     /// Wallet data directory (default: ~/.p2poolv2_wallet)
-    #[arg(short, long, value_hint = ValueHint::DirPath)]
+    #[arg(
+        short,
+        long,
+        env = "P2POOLV2_WALLET_DATADIR",
+        value_hint = ValueHint::DirPath
+    )]
     pub datadir: Option<PathBuf>,
 }
 
@@ -76,28 +83,27 @@ impl DatadirArgs {
     }
 }
 
-/// Options naming an existing wallet.
+/// Options selecting an existing wallet.
 #[derive(Args, Debug)]
 pub struct SelectWalletArgs {
     #[command(flatten)]
     pub datadir_args: DatadirArgs,
-    /// Wallet to use
-    #[arg(short, long, value_parser = parse_wallet_name)]
-    pub wallet: String,
+    /// Wallet to use (default: the default wallet)
+    #[arg(short, long, env = "P2POOLV2_WALLET", value_parser = parse_wallet_name)]
+    pub wallet: Option<String>,
     /// Network of the wallet: main, testnet4, testnet5, signet or regtest
-    /// (default: testnet5)
-    #[arg(short, long, value_parser = parse_wallet_chain)]
+    /// (default: the default wallet's network if it is the wallet used, else
+    /// testnet5)
+    #[arg(short, long, env = "P2POOLV2_NETWORK", value_parser = parse_wallet_chain)]
     pub network: Option<Chain>,
 }
 
 impl SelectWalletArgs {
-    /// The data directory and the wallet these options name.
+    /// The data directory and the wallet these options select.
     fn resolve(&self) -> Result<(PathBuf, WalletSelection), Box<dyn Error>> {
         let datadir = self.datadir_args.resolve()?;
-        let selection = WalletSelection {
-            name: self.wallet.clone(),
-            chain: self.network.unwrap_or(DEFAULT_CHAIN),
-        };
+        let default_wallet = read_default_wallet(&datadir)?;
+        let selection = select_wallet(self.wallet.as_deref(), self.network, default_wallet)?;
         Ok((datadir, selection))
     }
 }
@@ -147,6 +153,35 @@ fn execute_default_show(datadir_args: &DatadirArgs) -> Result<(), Box<dyn Error>
         ),
     }
     Ok(())
+}
+
+/// The wallet named by `wallet`, else the default wallet, on the network given
+/// by `network`, else the default wallet's network if it is the wallet
+/// selected, else testnet5.
+fn select_wallet(
+    wallet: Option<&str>,
+    network: Option<Chain>,
+    default_wallet: Option<WalletSelection>,
+) -> Result<WalletSelection, Box<dyn Error>> {
+    //* Take the named wallet, else the default one.
+    let name = match (wallet, &default_wallet) {
+        (Some(name), _) => name.to_owned(),
+        (None, Some(default_wallet)) => default_wallet.name.clone(),
+        (None, None) => {
+            return Err(
+                "No wallet selected. Pass --wallet, or set a default with: p2poolv2_cli wallet default set --wallet <name>"
+                    .into(),
+            );
+        }
+    };
+    //* Keep the default wallet's network only when that is the wallet selected.
+    let default_chain = default_wallet
+        .filter(|default_wallet| default_wallet.name == name)
+        .map(|default_wallet| default_wallet.chain);
+    Ok(WalletSelection {
+        chain: network.or(default_chain).unwrap_or(DEFAULT_CHAIN),
+        name,
+    })
 }
 
 /// Read the default wallet from `<datadir>/wallet.toml`, or `None` if the file
@@ -257,13 +292,66 @@ mod tests {
     }
 
     #[test]
+    fn wallet_selection_falls_back_to_the_default_wallet_and_its_network() {
+        //* With no wallet named and no default, nothing is selected.
+        assert!(select_wallet(None, None, None).is_err());
+        //* No wallet named selects the default wallet on its network, unless a network is given.
+        assert_eq!(
+            select_wallet(
+                None,
+                None,
+                Some(WalletSelection {
+                    name: "alice".to_owned(),
+                    chain: Chain::Testnet4,
+                })
+            )
+            .unwrap(),
+            WalletSelection {
+                name: "alice".to_owned(),
+                chain: Chain::Testnet4,
+            }
+        );
+        assert_eq!(
+            select_wallet(
+                None,
+                Some(Chain::Main),
+                Some(WalletSelection {
+                    name: "alice".to_owned(),
+                    chain: Chain::Testnet4,
+                })
+            )
+            .unwrap(),
+            WalletSelection {
+                name: "alice".to_owned(),
+                chain: Chain::Main,
+            }
+        );
+        //* Another wallet named does not take the default wallet's network.
+        assert_eq!(
+            select_wallet(
+                Some("bob"),
+                None,
+                Some(WalletSelection {
+                    name: "alice".to_owned(),
+                    chain: Chain::Testnet4,
+                })
+            )
+            .unwrap(),
+            WalletSelection {
+                name: "bob".to_owned(),
+                chain: Chain::Testnet5,
+            }
+        );
+    }
+
+    #[test]
     fn wallet_default_set_requires_the_wallet_file_and_saves_it() {
         let datadir = tempdir().unwrap();
         let arguments = SelectWalletArgs {
             datadir_args: DatadirArgs {
                 datadir: Some(datadir.path().to_path_buf()),
             },
-            wallet: "alice".to_owned(),
+            wallet: Some("alice".to_owned()),
             network: Some(Chain::Testnet5),
         };
         //* With no wallet file, nothing is saved.
