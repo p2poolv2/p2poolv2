@@ -17,6 +17,7 @@ pub mod pplns_shares;
 pub mod share;
 pub mod shares;
 pub mod transactions;
+pub mod wallet;
 
 use crate::commands;
 use bitcoin::Network;
@@ -29,7 +30,7 @@ use std::path::Path;
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 pub struct Cli {
-    /// Path to p2poolv2 config file (not required for address, gen-auth or --db-path commands)
+    /// Path to p2poolv2 config file (not required for address, gen-auth, wallet or --db-path commands)
     #[arg(short, long, env("P2POOL_CONFIG"), global = true)]
     pub config: Option<String>,
 
@@ -147,6 +148,26 @@ pub enum Commands {
         /// Password (leave empty to auto-generate, or use "-" to prompt)
         password: Option<String>,
     },
+    /// Descriptor wallet commands
+    Wallet {
+        #[command(subcommand)]
+        command: WalletCommands,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum WalletCommands {
+    /// Set or show the wallet used when none is named
+    Default {
+        #[command(subcommand)]
+        command: WalletDefaultCommands,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum WalletDefaultCommands {
+    /// Show the default wallet
+    Show(commands::wallet::DatadirArgs),
 }
 
 #[derive(Subcommand, Debug)]
@@ -201,6 +222,9 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
         }
         Some(Commands::GenAuth { username, password }) => {
             commands::gen_auth::execute(username.clone(), password.clone())?;
+        }
+        Some(Commands::Wallet { command }) => {
+            commands::wallet::execute(command)?;
         }
         Some(Commands::Db { command }) => {
             let db_path = cli
