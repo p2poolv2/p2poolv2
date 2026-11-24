@@ -166,6 +166,8 @@ pub enum WalletCommands {
 
 #[derive(Subcommand, Debug)]
 pub enum WalletDefaultCommands {
+    /// Make an existing wallet the default
+    Set(commands::wallet::SelectWalletArgs),
     /// Show the default wallet
     Show(commands::wallet::DatadirArgs),
 }

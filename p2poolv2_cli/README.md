@@ -177,11 +177,13 @@ default_network = "testnet5"
 ```
 
 ```sh
+p2poolv2_cli wallet default set --wallet alice
 p2poolv2_cli wallet default show
 ```
 
-A `wallet.toml` that is not valid is reported, never replaced; fix or delete
-it.
+`default set` checks only that the wallet file exists, and its `--network`
+defaults to testnet5. A `wallet.toml` that is not valid is reported, never
+replaced; fix or delete it.
 
 ## Viewing DOT output
 
