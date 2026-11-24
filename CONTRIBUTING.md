@@ -4,8 +4,7 @@ P2Poolv2 uses the Collective Code Construction Contract (C4) as
 adapted in [docs/C4.md](docs/C4.md). It is based on
 [42/C4](https://rfc.zeromq.org/spec/42/), and the differences are
 listed at the end of that document. Please read it before you send a
-patch. We are making changes to C4 as we go along to capture our own
-requirements, i.e. this process is continuously under review.
+patch.
 
 P2Poolv2 is licensed under "MIT OR Apache-2.0". Patches are submitted
 under the same license. Add yourself to [AUTHORS](AUTHORS) in your first
