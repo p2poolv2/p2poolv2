@@ -151,12 +151,21 @@ pub(crate) fn ensure_current(db: &DB) -> Result<(), StoreError> {
 
 /// Check that a store opened read-only is at `CURRENT_SCHEMA_VERSION`.
 ///
-/// A read-only open cannot migrate, so any other version is an error. A
-/// fresh store passes: it has no genesis, so no data in any layout.
+/// A read-only open cannot migrate, so any other version is an error. An
+/// older store can be migrated by starting the node; a newer one needs the
+/// newer binary that wrote it. A fresh store passes: it has no genesis, so
+/// no data in any layout.
 pub(crate) fn check_current(db: &DB) -> Result<(), StoreError> {
     match read_stored_schema_version(db)? {
         StoredSchemaVersion::Fresh => Ok(()),
         StoredSchemaVersion::Version(version) if version == CURRENT_SCHEMA_VERSION => Ok(()),
+        StoredSchemaVersion::Version(version) if version > CURRENT_SCHEMA_VERSION => {
+            Err(StoreError::Migration(format!(
+                "store is at schema version {version}. {version} is newer than {CURRENT_SCHEMA_VERSION} that \
+                 this binary supports. The version was written by a newer P2Poolv2, use a binary for \
+                 version {version} to continue."
+            )))
+        }
         StoredSchemaVersion::Version(version) => Err(StoreError::Migration(format!(
             "store is at schema version {version}, this binary needs {CURRENT_SCHEMA_VERSION}; \
              start the node once to migrate it, or use a binary for version {version}"
@@ -557,6 +566,8 @@ mod tests {
         let error = Store::new(path, true).err().unwrap();
 
         assert!(matches!(error, StoreError::Migration(_)), "{error}");
+        assert!(error.to_string().contains("newer"), "{error}");
+        assert!(!error.to_string().contains("start the node"), "{error}");
     }
 
     #[test]
