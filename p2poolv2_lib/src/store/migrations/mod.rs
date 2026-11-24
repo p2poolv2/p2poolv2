@@ -570,6 +570,38 @@ mod tests {
         assert!(!error.to_string().contains("start the node"), "{error}");
     }
 
+    /// `Store::read_schema_version` reports an older store's version, which
+    /// a read-only `Store::new` refuses to open.
+    #[test]
+    fn test_read_schema_version_reports_an_older_store() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().to_str().unwrap().to_string();
+        let store = Store::new(path.clone(), false).unwrap();
+        write_schema_version(&store.db, CURRENT_SCHEMA_VERSION - 1).unwrap();
+        drop(store);
+
+        assert_eq!(
+            Store::read_schema_version(&path).unwrap(),
+            StoredSchemaVersion::Version(CURRENT_SCHEMA_VERSION - 1)
+        );
+    }
+
+    /// `Store::read_schema_version` reports a newer store's version, which
+    /// a read-only `Store::new` refuses to open.
+    #[test]
+    fn test_read_schema_version_reports_a_newer_store() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().to_str().unwrap().to_string();
+        let store = Store::new(path.clone(), false).unwrap();
+        write_schema_version(&store.db, CURRENT_SCHEMA_VERSION + 1).unwrap();
+        drop(store);
+
+        assert_eq!(
+            Store::read_schema_version(&path).unwrap(),
+            StoredSchemaVersion::Version(CURRENT_SCHEMA_VERSION + 1)
+        );
+    }
+
     #[test]
     fn test_read_only_open_accepts_current_store() {
         let temp_dir = tempdir().unwrap();

@@ -133,6 +133,35 @@ impl Store {
     /// at the current version. Either way, no caller ever sees a store laid
     /// out for another version.
     pub fn new(path: String, read_only: bool) -> Result<Self, StoreError> {
+        let (db, script_history_gc_threshold) = Self::open_db(&path, read_only)?;
+        if read_only {
+            migrations::check_current(&db)?;
+        } else {
+            migrations::ensure_current(&db)?;
+        }
+        let store = Self {
+            path,
+            db,
+            // Initialise chain state fields
+            genesis_blockhash: Arc::new(RwLock::new(None)),
+            script_history_gc_threshold,
+        };
+        Ok(store)
+    }
+
+    /// Read the schema version of the store at `path` without checking it
+    /// against `migrations::CURRENT_SCHEMA_VERSION`, so it reports a store
+    /// at any version. Opens the store read-only and never migrates it.
+    pub fn read_schema_version(path: &str) -> Result<migrations::StoredSchemaVersion, StoreError> {
+        let (db, _) = Self::open_db(path, true)?;
+        migrations::read_stored_schema_version(&db)
+    }
+
+    /// Open the RocksDB database at `path` with every column family and its
+    /// options, creating it if missing, without checking its schema version.
+    /// Also returns the script history GC threshold its compaction filter
+    /// reads.
+    fn open_db(path: &str, read_only: bool) -> Result<(DB, Arc<AtomicU32>), StoreError> {
         // Point-lookup CFs get bloom filters to speed up existence checks
         // and reject negative lookups without disk I/O.
         // Merge/iterator CFs (BlockIndex, BlockHeight, TxidsBlocks, Uncles)
@@ -239,23 +268,11 @@ impl Store {
         db_options.create_missing_column_families(true);
         db_options.create_if_missing(true);
         let db = if read_only {
-            DB::open_cf_descriptors_read_only(&db_options, path.clone(), cfs, false)?
+            DB::open_cf_descriptors_read_only(&db_options, path, cfs, false)?
         } else {
-            DB::open_cf_descriptors(&db_options, path.clone(), cfs)?
+            DB::open_cf_descriptors(&db_options, path, cfs)?
         };
-        if read_only {
-            migrations::check_current(&db)?;
-        } else {
-            migrations::ensure_current(&db)?;
-        }
-        let store = Self {
-            path,
-            db,
-            // Initialise chain state fields
-            genesis_blockhash: Arc::new(RwLock::new(None)),
-            script_history_gc_threshold,
-        };
-        Ok(store)
+        Ok((db, script_history_gc_threshold))
     }
 
     /// Get a rocksb write batch
