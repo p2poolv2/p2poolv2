@@ -326,7 +326,12 @@ mod proptests {
     /// Difficulties a real share chain can produce, so the properties below
     /// describe normal payout behaviour.
     fn realistic_maps() -> impl Strategy<Value = HashMap<Address, u128>> {
-        hash_map(0..ADDRESSES.len(), 1u128..=1_000_000, 1usize..=ADDRESSES.len()).prop_map(to_map)
+        hash_map(
+            0..ADDRESSES.len(),
+            1u128..=1_000_000,
+            1usize..=ADDRESSES.len(),
+        )
+        .prop_map(to_map)
     }
 
     /// Any difficulty at all, up to u128::MAX. This is the shape a miner can

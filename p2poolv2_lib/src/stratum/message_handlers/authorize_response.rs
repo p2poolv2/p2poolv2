@@ -1179,6 +1179,60 @@ mod p2p_miner_address_tests {
         assert_eq!(session.difficulty_adjuster.get_current_difficulty(), 500);
     }
 
+    #[tokio::test]
+    async fn authorize_with_max_u64_difficulty_in_password() {
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, 0x1fffe000);
+        let request = SimpleRequest::new_authorize(
+            12345,
+            BITCOIN_ADDRESS.to_string(),
+            Some(format!("p2p={SHARE_ADDRESS},d=18446744073709551615")),
+        );
+        let (emissions_tx, _emissions_rx) = mpsc::channel(10);
+        let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let tracker_handle = start_tracker_actor();
+
+        let (pplns_shares_tx, _pplns_shares_rx) = mpsc::channel(10);
+        let ctx = StratumContext {
+            tracker_handle,
+            pplns_shares_tx,
+            bitcoindrpc_client: BitcoindRpcClient::new(
+                &bitcoinrpc_config.url,
+                &bitcoinrpc_config.username,
+                &bitcoinrpc_config.password,
+            )
+            .unwrap(),
+            start_difficulty: 1000,
+            minimum_difficulty: 1,
+            maximum_difficulty: None,
+            ignore_difficulty: false,
+            validate_addresses: true,
+            emissions_tx,
+            network: bitcoin::network::Network::Testnet4,
+            metrics: metrics_handle,
+            chain_store_handle,
+            mode: PoolMode::P2poolv2,
+            miner_address: None,
+        };
+
+        handle_authorize(request, &mut session, ctx).await.unwrap();
+
+        assert_eq!(
+            session.miner_address.map(|address| address.to_string()),
+            Some(SHARE_ADDRESS.to_string())
+        );
+        assert_eq!(session.btcaddress, Some(BITCOIN_ADDRESS.to_string()));
+        assert!(session.parsed_address.is_some());
+        assert_eq!(
+            session.difficulty_adjuster.get_current_difficulty(),
+            u64::MAX
+        );
+    }
+
     /// The conflict rule end to end: a miner naming a different owner than the
     /// node's configured one must be told, through `handle_authorize` rather
     /// than only in the resolver. Nothing else proves the rejection survives
