@@ -217,6 +217,7 @@ ensure_bitcoind_running() {
     -rpcuser="$RPC_USER" \
     -rpcpassword="$RPC_PASS" \
     -zmqpubhashblock="$ZMQ" \
+    -blockreservedweight=104000 \
     -fallbackfee=0.0001
 
   attempt=0

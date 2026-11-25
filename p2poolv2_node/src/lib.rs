@@ -36,6 +36,7 @@ use p2poolv2_lib::stratum::work::prepared_notify::PreparedNotifyParams;
 use p2poolv2_lib::stratum::work::tracker::start_tracker_actor;
 use p2poolv2_lib::stratum::zmq_listener::{ZmqListener, ZmqListenerTrait};
 use signal::{ShutdownReason, setup_signal_handler};
+use std::fs;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
@@ -200,6 +201,13 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
             return Err(ExitCode::FAILURE);
         }
     };
+    match fs::canonicalize(&config.store.path) {
+        Ok(store_directory) => info!("Using store directory {}", store_directory.display()),
+        Err(error) => warn!(
+            "Using store directory {}, could not resolve its full path: {error}",
+            config.store.path
+        ),
+    }
 
     let (write_tx, write_rx) = write_channel();
     let store_writer = StoreWriter::new(store.clone(), write_rx);
@@ -234,7 +242,7 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
     };
     info!("Latest tip {} at height {}", tip, height);
 
-    if let Err(error) = preflight::wait_for_bitcoin_node_synced(
+    if let Err(error) = preflight::wait_for_bitcoin_node_ready(
         &config.bitcoinrpc,
         Duration::from_secs(300),
         exit_sender.subscribe(),
@@ -294,7 +302,7 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
         .await
             && *exit_receiver_gbt.borrow() == ShutdownReason::None
         {
-            tracing::error!("Failed to fetch block template. Shutting down. \n {e}");
+            tracing::error!("Block template setup failed. Shutting down. \n {e}");
             let _ = exit_sender_gbt.send(ShutdownReason::Error);
         }
     });

@@ -59,7 +59,7 @@ pub fn parse_share_address(address: &str, network: Network) -> Result<ShareAddre
 }
 
 /// Max length for pool signature P2Poolv2 + 8 more bytes for users to add
-const MAX_POOL_SIGNATURE_LENGTH: usize = 16;
+pub const MAX_POOL_SIGNATURE_LENGTH: usize = 16;
 
 /// Maximum donation or fee cut, in basis points (100%).
 ///

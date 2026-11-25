@@ -50,7 +50,7 @@ running, start it and prime a wallet + coins:
 
 ```sh
 mkdir -p /tmp/p2pool-regtest
-/opt/homebrew/bin/bitcoind -regtest -datadir=/tmp/p2pool-regtest -daemon -rpcport=19443 -rpcuser=p2pool -rpcpassword=p2pool -zmqpubhashblock=tcp://127.0.0.1:28332 -fallbackfee=0.0001
+/opt/homebrew/bin/bitcoind -regtest -datadir=/tmp/p2pool-regtest -daemon -rpcport=19443 -rpcuser=p2pool -rpcpassword=p2pool -zmqpubhashblock=tcp://127.0.0.1:28332 -blockreservedweight=104000 -fallbackfee=0.0001
 sleep 2
 B createwallet p2pool 2>/dev/null || B loadwallet p2pool
 ADDR=$(B getnewaddress)

@@ -103,6 +103,13 @@ pub struct GetBlockchainInfo {
     pub initial_block_download: bool,
 }
 
+/// The `getnetworkinfo` fields P2Poolv2 reads.
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+pub struct GetNetworkInfo {
+    /// Bitcoin Core version as an integer, e.g. 290000 for v29.0.0.
+    pub version: u64,
+}
+
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct BitcoindRpcClient {
@@ -209,6 +216,11 @@ impl BitcoindRpcClient {
 
     pub async fn getblockchaininfo(&self) -> Result<GetBlockchainInfo, BitcoindRpcError> {
         self.request("getblockchaininfo", vec![]).await
+    }
+
+    /// Get the bitcoind version and network state.
+    pub async fn getnetworkinfo(&self) -> Result<GetNetworkInfo, BitcoindRpcError> {
+        self.request("getnetworkinfo", vec![]).await
     }
 
     /// Get a block template from bitcoind rpc
@@ -456,6 +468,41 @@ mod tests {
                 initial_block_download: true,
             }
         );
+    }
+
+    #[tokio::test]
+    async fn test_getnetworkinfo() {
+        //* A trimmed Bitcoin Core 29.0 response; fields other than version
+        //* are ignored.
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(header("Authorization", "Basic cDJwb29sOnAycG9vbA=="))
+            .and(body_json(serde_json::json!({
+                "method": "getnetworkinfo",
+                "params": [],
+                "id": 0
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "result": {
+                    "version": 290000,
+                    "subversion": "/Satoshi:29.0.0/",
+                    "protocolversion": 70016,
+                    "localservices": "0000000000000c09",
+                    "connections": 8,
+                    "networkactive": true,
+                },
+                "error": null,
+                "id": 0
+            })))
+            .mount(&mock_server)
+            .await;
+
+        let client = BitcoindRpcClient::new(&mock_server.uri(), "p2pool", "p2pool").unwrap();
+        let info = client.getnetworkinfo().await.unwrap();
+
+        assert_eq!(info, GetNetworkInfo { version: 290000 });
     }
 
     #[tokio::test]
