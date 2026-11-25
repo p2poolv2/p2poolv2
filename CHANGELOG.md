@@ -12,7 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Opt-in onion-only P2P transport with `network.onlynet = ["onion"]` and
   `network.proxy`. Outbound dials use Tor format-zero stream isolation with a
   unique nonce per dial. The node accepts `--no-clearnet-p2p`, `--socks5`,
-  `--no-dns`, and `--addpeers` as shortcuts for the same network settings.
+  `--no-dns`, and `--addpeers` as shortcuts for the same network settings. See
+  `docs/tor.md` for the possible cost: slower share propagation and a higher
+  uncle rate.
 - Testnet5 DNS seed `seed.p2pool.testnet5.roose.io`.
 
 ### Changed

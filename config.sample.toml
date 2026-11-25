@@ -30,6 +30,8 @@ dial_timeout_secs = 30
 # external_address = "/ip4/203.0.113.1/tcp/6884"
 
 # Onion-only P2P is opt-in. Set the following in this [network] section.
+# Tor can slow share propagation, which can raise your uncle rate and
+# lower your share value; see docs/tor.md before enabling it.
 # Dial peers use the remote service's port; external_address is your own
 # service and is optional. Peer hostname resolution happens at the proxy.
 # onlynet = ["onion"]
