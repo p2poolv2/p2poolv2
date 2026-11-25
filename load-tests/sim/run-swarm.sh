@@ -265,7 +265,7 @@ solo_address = "$MINER_ADDRESS"
 bootstrap_address = "$MINER_ADDRESS"
 zmqpubhashblock = "$ZMQ"
 network = "regtest"
-version_mask = "1fffffe0"
+version_mask = "1fffe000"
 pool_signature = "$node_pool_signature"
 
 [bitcoinrpc]

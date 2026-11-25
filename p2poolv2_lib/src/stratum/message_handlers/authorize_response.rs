@@ -201,9 +201,13 @@ pub(crate) async fn handle_authorize<'a, D: DifficultyAdjusterTrait>(
                 "Password difficulty override: requested={}, constrained={}",
                 requested_difficulty, constrained
             );
+            session.difficulty_from_password = true;
             constrained
         }
-        None => ctx.start_difficulty,
+        None => {
+            session.difficulty_from_password = false;
+            ctx.start_difficulty
+        }
     };
 
     session
@@ -225,6 +229,8 @@ mod tests {
     use super::*;
     use crate::accounting::stats::metrics;
     use crate::stratum::difficulty_adjuster::DifficultyAdjuster;
+    use crate::stratum::message_handlers::suggest_difficulty::handle_suggest_difficulty;
+    use crate::stratum::messages::{Id, SuggestDifficulty};
     use crate::stratum::server::PoolMode;
     use crate::stratum::server::StratumContext;
     use crate::stratum::work::tracker::start_tracker_actor;
@@ -233,6 +239,7 @@ mod tests {
     use bitcoindrpc::BitcoindRpcClient;
     use bitcoindrpc::test_utils::setup_mock_bitcoin_rpc;
     use p2poolv2_config::DEFAULT_VERSION_MASK;
+    use std::borrow::Cow;
     use tokio::sync::mpsc;
 
     #[tokio::test]
@@ -613,6 +620,72 @@ mod tests {
                 notification.params[0], 500,
                 "SetDifficulty notification should use password difficulty"
             );
+        } else {
+            panic!("Expected SetDifficulty message");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_suggest_difficulty_after_authorize_keeps_password_difficulty() {
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
+        let request = SimpleRequest::new_authorize(
+            12345,
+            "tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx".to_string(),
+            Some("d=500000".to_string()),
+        );
+        let (emissions_tx, _emissions_rx) = mpsc::channel(10);
+        let (pplns_shares_tx, _pplns_shares_rx) = mpsc::channel(10);
+        let (_mock_rpc_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let tracker_handle = start_tracker_actor();
+
+        let ctx = StratumContext {
+            tracker_handle,
+            bitcoindrpc_client: BitcoindRpcClient::new(
+                &bitcoinrpc_config.url,
+                &bitcoinrpc_config.username,
+                &bitcoinrpc_config.password,
+            )
+            .unwrap(),
+            start_difficulty: 125000,
+            minimum_difficulty: 1,
+            maximum_difficulty: None,
+            ignore_difficulty: false,
+            validate_addresses: true,
+            emissions_tx,
+            pplns_shares_tx,
+            network: bitcoin::network::Network::Testnet4,
+            metrics: metrics_handle,
+            chain_store_handle,
+            mode: PoolMode::P2poolv2,
+            miner_address: Some(make_test_share_address(1, bitcoin::Network::Testnet4)),
+        };
+
+        //* Authorize with d=500000, then simulate firmware (e.g. Whatsminer)
+        //* sending its own mining.suggest_difficulty right after authorize.
+        handle_authorize(request, &mut session, ctx).await.unwrap();
+        let suggest = SuggestDifficulty {
+            id: Some(Id::Number(12346)),
+            method: "mining.suggest_difficulty".into(),
+            params: Cow::Owned(vec![16384]),
+        };
+        let messages = handle_suggest_difficulty(suggest, &mut session)
+            .await
+            .unwrap();
+
+        //* The password difficulty survives and is what the miner is told.
+        assert_eq!(
+            session.difficulty_adjuster.get_current_difficulty(),
+            500000,
+            "Password difficulty should not be overridden by suggest_difficulty"
+        );
+        assert_eq!(session.suggested_difficulty, Some(16384));
+        if let Message::SetDifficulty(notification) = &messages[0] {
+            assert_eq!(notification.params[0], 500000);
         } else {
             panic!("Expected SetDifficulty message");
         }

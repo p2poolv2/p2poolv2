@@ -31,11 +31,14 @@ use tracing::{debug, error, info};
 ///
 /// {"id": 1, "method": "mining.submit", "params": ["username", "jobid", "extranonce2", "nTime", "nonce"]}
 /// Example message:
-/// {"id": 1, "method": "mining.submit", "params": ["username", "4f", "fe36a31b", "504e86ed", "e9695791"]}
+/// {"id": 1, "method": "mining.submit", "params": ["username", "4f", "fe36a31b00000000", "504e86ed", "e9695791"]}
 /// We can also receive messages with version_mask as the last parameter
 /// {"id": 1, "method": "mining.submit", "params": ["username", "jobid", "extranonce2", "nTime", "nonce", "version_mask"]}
 /// Example message:
-/// {"id": 1, "method": "mining.submit", "params": ["username", "4f", "fe36a31b", "504e86ed", "e9695791", "1fffe000"]}
+/// {"id": 1, "method": "mining.submit", "params": ["username", "4f", "fe36a31b00000000", "504e86ed", "e9695791", "1fffe000"]}
+///
+/// The extranonce2 must be exactly EXTRANONCE2_SIZE bytes (16 hex chars), else
+/// the submission is rejected with an invalid params error.
 ///
 /// Handling version mask, we check mask is valid and then apply it to the block header
 ///
@@ -1241,7 +1244,7 @@ mod handle_submit_tests {
             4,
             "worker".to_string(),
             "1".to_string(),
-            "00000000".to_string(),
+            "0000000000000000".to_string(),
             "504e86ed".to_string(),
             "e9695791".to_string(),
         );
@@ -1285,10 +1288,9 @@ mod handle_submit_tests {
         assert_eq!(response.result, None);
         let err = response.error.as_ref().unwrap();
         assert_eq!(err.code, 20, "should be OtherUnknown (code 20)");
-        assert!(
-            err.message.starts_with("Invalid parameters provided:"),
-            "error message should contain the validation failure reason, got: {}",
-            err.message
+        assert_eq!(
+            err.message,
+            "Invalid parameters provided: Failed to build coinbase transaction"
         );
     }
 
@@ -1456,6 +1458,186 @@ mod handle_submit_tests {
             err.message,
             "Invalid parameters provided: Missing version bits"
         );
+    }
+
+    #[tokio::test]
+    async fn test_handle_submit_rejects_short_extranonce2() {
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
+        session.subscribed = true;
+        let tracker_handle = start_tracker_actor();
+
+        let (template, notify, _submit, authorize_response) =
+            load_valid_stratum_work_components("../p2poolv2_tests/test_data/validation/stratum/b/");
+
+        let enonce1 = authorize_response.result.unwrap()[1].clone();
+        let enonce1: &str = enonce1.as_str().unwrap();
+        session.enonce1 =
+            u32::from_le_bytes(hex::decode(enonce1).unwrap().as_slice().try_into().unwrap());
+        session.enonce1_hex = enonce1.to_string();
+        session.btcaddress = Some("tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d".to_string());
+        session.user_id = Some(1);
+
+        let job_id = JobId(u64::from_str_radix(&notify.params.job_id, 16).unwrap());
+        let _ = tracker_handle.insert_job(
+            Arc::new(template),
+            notify.params.coinbase1.to_string(),
+            notify.params.coinbase2.to_string(),
+            None,
+            TEST_COINBASE_NSECS,
+            vec![],
+            job_id,
+        );
+
+        // One byte shorter than EXTRANONCE2_SIZE (8 bytes = 16 hex chars).
+        let submit = SimpleRequest::new_submit(
+            4,
+            "worker".to_string(),
+            notify.params.job_id.clone(),
+            "00000000000000".to_string(),
+            "504e86ed".to_string(),
+            "e9695791".to_string(),
+        );
+
+        let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        let (emissions_tx, mut emissions_rx) = mpsc::channel(10);
+        let (pplns_shares_tx, _pplns_shares_rx) = mpsc::channel(10);
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
+
+        let stratum_context = StratumContext {
+            tracker_handle: tracker_handle.clone(),
+            bitcoindrpc_client: BitcoindRpcClient::new(
+                &bitcoinrpc_config.url,
+                &bitcoinrpc_config.username,
+                &bitcoinrpc_config.password,
+            )
+            .unwrap(),
+            start_difficulty: 1,
+            minimum_difficulty: 1,
+            maximum_difficulty: None,
+            ignore_difficulty: false,
+            validate_addresses: true,
+            emissions_tx,
+            pplns_shares_tx,
+            network: bitcoin::network::Network::Regtest,
+            metrics: metrics_handle,
+            chain_store_handle,
+            mode: PoolMode::P2poolv2,
+            miner_address: None,
+        };
+
+        let messages = handle_submit(submit, &mut session, stratum_context)
+            .await
+            .unwrap();
+        let response = match &messages[..] {
+            [Message::Response(response_message)] => response_message,
+            _ => panic!("expected Response"),
+        };
+        assert_eq!(response.result, None);
+        let error = response.error.as_ref().unwrap();
+        assert_eq!(error.code, 20, "should be OtherUnknown (code 20)");
+        assert_eq!(
+            error.message,
+            "Invalid parameters provided: extranonce2 must be 8 bytes"
+        );
+
+        // No share is emitted and no block is submitted.
+        assert!(emissions_rx.try_recv().is_err());
+        let requests = mock_server.received_requests().await.unwrap();
+        assert!(requests.is_empty(), "no block should be submitted");
+    }
+
+    #[tokio::test]
+    async fn test_handle_submit_rejects_long_extranonce2() {
+        let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
+        session.subscribed = true;
+        let tracker_handle = start_tracker_actor();
+
+        let (template, notify, _submit, authorize_response) =
+            load_valid_stratum_work_components("../p2poolv2_tests/test_data/validation/stratum/b/");
+
+        let enonce1 = authorize_response.result.unwrap()[1].clone();
+        let enonce1: &str = enonce1.as_str().unwrap();
+        session.enonce1 =
+            u32::from_le_bytes(hex::decode(enonce1).unwrap().as_slice().try_into().unwrap());
+        session.enonce1_hex = enonce1.to_string();
+        session.btcaddress = Some("tb1q3udk7r26qs32ltf9nmqrjaaa7tr55qmkk30q5d".to_string());
+        session.user_id = Some(1);
+
+        let job_id = JobId(u64::from_str_radix(&notify.params.job_id, 16).unwrap());
+        let _ = tracker_handle.insert_job(
+            Arc::new(template),
+            notify.params.coinbase1.to_string(),
+            notify.params.coinbase2.to_string(),
+            None,
+            TEST_COINBASE_NSECS,
+            vec![],
+            job_id,
+        );
+
+        // One byte longer than EXTRANONCE2_SIZE (8 bytes = 16 hex chars).
+        let submit = SimpleRequest::new_submit(
+            4,
+            "worker".to_string(),
+            notify.params.job_id.clone(),
+            "000000000000000000".to_string(),
+            "504e86ed".to_string(),
+            "e9695791".to_string(),
+        );
+
+        let (mock_server, bitcoinrpc_config) = setup_mock_bitcoin_rpc().await;
+        let (emissions_tx, mut emissions_rx) = mpsc::channel(10);
+        let (pplns_shares_tx, _pplns_shares_rx) = mpsc::channel(10);
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let stats_dir = tempfile::tempdir().unwrap();
+        let metrics_handle = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+            .await
+            .unwrap();
+
+        let stratum_context = StratumContext {
+            tracker_handle: tracker_handle.clone(),
+            bitcoindrpc_client: BitcoindRpcClient::new(
+                &bitcoinrpc_config.url,
+                &bitcoinrpc_config.username,
+                &bitcoinrpc_config.password,
+            )
+            .unwrap(),
+            start_difficulty: 1,
+            minimum_difficulty: 1,
+            maximum_difficulty: None,
+            ignore_difficulty: false,
+            validate_addresses: true,
+            emissions_tx,
+            pplns_shares_tx,
+            network: bitcoin::network::Network::Regtest,
+            metrics: metrics_handle,
+            chain_store_handle,
+            mode: PoolMode::P2poolv2,
+            miner_address: None,
+        };
+
+        let messages = handle_submit(submit, &mut session, stratum_context)
+            .await
+            .unwrap();
+        let response = match &messages[..] {
+            [Message::Response(response_message)] => response_message,
+            _ => panic!("expected Response"),
+        };
+        assert_eq!(response.result, None);
+        let error = response.error.as_ref().unwrap();
+        assert_eq!(error.code, 20, "should be OtherUnknown (code 20)");
+        assert_eq!(
+            error.message,
+            "Invalid parameters provided: extranonce2 must be 8 bytes"
+        );
+
+        // No share is emitted and no block is submitted.
+        assert!(emissions_rx.try_recv().is_err());
+        let requests = mock_server.received_requests().await.unwrap();
+        assert!(requests.is_empty(), "no block should be submitted");
     }
 
     #[tokio::test]

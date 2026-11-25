@@ -19,7 +19,7 @@ use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::store::Store;
 use crate::store::prune_blocks::PruneStats;
-use bitcoin::{BlockHash, TxMerkleNode};
+use bitcoin::{BlockHash, TxMerkleNode, Txid};
 use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
@@ -48,6 +48,14 @@ pub enum StoreError {
     /// A block body below the prune target was offered for storage. Its
     /// body would be deleted again, so it is refused.
     BelowPruneHeight(BlockHash),
+    /// The store's schema version cannot be brought to the one this binary
+    /// uses: the store version is newer, a read-only open found an older
+    /// one, or a migration failed. See `store::migrations`.
+    Migration(String),
+    /// A transaction after index 0 is coinbase-shaped. Storing it would
+    /// overwrite the outputs of a coinbase with the same txid, so the
+    /// transactions are refused.
+    CoinbaseAfterIndexZero { txid: Txid, position: usize },
 }
 
 impl fmt::Display for StoreError {
@@ -64,6 +72,11 @@ impl fmt::Display for StoreError {
             StoreError::BelowPruneHeight(blockhash) => {
                 write!(f, "Block {blockhash} is below the prune target")
             }
+            StoreError::Migration(msg) => write!(f, "Store schema migration error: {msg}"),
+            StoreError::CoinbaseAfterIndexZero { txid, position } => write!(
+                f,
+                "Transaction {txid} at index {position} is a coinbase; only index 0 may be"
+            ),
         }
     }
 }

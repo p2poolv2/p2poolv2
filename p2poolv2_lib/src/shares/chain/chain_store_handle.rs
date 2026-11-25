@@ -10,12 +10,14 @@
 
 use crate::accounting::payout::sharechain_pplns::pplns_window::PRUNE_INTERVAL;
 use crate::accounting::payout::simple_pplns::SimplePplnsShare;
+use crate::config::PoolMode;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::store::block_tx_metadata::{BlockMetadata, Status};
 use crate::store::dag_store::{BlockValidSearch, ShareDag, UncleInfo};
-use crate::store::found_block::FoundBlock;
+use crate::store::found_block::{FoundBlock, LatestFoundBlocks};
 use crate::store::prune_blocks::{PruneStats, get_range_to_prune};
-use crate::store::transaction_store::PrevoutCheck;
+use crate::store::script_history::{ScriptHash, ScriptHistoryPage};
+use crate::store::transaction_store::{OutputOrigin, PrevoutCheck};
 use crate::store::writer::{StoreError, StoreHandle};
 use bitcoin::{BlockHash, TxMerkleNode, Work};
 use std::collections::HashMap;
@@ -108,6 +110,42 @@ impl ChainStoreHandle {
         }
     }
 
+    /// Initialise the chain for the node's pool mode.
+    ///
+    /// P2Poolv2 mode uses `init_or_setup_genesis`, failing with
+    /// `StoreError::GenesisMismatch` on a store built on another share
+    /// chain. Hydrapool mode keeps no share chain beyond genesis, so a
+    /// genesis change between releases must not stop the pool from
+    /// upgrading: it uses `init_or_replace_genesis` instead.
+    pub async fn init_for_mode(
+        &self,
+        genesis_block: ShareBlock,
+        mode: PoolMode,
+    ) -> Result<(), StoreError> {
+        match mode {
+            PoolMode::Hydrapool => self.init_or_replace_genesis(genesis_block).await,
+            PoolMode::P2poolv2 => self.init_or_setup_genesis(genesis_block).await,
+        }
+    }
+
+    /// Initialise the chain like `init_or_setup_genesis`, but replace the
+    /// genesis of a store built on another share chain instead of failing.
+    ///
+    /// The replacement genesis is confirmed at height 0; the old genesis
+    /// stays in the store unreferenced by the confirmed chain.
+    async fn init_or_replace_genesis(&self, genesis_block: ShareBlock) -> Result<(), StoreError> {
+        match self.init_or_setup_genesis(genesis_block.clone()).await {
+            Err(StoreError::GenesisMismatch(reason)) => {
+                warn!(
+                    "Using share chain genesis {}: {reason}",
+                    genesis_block.block_hash()
+                );
+                self.store_handle.setup_genesis(genesis_block).await
+            }
+            result => result,
+        }
+    }
+
     /// Get direct access to the underlying store handle.
     pub fn store_handle(&self) -> &StoreHandle {
         &self.store_handle
@@ -173,6 +211,44 @@ impl ChainStoreHandle {
         self.store_handle.get_output(txid, vout)
     }
 
+    /// Get transaction `txid` as block `blockhash` holds it, and each
+    /// output's coinbase origin, in output order. See
+    /// `Store::get_tx_with_output_origins_in_block`.
+    pub fn get_tx_with_output_origins_in_block(
+        &self,
+        blockhash: &BlockHash,
+        txid: &bitcoin::Txid,
+    ) -> Result<(bitcoin::Transaction, Vec<OutputOrigin>), StoreError> {
+        self.store_handle
+            .store()
+            .get_tx_with_output_origins_in_block(blockhash, txid)
+    }
+
+    /// The confirmed block containing `txid`, with its height, or `None`
+    /// when no confirmed block contains it. See
+    /// `Store::get_confirmed_block_for_txid`.
+    pub fn get_confirmed_block_for_txid(
+        &self,
+        txid: &bitcoin::Txid,
+    ) -> Result<Option<(BlockHash, u32)>, StoreError> {
+        self.store_handle.store().get_confirmed_block_for_txid(txid)
+    }
+
+    /// One page of the confirmed history of `scripthash`, from
+    /// `start_height` but never below the history window, ending at the
+    /// first height boundary after `max_rows` entries. See
+    /// `Store::get_script_history`.
+    pub fn get_script_history(
+        &self,
+        scripthash: &ScriptHash,
+        start_height: u32,
+        max_rows: usize,
+    ) -> Result<ScriptHistoryPage, StoreError> {
+        self.store_handle
+            .store()
+            .get_script_history(scripthash, start_height, max_rows)
+    }
+
     /// Check whether a share block exists without deserializing it.
     pub fn share_block_exists(&self, blockhash: &BlockHash) -> bool {
         self.store_handle.share_block_exists(blockhash)
@@ -233,6 +309,21 @@ impl ChainStoreHandle {
         self.store_handle
             .store()
             .get_headers_for_locator(block_hashes, stop_block_hash, limit)
+    }
+
+    /// Get every servable header after `resume_after`, or after the locator
+    /// when `resume_after` is absent or not servable, for a protocol 1.1.0
+    /// header request.
+    pub fn get_headers_after(
+        &self,
+        locator: &[BlockHash],
+        resume_after: Option<BlockHash>,
+        stop_block_hash: &BlockHash,
+        limit: usize,
+    ) -> Result<Vec<ShareHeader>, StoreError> {
+        self.store_handle
+            .store()
+            .get_headers_after(locator, resume_after, stop_block_hash, limit)
     }
 
     /// Get blockhashes for a locator.
@@ -382,6 +473,16 @@ impl ChainStoreHandle {
     /// Get every bitcoin block found by the pool, ordered by bitcoin height.
     pub fn get_found_blocks(&self) -> Result<Vec<FoundBlock>, StoreError> {
         self.store_handle.get_found_blocks()
+    }
+
+    /// Get the `limit` most recent found bitcoin blocks, highest bitcoin
+    /// height first, with a count of entries bounded by `scan_limit`.
+    pub fn get_latest_found_blocks(
+        &self,
+        limit: usize,
+        scan_limit: usize,
+    ) -> Result<LatestFoundBlocks, StoreError> {
+        self.store_handle.get_latest_found_blocks(limit, scan_limit)
     }
 
     /// Get the confirmed blockhash at the height
@@ -861,6 +962,11 @@ impl ChainStoreHandle {
     /// while the node is current stops a stale or withheld chain from
     /// pruning.
     ///
+    /// While the node is current it also moves the script history
+    /// compaction filter threshold up to the confirmed tip (see
+    /// `Store::update_script_history_gc_threshold`), on every run whether or
+    /// not bodies are due.
+    ///
     /// `next_prune_start` holds where the previous run stopped. It starts empty
     /// and is derived from the store on the first run, so nothing is persisted.
     /// Space and tombstones are reclaimed by RocksDB's automatic compaction;
@@ -870,8 +976,17 @@ impl ChainStoreHandle {
         &self,
         next_prune_start: &mut Option<u32>,
     ) -> Result<(), StoreError> {
+        let is_current = self.is_current();
+        // setting scripthistory gc threshold is independent of when
+        // prune is succesful or not, so it can be set before pruning
+        // happens
+        if is_current {
+            self.store_handle
+                .store()
+                .update_script_history_gc_threshold()?;
+        }
         let Some(range) = get_range_to_prune(
-            self.is_current(),
+            is_current,
             self.store_handle.store().prune_target()?,
             *next_prune_start,
             |prune_target| self.find_prune_start(prune_target),
@@ -927,9 +1042,11 @@ impl ChainStoreHandle {
     pub async fn promote_block(&self, header: ShareHeader) -> Result<Option<u32>, StoreError> {
         let blockhash = header.block_hash();
         let uncle_count = header.uncles.len();
+        let difficulty = header.get_difficulty(self.network);
         self.organise_header(header).await?;
         let height = self.organise_block().await?;
-        info!("Promoted block {blockhash} to confirmed height {height:?}");
+        let log_height = height.map(|h| h as i64).unwrap_or(-1);
+        info!("Promoted block {blockhash} to confirmed height {log_height}: diff={difficulty}");
         if uncle_count > 0 {
             info!("Confirmed block {blockhash} references {uncle_count} uncle(s)");
         }
@@ -989,6 +1106,9 @@ mockall::mock! {
         pub fn check_prevouts(&self, outpoints: &[bitcoin::OutPoint], spending_height: u32, min_coinbase_root_height: u32, coinbase_maturity: usize) -> Result<PrevoutCheck, StoreError>;
         pub fn all_block_and_uncle_data_available(&self, blockhashes: &[BlockHash], prune_height: u32) -> Result<bool, StoreError>;
         pub fn get_output(&self, txid: &bitcoin::Txid, vout: u32) -> Result<bitcoin::TxOut, StoreError>;
+        pub fn get_tx_with_output_origins_in_block(&self, blockhash: &BlockHash, txid: &bitcoin::Txid) -> Result<(bitcoin::Transaction, Vec<OutputOrigin>), StoreError>;
+        pub fn get_confirmed_block_for_txid(&self, txid: &bitcoin::Txid) -> Result<Option<(BlockHash, u32)>, StoreError>;
+        pub fn get_script_history(&self, scripthash: &ScriptHash, start_height: u32, max_rows: usize) -> Result<ScriptHistoryPage, StoreError>;
         pub fn share_block_exists(&self, blockhash: &BlockHash) -> bool;
         pub fn first_existing_share_header(&self, blockhashes: &[BlockHash]) -> Option<BlockHash>;
         pub fn get_share(&self, share_hash: &BlockHash) -> Option<ShareBlock>;
@@ -996,7 +1116,9 @@ mockall::mock! {
         pub fn get_share_headers(&self, share_hashes: &[BlockHash]) -> Result<Vec<(BlockHash, ShareHeader)>, StoreError>;
         pub fn get_share_header(&self, share_hash: &BlockHash) -> Result<ShareHeader, StoreError>;
         pub fn get_found_blocks(&self) -> Result<Vec<FoundBlock>, StoreError>;
+        pub fn get_latest_found_blocks(&self, limit: usize, scan_limit: usize) -> Result<LatestFoundBlocks, StoreError>;
         pub fn get_headers_for_locator(&self, block_hashes: &[BlockHash], stop_block_hash: &BlockHash, limit: usize) -> Result<Vec<ShareHeader>, StoreError>;
+        pub fn get_headers_after(&self, locator: &[BlockHash], resume_after: Option<BlockHash>, stop_block_hash: &BlockHash, limit: usize) -> Result<Vec<ShareHeader>, StoreError>;
         pub fn get_blockhashes_for_locator(&self, locator: &[BlockHash], stop_block_hash: &BlockHash, max_blockhashes: usize) -> Result<Vec<BlockHash>, StoreError>;
         pub fn get_tip_height(&self) -> Result<Option<u32>, StoreError>;
         pub fn get_candidate_tip_height(&self) -> Result<Option<u32>, StoreError>;
@@ -1027,6 +1149,7 @@ mockall::mock! {
         pub fn is_confirmed_or_confirmed_uncle(&self, blockhash: &BlockHash) -> bool;
         pub fn get_btcaddresses_for_user_ids(&self, user_ids: &[u64]) -> Result<Vec<(u64, String)>, StoreError>;
         pub async fn init_or_setup_genesis(&self, genesis_block: ShareBlock) -> Result<(), StoreError>;
+        pub async fn init_for_mode(&self, genesis_block: ShareBlock, mode: PoolMode) -> Result<(), StoreError>;
         pub async fn organise_header(&self, header: ShareHeader) -> Result<Option<u32>, StoreError>;
         pub async fn organise_block(&self) -> Result<Option<u32>, StoreError>;
         pub async fn mark_invalid(&self, blockhash: BlockHash) -> Result<(), StoreError>;
@@ -1050,11 +1173,13 @@ mockall::mock! {
 
 #[cfg(test)]
 mod tests {
+    use crate::config::PoolMode;
     use crate::store::Store;
+    use crate::store::script_history::{ScriptHistoryEntry, ScriptHistoryPage, script_hash};
     use crate::store::writer::StoreError;
     use crate::test_utils::{
-        TestShareBlockBuilder, build_confirmed_test_chain, genesis_for_tests,
-        setup_test_chain_store_handle,
+        TestShareBlockBuilder, build_confirmed_test_chain, confirm_test_block, funding_outpoint,
+        genesis_for_tests, setup_test_chain_store_handle, test_funding_transaction,
     };
     use bitcoin::BlockHash;
     use bitcoin::hashes::Hash;
@@ -1093,6 +1218,89 @@ mod tests {
                 .to_string()
                 .contains(&genesis.block_hash().to_string()),
             "error must name the genesis already in the store: {error}"
+        );
+    }
+
+    /// Hydrapool must start on a store built on another share chain, so an
+    /// upgrade across a genesis change does not stop the pool. The code's
+    /// genesis replaces the stored one as the confirmed tip at height 0.
+    #[tokio::test]
+    async fn test_init_for_mode_hydrapool_replaces_genesis_of_another_chain() {
+        let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let genesis = genesis_for_tests();
+        chain_handle
+            .init_or_setup_genesis(genesis.clone())
+            .await
+            .unwrap();
+
+        let other_genesis = TestShareBlockBuilder::new().nonce(0xe9695792).build();
+        assert_ne!(other_genesis.block_hash(), genesis.block_hash());
+
+        chain_handle
+            .init_for_mode(other_genesis.clone(), PoolMode::Hydrapool)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            chain_handle.get_confirmed_at_height(0).unwrap(),
+            other_genesis.block_hash()
+        );
+        assert_eq!(
+            chain_handle.get_chain_tip().unwrap(),
+            other_genesis.block_hash()
+        );
+        assert_eq!(chain_handle.get_tip_height().unwrap(), Some(0));
+    }
+
+    /// In Hydrapool mode, a store already on the code's genesis is
+    /// initialised from the store, leaving the confirmed chain as it was.
+    #[tokio::test]
+    async fn test_init_for_mode_hydrapool_keeps_matching_genesis() {
+        let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let genesis = genesis_for_tests();
+        chain_handle
+            .init_or_setup_genesis(genesis.clone())
+            .await
+            .unwrap();
+
+        chain_handle
+            .init_for_mode(genesis.clone(), PoolMode::Hydrapool)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            chain_handle.get_confirmed_at_height(0).unwrap(),
+            genesis.block_hash()
+        );
+        assert_eq!(chain_handle.get_chain_tip().unwrap(), genesis.block_hash());
+    }
+
+    /// P2Poolv2 mode must keep rejecting a store built on another share
+    /// chain, since it would serve the old chain to peers on the new one.
+    #[tokio::test]
+    async fn test_init_for_mode_p2poolv2_rejects_store_built_on_another_chain() {
+        let (chain_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let genesis = genesis_for_tests();
+        chain_handle
+            .init_or_setup_genesis(genesis.clone())
+            .await
+            .unwrap();
+
+        let other_genesis = TestShareBlockBuilder::new().nonce(0xe9695792).build();
+        assert_ne!(other_genesis.block_hash(), genesis.block_hash());
+
+        let error = chain_handle
+            .init_for_mode(other_genesis, PoolMode::P2poolv2)
+            .await
+            .expect_err("store on another chain must be rejected");
+
+        assert!(
+            matches!(error, StoreError::GenesisMismatch(_)),
+            "expected GenesisMismatch, got {error:?}"
+        );
+        assert_eq!(
+            chain_handle.get_confirmed_at_height(0).unwrap(),
+            genesis.block_hash()
         );
     }
 
@@ -2037,6 +2245,387 @@ mod tests {
                 .store_handle()
                 .store()
                 .share_block_exists(&blocks[1].block_hash())
+        );
+    }
+
+    /// A current node moves the script history compaction threshold to its
+    /// confirmed tip on every run, even when no bodies are due.
+    #[tokio::test]
+    async fn test_prune_block_bodies_if_due_updates_gc_threshold_when_current() {
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as u32;
+        let genesis = TestShareBlockBuilder::new().time(now_secs).build();
+        chain_store_handle
+            .init_or_setup_genesis(genesis)
+            .await
+            .unwrap();
+        assert!(chain_store_handle.is_current());
+        let store = chain_store_handle.store_handle().store();
+        store.set_script_history_gc_threshold(7);
+        let mut next_prune_start = None;
+
+        chain_store_handle
+            .prune_block_bodies_if_due(&mut next_prune_start)
+            .await
+            .unwrap();
+
+        assert_eq!(store.script_history_gc_threshold(), 0);
+    }
+
+    /// A node that is not current never raises the threshold, so a syncing
+    /// node never drops script history.
+    #[tokio::test]
+    async fn test_prune_block_bodies_if_due_keeps_gc_threshold_when_not_current() {
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        build_confirmed_test_chain(&chain_store_handle, 4).await;
+        assert!(!chain_store_handle.is_current());
+        let store = chain_store_handle.store_handle().store();
+        store.set_script_history_gc_threshold(7);
+        let mut next_prune_start = None;
+
+        chain_store_handle
+            .prune_block_bodies_if_due(&mut next_prune_start)
+            .await
+            .unwrap();
+
+        assert_eq!(store.script_history_gc_threshold(), 7);
+    }
+
+    #[tokio::test]
+    async fn test_get_confirmed_block_for_txid_returns_block_and_height() {
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let blocks = build_confirmed_test_chain(&chain_store_handle, 3).await;
+        let coinbase_txid = blocks[2].transactions[0].0.compute_txid();
+
+        let confirmed = chain_store_handle
+            .get_confirmed_block_for_txid(&coinbase_txid)
+            .unwrap();
+
+        assert_eq!(confirmed, Some((blocks[2].block_hash(), 2)));
+    }
+
+    /// The block is stored and on the candidate chain, so it has metadata,
+    /// but is never confirmed, as an uncle or fork block would be. Its
+    /// transactions have no confirmed block.
+    #[tokio::test]
+    async fn test_get_confirmed_block_for_txid_ignores_unconfirmed_block() {
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let blocks = build_confirmed_test_chain(&chain_store_handle, 2).await;
+        let unconfirmed = TestShareBlockBuilder::new()
+            .prev_share_blockhash(blocks[2].block_hash().to_string())
+            .add_transaction(test_funding_transaction(funding_outpoint(&blocks[2]), 99))
+            .build();
+        chain_store_handle
+            .add_share_block_and_organise_header(unconfirmed.clone())
+            .await
+            .unwrap();
+        assert!(
+            chain_store_handle
+                .store_handle()
+                .store()
+                .share_block_exists(&unconfirmed.block_hash())
+        );
+
+        let confirmed = chain_store_handle
+            .get_confirmed_block_for_txid(&unconfirmed.transactions[0].0.compute_txid())
+            .unwrap();
+
+        assert_eq!(confirmed, None);
+    }
+
+    /// A block off the confirmed chain can carry a confirmed transaction with
+    /// another witness, under the same txid. It can never be confirmed too:
+    /// its copy spends the same outputs. A lookup by txid serves the confirmed
+    /// block's copy, whether the other copies were stored before or after it.
+    #[tokio::test]
+    async fn test_get_tx_serves_the_confirmed_blocks_copy() {
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let blocks = build_confirmed_test_chain(&chain_store_handle, 1).await;
+        let confirmed_copy = test_funding_transaction(funding_outpoint(&blocks[1]), 2);
+        let mut earlier_copy = confirmed_copy.clone();
+        earlier_copy.input[0].witness.push([0x42u8; 4]);
+        let mut later_copy = confirmed_copy.clone();
+        later_copy.input[0].witness.push([0x43u8; 4]);
+        let earlier = TestShareBlockBuilder::new()
+            .prev_share_blockhash(blocks[1].block_hash().to_string())
+            .nonce(1)
+            .add_transaction(earlier_copy)
+            .build();
+        let confirmed = TestShareBlockBuilder::new()
+            .prev_share_blockhash(blocks[1].block_hash().to_string())
+            .nonce(2)
+            .work(2)
+            .add_transaction(confirmed_copy.clone())
+            .build();
+        let later = TestShareBlockBuilder::new()
+            .prev_share_blockhash(blocks[1].block_hash().to_string())
+            .nonce(3)
+            .add_transaction(later_copy)
+            .build();
+        let txid = confirmed_copy.compute_txid();
+
+        //* Store one other copy's block, confirm the heavier block, then store another copy's block
+        chain_store_handle
+            .add_share_block_and_organise_header(earlier.clone())
+            .await
+            .unwrap();
+        confirm_test_block(&chain_store_handle, &confirmed).await;
+        chain_store_handle
+            .add_share_block_and_organise_header(later.clone())
+            .await
+            .unwrap();
+        let store = chain_store_handle.store_handle().store();
+        assert_eq!(
+            store.get_blockhashes_for_txid(&txid).unwrap(),
+            vec![
+                earlier.block_hash(),
+                confirmed.block_hash(),
+                later.block_hash()
+            ]
+        );
+        assert_eq!(
+            chain_store_handle
+                .get_confirmed_block_for_txid(&txid)
+                .unwrap(),
+            Some((confirmed.block_hash(), 2))
+        );
+
+        let served = store.get_tx(&txid).unwrap();
+
+        assert_eq!(served, confirmed_copy);
+    }
+
+    /// With no confirmed block, a lookup by txid skips an Invalid block's
+    /// copies for one from a block that is not Invalid, whether the Invalid
+    /// blocks were stored before or after it.
+    #[tokio::test]
+    async fn test_get_tx_skips_an_invalid_blocks_copy() {
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let blocks = build_confirmed_test_chain(&chain_store_handle, 1).await;
+        let honest_copy = test_funding_transaction(funding_outpoint(&blocks[1]), 2);
+        let mut earlier_altered_copy = honest_copy.clone();
+        earlier_altered_copy.input[0].witness.push([0x42u8; 4]);
+        let mut later_altered_copy = honest_copy.clone();
+        later_altered_copy.input[0].witness.push([0x43u8; 4]);
+        let earlier_invalid_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(blocks[1].block_hash().to_string())
+            .nonce(1)
+            .add_transaction(earlier_altered_copy)
+            .build();
+        let honest_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(blocks[1].block_hash().to_string())
+            .nonce(2)
+            .add_transaction(honest_copy.clone())
+            .build();
+        let later_invalid_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(blocks[1].block_hash().to_string())
+            .nonce(3)
+            .add_transaction(later_altered_copy)
+            .build();
+
+        //* Store an altered copy's block and mark it Invalid, then the honest one
+        chain_store_handle
+            .add_share_block_and_organise_header(earlier_invalid_block.clone())
+            .await
+            .unwrap();
+        chain_store_handle
+            .mark_invalid(earlier_invalid_block.block_hash())
+            .await
+            .unwrap();
+        chain_store_handle
+            .add_share_block_and_organise_header(honest_block)
+            .await
+            .unwrap();
+
+        //* Store another altered copy's block last and mark it Invalid
+        chain_store_handle
+            .add_share_block_and_organise_header(later_invalid_block.clone())
+            .await
+            .unwrap();
+        chain_store_handle
+            .mark_invalid(later_invalid_block.block_hash())
+            .await
+            .unwrap();
+
+        let served = chain_store_handle
+            .store_handle()
+            .store()
+            .get_tx(&honest_copy.compute_txid())
+            .unwrap();
+
+        assert_eq!(served, honest_copy);
+    }
+
+    #[tokio::test]
+    async fn test_get_confirmed_block_for_txid_unknown_txid_is_none() {
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        build_confirmed_test_chain(&chain_store_handle, 2).await;
+
+        let confirmed = chain_store_handle
+            .get_confirmed_block_for_txid(&bitcoin::Txid::from_byte_array([9; 32]))
+            .unwrap();
+
+        assert_eq!(confirmed, None);
+    }
+
+    /// With no confirmed block holding it, a lookup by txid serves the
+    /// transaction from a block that is not Invalid.
+    #[tokio::test]
+    async fn test_get_tx_serves_a_transaction_an_unconfirmed_block_holds() {
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let blocks = build_confirmed_test_chain(&chain_store_handle, 1).await;
+        let spend = test_funding_transaction(funding_outpoint(&blocks[1]), 2);
+        let unconfirmed = TestShareBlockBuilder::new()
+            .prev_share_blockhash(blocks[1].block_hash().to_string())
+            .add_transaction(spend.clone())
+            .build();
+        chain_store_handle
+            .add_share_block_and_organise_header(unconfirmed)
+            .await
+            .unwrap();
+
+        let served = chain_store_handle
+            .store_handle()
+            .store()
+            .get_tx(&spend.compute_txid())
+            .unwrap();
+
+        assert_eq!(served, spend);
+    }
+
+    /// A transaction that only an Invalid block holds is not served.
+    #[tokio::test]
+    async fn test_get_tx_does_not_serve_a_transaction_only_an_invalid_block_holds() {
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let blocks = build_confirmed_test_chain(&chain_store_handle, 1).await;
+        let spend = test_funding_transaction(funding_outpoint(&blocks[1]), 2);
+        let invalid_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(blocks[1].block_hash().to_string())
+            .add_transaction(spend.clone())
+            .build();
+
+        //* Store the block, then mark it Invalid
+        chain_store_handle
+            .add_share_block_and_organise_header(invalid_block.clone())
+            .await
+            .unwrap();
+        chain_store_handle
+            .mark_invalid(invalid_block.block_hash())
+            .await
+            .unwrap();
+
+        let result = chain_store_handle
+            .store_handle()
+            .store()
+            .get_tx(&spend.compute_txid());
+
+        assert!(
+            matches!(result, Err(StoreError::NotFound(_))),
+            "unexpected: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_tx_with_output_origins_in_block_rejects_a_block_without_the_transaction() {
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let blocks = build_confirmed_test_chain(&chain_store_handle, 2).await;
+        let coinbase_txid = blocks[1].transactions[0].0.compute_txid();
+
+        let result = chain_store_handle
+            .get_tx_with_output_origins_in_block(&blocks[2].block_hash(), &coinbase_txid);
+
+        assert!(
+            matches!(result, Err(StoreError::NotFound(_))),
+            "unexpected: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_script_history_returns_whole_history_from_genesis() {
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let blocks = build_confirmed_test_chain(&chain_store_handle, 2).await;
+        let payout = script_hash(&blocks[1].transactions[0].0.output[0].script_pubkey);
+
+        let history = chain_store_handle
+            .get_script_history(&payout, 0, 10)
+            .unwrap();
+
+        assert_eq!(
+            history,
+            ScriptHistoryPage {
+                entries: vec![
+                    ScriptHistoryEntry {
+                        height: 0,
+                        txid: blocks[0].transactions[0].0.compute_txid(),
+                    },
+                    ScriptHistoryEntry {
+                        height: 1,
+                        txid: blocks[1].transactions[0].0.compute_txid(),
+                    },
+                    ScriptHistoryEntry {
+                        height: 1,
+                        txid: blocks[1].transactions[1].0.compute_txid(),
+                    },
+                    ScriptHistoryEntry {
+                        height: 2,
+                        txid: blocks[2].transactions[0].0.compute_txid(),
+                    },
+                ],
+                has_more: false,
+            }
+        );
+    }
+
+    /// Both the start height and the page size reach the store: a page of one
+    /// row starting at height 1 holds that height's two rows (block 1's
+    /// coinbase and its funding spend of the genesis payout), since a page
+    /// only ends at a height boundary, and reports the row after them.
+    #[tokio::test]
+    async fn test_get_script_history_passes_start_height_and_max_rows() {
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        let blocks = build_confirmed_test_chain(&chain_store_handle, 2).await;
+        let payout = script_hash(&blocks[1].transactions[0].0.output[0].script_pubkey);
+
+        let history = chain_store_handle
+            .get_script_history(&payout, 1, 1)
+            .unwrap();
+
+        assert_eq!(
+            history,
+            ScriptHistoryPage {
+                entries: vec![
+                    ScriptHistoryEntry {
+                        height: 1,
+                        txid: blocks[1].transactions[0].0.compute_txid(),
+                    },
+                    ScriptHistoryEntry {
+                        height: 1,
+                        txid: blocks[1].transactions[1].0.compute_txid(),
+                    },
+                ],
+                has_more: true,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_script_history_unknown_scripthash_is_empty() {
+        let (chain_store_handle, _temp_dir) = setup_test_chain_store_handle(true).await;
+        build_confirmed_test_chain(&chain_store_handle, 2).await;
+
+        let history = chain_store_handle
+            .get_script_history(&[9; 32], 0, 10)
+            .unwrap();
+
+        assert_eq!(
+            history,
+            ScriptHistoryPage {
+                entries: Vec::new(),
+                has_more: false,
+            }
         );
     }
 }

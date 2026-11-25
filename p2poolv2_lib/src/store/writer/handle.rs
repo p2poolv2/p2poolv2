@@ -12,7 +12,7 @@ use super::{StoreError, WriteCommand, WriteSender};
 use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::shares::share_block::{ShareBlock, ShareHeader};
 use crate::store::Store;
-use crate::store::found_block::FoundBlock;
+use crate::store::found_block::{FoundBlock, LatestFoundBlocks};
 use crate::store::prune_blocks::PruneStats;
 use crate::store::stored_user::StoredUser;
 use crate::store::transaction_store::PrevoutCheck;
@@ -174,6 +174,16 @@ impl StoreHandle {
     /// Get every bitcoin block found by the pool, ordered by bitcoin height.
     pub fn get_found_blocks(&self) -> Result<Vec<FoundBlock>, StoreError> {
         self.store.get_found_blocks()
+    }
+
+    /// Get the `limit` most recent found bitcoin blocks, highest bitcoin
+    /// height first, with a count of entries bounded by `scan_limit`.
+    pub fn get_latest_found_blocks(
+        &self,
+        limit: usize,
+        scan_limit: usize,
+    ) -> Result<LatestFoundBlocks, StoreError> {
+        self.store.get_latest_found_blocks(limit, scan_limit)
     }
 
     /// Get the confirmed blockhash at a specific height.
@@ -428,6 +438,7 @@ mockall::mock! {
         pub fn get_chain_tip(&self) -> Result<BlockHash, StoreError>;
         pub fn get_total_work(&self) -> Result<Work, StoreError>;
         pub fn get_found_blocks(&self) -> Result<Vec<FoundBlock>, StoreError>;
+        pub fn get_latest_found_blocks(&self, limit: usize, scan_limit: usize) -> Result<LatestFoundBlocks, StoreError>;
         pub fn get_confirmed_at_height(&self, height: u32) -> Result<BlockHash, StoreError>;
         pub fn get_pplns_shares(&self) -> Vec<SimplePplnsShare>;
         pub fn get_pplns_shares_filtered(&self, limit: Option<usize>, start_time: Option<u64>, end_time: Option<u64>) -> Vec<SimplePplnsShare>;

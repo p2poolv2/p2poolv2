@@ -6,9 +6,14 @@ use crate::shares::share_block::ShareBlock;
 use crate::store::block_tx_metadata::{BlockMetadata, ChainMembership, Status};
 use crate::store::column_families::ColumnFamily;
 use crate::store::dag_store::{MAX_BLOCKS_PER_HEIGHT, MAX_UNCLES_DEPTH};
+use crate::store::script_history::script_history_cf_options;
 use bitcoin::consensus::{Encodable, encode};
 use bitcoin::{BlockHash, Work};
-use rocksdb::{BlockBasedOptions, ColumnFamilyDescriptor, DB, Options as RocksDbOptions};
+use rocksdb::{
+    BlockBasedOptions, ColumnFamilyDescriptor, DB, DEFAULT_COLUMN_FAMILY_NAME,
+    Options as RocksDbOptions,
+};
+use std::sync::atomic::AtomicU32;
 use std::sync::{Arc, RwLock};
 use tracing::debug;
 use writer::StoreError;
@@ -17,10 +22,12 @@ pub mod block_tx_metadata;
 pub mod column_families;
 pub mod dag_store;
 pub mod found_block;
+pub mod migrations;
 pub mod organise;
 mod pplns_shares;
 pub mod prune_blocks;
 mod prune_shares;
+pub mod script_history;
 pub mod share_store;
 pub mod stored_user;
 pub mod transaction_store;
@@ -41,6 +48,9 @@ pub struct Store {
     db: DB,
     // Thread-safe chain state for use by ChainStore
     genesis_blockhash: Arc<RwLock<Option<BlockHash>>>,
+    /// Script history rows below this height are dropped by the
+    /// `ScriptHistory` compaction filter. Shared with that filter.
+    script_history_gc_threshold: Arc<AtomicU32>,
 }
 
 /// Merge operator for appending BlockHashes to a Vec<BlockHash>.
@@ -103,6 +113,25 @@ fn parse_blockhash_bytes(bytes: &[u8]) -> Option<Vec<BlockHash>> {
     Some(hashes)
 }
 
+/// The column families in `column_families_on_disk` that are not in
+/// `known_column_families` and are not RocksDB's `default` one, which
+/// every database has and an open adds itself.
+fn unknown_column_families<'a>(
+    column_families_on_disk: &'a [String],
+    known_column_families: &[ColumnFamilyDescriptor],
+) -> Vec<&'a str> {
+    column_families_on_disk
+        .iter()
+        .map(String::as_str)
+        .filter(|name| {
+            *name != DEFAULT_COLUMN_FAMILY_NAME
+                && !known_column_families
+                    .iter()
+                    .any(|descriptor| descriptor.name() == *name)
+        })
+        .collect()
+}
+
 /// A rocksdb based store for share blocks.
 /// We use column families to store different types of data, so that compactions are independent for each type.
 #[allow(dead_code)]
@@ -118,8 +147,134 @@ impl Store {
         opts
     }
 
-    /// Create a new share store
+    /// Open the share store at `path`, creating it if missing.
+    ///
+    /// A writable open brings the store to the current schema version first,
+    /// running any pending migrations (`migrations::ensure_current`). A
+    /// read-only open cannot migrate, so it fails unless the store is already
+    /// at the current version. Either way, no caller ever sees a store laid
+    /// out for another version.
     pub fn new(path: String, read_only: bool) -> Result<Self, StoreError> {
+        let (db, script_history_gc_threshold) = Self::open_db(&path, read_only)?;
+        if read_only {
+            migrations::check_current(&db)?;
+        } else {
+            migrations::ensure_current(&db)?;
+        }
+        let store = Self {
+            path,
+            db,
+            // Initialise chain state fields
+            genesis_blockhash: Arc::new(RwLock::new(None)),
+            script_history_gc_threshold,
+        };
+        Ok(store)
+    }
+
+    /// Read the schema version of the store at `path` without checking it
+    /// against `migrations::CURRENT_SCHEMA_VERSION`, so it reports a store
+    /// at any version. Opens the store read-only and never migrates it.
+    ///
+    /// Opens exactly the column families on disk, so it also reads a store
+    /// from a newer binary with column families this one does not know, or
+    /// from an older binary missing some of ours.
+    pub fn read_schema_version(path: &str) -> Result<migrations::StoredSchemaVersion, StoreError> {
+        let db = Self::open_db_read_only_as_on_disk(path)?;
+        migrations::read_stored_schema_version(&db)
+    }
+
+    /// Open the RocksDB database at `path` with every column family and its
+    /// options, without checking its schema version. Also returns the script
+    /// history GC threshold its compaction filter reads.
+    ///
+    /// A writable open creates the store and any missing column family. A
+    /// read-only open first checks the column families on disk are exactly
+    /// this binary's (`check_column_families_on_disk`): RocksDB lets a
+    /// read-only open leave some out, and closing it then deletes their files.
+    fn open_db(path: &str, read_only: bool) -> Result<(DB, Arc<AtomicU32>), StoreError> {
+        let (column_families, script_history_gc_threshold) = Self::column_family_descriptors();
+        let db = if read_only {
+            Self::check_column_families_on_disk(path, &column_families)?;
+            DB::open_cf_descriptors_read_only(&Self::db_options(), path, column_families, false)?
+        } else {
+            DB::open_cf_descriptors(&Self::db_options(), path, column_families)?
+        };
+        Ok((db, script_history_gc_threshold))
+    }
+
+    /// Open the store at `path` read-only with exactly the column families on
+    /// disk: ours with their options, and any this binary does not know with
+    /// default options. Leaving one out would delete its files on close.
+    fn open_db_read_only_as_on_disk(path: &str) -> Result<DB, StoreError> {
+        let column_families_on_disk = DB::list_cf(&RocksDbOptions::default(), path)?;
+        let (known_column_families, _script_history_gc_threshold) =
+            Self::column_family_descriptors();
+        let unknown: Vec<ColumnFamilyDescriptor> =
+            unknown_column_families(&column_families_on_disk, &known_column_families)
+                .into_iter()
+                .map(|name| ColumnFamilyDescriptor::new(name, RocksDbOptions::default()))
+                .collect();
+        let column_families: Vec<ColumnFamilyDescriptor> = known_column_families
+            .into_iter()
+            .filter(|descriptor| {
+                column_families_on_disk
+                    .iter()
+                    .any(|name| name == descriptor.name())
+            })
+            .chain(unknown)
+            .collect();
+        Ok(DB::open_cf_descriptors_read_only(
+            &Self::db_options(),
+            path,
+            column_families,
+            false,
+        )?)
+    }
+
+    /// Check the column families on disk at `path` are exactly `known`.
+    ///
+    /// Refuses one this binary does not know, which a newer binary wrote, and
+    /// a missing one, which a writable open would create. Fails if `path`
+    /// holds no store.
+    fn check_column_families_on_disk(
+        path: &str,
+        known: &[ColumnFamilyDescriptor],
+    ) -> Result<(), StoreError> {
+        let on_disk = DB::list_cf(&RocksDbOptions::default(), path)?;
+        let unknown = unknown_column_families(&on_disk, known);
+        if !unknown.is_empty() {
+            return Err(StoreError::Migration(format!(
+                "store has column families {} that this binary does not know; it was written \
+                 by a newer P2Poolv2, use a binary for that version",
+                unknown.join(", ")
+            )));
+        }
+        let missing: Vec<&str> = known
+            .iter()
+            .map(|descriptor| descriptor.name())
+            .filter(|name| !on_disk.iter().any(|on_disk_name| on_disk_name == name))
+            .collect();
+        if !missing.is_empty() {
+            return Err(StoreError::Migration(format!(
+                "store lacks column families {}; start the node once to create them",
+                missing.join(", ")
+            )));
+        }
+        Ok(())
+    }
+
+    /// The database options for every open: create the store and any missing
+    /// column family when opened writable.
+    fn db_options() -> RocksDbOptions {
+        let mut db_options = RocksDbOptions::default();
+        db_options.create_missing_column_families(true);
+        db_options.create_if_missing(true);
+        db_options
+    }
+
+    /// Every column family this binary uses, with its options. Also returns
+    /// the script history GC threshold its compaction filter reads.
+    fn column_family_descriptors() -> (Vec<ColumnFamilyDescriptor>, Arc<AtomicU32>) {
         // Point-lookup CFs get bloom filters to speed up existence checks
         // and reject negative lookups without disk I/O.
         // Merge/iterator CFs (BlockIndex, BlockHeight, TxidsBlocks, Uncles)
@@ -192,7 +347,13 @@ impl Store {
         let found_blocks_cf =
             ColumnFamilyDescriptor::new(ColumnFamily::FoundBlocks, RocksDbOptions::default());
 
-        let cfs = vec![
+        let script_history_gc_threshold = Arc::new(AtomicU32::new(0));
+        let script_history_cf = ColumnFamilyDescriptor::new(
+            ColumnFamily::ScriptHistory,
+            script_history_cf_options(Arc::clone(&script_history_gc_threshold)),
+        );
+
+        let column_families = vec![
             block_metadata_cf_descriptor,
             block_txids_cf,
             txids_blocks_cf,
@@ -212,30 +373,21 @@ impl Store {
             template_merkle_branches_cf,
             bitcoin_coinbase_cf,
             found_blocks_cf,
+            script_history_cf,
         ];
-
-        // for the db too, we use default options for now
-        let mut db_options = RocksDbOptions::default();
-        db_options.create_missing_column_families(true);
-        db_options.create_if_missing(true);
-        let db = if read_only {
-            DB::open_cf_descriptors_read_only(&db_options, path.clone(), cfs, false)?
-        } else {
-            DB::open_cf_descriptors(&db_options, path.clone(), cfs)?
-        };
-        let store = Self {
-            path,
-            db,
-            // Initialise chain state fields
-            genesis_blockhash: Arc::new(RwLock::new(None)),
-        };
-        Ok(store)
+        (column_families, script_history_gc_threshold)
     }
 
     /// Get a rocksb write batch
     /// An associated function as batch is not obtained from db
     pub fn get_write_batch() -> rocksdb::WriteBatch {
         rocksdb::WriteBatch::default()
+    }
+
+    /// The store's schema version. `Store::new` has already brought it to
+    /// `migrations::CURRENT_SCHEMA_VERSION`, unless the store is fresh.
+    pub fn schema_version(&self) -> Result<migrations::StoredSchemaVersion, StoreError> {
+        migrations::read_stored_schema_version(&self.db)
     }
 
     /// Commit a write batch earlier obtained using get batch
@@ -263,6 +415,10 @@ impl Store {
     /// This produces a topologically sorted DAG subgraph because every
     /// block's parent is at height H-1, which is either in this batch
     /// or was sent in a previous batch.
+    ///
+    /// Returns an empty list when the store has no confirmed chain yet, since
+    /// there is nothing to serve. Any other store error is returned, so a
+    /// requester never mistakes a storage failure for the end of the chain.
     fn get_descendant_blockhashes(
         &self,
         blockhash: &BlockHash,
@@ -279,7 +435,8 @@ impl Store {
 
         let top_confirmed_height = match self.get_top_confirmed_height() {
             Ok(height) => height,
-            Err(_) => return Ok(blockhashes),
+            Err(StoreError::NotFound(_)) => return Ok(blockhashes),
+            Err(error) => return Err(error),
         };
 
         let end_height = std::cmp::min(
@@ -289,15 +446,7 @@ impl Store {
         let height_entries = self.get_blockhashes_for_height_range(start_height, end_height);
 
         for (_height, raw_hashes) in height_entries {
-            let mut hashes_at_height: Vec<BlockHash> = self
-                .get_block_metadata_batch(&raw_hashes)?
-                .into_iter()
-                .filter(|(_, metadata)| {
-                    metadata.status != Status::Pending && metadata.status != Status::Invalid
-                })
-                .map(|(hash, _)| hash)
-                .collect();
-            hashes_at_height.sort();
+            let mut hashes_at_height = self.servable_blockhashes_sorted(&raw_hashes)?;
             hashes_at_height.truncate(MAX_BLOCKS_PER_HEIGHT);
 
             let found_stop = hashes_at_height.contains(stop_blockhash);
@@ -309,6 +458,95 @@ impl Store {
         }
 
         Ok(blockhashes)
+    }
+
+    /// Serve every servable block from `start_height` upward, for protocol
+    /// 1.1.0 header sync.
+    ///
+    /// Walks heights in ascending order and, within a height, blockhashes in
+    /// ascending order -- the same order `get_descendant_blockhashes` uses, but
+    /// with no per-height cap, so a block on the chain can never be left out
+    /// of a dense height. Pending and invalid blocks are excluded.
+    ///
+    /// `resume_after` skips the blocks at `start_height` up to and including
+    /// that hash, continuing a previous page from inside a height. The walk
+    /// stops after exactly `limit` blocks, even mid-height, so a response never
+    /// overshoots; the next request resumes after the last block served. It
+    /// also stops after `stop_blockhash` and at the top confirmed height.
+    ///
+    /// Every block's parent is at the height below, either earlier in this
+    /// page or served by a previous one, so pages arrive topologically sorted.
+    ///
+    /// Returns an empty list when the store has no confirmed chain yet, since
+    /// there is nothing to serve. Any other store error is returned, so a
+    /// requester never mistakes a storage failure for the end of the chain.
+    fn get_blockhashes_from_height(
+        &self,
+        start_height: u32,
+        resume_after: Option<BlockHash>,
+        stop_blockhash: &BlockHash,
+        limit: usize,
+    ) -> Result<Vec<BlockHash>, StoreError> {
+        let mut blockhashes = Vec::with_capacity(limit);
+        if limit == 0 {
+            return Ok(blockhashes);
+        }
+
+        let top_confirmed_height = match self.get_top_confirmed_height() {
+            Ok(height) => height,
+            Err(StoreError::NotFound(_)) => return Ok(blockhashes),
+            Err(error) => return Err(error),
+        };
+
+        // Every height up to the confirmed tip holds at least its confirmed
+        // block, so `limit` heights always hold at least `limit` blocks.
+        let end_height = std::cmp::min(
+            start_height.saturating_add(limit as u32),
+            top_confirmed_height,
+        );
+        let height_entries = self.get_blockhashes_for_height_range(start_height, end_height);
+
+        for (height, raw_hashes) in height_entries {
+            let hashes_at_height = self.servable_blockhashes_sorted(&raw_hashes)?;
+            //* Hashes are sorted, so the resume point is found by binary
+            //* search: serving starts at the first hash after it.
+            let first_unserved = match resume_after {
+                Some(resume_hash) if height == start_height => {
+                    hashes_at_height.partition_point(|hash| *hash <= resume_hash)
+                }
+                _ => 0,
+            };
+
+            //* Serve hashes in order, ending the page once it is full or the
+            //* stop hash has been served.
+            for blockhash in &hashes_at_height[first_unserved..] {
+                blockhashes.push(*blockhash);
+                if blockhashes.len() == limit || blockhash == stop_blockhash {
+                    return Ok(blockhashes);
+                }
+            }
+        }
+
+        Ok(blockhashes)
+    }
+
+    /// The blocks among `raw_hashes` a header sync server may serve -- not
+    /// `Pending` and not `Invalid` -- sorted ascending by blockhash, the order
+    /// both serving walks use within a height.
+    fn servable_blockhashes_sorted(
+        &self,
+        raw_hashes: &[BlockHash],
+    ) -> Result<Vec<BlockHash>, StoreError> {
+        let mut servable: Vec<BlockHash> = self
+            .get_block_metadata_batch(raw_hashes)?
+            .into_iter()
+            .filter(|(_, metadata)| {
+                metadata.status != Status::Pending && metadata.status != Status::Invalid
+            })
+            .map(|(hash, _)| hash)
+            .collect();
+        servable.sort();
+        Ok(servable)
     }
 
     /// Get genesis block hash from chain state
@@ -336,7 +574,8 @@ impl Store {
         Ok(metadata.chain_work)
     }
 
-    /// Setup genesis block for the store
+    /// Setup genesis block for the store, including the script history of
+    /// its coinbase.
     /// Returns an error, if store already has even a single block
     pub fn setup_genesis(
         &self,
@@ -367,6 +606,10 @@ impl Store {
             "Genesis should only have one transaction, the coinbase."
         );
         self.append_to_confirmed(&blockhash, 0, &mut metadata, batch)?;
+        // `put_confirmed_entry` skips the history of a block whose body is
+        // not yet committed, and the genesis body is in this batch. Its
+        // coinbase has no prevouts, so its history is written directly.
+        self.add_script_history_for_block(0, &genesis.transactions, batch)?;
         Ok(())
     }
 

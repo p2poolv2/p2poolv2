@@ -27,7 +27,7 @@ const BLOCK_RECEIVER_CHANNEL_CAPACITY: usize = 8192;
 /// Events sent to the BlockReceiver actor.
 pub enum BlockReceiverEvent {
     /// A new share block arrived from a peer, after passing DoS
-    /// validation (validate_share_header) in handle_share_block.
+    /// validation (validate_header_on_arrival) in handle_share_block.
     ShareBlockReceived {
         share_block: ShareBlock,
         result_tx: oneshot::Sender<Result<(), Box<dyn Error + Send + Sync>>>,

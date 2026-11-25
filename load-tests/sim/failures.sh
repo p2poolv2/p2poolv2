@@ -269,7 +269,7 @@ start_node() {
 
 log_tip_height() {
   local height
-  height="$(grep -oE "to confirmed height Some\([0-9]+\)" "$RUN_DIR/node-$1.log" 2>/dev/null \
+  height="$(grep -oE "to confirmed height [0-9]+:" "$RUN_DIR/node-$1.log" 2>/dev/null \
     | grep -oE "[0-9]+" | sort -n | tail -1)"
   echo "${height:-0}"
 }

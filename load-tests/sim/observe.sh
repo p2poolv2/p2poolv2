@@ -31,8 +31,8 @@ for i in $(seq 0 $((N - 1))); do
   # tip height/hash from the LOG — load-immune and authoritative for convergence
   # (the HTTP API can time out while a node is busy). peer count is live state,
   # so the API is the natural, advisory source.
-  last=$(grep "to confirmed height Some" "$RUN_DIR/node-$i.log" 2>/dev/null | tail -1)
-  tip_h=$(echo "$last" | grep -oE "Some\([0-9]+\)" | grep -oE "[0-9]+"); tip_h="${tip_h:--1}"
+  last=$(grep -E "to confirmed height [0-9]+:" "$RUN_DIR/node-$i.log" 2>/dev/null | tail -1)
+  tip_h=$(echo "$last" | grep -oE "height [0-9]+:" | grep -oE "[0-9]+"); tip_h="${tip_h:--1}"
   tip_hash=$(echo "$last" | sed -nE 's/.*Promoted block ([0-9a-f]{16,}).*/\1/p' | cut -c1-12)
   tip_hash="${tip_hash:--}"
 
@@ -75,13 +75,13 @@ echo "log scan (all nodes):  promotions=$promos  error-lines=$errs"
 # Uncle rate on node 0 (live snapshot). An uncle is a produced share not on the
 # canonical chain (credited as an uncle in healthy operation). Count DISTINCT
 # produced blocks vs the chain's net growth -- NOT log-line counts: promote_block
-# re-logs on every reorg re-promotion (incl. height=None), so line counts
+# re-logs on every reorg re-promotion (incl. height=-1), so line counts
 # inflate under forking. See metrics.sh for the authoritative version.
 n0="$RUN_DIR/node-0.log"
 if [ -f "$n0" ]; then
   produced=$(grep -oE "Promoted block [0-9a-f]+" "$n0" 2>/dev/null | awk '{print $3}' | sort -u | wc -l | tr -d ' ')
-  chain_hi=$(grep -oE "to confirmed height Some\([0-9]+\)" "$n0" 2>/dev/null | grep -oE "[0-9]+" | sort -n | tail -1)
-  chain_lo=$(grep -oE "to confirmed height Some\([0-9]+\)" "$n0" 2>/dev/null | grep -oE "[0-9]+" | sort -n | head -1)
+  chain_hi=$(grep -oE "to confirmed height [0-9]+:" "$n0" 2>/dev/null | grep -oE "[0-9]+" | sort -n | tail -1)
+  chain_lo=$(grep -oE "to confirmed height [0-9]+:" "$n0" 2>/dev/null | grep -oE "[0-9]+" | sort -n | head -1)
   rate="n/a"; mainchain=0; uncles=0
   if [ -n "${chain_hi:-}" ] && [ "$produced" -gt 0 ]; then
     mainchain=$(( chain_hi - chain_lo + 1 ))

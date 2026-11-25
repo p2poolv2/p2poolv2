@@ -114,6 +114,24 @@ pub fn extract_spending_prevouts(
     })
 }
 
+/// The first coinbase-shaped transaction after index 0, with its index, or
+/// `None`.
+///
+/// The share coinbase is the transaction at index 0. Any later transaction
+/// with a single null-prevout input is coinbase-shaped. A block with one is
+/// invalid, and its outputs would overwrite those of a coinbase with the same
+/// txid. Arrival, both validation tiers and the store all enforce the rule
+/// through this function, so they cannot disagree.
+pub fn first_coinbase_after_index_zero(
+    transactions: &[ShareTransaction],
+) -> Option<(usize, &ShareTransaction)> {
+    transactions
+        .iter()
+        .enumerate()
+        .skip(1)
+        .find(|(_position, transaction)| transaction.0.is_coinbase())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -153,6 +171,20 @@ mod tests {
 
     fn coinbase() -> ShareTransaction {
         transaction_spending(&[OutPoint::null()])
+    }
+
+    #[test]
+    fn test_first_coinbase_after_index_zero_is_none_with_coinbase_only_at_index_zero() {
+        let block = vec![coinbase(), transaction_spending(&[outpoint(1, 0)])];
+        assert!(first_coinbase_after_index_zero(&block).is_none());
+    }
+
+    #[test]
+    fn test_first_coinbase_after_index_zero_finds_coinbase_at_index_one() {
+        let block = vec![coinbase(), coinbase()];
+        let (position, transaction) = first_coinbase_after_index_zero(&block).unwrap();
+        assert_eq!(position, 1);
+        assert_eq!(transaction, &block[1]);
     }
 
     #[test]

@@ -2,8 +2,10 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+use p2poolv2_lib::store::writer::StoreError;
 use std::io;
 use thiserror::Error;
+use tokio::task::JoinError;
 
 /// Errors that stop one Electrum server instance. The caller decides
 /// whether to restart; none of these are fatal to the node.
@@ -15,4 +17,10 @@ pub enum ElectrumServerError {
     /// Accepting connections failed too many times in a row.
     #[error("Electrum server stopped accepting connections: {0}")]
     Accept(io::Error),
+    /// Reading the share chain tip failed.
+    #[error("Electrum server could not read the share chain tip: {0}")]
+    TipRead(StoreError),
+    /// The blocking task reading the share chain tip failed.
+    #[error("Electrum server tip read task failed: {0}")]
+    TipReadTask(JoinError),
 }

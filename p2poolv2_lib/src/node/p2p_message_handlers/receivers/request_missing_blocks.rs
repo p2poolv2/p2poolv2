@@ -48,7 +48,7 @@ pub async fn request_headers_for_missing_blocks<C>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node::messages::Message;
+    use crate::node::messages::{GetShareHeaders, Message};
     use crate::test_utils::TestShareBlockBuilder;
     use bitcoin::hashes::Hash;
     use mockall::predicate::*;
@@ -82,7 +82,14 @@ mod tests {
 
         let message = swarm_rx.recv().await.unwrap();
         match message {
-            SwarmSend::Request(sent_peer, Message::GetShareHeaders(locator, stop_hash)) => {
+            SwarmSend::Request(
+                sent_peer,
+                Message::GetShareHeaders(GetShareHeaders {
+                    locator,
+                    stop: stop_hash,
+                    ..
+                }),
+            ) => {
                 assert_eq!(sent_peer, peer_id);
                 assert_eq!(locator, vec![BlockHash::all_zeros()]);
                 assert_eq!(stop_hash, BlockHash::all_zeros());

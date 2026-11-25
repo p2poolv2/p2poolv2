@@ -1,8 +1,10 @@
 [network]
 listen_address = "/ip4/127.0.0.1/tcp/6884"
 # Peers to dial at startup and keep reconnecting to. Optional: leave it
-# out to find peers through the DNS seeds alone.
-# dial_peers = ["/ip4/203.0.113.1/tcp/6884"]
+# out to find peers through the DNS seeds alone. Hostnames work too, as
+# /dns4/, /dns6/ or /dns/ addresses; only hostnames listed here are ever
+# dialed, never ones learned from peers.
+# dial_peers = ["/ip4/203.0.113.1/tcp/6884", "/dns4/peer.example.com/tcp/6884"]
 # Fall back to the built-in DNS seeds for this network when no peer is
 # connected. Seeds are queried at startup without dial_peers, or 10s
 # after startup when dial_peers are set but none connected. Set false
@@ -67,10 +69,10 @@ bootstrap_address = "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk"
 # In basis points, 1% = 100 basis points. Default 0
 # fee = 0
 zmqpubhashblock = "tcp://127.0.0.1:28332"
-# The network can be "main", "testnet4" or "signet"
+# The network can be "main", "testnet4", "testnet5", "signet" or "regtest"
 network = "signet"
-# Use BIP 323 mask for version rolling (see https://github.com/bitcoin/bips/blob/622e47722cd35514e96da37ae89f868e18d581e4/bip-0323.mediawiki#specification)
-version_mask = "1fffffe0"
+# Use BIP 320 mask for version rolling (see https://github.com/bitcoin/bips/blob/master/bip-0320.mediawiki)
+version_mask = "1fffe000"
 # The PPLNS payout window is fixed for the network, not configured: each
 # coinbase pays the last 120,960 shares (about two weeks at the 10 second
 # share target), weighted by share difficulty.
@@ -120,3 +122,11 @@ port = 46884
 # hostname = "127.0.0.1"
 # port = 50001
 # max_connections = 64
+
+# Share chain fork activation heights. Each network has defaults compiled
+# into the node; a value here overrides the default for this node only. Every
+# node on a network must use the same heights or the network splits, so leave
+# this section out unless you run a private or test network. The node logs a
+# warning for every override.
+# [forks]
+# capped_coinbase_height = 60000

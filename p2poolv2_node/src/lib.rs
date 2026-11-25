@@ -19,6 +19,8 @@ use p2poolv2_lib::accounting::payout::build_payout_for_mode;
 use p2poolv2_lib::accounting::payout::simple_pplns::share_worker::PplnsShareWorker;
 use p2poolv2_lib::accounting::stats::metrics;
 use p2poolv2_lib::config::Config;
+use p2poolv2_lib::forks::build_fork_schedule;
+use p2poolv2_lib::monitoring_events::create_monitoring_event_channel;
 use p2poolv2_lib::node::actor::NodeHandle;
 use p2poolv2_lib::pool_difficulty::PoolDifficulty;
 use p2poolv2_lib::shares::chain::chain_store_handle::ChainStoreHandle;
@@ -190,8 +192,14 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
     let exit_sender = watch::Sender::new(ShutdownReason::None);
     let sig_handle = setup_signal_handler(exit_sender.clone());
 
-    let genesis = ShareBlock::build_genesis_for_network(config.stratum.network).unwrap();
-    let store = Arc::new(Store::new(config.store.path.clone(), false).unwrap());
+    let genesis = ShareBlock::build_genesis_for_network(config.stratum.chain).unwrap();
+    let store = match Store::new(config.store.path.clone(), false) {
+        Ok(store) => Arc::new(store),
+        Err(error) => {
+            error!("Failed to open store at {}: {error}", config.store.path);
+            return Err(ExitCode::FAILURE);
+        }
+    };
 
     let (write_tx, write_rx) = write_channel();
     let store_writer = StoreWriter::new(store.clone(), write_rx);
@@ -206,10 +214,10 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
     });
 
     let store_handle = StoreHandle::new(store.clone(), write_tx);
-    let chain_store_handle = ChainStoreHandle::new(store_handle, config.stratum.network);
+    let chain_store_handle = ChainStoreHandle::new(store_handle, config.stratum.network());
 
     if let Err(e) = chain_store_handle
-        .init_or_setup_genesis(genesis.clone())
+        .init_for_mode(genesis.clone(), config.stratum.mode)
         .await
     {
         error!("Failed to initialise chain at {}: {e}", config.store.path);
@@ -255,6 +263,8 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
     );
 
     let stratum_config = config.stratum.clone().parse().unwrap();
+    let network = stratum_config.network();
+    build_fork_schedule(stratum_config.chain, &config.forks);
     let bitcoinrpc_config = config.bitcoinrpc.clone();
 
     let (stratum_shutdown_tx, stratum_shutdown_rx) = tokio::sync::oneshot::channel();
@@ -278,7 +288,7 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
             bitcoinrpc_config_cloned,
             notify_tx_for_gbt,
             GBT_POLL_INTERVAL,
-            stratum_config.network,
+            network,
             zmq_trigger_rx,
         )
         .await
@@ -298,8 +308,7 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
         PoolDifficulty::build(&chain_store_handle).expect("Failed to build pool difficulty");
 
     let cloned_stratum_config = stratum_config.clone();
-    let (payout, shared_pplns_window) =
-        build_payout_for_mode(stratum_config.mode, cloned_stratum_config.network);
+    let (payout, shared_pplns_window) = build_payout_for_mode(stratum_config.mode, network);
     let exit_sender_notify = exit_sender.clone();
     let exit_receiver_notify = exit_sender.subscribe();
     tokio::spawn(async move {
@@ -368,7 +377,7 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
             .validate_addresses(Some(
                 stratum_config.donation.unwrap_or_default() != FULL_DONATION_BIPS,
             ))
-            .network(stratum_config.network)
+            .network(network)
             .version_mask(stratum_config.version_mask)
             .max_connections(stratum_config.max_connections)
             .wait_for_chain_sync(stratum_config.wait_for_chain_sync)
@@ -397,8 +406,7 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
         info!("Stratum server stopped");
     });
 
-    let (monitoring_event_sender, _monitoring_event_receiver) =
-        p2poolv2_lib::monitoring_events::create_monitoring_event_channel();
+    let monitoring_event_sender = create_monitoring_event_channel();
 
     let (node_handle, stopping_rx) = match NodeHandle::new(
         config.clone(),
@@ -426,8 +434,8 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
         metrics_handle.clone(),
         tracker_handle,
         node_handle.clone(),
-        monitoring_event_sender,
-        stratum_config.network,
+        monitoring_event_sender.clone(),
+        stratum_config.chain,
         stratum_config.pool_signature,
     )
     .await
@@ -452,6 +460,7 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
         Some(start_electrum_server(
             config.electrum.clone(),
             chain_store_handle.clone(),
+            monitoring_event_sender,
             electrum_shutdown.clone(),
         ))
     } else {

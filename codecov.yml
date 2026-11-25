@@ -3,11 +3,13 @@ codecov:
 
 coverage:
   status:
-    project:
-      default:
-        informational: true
+    # Off: the blocking total-coverage check is coverage/gate, posted by
+    # .github/workflows/coverage-gate.yml without depending on Codecov.
+    project: off
+    # Advisory: reported on every PR but does not block merge.
     patch:
       default:
+        target: 90%
         informational: true
 
 ignore:

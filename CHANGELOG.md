@@ -7,6 +7,136 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Testnet5 DNS seed `seed.p2pool.testnet5.roose.io`.
+
+### Changed
+
+- The `/pplns_shares` API endpoint takes `start_time` and `end_time` as unix
+  seconds instead of RFC 3339 strings, e.g.
+  `/pplns_shares?start_time=1760730000&end_time=1760730600`. Clients sending
+  RFC 3339 strings now get 400 Bad Request.
+- The `/share` API endpoint returns `time` and `bitcoin_header.time` as unix
+  seconds instead of a formatted UTC string, matching `/shares` and the
+  WebSocket events.
+- The CLI share lookup prints `time` and `bitcoin_header.time` as unix
+  seconds instead of a formatted UTC string, and `shares --dot` and
+  `candidates --dot` labels show unix seconds instead of `HH:MM:SS`.
+
+### Removed
+
+- The `chrono` dependency, which is unmaintained (RUSTSEC-2026-0543).
+
+## [v0.18.0] - 2026-11-14
+
+This release moves testnet5 from the rehearsal chain to the final BIP 95
+chain, mined on 2026-11-14. The testnet5 share chain is reset: testnet5 nodes
+must upgrade, rebuild Bitcoin Core for the new chain and start both bitcoind
+and p2poolv2 from fresh data directories. Testnet4 and mainnet are unchanged.
+
+### Added
+
+- `dial_peers` accepts hostnames as `/dns4/`, `/dns6/` or `/dns/` multiaddrs,
+  resolved when the node dials them. Only hostnames listed in `dial_peers` are
+  dialed; `/dns` addresses learned from peers through Kademlia are ignored.
+
+### Changed
+
+- The testnet5 share chain genesis anchors on block 35
+  (`00000000000002bd...b3b8`) of the final BIP 95 testnet5 chain, replacing
+  the rehearsal chain genesis. `docs/testnet5.md` now builds Bitcoin Core from
+  PR #35861 patched with the final genesis parameters.
+
+### Fixed
+
+- The node no longer redials a `dial_peers` peer while an earlier dial to it
+  is still pending, and backs off after dials that fail asynchronously.
+- A host without a usable resolver config (no `/etc/resolv.conf` or no
+  nameservers, as in some minimal containers) no longer stops the node. It
+  warns and runs with `/ip4` and `/ip6` peers only; `/dns` dials fail.
+
+### Security
+
+- Blocked IPs are checked after a `/dns` address resolves, so a hostname
+  that resolves to a blocked IP is not dialed.
+
+## [v0.17.0] - 2026-11-11
+
+This release adds testnet5 and changes share chain consensus: uncle work now
+counts toward chain work. Nodes running earlier versions compute different
+chain work for the same headers, so every node on a share chain must upgrade
+together.
+
+### Added
+
+- Testnet5 (BIP 95) support, mining on the bootstrap rehearsal chain run at
+  `lapis.erisian.com.au`. Set `network = "testnet5"`. Testnet5 has its own
+  share chain genesis, anchored on the rehearsal chain's genesis block
+  (`00000000000027fb...42d7`), and its own P2P protocol string, so testnet5
+  nodes never connect to testnet4 nodes. The genesis share is replaced once
+  the final BIP 95 genesis is mined, which will need a testnet5 share chain
+  reset. Addresses use testnet4 formats: `tb1...` bitcoin addresses and
+  `tp2pool1...` share chain addresses. See `docs/testnet5.md` for building and
+  running a testnet5 Bitcoin Core node.
+- Testnet5 DNS seed `seed.testnet5.p2poolv2.org`. Testnet5 nodes listen on
+  P2P port 56886.
+- Electrum wallet server over the share chain, in the new `[electrum]` config
+  section (off by default, binds localhost). Supports `server.version`,
+  `server.ping`, `server.banner`, `server.features`,
+  `blockchain.block.header`, `blockchain.headers.subscribe`,
+  `blockchain.transaction.get`, `blockchain.scripthash.get_history`,
+  `blockchain.scripthash.subscribe` and `blockchain.scripthash.unsubscribe`,
+  with scripthash notifications. The server is supervised and restarted if
+  it fails.
+- Nix flake with a development shell and crane-based package builds.
+- Ansible role to install Prometheus and Grafana natively, with provisioned
+  dashboards. Ansible can also build p2poolv2 from source on the host
+  (`p2poolv2_install_method: source`), and the nginx role supports Arch
+  Linux.
+- Share difficulty in the log line for a confirmed share.
+
+### Changed
+
+- Uncle work counts toward share chain work. Header sync waits for a header's
+  uncles as it waits for its parent, and uncles are validated during header
+  sync.
+- A share may not include an uncle already referenced by one of its
+  ancestors. Shares built by the node exclude such uncles.
+- `getblocktemplate` requests declare the BIP 54 `consensuscleanup` rule on
+  every network. Testnet5 bitcoind refuses templates to clients that do not
+  declare it; nodes that do not know the rule ignore it.
+- The startup log and the found blocks `network` label in `/metrics` use the
+  chain name, so testnet5 shows as `testnet5` rather than `testnet4`. The
+  startup log now says `main` for mainnet, where it said `bitcoin`.
+- The Grafana found blocks table links to the block explorer from a new
+  Explorer column instead of the block hash. Chains without a public explorer
+  (testnet5) show no link.
+- Ansible no longer manages certbot certificates.
+
+### Fixed
+
+- In Hydrapool mode, the node again ignores a change of share chain genesis.
+- The vendored libzmq build no longer crashes with SIGSEGV when the compiler
+  enables AVX by default.
+- The Docker node image build copies the `p2poolv2_electrum` crate.
+
+### Security
+
+- Updated `tokio`, `zstd` and `crypto-bigint` for cargo-deny advisories, and
+  upgraded `sha2` and `hmac`.
+- Removed the unused `k256` secp256k1 dependency from libp2p.
+
+## [v0.16.3] - 2026-11-06
+
+### Fixed
+
+- The default stratum version rolling mask is back to the BIP320 mask
+  `1fffe000`, reverting the v0.16.0 switch to the BIP323 mask `1fffffe0`.
+  Some miners, such as Antminer S19, reject a `mining.configure` reply with
+  bits they did not offer and fail to initiate stratum. Existing deployments
+  should set `version_mask = "1fffe000"` in their config.
+
 ## [v0.16.2] - 2026-10-21
 
 ### Added
@@ -1280,7 +1410,10 @@ and existing share chain stores must be cleared.
 
 We used tags like hydrapool.v0.x.0 and we didn't keep a changelog.
 
-[Unreleased]: https://github.com/p2poolv2/p2poolv2/compare/v0.16.2...HEAD
+[Unreleased]: https://github.com/p2poolv2/p2poolv2/compare/v0.18.0...HEAD
+[v0.18.0]: https://github.com/p2poolv2/p2poolv2/compare/v0.17.0...v0.18.0
+[v0.17.0]: https://github.com/p2poolv2/p2poolv2/compare/v0.16.3...v0.17.0
+[v0.16.3]: https://github.com/p2poolv2/p2poolv2/compare/v0.16.2...v0.16.3
 [v0.16.2]: https://github.com/p2poolv2/p2poolv2/compare/v0.16.1...v0.16.2
 [v0.16.1]: https://github.com/p2poolv2/p2poolv2/compare/v0.16.0...v0.16.1
 [v0.16.0]: https://github.com/p2poolv2/p2poolv2/compare/v0.15.3...v0.16.0

@@ -10,6 +10,8 @@ the design and remain consistent with the design choices.**
 # Chain Store RocksDB Schema
 
 This document captures the RocksDB storage schema used by `Store` and `ChainStore` in P2Poolv2.
+It describes schema version 2 (`CURRENT_SCHEMA_VERSION`); see `store-migrations.md`
+for how older stores are migrated.
 
 ## Overview
 
@@ -118,11 +120,16 @@ for it and only the `h:` keys use it.
 
 ### 4. `BlockTxids` - Block→Transaction IDs
 
-Maps share blocks to their sharechain transaction IDs.
+Maps share blocks to the ids of their sharechain transactions, in block
+order.
 
-| Key                    | Value                          |
-|------------------------|--------------------------------|
-| `blockhash` + `_txids` | `Txids` (Vec<Txid> serialized) |
+| Key                    | Value                                                          |
+|------------------------|----------------------------------------------------------------|
+| `blockhash` + `_txids` | `BlockTransactionIds`: varint count, then `txid` + `wtxid` each |
+
+The wtxid finds the exact transaction the block holds in `Tx` and
+`Inputs`; the txid finds its outputs. One key holds both, so the marker for
+"body present" and the data to rebuild the body cannot drift apart.
 
 `share_block_exists` keys off this entry, so a block with no entry is held
 header-only. Body data: deleted by the pruner below the prune target.
@@ -146,9 +153,15 @@ every pruned block, so a future writer cannot leak data.
 
 Stores transaction metadata (not full tx data).
 
-| Key               | Value                     |
-|-------------------|---------------------------|
-| `txid` (32 bytes) | `TxMetadata` (serialized) |
+| Key                | Value                     |
+|--------------------|---------------------------|
+| `wtxid` (32 bytes) | `TxMetadata` (serialized) |
+
+Keyed by wtxid, which covers the witness: a share can carry another
+block's transaction with a different witness under the same txid, and that
+copy must not overwrite the original (GHSA-78w3-x227-xp6x, issue 755). The
+metadata carries the txid, which the transaction's outputs are keyed by.
+For a transaction without witness data the wtxid equals the txid.
 
 **TxMetadata Structure:**
 ```rust
@@ -166,11 +179,13 @@ pub struct TxMetadata {
 
 ### 7. `Inputs` - Transaction Inputs
 
-Stores individual transaction inputs.
+Stores individual transaction inputs, each with its witness.
 
-| Key                       | Value               |
-|---------------------------|---------------------|
-| `{txid}:{index}` (string) | `TxIn` (serialized) |
+| Key                        | Value                          |
+|----------------------------|--------------------------------|
+| `{wtxid}:{index}` (string) | `TxIn` + witness (serialized)  |
+
+Keyed by wtxid for the same reason as `Tx`.
 
 ---
 
@@ -181,6 +196,10 @@ Stores individual transaction outputs.
 | Key                       | Value                |
 |---------------------------|----------------------|
 | `{txid}:{index}` (string) | `TxOut` (serialized) |
+
+Keyed by txid, since spends refer to an outpoint. Every row depends only on
+its txid: outputs are covered by the txid, and only the coinbase at index 0
+writes coinbase rows (see `pruning.md`), so rewriting a row is harmless.
 
 ---
 
@@ -219,12 +238,41 @@ The blocks that declare a block as an uncle. Uses the merge operator.
 
 ---
 
+### 9d. `ScriptHistory` - Script→Confirmed Transactions
+
+The confirmed transactions that touch each script, for wallet history. A
+transaction touches a script when an output pays it (`OP_RETURN` outputs
+excluded) or an input spends an output that paid it, with one row per
+distinct script per transaction. A prefix scan returns a script's history in
+height then position order. See `store/script_history.rs`.
+
+| Key (40 bytes)                                                                  | Value             |
+|---------------------------------------------------------------------------------|-------------------|
+| `sha256(script_pubkey)` (32 bytes) + height (4 bytes BE) + position (4 bytes BE) | `txid` (32 bytes) |
+
+`position` is the transaction's index in its block.
+
+- **Window:** spendable depth, heights from `candidate tip + 1 -
+  PAYOUT_DEPTH`. Rows are written only for blocks confirmed inside it
+  (`put_confirmed_entry`, and `setup_genesis` for genesis), and reads never
+  go below it.
+- **Reorg-out:** the reorged-out block's keys are recomputed from its
+  transactions and deleted in the reorg batch.
+- **Old rows:** never deleted explicitly. A compaction filter drops rows
+  below `confirmed tip - PAYOUT_DEPTH - PRUNE_INTERVAL` (threshold raised by
+  the prune task while the node is current), and periodic compaction filters
+  every file at least daily.
+
+---
+
 ### Pruning
 
-`Tx`, `Inputs`, `Outputs`, `TxidsBlocks` and `SpendsIndex` rows are deleted
-with a pruned block unless a kept block still includes the transaction.
+`Tx` and `Inputs` rows are deleted with a pruned block unless a kept block
+holds the same wtxid. `Outputs`, `TxidsBlocks` and `SpendsIndex` rows are
+deleted unless a kept block still includes the txid.
 `BlockTxids`, `BitcoinTxids`, `BitcoinCoinbase` and candidate `BlockHeight`
-entries are deleted below the prune target. Headers, metadata, the block
+entries are deleted below the prune target. `ScriptHistory` is not pruned:
+its compaction filter drops rows at spendable depth (section 9d). Headers, metadata, the block
 index, `h:` and confirmed height entries, `TemplateMerkleBranches`, `Uncles`
 and `FoundBlocks` are kept forever. See `pruning.md`.
 
@@ -285,11 +333,14 @@ Secondary index for looking up users by Bitcoin address.
 
 ### 13. `Metadata` - General Metadata
 
-Reserved for general metadata storage.
+Store-wide values that belong to no block.
 
-| Key | Value |
-|-----|-------|
-| TBD | TBD   |
+| Key              | Value                              |
+|------------------|------------------------------------|
+| `schema_version` | store layout version, u32 big-endian |
+
+`schema_version` is written by `store::migrations` when a store is created
+or migrated. See `store-migrations.md`.
 
 ---
 
@@ -331,7 +382,7 @@ see `pruning.md`.
 
 1. Store transactions in `Inputs`, `Outputs` and `Tx`, and append the block to
    each transaction's `TxidsBlocks` list
-2. Store `blockhash → txids` in `BlockTxids`
+2. Store `blockhash → (txid, wtxid)` pairs in `BlockTxids`
 3. Store the bitcoin coinbase in `BitcoinCoinbase`
 4. Update `BlockIndex` (parent→child relationship)
 5. Update `BlockHeight` (height→blockhash mapping)

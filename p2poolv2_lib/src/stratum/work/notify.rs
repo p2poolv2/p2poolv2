@@ -45,7 +45,7 @@ fn build_output_distribution(
 
     let compact_target = bitcoin::pow::CompactTarget::from_unprefixed_hex(&template.bits).unwrap();
     let bitcoin_difficulty =
-        bitcoin::Target::from_compact(compact_target).difficulty(context.config.network);
+        bitcoin::Target::from_compact(compact_target).difficulty(context.config.network());
 
     context
         .payout

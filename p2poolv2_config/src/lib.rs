@@ -10,6 +10,9 @@ use serde::Deserialize;
 use std::marker::PhantomData;
 use std::str::FromStr;
 
+mod chain;
+pub use chain::{Chain, UnknownChainError};
+
 /// Default version mask for BIP 323 version rolling.
 pub const DEFAULT_VERSION_MASK: i32 = 0x1fffe000;
 
@@ -57,6 +60,11 @@ pub fn parse_share_address(address: &str, network: Network) -> Result<ShareAddre
 
 /// Max length for pool signature P2Poolv2 + 8 more bytes for users to add
 const MAX_POOL_SIGNATURE_LENGTH: usize = 16;
+
+/// Maximum donation or fee cut, in basis points (100%).
+///
+/// This crate does not depend on p2poolv2_lib, so the bound is repeated here.
+const MAX_CUT_BASIS_POINTS: u16 = 10_000;
 
 /// Pool operating mode.
 ///
@@ -116,9 +124,11 @@ pub struct StratumConfig<State = Raw> {
     /// and one that disagrees with this address is rejected at authorize.
     /// P2Poolv2 mode only; Hydrapool builds no share commitment.
     pub miner_address: Option<String>,
-    /// The network can be "main", "testnet4" or "signet
-    #[serde(deserialize_with = "deserialize_network")]
-    pub network: bitcoin::Network,
+    /// The chain to mine on, read from the `network` key: "main", "test",
+    /// "testnet4", "testnet5", "signet" or "regtest". Use `network()` for the
+    /// rust-bitcoin network.
+    #[serde(rename = "network", deserialize_with = "deserialize_chain")]
+    pub chain: Chain,
     /// The version mask to use for version-rolling
     #[serde(deserialize_with = "deserialize_version_mask")]
     pub version_mask: i32,
@@ -160,6 +170,25 @@ impl StratumConfig<Raw> {
             });
         }
 
+        if let Some(donation) = self
+            .donation
+            .filter(|donation| *donation > MAX_CUT_BASIS_POINTS)
+        {
+            return Err(ConfigError {
+                message: format!(
+                    "donation {donation} must be in the range 0..={MAX_CUT_BASIS_POINTS} basis points"
+                ),
+            });
+        }
+
+        if let Some(fee) = self.fee.filter(|fee| *fee > MAX_CUT_BASIS_POINTS) {
+            return Err(ConfigError {
+                message: format!(
+                    "fee {fee} must be in the range 0..={MAX_CUT_BASIS_POINTS} basis points"
+                ),
+            });
+        }
+
         if self.donation_address.is_some() != self.donation.is_some() {
             return Err(ConfigError {
                 message: "donation_address and donation must both be set or both be unset"
@@ -184,34 +213,36 @@ impl StratumConfig<Raw> {
             });
         }
 
+        let network = self.network();
+
         // The network should be one we support an hrp for.
         if self.mode == PoolMode::P2poolv2 {
-            p2poolv2_wallet::expected_hrp(self.network).map_err(|error| ConfigError {
+            p2poolv2_wallet::expected_hrp(network).map_err(|error| ConfigError {
                 message: format!(
                     "Network {} cannot be used for a share chain: {error}",
-                    self.network
+                    self.chain
                 ),
             })?;
         }
 
-        let bootstrap_address_parsed = parse_address(&self.bootstrap_address, self.network)?;
+        let bootstrap_address_parsed = parse_address(&self.bootstrap_address, network)?;
 
         let miner_address_parsed = self
             .miner_address
             .as_ref()
-            .map(|address| parse_share_address(address, self.network))
+            .map(|address| parse_share_address(address, network))
             .transpose()?;
 
         let donation_address_parsed = self
             .donation_address
             .as_ref()
-            .map(|addr| parse_address(addr, self.network))
+            .map(|addr| parse_address(addr, network))
             .transpose()?;
 
         let fee_address_parsed = self
             .fee_address
             .as_ref()
-            .map(|addr| parse_address(addr, self.network))
+            .map(|addr| parse_address(addr, network))
             .transpose()?;
 
         Ok(StratumConfig {
@@ -228,7 +259,7 @@ impl StratumConfig<Raw> {
             fee_address: self.fee_address,
             fee: self.fee,
             miner_address: self.miner_address,
-            network: self.network,
+            chain: self.chain,
             version_mask: self.version_mask,
             ignore_difficulty: self.ignore_difficulty,
             pool_signature: self.pool_signature,
@@ -241,6 +272,15 @@ impl StratumConfig<Raw> {
             miner_address_parsed,
             _state: PhantomData,
         })
+    }
+}
+
+impl<State> StratumConfig<State> {
+    /// The rust-bitcoin network for this config's chain, used for address
+    /// validation and anything else that does not tell testnet4 and testnet5
+    /// apart.
+    pub fn network(&self) -> Network {
+        self.chain.bitcoin_network()
     }
 }
 
@@ -290,7 +330,7 @@ impl StratumConfig<Raw> {
             fee_address: None,
             fee: None,
             miner_address: None,
-            network: bitcoin::Network::Signet,
+            chain: Chain::Signet,
             version_mask: DEFAULT_VERSION_MASK,
             ignore_difficulty: None,
             pool_signature: None,
@@ -306,14 +346,14 @@ impl StratumConfig<Raw> {
     }
 }
 
-/// Helper function to deserialize the network from the config file.
-/// Possible values are: main, test, testnet4, signet, regtest
-fn deserialize_network<'de, D>(deserializer: D) -> Result<bitcoin::Network, D::Error>
+/// Helper function to deserialize the chain from the config file's `network` key.
+/// Possible values are: main, test, testnet4, testnet5, signet, regtest
+fn deserialize_chain<'de, D>(deserializer: D) -> Result<Chain, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    let network_string: String = serde::Deserialize::deserialize(deserializer)?;
-    bitcoin::Network::from_core_arg(&network_string).map_err(serde::de::Error::custom)
+    let chain_name: String = serde::Deserialize::deserialize(deserializer)?;
+    Chain::from_str(&chain_name).map_err(serde::de::Error::custom)
 }
 
 fn deserialize_version_mask<'de, D>(deserializer: D) -> Result<i32, D::Error>
@@ -588,6 +628,23 @@ pub struct Config {
     pub api: ApiConfig,
     #[serde(default)]
     pub electrum: ElectrumConfig,
+    #[serde(default)]
+    pub forks: ForksConfig,
+}
+
+/// Optional overrides of the share chain fork activation heights.
+///
+/// The defaults for each network live in code, in `p2poolv2_lib::forks`. A
+/// value set here replaces that default for this node only. Every node on a
+/// network must use the same heights, or nodes disagree on share validity and
+/// the network splits, so the node logs a warning for each override. Leave
+/// the `[forks]` section out to use the defaults.
+#[derive(Debug, Deserialize, Clone, Default, PartialEq, Eq)]
+pub struct ForksConfig {
+    /// Share chain height from which the coinbase carries at most a fixed
+    /// number of miner outputs, paid by the raffled tail split.
+    #[serde(default)]
+    pub capped_coinbase_height: Option<u32>,
 }
 
 #[allow(dead_code)]
@@ -718,8 +775,8 @@ impl Config {
         self
     }
 
-    pub fn with_bitcoin_network(mut self, network: bitcoin::Network) -> Self {
-        self.stratum.network = network;
+    pub fn with_chain(mut self, chain: Chain) -> Self {
+        self.stratum.chain = chain;
         self
     }
 
@@ -802,7 +859,7 @@ mod tests {
             .with_bitcoinrpc_url("http://localhost:8332".to_string())
             .with_bitcoinrpc_username("testuser".to_string())
             .with_bitcoinrpc_password("testpass".to_string())
-            .with_bitcoin_network(bitcoin::Network::Signet)
+            .with_chain(Chain::Signet)
             .with_stats_dir("./logs/stats".to_string())
             .with_api_hostname("127.0.0.1".to_string())
             .with_api_port(3000)
@@ -907,6 +964,24 @@ mod tests {
         });
     }
 
+    /// rust-bitcoin has no testnet5, so the `network` key must reach the
+    /// `Chain` type and still give testnet4 address rules.
+    #[test]
+    fn network_key_testnet5_selects_testnet5_chain() {
+        with_var("P2POOL_STRATUM__NETWORK", Some("testnet5"), || {
+            let config = Config::load("../config.sample.toml").unwrap();
+            assert_eq!(config.stratum.chain, Chain::Testnet5);
+            assert_eq!(config.stratum.network(), Network::Testnet4);
+        });
+    }
+
+    #[test]
+    fn network_key_with_unknown_chain_fails_to_load() {
+        with_var("P2POOL_STRATUM__NETWORK", Some("testnet6"), || {
+            assert!(Config::load("../config.sample.toml").is_err());
+        });
+    }
+
     /// A field whose own name contains an underscore is reachable, because the
     /// nesting separator is `__` and single underscores stay part of the key.
     ///
@@ -978,6 +1053,37 @@ mod tests {
         assert_eq!(electrum.max_connections, 8);
     }
 
+    /// The sample config leaves `[forks]` commented out, so the node uses the
+    /// fork heights compiled in for its network.
+    #[test]
+    fn forks_default_to_no_overrides_when_section_absent() {
+        let config = Config::load("../config.sample.toml").unwrap();
+        assert_eq!(config.forks, ForksConfig::default());
+        assert_eq!(config.forks.capped_coinbase_height, None);
+    }
+
+    #[test]
+    fn forks_section_values_are_parsed() {
+        let forks: ForksConfig = config::Config::builder()
+            .add_source(config::File::from_str(
+                "capped_coinbase_height = 1234\n",
+                config::FileFormat::Toml,
+            ))
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+        assert_eq!(forks.capped_coinbase_height, Some(1234));
+    }
+
+    #[test]
+    fn env_override_sets_capped_coinbase_height() {
+        with_var("P2POOL_FORKS__CAPPED_COINBASE_HEIGHT", Some("4321"), || {
+            let config = Config::load("../config.sample.toml").unwrap();
+            assert_eq!(config.forks.capped_coinbase_height, Some(4321));
+        });
+    }
+
     #[test]
     fn env_override_sets_electrum_port() {
         with_var("P2POOL_ELECTRUM__PORT", Some("50999"), || {
@@ -1020,7 +1126,7 @@ mod tests {
     /// The exact keys docker/docker-compose.p2poolv2.yml sets, asserted
     /// together so the container and the config schema cannot drift apart.
     ///
-    /// Compose deliberately does not set `stratum.network` or
+    /// Compose deliberately does not set `stratum.network()` or
     /// `bitcoinrpc.url`. Those are the operator's, from the mounted
     /// config.toml: an override here would silently contradict that file and
     /// fail late, either on the wrong chain or against the wrong bitcoind.
@@ -1126,7 +1232,7 @@ mod tests {
     #[test]
     fn parse_rejects_a_network_with_no_share_address_prefix() {
         let mut config = StratumConfig::<Raw>::new_for_test_default();
-        config.network = Network::Testnet;
+        config.chain = Chain::Testnet3;
         config.mode = PoolMode::P2poolv2;
         assert!(config.miner_address.is_none());
 
@@ -1143,7 +1249,7 @@ mod tests {
     #[test]
     fn parse_allows_an_unusable_network_in_hydrapool_mode() {
         let mut config = StratumConfig::<Raw>::new_for_test_default();
-        config.network = Network::Testnet;
+        config.chain = Chain::Testnet3;
         config.mode = PoolMode::Hydrapool;
         config.miner_address = None;
 
@@ -1252,6 +1358,50 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_fails_donation_above_maximum() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.donation_address = Some("tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string());
+        config.donation = Some(10_001);
+
+        let error = config.parse().unwrap_err();
+
+        assert!(
+            error.message.contains("donation") && error.message.contains("0..=10000"),
+            "unexpected message: {}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn test_parse_fails_fee_above_maximum() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.fee_address = Some("tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string());
+        config.fee = Some(10_001);
+
+        let error = config.parse().unwrap_err();
+
+        assert!(
+            error.message.contains("fee") && error.message.contains("0..=10000"),
+            "unexpected message: {}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn test_parse_succeeds_with_maximum_donation_and_fee() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.donation_address = Some("tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string());
+        config.donation = Some(10_000);
+        config.fee_address = Some("tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk".to_string());
+        config.fee = Some(10_000);
+
+        let parsed = config.parse().unwrap();
+
+        assert_eq!(parsed.donation, Some(10_000));
+        assert_eq!(parsed.fee, Some(10_000));
+    }
+
+    #[test]
     fn test_parse_succeeds_with_neither_donation_nor_fee() {
         let config = StratumConfig::<Raw>::new_for_test_default();
         assert!(config.donation_address.is_none());
@@ -1337,6 +1487,30 @@ mod miner_address_tests {
             error.message.contains("share chain address"),
             "unexpected message: {}",
             error.message
+        );
+    }
+
+    /// Testnet5 shares testnet4's address formats, so a testnet bitcoin
+    /// address and a `tp2pool` share address both parse on it.
+    #[test]
+    fn testnet5_accepts_testnet_bootstrap_and_testnet4_share_address() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.chain = Chain::Testnet5;
+        config.mode = PoolMode::P2poolv2;
+        config.miner_address = Some(TESTNET4_ADDRESS.to_string());
+
+        let parsed = config.parse().unwrap();
+
+        assert_eq!(parsed.chain, Chain::Testnet5);
+        assert!(
+            parsed
+                .bootstrap_address()
+                .as_unchecked()
+                .is_valid_for_network(Network::Testnet4)
+        );
+        assert_eq!(
+            parsed.miner_address().map(|address| address.to_string()),
+            Some(TESTNET4_ADDRESS.to_string())
         );
     }
 

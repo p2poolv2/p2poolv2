@@ -36,6 +36,8 @@ Read `docs/architecture/` when working in the relevant area:
 - `async-flow.md` -- worker tasks, channel topology, backpressure
 - `store-schema.md` -- RocksDB column families, key encoding, merge ops
 - `store-architecture.md` -- read/write separation, StoreWriter thread
+- `store-migrations.md` -- schema version in the `Metadata` CF, automatic
+  migration in `Store::new`, one atomic batch per migration, how to add one
 - `pruning.md` -- two-zone validation, output expiry, and block body
   pruning (derived boundaries, pruner, reorg depth limit, decisions)
 - `payout-distribution.md` -- how a found block's coinbase is split:
@@ -44,6 +46,9 @@ Read `docs/architecture/` when working in the relevant area:
 - `metrics.md` -- Prometheus exposition, metric sources, Grafana panels
 - `address-format.md` -- share chain address encoding, parser rules,
   test vectors, and how a miner supplies one over stratum
+- `forks.md` -- consensus changes activated at a share chain height:
+  per-network fork files, config overrides with a warning, how to add a
+  fork
 - `mine-on-bitcoin-chain.md` -- bitcoin prevhash handling: share
   messages carry bitcoin headers (outside the share hash), and a share is
   paid only if its bitcoin prev is within one block of the paying share's
@@ -162,6 +167,18 @@ Most modules are discoverable by name; these are the non-obvious ones:
   unnecessary copies.
 - Avoid continue/break. Prefer structured control flow because the distributed
   algorithms are easier to reason about without non-local jumps.
+
+## Code comments
+
+- `//` comments are human-owned. **Never rewrite, reflow, or delete
+  them.** This is where invariants and hard-won rationale live.
+- `//*` star comments are AI-maintained outline statements. Agents may
+  add, change, or remove them.
+- Extract a well-named function before adding an outline; never
+  outline instead of extracting.
+
+Before adding, changing, or reviewing `//*` outlines, read
+`.agents/skills/nl-outlines/SKILL.md`.
 
 ## Prefer existing code
 

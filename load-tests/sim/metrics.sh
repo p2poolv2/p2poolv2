@@ -22,7 +22,7 @@ echo "=== sim swarm summary ($N nodes, ideal_block_time=${T}s → target ${targe
 # --- 1. convergence (confirmed height + tip-hash agreement, from logs) ---
 declare -a MAXH; maxmax=-1; minmax=999999999
 for i in $(seq 0 $((N - 1))); do
-  h=$(grep -oE "to confirmed height Some\([0-9]+\)" "$RUN_DIR/node-$i.log" 2>/dev/null \
+  h=$(grep -oE "to confirmed height [0-9]+:" "$RUN_DIR/node-$i.log" 2>/dev/null \
         | grep -oE "[0-9]+" | sort -n | tail -1)
   h="${h:-0}"; MAXH[i]="$h"
   [ "$h" -gt "$maxmax" ] && maxmax="$h"
@@ -32,7 +32,7 @@ within2=$(printf "%s\n" "${MAXH[@]}" | awk -v m="$maxmax" '$1>=m-2' | wc -l | tr
 # Tip-hash agreement at a height every node has reached (avoids frontier straddle).
 H=$([ "$minmax" -gt 2 ] && echo $((minmax - 2)) || echo "$minmax")
 distinct=$(for i in $(seq 0 $((N - 1))); do
-  grep -oE "Promoted block [0-9a-f]+ to confirmed height Some\($H\)" "$RUN_DIR/node-$i.log" 2>/dev/null \
+  grep -oE "Promoted block [0-9a-f]+ to confirmed height $H:" "$RUN_DIR/node-$i.log" 2>/dev/null \
     | grep -oE "[0-9a-f]{16,}" | head -1
 done | sort -u | wc -l | tr -d ' ')
 echo "--- 1. convergence ---"
@@ -41,7 +41,7 @@ echo "distinct block hash at height $H across nodes: $distinct  (1 = single conv
 
 # --- 2. share rate vs target (node 0's view of the shared main chain) ---
 echo "--- 2. main-chain share rate (node 0) ---"
-grep "to confirmed height Some" "$RUN_DIR/node-0.log" 2>/dev/null \
+grep -E "to confirmed height [0-9]+:" "$RUN_DIR/node-0.log" 2>/dev/null \
   | sed -E 's/.*T([0-9]{2}):([0-9]{2}):([0-9]{2}).*/\1 \2 \3/' \
   | awk -v tr="$target_rate" '{t=$1*3600+$2*60+$3; if(NR==1)f=t; l=t; n++} END{
       if(n>1){span=l-f; printf "promotions=%d  span=%ds  rate=%.3f/s  (target %s/s)\n", n, span, (span>0?n/span:0), tr}
@@ -78,7 +78,7 @@ n0="$RUN_DIR/node-0.log"
 # canonical chain; in healthy operation these are all credited as uncles. Count
 # DISTINCT produced blocks vs the chain's net growth -- NOT log-line sums.
 # promote_block re-logs "Confirmed block ... references N uncle(s)" on every
-# reorg re-promotion (including height=None ones), so summing those lines
+# reorg re-promotion (including height=-1 ones), so summing those lines
 # double-counts and inflates badly under forking: e.g. it reported 89% where the
 # true rate was ~29%. A block references at most MAX_UNCLES=3, yet the line-sum
 # gave >10 per main block -- impossible under any uncle definition (the per-block
@@ -88,8 +88,8 @@ n0="$RUN_DIR/node-0.log"
 # A pathologically high value means the network is failing -- more stale shares
 # than can be credited as uncles, i.e. true orphans.
 produced=$(grep -oE "Promoted block [0-9a-f]+" "$n0" 2>/dev/null | awk '{print $3}' | sort -u | wc -l | tr -d ' ')
-chain_hi=$(grep -oE "to confirmed height Some\([0-9]+\)" "$n0" 2>/dev/null | grep -oE "[0-9]+" | sort -n | tail -1)
-chain_lo=$(grep -oE "to confirmed height Some\([0-9]+\)" "$n0" 2>/dev/null | grep -oE "[0-9]+" | sort -n | head -1)
+chain_hi=$(grep -oE "to confirmed height [0-9]+:" "$n0" 2>/dev/null | grep -oE "[0-9]+" | sort -n | tail -1)
+chain_lo=$(grep -oE "to confirmed height [0-9]+:" "$n0" 2>/dev/null | grep -oE "[0-9]+" | sort -n | head -1)
 if [ -z "${chain_hi:-}" ] || [ "$produced" -eq 0 ]; then
   echo "uncle rate (node 0): n/a (no confirmed blocks yet)"
 else

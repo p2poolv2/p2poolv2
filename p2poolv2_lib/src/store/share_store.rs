@@ -9,13 +9,13 @@ use crate::shares::share_block::{
 };
 use crate::store::block_tx_metadata::ChainMembership;
 use crate::store::block_tx_metadata::Status::{BlockValid, HeaderValid, Invalid, Pending};
-use crate::store::transaction_store::{BLOCK_TXIDS_SUFFIX, txids_key};
+use crate::store::transaction_store::{BLOCK_TXIDS_SUFFIX, BlockTransactionIds, txids_key};
 use bitcoin::BlockHash;
 use bitcoin::Transaction;
 use bitcoin::TxMerkleNode;
 use bitcoin::consensus::{self, Encodable, encode};
 use std::collections::{HashMap, HashSet};
-use tracing::debug;
+use tracing::{debug, error};
 
 impl Store {
     /// Add a share to the store.
@@ -55,19 +55,16 @@ impl Store {
         }
 
         // Store transactions and get their metadata
-        let txs_metadata = self.add_sharechain_txs(&share.transactions, block_height, batch)?;
-
-        let txids = Txids(txs_metadata.iter().map(|t| t.txid).collect());
-        // Store block -> txids index
-        self.add_block_to_txids_index(
-            &blockhash,
-            &txids,
+        let block_transaction_ids = BlockTransactionIds(self.add_sharechain_txs(
+            &share.transactions,
+            block_height,
             batch,
-            BLOCK_TXIDS_SUFFIX,
-            ColumnFamily::BlockTxids,
-        )?;
+        )?);
 
-        self.add_txids_to_blocks_index(&blockhash, &txids, batch)?;
+        // Store block -> txids index
+        self.add_block_transaction_ids(&blockhash, &block_transaction_ids, batch)?;
+
+        self.add_txids_to_blocks_index(&blockhash, &Txids(block_transaction_ids.txids()), batch)?;
 
         // Store template merkle branches for validation
         let branches = MerkleBranches(share.template_merkle_branches.clone());
@@ -283,7 +280,9 @@ impl Store {
     /// Get a share from the store by reconstructing it from the Header CF
     /// and transaction CFs.
     ///
-    /// Returns None if the header, txids or bitcoin coinbase are missing.
+    /// Returns None if the header, the transaction ids or the bitcoin
+    /// coinbase are missing, or if any transaction row is missing or
+    /// unreadable (logged).
     pub fn get_share(&self, blockhash: &BlockHash) -> Option<ShareBlock> {
         let header = match self.get_share_header(blockhash) {
             Ok(Some(header)) => header,
@@ -292,11 +291,13 @@ impl Store {
         if !self.share_block_exists(blockhash) {
             return None;
         }
-        let transactions: Vec<ShareTransaction> = self
-            .get_txs_for_blockhash(blockhash)
-            .into_iter()
-            .map(ShareTransaction)
-            .collect();
+        let transactions: Vec<ShareTransaction> = match self.get_txs_for_blockhash(blockhash) {
+            Ok(transactions) => transactions.into_iter().map(ShareTransaction).collect(),
+            Err(error) => {
+                error!("Share block {blockhash} has unreadable transactions: {error}");
+                return None;
+            }
+        };
         let template_merkle_branches = self.get_template_merkle_branches(blockhash).ok()?;
         let bitcoin_coinbase = self.get_bitcoin_coinbase(blockhash).ok()??;
         Some(ShareBlock {
@@ -663,7 +664,7 @@ impl Store {
 mod tests {
     use super::*;
     use crate::store::block_tx_metadata::{BlockMetadata, ChainMembership, Status};
-    use crate::test_utils::TestShareBlockBuilder;
+    use crate::test_utils::{TestShareBlockBuilder, coinbase_outpoint, test_funding_transaction};
     use bitcoin::TxMerkleNode;
     use bitcoin::Work;
     use bitcoin::hashes::Hash;
@@ -1094,6 +1095,40 @@ mod tests {
         assert_eq!(share.transactions, txs);
     }
 
+    /// A block whose transaction row is gone must not rebuild without that
+    /// transaction: the short body no longer matches its header.
+    #[test]
+    fn test_get_share_returns_none_when_a_transaction_row_is_missing() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let source = TestShareBlockBuilder::new().nonce(1).build();
+        let spend = test_funding_transaction(coinbase_outpoint(&source), 1_000);
+        let spend_txid = spend.compute_txid();
+        let block = TestShareBlockBuilder::new()
+            .nonce(2)
+            .add_transaction(spend)
+            .build();
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&source, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&block, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+        assert_eq!(
+            store.get_share(&block.block_hash()).unwrap().transactions,
+            block.transactions
+        );
+
+        //* Drop the spend's Tx row, as a prune racing the read would
+        let tx_cf = store.db.cf_handle(&ColumnFamily::Tx).unwrap();
+        store
+            .db
+            .delete_cf(&tx_cf, spend_txid.as_ref() as &[u8])
+            .unwrap();
+
+        assert!(store.get_share(&block.block_hash()).is_none());
+    }
+
     #[test]
     fn test_get_share_header() {
         let temp_dir = tempdir().unwrap();
@@ -1278,6 +1313,92 @@ mod tests {
         // We verify by checking the block is still retrievable and unchanged
         store.commit_batch(batch).unwrap();
         assert!(store.get_share(&blockhash).is_some());
+    }
+
+    /// A share Y can carry a copy of share X's coinbase with another witness:
+    /// the txid leaves the witness out, so it is the same txid. The copy is
+    /// coinbase-shaped after index 0, so storing Y is refused, and X still
+    /// rebuilds to its own block.
+    #[test]
+    fn test_coinbase_copy_with_other_witness_leaves_original_block_intact() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let original = TestShareBlockBuilder::new().nonce(1).build();
+        let mut copy = original.transactions[0].0.clone();
+        copy.input[0].witness.push([0x42u8; 4]);
+        assert_eq!(copy.compute_txid(), original.transactions[0].compute_txid());
+        let copier = TestShareBlockBuilder::new()
+            .nonce(2)
+            .add_transaction(copy)
+            .build();
+
+        //* Store X, then try Y carrying the altered copy of X's coinbase
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&original, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+        let mut batch = Store::get_write_batch();
+        let result = store.add_share_block(&copier, &mut batch);
+        assert!(
+            matches!(
+                result,
+                Err(StoreError::CoinbaseAfterIndexZero { position: 1, .. })
+            ),
+            "unexpected: {result:?}"
+        );
+
+        //* X still rebuilds with its own coinbase witness
+        assert_eq!(
+            store
+                .get_share(&original.block_hash())
+                .unwrap()
+                .transactions,
+            original.transactions
+        );
+    }
+
+    /// The same holds for any transaction: Y carrying X's spending
+    /// transaction with another witness must not change X's copy of it.
+    #[test]
+    fn test_transaction_copy_with_other_witness_leaves_original_block_intact() {
+        let temp_dir = tempdir().unwrap();
+        let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
+        let source = TestShareBlockBuilder::new().nonce(1).build();
+        let spend = test_funding_transaction(coinbase_outpoint(&source), 1_000);
+        let mut copy = spend.clone();
+        copy.input[0].witness.push([0x42u8; 4]);
+        assert_eq!(copy.compute_txid(), spend.compute_txid());
+        let original = TestShareBlockBuilder::new()
+            .nonce(2)
+            .add_transaction(spend)
+            .build();
+        let copier = TestShareBlockBuilder::new()
+            .nonce(3)
+            .add_transaction(copy)
+            .build();
+
+        //* Store the source of the spend, then X, then Y carrying the altered copy
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&source, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&original, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+        let mut batch = Store::get_write_batch();
+        store.add_share_block(&copier, &mut batch).unwrap();
+        store.commit_batch(batch).unwrap();
+
+        //* X still rebuilds with its own witness, and Y with the altered one
+        assert_eq!(
+            store
+                .get_share(&original.block_hash())
+                .unwrap()
+                .transactions,
+            original.transactions
+        );
+        assert_eq!(
+            store.get_share(&copier.block_hash()).unwrap().transactions,
+            copier.transactions
+        );
     }
 
     #[test]

@@ -4,13 +4,15 @@
 
 use crate::connection::handle_connection;
 use crate::error::ElectrumServerError;
+use crate::tip::{TipSender, publish_tip, run_tip_watcher};
 use p2poolv2_lib::config::ElectrumConfig;
+use p2poolv2_lib::monitoring_events::MonitoringEventSender;
 use p2poolv2_lib::shares::chain::chain_store_handle::ChainStoreHandle;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{Semaphore, oneshot};
+use tokio::sync::{Semaphore, oneshot, watch};
 use tokio::task::{JoinError, JoinSet};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
@@ -30,31 +32,56 @@ const CONNECTION_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 /// Run one Electrum server instance until `shutdown` is cancelled or the
 /// listener fails.
 ///
-/// Binds `hostname:port` and, once bound, sends the actual local address on
-/// `ready_tx` (useful with port 0). Each accepted connection runs as its own
-/// task holding a permit from a `max_connections` semaphore; a connection
-/// over the cap is dropped. Returns `Ok(())` after shutdown, or an error if
-/// binding fails or accepting fails `MAX_CONSECUTIVE_ACCEPT_ERRORS` times in
-/// a row. In every case the listener is closed and all connection tasks have
-/// finished, or been aborted, before this returns.
+/// Binds `hostname:port`, publishes the first tip, and then sends the
+/// actual local address on `ready_tx` (useful with port 0). Each accepted
+/// connection runs as its own task holding a permit from a
+/// `max_connections` semaphore; a connection over the cap is dropped.
+/// Returns `Ok(())` after shutdown, or an error if binding fails, the first
+/// tip read fails, or accepting fails `MAX_CONSECUTIVE_ACCEPT_ERRORS` times
+/// in a row. In every case the listener is closed and all connection tasks
+/// have finished, or been aborted, before this returns.
+///
+/// The instance runs its own tip watcher on `monitoring_event_sender`, so
+/// a restarted instance starts from a fresh tip read. That first read is
+/// awaited before readiness is signalled and connections are accepted, so
+/// a subscribe to a current node never finds the channel still empty. If
+/// it fails the instance returns the error, and the supervisor retries
+/// with a fresh instance. Connections arriving during the read wait in
+/// the listen backlog. The
+/// watcher stops with the connections, and the tip sender is held until
+/// they have all finished.
 pub(crate) async fn run_server(
     config: &ElectrumConfig,
     chain_store_handle: &ChainStoreHandle,
+    monitoring_event_sender: &MonitoringEventSender,
     shutdown: CancellationToken,
     ready_tx: Option<oneshot::Sender<SocketAddr>>,
 ) -> Result<(), ElectrumServerError> {
     let (listener, local_address) = bind(config).await?;
+
+    // Publish the first tip before accepting. Subscribing to events first
+    // means a tip change during the read still wakes the watcher.
+    let connection_shutdown = shutdown.child_token();
+    let (tip_sender, _tip_receiver) = watch::channel(None);
+    let event_receiver = monitoring_event_sender.subscribe();
+    publish_tip(chain_store_handle, &tip_sender).await?;
+    let tip_watcher = tokio::spawn(run_tip_watcher(
+        chain_store_handle.clone(),
+        event_receiver,
+        tip_sender.clone(),
+        connection_shutdown.clone(),
+    ));
+
     info!("Electrum server listening on {local_address}");
     if let Some(ready_tx) = ready_tx {
         ready_tx.send(local_address).ok();
     }
-
-    let connection_shutdown = shutdown.child_token();
     let mut connections = JoinSet::new();
     let outcome = accept_loop(
         &listener,
         config.max_connections,
         chain_store_handle,
+        &tip_sender,
         &shutdown,
         &connection_shutdown,
         &mut connections,
@@ -64,6 +91,9 @@ pub(crate) async fn run_server(
     drop(listener);
     connection_shutdown.cancel();
     drain_connections(&mut connections).await;
+    if let Err(error) = tip_watcher.await {
+        error!("Electrum tip watcher failed: {error}");
+    }
     info!("Electrum server on {local_address} closed");
     outcome
 }
@@ -90,6 +120,7 @@ async fn accept_loop(
     listener: &TcpListener,
     max_connections: u32,
     chain_store_handle: &ChainStoreHandle,
+    tip_sender: &TipSender,
     shutdown: &CancellationToken,
     connection_shutdown: &CancellationToken,
     connections: &mut JoinSet<()>,
@@ -104,12 +135,13 @@ async fn accept_loop(
                 outcome = Some(Ok(()));
             }
             accepted = listener.accept() => match accepted {
-                Ok((stream, peer_address)) => {
+                Ok((stream, client_address)) => {
                     consecutive_accept_errors = 0;
                     accept_connection(
                         stream,
-                        peer_address,
+                        client_address,
                         chain_store_handle,
+                        tip_sender,
                         &connection_semaphore,
                         connection_shutdown,
                         connections,
@@ -138,26 +170,36 @@ async fn accept_loop(
 /// released when the connection closes.
 fn accept_connection(
     stream: TcpStream,
-    peer_address: SocketAddr,
+    client_address: SocketAddr,
     chain_store_handle: &ChainStoreHandle,
+    tip_sender: &TipSender,
     connection_semaphore: &Arc<Semaphore>,
     connection_shutdown: &CancellationToken,
     connections: &mut JoinSet<()>,
 ) {
     let Ok(permit) = connection_semaphore.clone().try_acquire_owned() else {
-        warn!("Electrum server at connection limit, rejecting {peer_address}");
+        warn!("Electrum server at connection limit, rejecting {client_address}");
         return;
     };
     if let Err(error) = stream.set_nodelay(true) {
-        debug!("Failed to set TCP_NODELAY for {peer_address}: {error}");
+        debug!("Failed to set TCP_NODELAY for {client_address}: {error}");
     }
-    debug!("Electrum connection from {peer_address}");
+    debug!("Electrum connection from {client_address}");
     let (reader, writer) = stream.into_split();
     let shutdown = connection_shutdown.clone();
     let chain_store_handle = chain_store_handle.clone();
+    let tip_receiver = tip_sender.subscribe();
     connections.spawn(async move {
         let _permit = permit;
-        handle_connection(reader, writer, peer_address, chain_store_handle, shutdown).await;
+        handle_connection(
+            reader,
+            writer,
+            client_address,
+            chain_store_handle,
+            tip_receiver,
+            shutdown,
+        )
+        .await;
     });
 }
 
@@ -191,7 +233,9 @@ fn log_connection_result(joined: Result<(), JoinError>) {
 mod tests {
     use super::*;
     use crate::connection::MAX_LINE_LENGTH;
-    use crate::test_utils::{TestClient, start_test_server, test_config};
+    use crate::test_utils::{TestClient, build_current_test_chain, start_test_server, test_config};
+    use crate::tip::read_tip;
+    use p2poolv2_lib::monitoring_events::create_monitoring_event_channel;
     use p2poolv2_lib::test_utils::setup_test_chain_store_handle;
     use serde_json::json;
     use std::net::TcpListener as StdTcpListener;
@@ -199,6 +243,27 @@ mod tests {
 
     const TEST_TIMEOUT: Duration = Duration::from_secs(5);
     const PING: &str = r#"{"jsonrpc":"2.0","id":1,"method":"server.ping","params":[]}"#;
+
+    /// Readiness is signalled only after the first tip is published, so a
+    /// subscribe sent the moment the server is ready already gets the tip
+    /// of a current node, not `NOT_SYNCED`.
+    #[tokio::test]
+    async fn subscribe_right_after_ready_returns_tip() {
+        let shutdown = CancellationToken::new();
+        let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(true).await;
+        build_current_test_chain(&chain_store_handle, 2).await;
+        let tip = read_tip(&chain_store_handle).unwrap();
+        let (address, _server) = start_test_server(chain_store_handle, shutdown.clone()).await;
+        let mut client = TestClient::connect(address).await;
+
+        assert_eq!(
+            client
+                .call(r#"{"jsonrpc":"2.0","id":2,"method":"blockchain.headers.subscribe","params":[]}"#)
+                .await,
+            json!({"jsonrpc": "2.0", "id": 2, "result": tip.to_json()})
+        );
+        shutdown.cancel();
+    }
 
     #[tokio::test]
     async fn ping_over_tcp_returns_null_result() {
@@ -246,10 +311,12 @@ mod tests {
         let (ready_tx, ready_rx) = oneshot::channel();
         let server_shutdown = shutdown.clone();
         let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(false).await;
+        let monitoring_event_sender = create_monitoring_event_channel();
         tokio::spawn(async move {
             run_server(
                 &config,
                 &chain_store_handle,
+                &monitoring_event_sender,
                 server_shutdown,
                 Some(ready_tx),
             )
@@ -296,7 +363,15 @@ mod tests {
         config.port = held.local_addr().unwrap().port();
 
         let (chain_store_handle, _store_dir) = setup_test_chain_store_handle(false).await;
-        let result = run_server(&config, &chain_store_handle, CancellationToken::new(), None).await;
+        let monitoring_event_sender = create_monitoring_event_channel();
+        let result = run_server(
+            &config,
+            &chain_store_handle,
+            &monitoring_event_sender,
+            CancellationToken::new(),
+            None,
+        )
+        .await;
 
         assert!(
             matches!(result, Err(ElectrumServerError::Bind { .. })),

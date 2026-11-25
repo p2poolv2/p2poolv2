@@ -1,0 +1,166 @@
+= P2Poolv2 Electrum Server
+
+An Electrum JSON-RPC server over plain TCP that serves share chain
+queries to the operator's own wallet. Use it only with your own fully
+synced node: a wallet trusts the node it connects to completely.
+
+== Configuration
+
+Enable it in the node config (`config-dev.toml` and
+`config-testnet4.toml` already do):
+
+[source,toml]
+----
+[electrum]
+enabled = true
+hostname = "127.0.0.1"
+port = 50001
+max_connections = 64
+----
+
+== Protocol
+
+Requests are newline-delimited JSON-RPC 2.0. Every request must carry
+`"jsonrpc":"2.0"`; JSON-RPC 1.0 is not supported. A request without an
+`id` is a notification and gets no response.
+
+`blockchain.*` methods answer only once the node is synced. Before that
+they return error `-32000`, whose `data` shows sync progress:
+`confirmed_tip_height`, `candidate_tip_height` and `tip_age_secs`.
+`server.*` methods always answer.
+
+`blockchain.scripthash.get_history` returns confirmed history only, and
+only for spendable depth (`p2pool.payout_depth` in `server.features`),
+so every synced node returns the same entries. Its optional second
+parameter `start_height` is a P2Poolv2 extension for paging:
+
+* Without `start_height`, the whole history is returned. A history
+  longer than one page (`p2pool.scripthash_history_page_size`, 10,000)
+  is error `10001`, "history too large".
+* With `start_height`, one page from that height is returned. A page
+  ends at a block boundary. Ask again from the last height plus one
+  until the result is `[]`.
+
+`blockchain.scripthash.subscribe [scripthash]` answers with the status
+of the script's history, or null when it is empty. The status is the
+standard Electrum one: the sha256 of `"tx_hash:height:"` joined over the
+whole history, in `get_history` order, as hex. It covers the whole
+history however long, so it never needs paging. A connection may hold
+at most 1,000 scripthash subscriptions; a subscribe to one more is error
+`10002`. `blockchain.scripthash.unsubscribe [scripthash]` answers true if
+the connection was subscribed, false if not.
+
+== Testing with nc
+
+These commands use OpenBSD netcat. GNU netcat has no `-q`, and its `-w`
+waits for the server to close, which this server never does; use
+`socat -t 1 - TCP:127.0.0.1:50001` in place of `nc -q 1 127.0.0.1 50001`
+instead.
+
+Check the protocol version. `-q 1` makes `nc` exit a second after the
+reply:
+
+[source,bash]
+----
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"server.version","params":["cli","1.4"]}' \
+  | nc -q 1 127.0.0.1 50001
+----
+
+Expected: `{"jsonrpc":"2.0","id":1,"result":["P2Poolv2 <version>","1.4"]}`.
+
+Subscribe to share chain tip changes. `cat` keeps stdin open, so the
+connection stays up and notifications keep arriving until Ctrl-C:
+
+[source,bash]
+----
+{ printf '%s\n' \
+    '{"jsonrpc":"2.0","id":1,"method":"server.version","params":["cli","1.4"]}' \
+    '{"jsonrpc":"2.0","id":2,"method":"blockchain.headers.subscribe","params":[]}'; \
+  cat; } | nc 127.0.0.1 50001
+----
+
+The subscribe answers with the confirmed tip:
+
+----
+{"jsonrpc":"2.0","id":2,"result":{"height":<tip>,"hex":"<share header hex>"}}
+----
+
+Each later tip change is pushed as a notification, without an `id`:
+
+----
+{"jsonrpc":"2.0","method":"blockchain.headers.subscribe","params":[{"height":<new tip>,"hex":"..."}]}
+----
+
+Notifications pause while the node is not current (confirmed tip older
+than 300 seconds) and resume with the latest tip once it catches up.
+
+Fetch the header at a height, to compare with a subscribe result. The
+hex is a consensus-encoded `ShareHeader`, not an 80-byte bitcoin header:
+
+[source,bash]
+----
+printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"blockchain.block.header","params":[<height>]}' \
+  | nc -q 1 127.0.0.1 50001
+----
+
+Pretty-print a live subscription with `jq`; `--unbuffered` shows each
+notification as it arrives:
+
+[source,bash]
+----
+{ printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"blockchain.headers.subscribe","params":[]}'; cat; } \
+  | nc 127.0.0.1 50001 | jq --unbuffered .
+----
+
+Fetch the history of a script. The scripthash is the sha256 of the
+script, in reversed byte order, as hex. Take a script from
+`scriptPubKey.hex` in a verbose `blockchain.transaction.get` result:
+
+[source,bash]
+----
+SCRIPTHASH=$(printf '%s' '<script hex>' | xxd -r -p | sha256sum | cut -d' ' -f1 \
+  | fold -w2 | tac | tr -d '\n')
+printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"blockchain.scripthash.get_history\",\"params\":[\"$SCRIPTHASH\"]}" \
+  | nc -q 1 127.0.0.1 50001
+----
+
+Expected: `{"jsonrpc":"2.0","id":4,"result":[{"height":<h>,"tx_hash":"<txid>"},...]}`.
+Each `tx_hash` can be fetched with `blockchain.transaction.get`.
+
+Page through a long history by passing `start_height`, starting at 0:
+
+[source,bash]
+----
+printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"blockchain.scripthash.get_history\",\"params\":[\"$SCRIPTHASH\",0]}" \
+  | nc -q 1 127.0.0.1 50001
+----
+
+Repeat with the last height in the result plus one until the result is
+`[]`.
+
+Subscribe to a script. The answer is its status, and each confirmed share
+that changes its history pushes the new status:
+
+[source,bash]
+----
+{ printf '%s\n' "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"blockchain.scripthash.subscribe\",\"params\":[\"$SCRIPTHASH\"]}"; \
+  cat; } | nc 127.0.0.1 50001
+----
+
+----
+{"jsonrpc":"2.0","id":6,"result":"<status>"}
+{"jsonrpc":"2.0","method":"blockchain.scripthash.subscribe","params":["<scripthash>","<new status>"]}
+----
+
+The status changes when a share pays or spends the script, when a reorg
+removes one, and when an old entry leaves the history window. Statuses
+are checked on each new confirmed tip, so an entry that leaves the window
+while only the candidate tip moved is reported with the next confirmed
+tip.
+
+For an interactive session, type one request per line:
+
+[source,bash]
+----
+socat - TCP:127.0.0.1:50001
+----

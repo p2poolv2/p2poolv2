@@ -3,15 +3,18 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Debug tool that traverses the entire confirmed chain in a store.db
-//! and verifies structural integrity of all blocks.
+//! and verifies structural integrity of all blocks, and that the script
+//! history index holds every coinbase output inside the history window.
 //!
 //! Usage: verify_chain <path-to-store.db>
 
 use bitcoin::BlockHash;
 use bitcoin::hashes::Hash;
+use p2poolv2_lib::shares::share_block::ShareBlock;
 use p2poolv2_lib::shares::validation::MAX_UNCLES;
 use p2poolv2_lib::store::Store;
 use p2poolv2_lib::store::block_tx_metadata::ChainMembership;
+use p2poolv2_lib::store::script_history::script_hash;
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::process;
@@ -56,6 +59,45 @@ fn is_uncle_ancestor_type(
     (0..nephew_height).any(|height| confirmed_hashes.get(&height) == Some(uncle_parent))
 }
 
+/// Check that the script history index has a row at `height` for the
+/// coinbase txid under the scripthash of every coinbase output except
+/// `OP_RETURN`. One row per page is enough to read: a page always runs to
+/// the end of a height, so it holds every row at `height` when the script
+/// has any.
+fn check_coinbase_script_history(
+    store: &Store,
+    height: u32,
+    share_block: &ShareBlock,
+    summary: &mut VerificationSummary,
+) {
+    let blockhash = share_block.block_hash();
+    let coinbase = &share_block.transactions[0].0;
+    let coinbase_txid = coinbase.compute_txid();
+    for (index, output) in coinbase.output.iter().enumerate() {
+        if !output.script_pubkey.is_op_return() {
+            let scripthash = script_hash(&output.script_pubkey);
+            match store.get_script_history(&scripthash, height, 1) {
+                Ok(page) => {
+                    let indexed = page
+                        .entries
+                        .iter()
+                        .any(|entry| entry.height == height && entry.txid == coinbase_txid);
+                    if !indexed {
+                        summary.error(format!(
+                            "h:{height} {blockhash} - coinbase {coinbase_txid} output {index} missing from script history"
+                        ));
+                    }
+                }
+                Err(error) => {
+                    summary.error(format!(
+                        "h:{height} {blockhash} - error reading script history for coinbase output {index}: {error}"
+                    ));
+                }
+            }
+        }
+    }
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() != 2 {
@@ -91,6 +133,17 @@ fn main() {
         }
     };
     println!("Prune boundary: {prune_boundary} (blocks at or above this must have full data)");
+
+    let history_start = match store.history_start() {
+        Ok(height) => height,
+        Err(error) => {
+            eprintln!("Failed to read script history start: {error}");
+            process::exit(1);
+        }
+    };
+    println!(
+        "Script history start: {history_start} (coinbase outputs at or above this must be indexed)"
+    );
 
     let mut summary = VerificationSummary::new();
 
@@ -163,6 +216,8 @@ fn main() {
                         summary.error(format!(
                             "h:{height} {blockhash} - share has zero transactions (expected at least coinbase)"
                         ));
+                    } else if height >= history_start {
+                        check_coinbase_script_history(&store, height, share_block, &mut summary);
                     }
                 }
                 None => {

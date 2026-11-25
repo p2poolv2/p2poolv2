@@ -996,7 +996,7 @@ mod tests {
             .returning(move |_| body_exists);
 
         let (_organise_tx, organise_rx) = create_organise_channel();
-        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let monitoring_tx = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         OrganiseWorker::new(
             organise_rx,
@@ -1113,7 +1113,7 @@ mod tests {
         mock_chain_handle
             .expect_mark_block_valid()
             .returning(|_| Ok(()));
-        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let monitoring_tx = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let worker = OrganiseWorker::new(
             organise_rx,
@@ -1176,7 +1176,7 @@ mod tests {
             .expect_promote_block()
             .returning(|_| Ok(None));
 
-        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let monitoring_tx = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let worker = OrganiseWorker::new(
             organise_rx,
@@ -1259,7 +1259,7 @@ mod tests {
         mock_validator.expect_validate_with_chain_context().never();
         let share_validator: Arc<dyn ShareValidator + Send + Sync> = Arc::new(mock_validator);
 
-        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let monitoring_tx = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let worker = OrganiseWorker::new(
             organise_rx,
@@ -1334,7 +1334,7 @@ mod tests {
             .expect_organise_block()
             .returning(|| Ok(None));
 
-        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let monitoring_tx = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let worker = OrganiseWorker::new(
             organise_rx,
@@ -1421,7 +1421,7 @@ mod tests {
             .returning(|_, _, _| Err(ValidationError::consensus("rejected for test")));
         let share_validator: Arc<dyn ShareValidator + Send + Sync> = Arc::new(mock_validator);
 
-        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let monitoring_tx = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let worker = OrganiseWorker::new(
             organise_rx,
@@ -1491,7 +1491,7 @@ mod tests {
         mock_validator.expect_validate_with_chain_context().never();
         let share_validator: Arc<dyn ShareValidator + Send + Sync> = Arc::new(mock_validator);
 
-        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let monitoring_tx = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let worker = OrganiseWorker::new(
             organise_rx,
@@ -1553,7 +1553,7 @@ mod tests {
             .expect_promote_block()
             .returning(|_| Err(StoreError::ChannelClosed));
 
-        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let monitoring_tx = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let worker = OrganiseWorker::new(
             organise_rx,
@@ -1619,7 +1619,7 @@ mod tests {
             .expect_promote_block()
             .returning(|_| Err(StoreError::Database("test error".to_string())));
 
-        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let monitoring_tx = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let worker = OrganiseWorker::new(
             rx,
@@ -1689,7 +1689,7 @@ mod tests {
             .expect_get_uncle_infos()
             .returning(|_| Vec::new());
 
-        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let monitoring_tx = create_monitoring_event_channel();
         let (notify_tx, mut notify_rx) = create_test_notify_channel();
         let worker = OrganiseWorker::new(
             organise_rx,
@@ -1765,7 +1765,7 @@ mod tests {
             .expect_get_uncle_infos()
             .returning(|_| Vec::new());
 
-        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let monitoring_tx = create_monitoring_event_channel();
         let (notify_tx, mut notify_rx) = create_test_notify_channel();
         let worker = OrganiseWorker::new(
             organise_rx,
@@ -1835,7 +1835,7 @@ mod tests {
             .expect_organise_block()
             .returning(|| Ok(None));
 
-        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let monitoring_tx = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let worker = OrganiseWorker::new(
             organise_rx,
@@ -1904,7 +1904,7 @@ mod tests {
             .expect_get_uncle_infos()
             .returning(|_| Vec::new());
 
-        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let monitoring_tx = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let worker = OrganiseWorker::new(
             organise_rx,
@@ -1998,7 +1998,8 @@ mod tests {
             .expect_get_uncle_infos()
             .returning(|_| Vec::new());
 
-        let (monitoring_tx, mut monitoring_rx) = create_monitoring_event_channel();
+        let monitoring_tx = create_monitoring_event_channel();
+        let mut monitoring_rx = monitoring_tx.subscribe();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let mut worker = OrganiseWorker::new(
             organise_rx,
@@ -2085,7 +2086,7 @@ mod tests {
             .expect_get_uncle_infos()
             .returning(|_| Vec::new());
 
-        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let monitoring_tx = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         // Hold a metrics handle so we can inspect it after the worker runs.
         let metrics = create_test_metrics_handle();
@@ -2169,7 +2170,7 @@ mod tests {
             .expect_get_uncle_infos()
             .returning(|_| Vec::new());
 
-        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let monitoring_tx = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let metrics = create_test_metrics_handle();
         let worker = OrganiseWorker::new(
@@ -2268,7 +2269,7 @@ mod tests {
             .expect_get_uncle_infos()
             .returning(|_| Vec::new());
 
-        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let monitoring_tx = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let worker = OrganiseWorker::new(
             organise_rx,
@@ -2375,7 +2376,7 @@ mod tests {
                 }
             });
 
-        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let monitoring_tx = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let mut worker = OrganiseWorker::new(
             organise_rx,
@@ -2451,7 +2452,7 @@ mod tests {
                 })
             });
 
-        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let monitoring_tx = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let mut worker = OrganiseWorker::new(
             organise_rx,
@@ -2525,7 +2526,7 @@ mod tests {
             .expect_promote_block()
             .returning(|_| Err(StoreError::Database("transient".to_string())));
 
-        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let monitoring_tx = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let mut worker = OrganiseWorker::new(
             organise_rx,
@@ -2590,7 +2591,7 @@ mod tests {
             .returning(|_| Ok(None));
 
         let (_organise_tx, organise_rx) = create_organise_channel();
-        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let monitoring_tx = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         OrganiseWorker::new(
             organise_rx,
@@ -2698,7 +2699,7 @@ mod tests {
             .expect_validate_with_chain_context()
             .returning(|_, _, _| Err(ValidationError::consensus("rejected for test")));
 
-        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let monitoring_tx = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let mut worker = OrganiseWorker::new(
             organise_rx,
@@ -2751,7 +2752,7 @@ mod tests {
             .returning(|_| Err(StoreError::Database("transient".to_string())));
         mock_chain_handle.expect_organise_block().never();
 
-        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let monitoring_tx = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let mut worker = OrganiseWorker::new(
             organise_rx,
@@ -2793,7 +2794,7 @@ mod tests {
             .returning(|_| Err(StoreError::ChannelClosed));
         mock_chain_handle.expect_organise_block().never();
 
-        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let monitoring_tx = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let mut worker = OrganiseWorker::new(
             organise_rx,
@@ -2866,7 +2867,7 @@ mod tests {
                 ))
             });
 
-        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let monitoring_tx = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let mut worker = OrganiseWorker::new(
             organise_rx,
@@ -2929,7 +2930,7 @@ mod tests {
         });
         mock_chain_handle.expect_promote_block().never();
 
-        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let monitoring_tx = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let mut worker = OrganiseWorker::new(
             organise_rx,
@@ -3004,7 +3005,7 @@ mod tests {
             .expect_get_uncle_infos()
             .returning(|_| Vec::new());
 
-        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let monitoring_tx = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let mut worker = OrganiseWorker::new(
             organise_rx,
@@ -3139,7 +3140,7 @@ mod tests {
             .expect_get_tip_height()
             .returning(|| Ok(Some(2)));
 
-        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let monitoring_tx = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let worker = OrganiseWorker::new(
             organise_rx,
@@ -3262,7 +3263,7 @@ mod tests {
             .expect_promote_block()
             .returning(|_| Ok(None));
 
-        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let monitoring_tx = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let mut worker = OrganiseWorker::new(
             organise_rx,
@@ -3337,7 +3338,7 @@ mod tests {
             .returning(|_, _, _| Err(ValidationError::store_access("store read failed")));
         let share_validator: Arc<dyn ShareValidator + Send + Sync> = Arc::new(mock_validator);
 
-        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let monitoring_tx = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let worker = OrganiseWorker::new(
             organise_rx,
@@ -3400,7 +3401,7 @@ mod tests {
         mock_chain_handle.expect_is_current().returning(|| false);
 
         let (_organise_tx, organise_rx) = create_organise_channel();
-        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let monitoring_tx = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let (validation_tx, mut validation_rx) = create_validation_channel();
         let mut worker = OrganiseWorker::new(
@@ -3464,7 +3465,7 @@ mod tests {
             .returning(|_| false);
 
         let (_organise_tx, organise_rx) = create_organise_channel();
-        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let monitoring_tx = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let (validation_tx, mut validation_rx) = create_validation_channel();
         let mut worker = OrganiseWorker::new(
@@ -3523,7 +3524,7 @@ mod tests {
             });
 
         let (organise_tx, organise_rx) = create_organise_channel();
-        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let monitoring_tx = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let (validation_tx, mut validation_rx) = create_validation_channel();
         let worker = OrganiseWorker::new(
@@ -3567,7 +3568,7 @@ mod tests {
             .returning(|| Err(StoreError::Database("simulated read failure".to_string())));
 
         let (_organise_tx, organise_rx) = create_organise_channel();
-        let (monitoring_tx, _monitoring_rx) = create_monitoring_event_channel();
+        let monitoring_tx = create_monitoring_event_channel();
         let (notify_tx, _notify_rx) = create_test_notify_channel();
         let worker = OrganiseWorker::new(
             organise_rx,

@@ -89,6 +89,9 @@ pub trait PayoutDistribution {
     }
 }
 
+/// Maximum donation or fee cut, in basis points (100%).
+pub(crate) const MAX_CUT_BASIS_POINTS: u16 = 10_000;
+
 /// Appends new output pair to distribution and returns remaining amount
 pub(crate) fn include_address_and_cut(
     distribution: &mut Vec<OutputPair>,
@@ -96,15 +99,29 @@ pub(crate) fn include_address_and_cut(
     address: &Option<Address>,
     cut: Option<u16>, // in basis points
 ) -> Amount {
-    const BASIS_POINT_FACTOR: u64 = 10_000; // 100 * 100
+    const BASIS_POINT_FACTOR: u64 = MAX_CUT_BASIS_POINTS as u64; // 100 * 100
+
+    // An over-100% cut would make the payout subtraction underflow. Ignore it
+    // here as well as rejecting it during header validation, so every caller
+    // remains panic-free.
+    if let Some(cut_bp) = cut.filter(|c| *c > MAX_CUT_BASIS_POINTS) {
+        tracing::warn!("Ignoring cut of {cut_bp} basis points; maximum is {MAX_CUT_BASIS_POINTS}");
+        return total_amount;
+    }
+
     if let (Some(addr), Some(cut_bp)) = (address.as_ref(), cut.filter(|c| *c > 0)) {
         if let Some(amount) = total_amount.checked_mul(cut_bp.into()) {
             if let Some(div_amount) = amount.checked_div(BASIS_POINT_FACTOR) {
-                distribution.push(OutputPair {
-                    address: addr.clone(),
-                    amount: div_amount,
-                });
-                return total_amount - div_amount;
+                if let Some(remaining) = total_amount.checked_sub(div_amount) {
+                    distribution.push(OutputPair {
+                        address: addr.clone(),
+                        amount: div_amount,
+                    });
+                    return remaining;
+                }
+                tracing::warn!(
+                    "checked_sub failed for total_amount: {total_amount:?}, div_amount: {div_amount:?}"
+                );
             } else {
                 tracing::warn!("checked_div failed for amount: {amount:?}");
             }
@@ -243,6 +260,42 @@ mod tests {
                 .all(|address| address == first_remainder),
             "remainder should always go to the same address across runs"
         );
+    }
+
+    #[test]
+    fn test_include_address_and_cut_ignores_cuts_above_maximum() {
+        let address = Some(parse_address_from_string(
+            "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq",
+        ));
+        let total_amount = Amount::from_sat(100_000_000);
+
+        for cut in [10_001, u16::MAX] {
+            let mut distribution = Vec::new();
+            let remaining =
+                include_address_and_cut(&mut distribution, total_amount, &address, Some(cut));
+
+            assert_eq!(remaining, total_amount);
+            assert!(distribution.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_include_address_and_cut_allows_one_hundred_percent() {
+        let address = parse_address_from_string("bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq");
+        let total_amount = Amount::from_sat(100_000_000);
+        let mut distribution = Vec::new();
+
+        let remaining = include_address_and_cut(
+            &mut distribution,
+            total_amount,
+            &Some(address.clone()),
+            Some(10_000),
+        );
+
+        assert_eq!(remaining, Amount::ZERO);
+        assert_eq!(distribution.len(), 1);
+        assert_eq!(distribution[0].address, address);
+        assert_eq!(distribution[0].amount, total_amount);
     }
 }
 

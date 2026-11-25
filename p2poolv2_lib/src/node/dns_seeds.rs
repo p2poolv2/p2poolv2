@@ -13,6 +13,7 @@
 //! whether a peer is on our network.
 
 use super::{SwarmSend, address_filter};
+use crate::config::Chain;
 use libp2p::Multiaddr;
 use libp2p::multiaddr::Protocol;
 use std::collections::HashSet;
@@ -40,6 +41,16 @@ const TESTNET4_P2P_PORT: u16 = 46884;
 /// Seed hostnames for testnet4.
 const TESTNET4_SEED_HOSTNAMES: &[&str] = &["seed.testnet4.p2poolv2.org"];
 
+/// P2P port testnet5 nodes listen on. Differs from testnet4 so both can
+/// run on one host.
+const TESTNET5_P2P_PORT: u16 = 56886;
+
+/// Seed hostnames for testnet5.
+const TESTNET5_SEED_HOSTNAMES: &[&str] = &[
+    "seed.testnet5.p2poolv2.org",
+    "seed.p2pool.testnet5.roose.io",
+];
+
 /// The DNS seeds for one network and the port their nodes listen on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct DnsSeeds {
@@ -47,17 +58,21 @@ pub(crate) struct DnsSeeds {
     pub(crate) port: u16,
 }
 
-/// Returns the built-in DNS seeds for a bitcoin network, or None when the
-/// network has no seeds.
+/// Returns the built-in DNS seeds for a chain, or None when the chain has
+/// no seeds.
 ///
 /// For use cases where people run multiple p2poolv2 networks for a
 /// single bitcoin network, they should use dial_peers and set
 /// dns_seed to false in their configs.
-pub(crate) fn dns_seeds_for_network(network: bitcoin::Network) -> Option<DnsSeeds> {
-    match network {
-        bitcoin::Network::Testnet4 => Some(DnsSeeds {
+pub(crate) fn dns_seeds_for_network(chain: Chain) -> Option<DnsSeeds> {
+    match chain {
+        Chain::Testnet4 => Some(DnsSeeds {
             hostnames: TESTNET4_SEED_HOSTNAMES,
             port: TESTNET4_P2P_PORT,
+        }),
+        Chain::Testnet5 => Some(DnsSeeds {
+            hostnames: TESTNET5_SEED_HOSTNAMES,
+            port: TESTNET5_P2P_PORT,
         }),
         _ => None,
     }
@@ -107,6 +122,12 @@ pub(crate) async fn resolve_dns_seeds(seeds: DnsSeeds) -> HashSet<Multiaddr> {
 /// Resolves one seed hostname through the system resolver and returns at
 /// most MAX_ADDRESSES_PER_SEED routable addresses on `port`. Duplicates are
 /// left to the caller, which merges every seed's addresses into one set.
+///
+/// Seeds are resolved here with getaddrinfo, not dialed as `/dns` addresses
+/// through the libp2p DNS transport (hickory) that dial_peers use: a `/dns`
+/// dial stops at the first IP that connects, while a seed must yield every
+/// A record so the node can connect to many peers. The two resolvers can
+/// disagree on names that only nsswitch knows (mDNS, NSS plugins).
 async fn resolve_dns_seed(hostname: &str, port: u16) -> Vec<Multiaddr> {
     let lookup = timeout(
         Duration::from_secs(DNS_SEED_LOOKUP_TIMEOUT_SECS),
@@ -211,13 +232,29 @@ mod tests {
 
     #[test]
     fn dns_seeds_for_network_testnet4_has_seeds() {
-        let seeds = dns_seeds_for_network(bitcoin::Network::Testnet4).unwrap();
+        let seeds = dns_seeds_for_network(Chain::Testnet4).unwrap();
         assert!(!seeds.hostnames.is_empty());
         assert_eq!(seeds.port, TESTNET4_P2P_PORT);
     }
 
     #[test]
     fn dns_seeds_for_network_signet_is_none() {
-        assert_eq!(dns_seeds_for_network(bitcoin::Network::Signet), None);
+        assert_eq!(dns_seeds_for_network(Chain::Signet), None);
+    }
+
+    /// Testnet5 has its own share chain, so it uses its own seeds rather
+    /// than testnet4's.
+    #[test]
+    fn dns_seeds_for_network_testnet5_has_its_own_seeds() {
+        let seeds = dns_seeds_for_network(Chain::Testnet5).unwrap();
+        assert_eq!(
+            seeds.hostnames,
+            &[
+                "seed.testnet5.p2poolv2.org",
+                "seed.p2pool.testnet5.roose.io"
+            ]
+        );
+        assert_eq!(seeds.port, TESTNET5_P2P_PORT);
+        assert_ne!(seeds, dns_seeds_for_network(Chain::Testnet4).unwrap());
     }
 }

@@ -445,7 +445,7 @@ except Exception:
 
 # Convergence is checked against the actual store state, not the logs. Reorgs
 # resolve transient forks, but reorg_confirmed does not emit per-block
-# "Promoted ... Some(H)" lines, so a log-based check reads stale pre-reorg
+# "Promoted ... height H:" lines, so a log-based check reads stale pre-reorg
 # hashes and reports false divergence. Compare the confirmed block hash two
 # heights below the shallowest tip (a height every node has confirmed) across
 # all stores; converged iff all stores agree and are within 2 of the deepest

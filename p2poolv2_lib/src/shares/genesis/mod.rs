@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+use crate::config::Chain;
 use std::error::Error;
 
 /// Genesis block data captures the first block in the share chain
@@ -44,6 +45,16 @@ const TESTNET4_GENESIS_DATA: GenesisData = GenesisData {
     timestamp: 1792472400, // 10-20-2026T0500
 };
 
+// Testnet5 block at height 35, hash
+// 00000000000002bd0196f81f7b58c99cb72b2e4b4720bb24dc98c2a47ae3b3b8,
+// from the lapis.erisian.com.au testnet5 bootstrap chain.
+const TESTNET5_GENESIS_DATA: GenesisData = GenesisData {
+    public_key: "02ac493f2130ca56cb5c3a559860cef9a84f90b5a85dfe4ec6e6067eeee17f4d2d",
+    bitcoin_block: include_bytes!("testnet5.dat"),
+    bitcoin_height: 35,
+    timestamp: 1794634644, // 11-14-2026T0537
+};
+
 // Mainnet block hash 000000000000000000006fa29653a523d531657ad20d6f946d0fef88c97cd935,
 // mined on previousblockhash 00000000000000000001414ee2ca686bd8dc13a40f02d94ff96cb1279dac64aa.
 const MAINNET_GENESIS_DATA: GenesisData = GenesisData {
@@ -64,14 +75,15 @@ const REGTEST_GENESIS_DATA: GenesisData = GenesisData {
     timestamp: 1776855600,
 };
 
-/// Get the genesis data for a given network
-pub fn genesis_data(network: bitcoin::Network) -> Result<GenesisData, Box<dyn Error>> {
-    match network {
-        bitcoin::Network::Signet => Ok(SIGNET_GENESIS_DATA),
-        bitcoin::Network::Testnet4 => Ok(TESTNET4_GENESIS_DATA),
-        bitcoin::Network::Bitcoin => Ok(MAINNET_GENESIS_DATA),
-        bitcoin::Network::Regtest => Ok(REGTEST_GENESIS_DATA),
-        _ => Err("Unsupported network".into()),
+/// Get the genesis data for a given chain
+pub fn genesis_data(chain: Chain) -> Result<GenesisData, Box<dyn Error>> {
+    match chain {
+        Chain::Signet => Ok(SIGNET_GENESIS_DATA),
+        Chain::Testnet4 => Ok(TESTNET4_GENESIS_DATA),
+        Chain::Testnet5 => Ok(TESTNET5_GENESIS_DATA),
+        Chain::Main => Ok(MAINNET_GENESIS_DATA),
+        Chain::Regtest => Ok(REGTEST_GENESIS_DATA),
+        Chain::Testnet3 => Err("Unsupported chain".into()),
     }
 }
 
@@ -84,7 +96,7 @@ mod tests {
 
     #[test]
     fn test_signet_genesis_block_hash() {
-        let genesis = genesis_data(bitcoin::Network::Signet).unwrap();
+        let genesis = genesis_data(Chain::Signet).unwrap();
         let block = deserialize::<Block>(genesis.bitcoin_block).unwrap();
 
         assert_eq!(
@@ -97,7 +109,7 @@ mod tests {
 
     #[test]
     fn test_testnet4_genesis_block_hash() {
-        let genesis = genesis_data(bitcoin::Network::Testnet4).unwrap();
+        let genesis = genesis_data(Chain::Testnet4).unwrap();
         let block = deserialize::<Block>(genesis.bitcoin_block).unwrap();
 
         assert_eq!(
@@ -110,8 +122,27 @@ mod tests {
     }
 
     #[test]
+    fn test_testnet5_genesis_block_hash() {
+        let genesis = genesis_data(Chain::Testnet5).unwrap();
+        let block = deserialize::<Block>(genesis.bitcoin_block).unwrap();
+
+        assert_eq!(
+            block.block_hash(),
+            BlockHash::from_str("00000000000002bd0196f81f7b58c99cb72b2e4b4720bb24dc98c2a47ae3b3b8")
+                .unwrap()
+        );
+        assert!(block.check_merkle_root());
+        assert_eq!(genesis.bitcoin_height, 35);
+    }
+
+    #[test]
+    fn test_testnet3_has_no_genesis() {
+        assert!(genesis_data(Chain::Testnet3).is_err());
+    }
+
+    #[test]
     fn test_mainnet_genesis_block_hash() {
-        let genesis = genesis_data(bitcoin::Network::Bitcoin).unwrap();
+        let genesis = genesis_data(Chain::Main).unwrap();
         let block = deserialize::<Block>(genesis.bitcoin_block).unwrap();
 
         assert_eq!(
@@ -124,7 +155,7 @@ mod tests {
 
     #[test]
     fn test_regtest_genesis_block_hash() {
-        let genesis = genesis_data(bitcoin::Network::Regtest).unwrap();
+        let genesis = genesis_data(Chain::Regtest).unwrap();
         let block = deserialize::<Block>(genesis.bitcoin_block).unwrap();
 
         assert_eq!(

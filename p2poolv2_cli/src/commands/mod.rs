@@ -153,6 +153,8 @@ pub enum Commands {
 pub enum DbCommands {
     /// Clean up dense heights by invalidating excess HeaderValid blocks
     CleanupDenseHeights,
+    /// Print the store's schema version and the version this binary uses
+    Version,
 }
 
 #[derive(Subcommand, Debug)]
@@ -233,7 +235,7 @@ pub async fn run() -> Result<(), Box<dyn Error>> {
                 // documented as not required here.
                 let network = match &cli.config {
                     Some(config_path) if Path::new(config_path).exists() => {
-                        Some(Config::load(config_path)?.stratum.network)
+                        Some(Config::load(config_path)?.stratum.network())
                     }
                     _ => None,
                 };

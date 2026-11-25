@@ -24,12 +24,18 @@ pub(crate) const INTERNAL_ERROR: i64 = -32603;
 /// Server error (JSON-RPC 2.0 reserves -32000 to -32099 for these): the
 /// node is still syncing, so chain data would be partial
 pub(crate) const NOT_SYNCED: i64 = -32000;
+/// Electrum server error: a script's history is larger than one page and
+/// the request did not ask for pages with `start_height`
+pub(crate) const HISTORY_TOO_LARGE: i64 = 10001;
+/// Electrum server error: the session already holds the most scripthash
+/// subscriptions it may, and the request was for a new one
+pub(crate) const TOO_MANY_SUBSCRIPTIONS: i64 = 10002;
 
 /// Largest batch request answered. Larger batches get a single
 /// invalid request error rather than a truncated answer.
 pub(crate) const MAX_BATCH_SIZE: usize = 100;
 
-const JSONRPC_VERSION: &str = "2.0";
+pub(crate) const JSONRPC_VERSION: &str = "2.0";
 
 /// A JSON-RPC error object, with the optional `data` member for
 /// structured detail.
@@ -63,13 +69,15 @@ impl RpcError {
 /// notifications. A parse failure or an invalid request is answered with
 /// an error object, never by closing the connection. The envelope layer
 /// knows no methods: `dispatch` maps a method name and params to a result.
-pub(crate) fn handle_line<D>(line: &str, dispatch: &D) -> Option<Value>
+/// It is called once per request, in order, so it may keep state across
+/// the requests of a batch.
+pub(crate) fn handle_line<D>(line: &str, mut dispatch: D) -> Option<Value>
 where
-    D: Fn(&str, &Value) -> Result<Value, RpcError>,
+    D: FnMut(&str, &Value) -> Result<Value, RpcError>,
 {
     match serde_json::from_str::<Value>(line) {
-        Ok(Value::Array(requests)) => handle_batch(requests, dispatch),
-        Ok(request) => handle_request(request, dispatch),
+        Ok(Value::Array(requests)) => handle_batch(requests, &mut dispatch),
+        Ok(request) => handle_request(request, &mut dispatch),
         Err(error) => Some(error_message(
             Value::Null,
             RpcError::new(PARSE_ERROR, format!("parse error: {error}")),
@@ -80,9 +88,9 @@ where
 /// Answer each request of a batch in order, as an array of responses.
 /// Notifications contribute no entry; a batch of only notifications gets
 /// no response at all.
-fn handle_batch<D>(requests: Vec<Value>, dispatch: &D) -> Option<Value>
+fn handle_batch<D>(requests: Vec<Value>, dispatch: &mut D) -> Option<Value>
 where
-    D: Fn(&str, &Value) -> Result<Value, RpcError>,
+    D: FnMut(&str, &Value) -> Result<Value, RpcError>,
 {
     if requests.is_empty() {
         return Some(error_message(
@@ -115,9 +123,9 @@ where
 /// An invalid request is always answered, with a null id when its id is
 /// absent or not a string, number or null. A valid request without an id
 /// is a notification: it runs but gets no response.
-fn handle_request<D>(request: Value, dispatch: &D) -> Option<Value>
+fn handle_request<D>(request: Value, dispatch: &mut D) -> Option<Value>
 where
-    D: Fn(&str, &Value) -> Result<Value, RpcError>,
+    D: FnMut(&str, &Value) -> Result<Value, RpcError>,
 {
     let Value::Object(fields) = request else {
         return Some(error_message(
@@ -193,7 +201,7 @@ mod tests {
     fn ping_returns_null_result() {
         let response = handle_line(
             r#"{"jsonrpc":"2.0","id":1,"method":"server.ping","params":[]}"#,
-            &ping_only_dispatch,
+            ping_only_dispatch,
         );
         assert_eq!(
             response,
@@ -205,7 +213,7 @@ mod tests {
     fn string_id_is_echoed() {
         let response = handle_line(
             r#"{"jsonrpc":"2.0","id":"a","method":"server.ping"}"#,
-            &ping_only_dispatch,
+            ping_only_dispatch,
         );
         assert_eq!(
             response,
@@ -217,7 +225,7 @@ mod tests {
     fn unknown_method_returns_method_not_found_without_result() {
         let response = handle_line(
             r#"{"jsonrpc":"2.0","id":4,"method":"blockchain.scripthash.get_balance","params":[]}"#,
-            &ping_only_dispatch,
+            ping_only_dispatch,
         )
         .unwrap();
         assert_eq!(response["id"], json!(4));
@@ -227,7 +235,7 @@ mod tests {
 
     #[test]
     fn invalid_json_returns_parse_error_with_null_id() {
-        let response = handle_line("{not json", &ping_only_dispatch).unwrap();
+        let response = handle_line("{not json", ping_only_dispatch).unwrap();
         assert_eq!(response["id"], Value::Null);
         assert_eq!(response["error"]["code"], json!(PARSE_ERROR));
     }
@@ -236,7 +244,7 @@ mod tests {
     fn request_without_jsonrpc_member_is_invalid() {
         let response = handle_line(
             r#"{"id":5,"method":"server.ping","params":[]}"#,
-            &ping_only_dispatch,
+            ping_only_dispatch,
         )
         .unwrap();
         assert_eq!(response["id"], json!(5));
@@ -247,7 +255,7 @@ mod tests {
     fn request_with_jsonrpc_1_0_is_invalid() {
         let response = handle_line(
             r#"{"jsonrpc":"1.0","id":6,"method":"server.ping","params":[]}"#,
-            &ping_only_dispatch,
+            ping_only_dispatch,
         )
         .unwrap();
         assert_eq!(response["id"], json!(6));
@@ -258,7 +266,7 @@ mod tests {
     fn request_without_method_is_invalid() {
         let response = handle_line(
             r#"{"jsonrpc":"2.0","id":7,"params":[]}"#,
-            &ping_only_dispatch,
+            ping_only_dispatch,
         )
         .unwrap();
         assert_eq!(response["id"], json!(7));
@@ -269,7 +277,7 @@ mod tests {
     fn scalar_params_are_invalid() {
         let response = handle_line(
             r#"{"jsonrpc":"2.0","id":8,"method":"server.ping","params":1}"#,
-            &ping_only_dispatch,
+            ping_only_dispatch,
         )
         .unwrap();
         assert_eq!(response["id"], json!(8));
@@ -280,7 +288,7 @@ mod tests {
     fn object_id_is_invalid_and_answered_with_null_id() {
         let response = handle_line(
             r#"{"jsonrpc":"2.0","id":{"a":1},"method":"server.ping"}"#,
-            &ping_only_dispatch,
+            ping_only_dispatch,
         )
         .unwrap();
         assert_eq!(response["id"], Value::Null);
@@ -289,7 +297,7 @@ mod tests {
 
     #[test]
     fn non_object_request_is_invalid() {
-        let response = handle_line("42", &ping_only_dispatch).unwrap();
+        let response = handle_line("42", ping_only_dispatch).unwrap();
         assert_eq!(response["error"]["code"], json!(INVALID_REQUEST));
     }
 
@@ -297,7 +305,7 @@ mod tests {
     fn notification_gets_no_response() {
         let response = handle_line(
             r#"{"jsonrpc":"2.0","method":"server.ping","params":[]}"#,
-            &ping_only_dispatch,
+            ping_only_dispatch,
         );
         assert_eq!(response, None);
     }
@@ -306,7 +314,7 @@ mod tests {
     fn invalid_notification_is_answered_with_null_id() {
         let response = handle_line(
             r#"{"method":"server.ping","params":[]}"#,
-            &ping_only_dispatch,
+            ping_only_dispatch,
         )
         .unwrap();
         assert_eq!(response["id"], Value::Null);
@@ -316,7 +324,7 @@ mod tests {
     #[test]
     fn batch_is_answered_in_order_as_an_array() {
         let response = handle_line(
-            r#"[{"jsonrpc":"2.0","id":1,"method":"server.ping"},{"jsonrpc":"2.0","id":2,"method":"no.such.method"}]"#, &ping_only_dispatch)
+            r#"[{"jsonrpc":"2.0","id":1,"method":"server.ping"},{"jsonrpc":"2.0","id":2,"method":"no.such.method"}]"#, ping_only_dispatch)
         .unwrap();
         assert_eq!(response.as_array().unwrap().len(), 2);
         assert_eq!(
@@ -330,7 +338,7 @@ mod tests {
     #[test]
     fn batch_omits_notifications() {
         let response = handle_line(
-            r#"[{"jsonrpc":"2.0","method":"server.ping"},{"jsonrpc":"2.0","id":2,"method":"server.ping"}]"#, &ping_only_dispatch)
+            r#"[{"jsonrpc":"2.0","method":"server.ping"},{"jsonrpc":"2.0","id":2,"method":"server.ping"}]"#, ping_only_dispatch)
         .unwrap();
         assert_eq!(
             response,
@@ -342,7 +350,7 @@ mod tests {
     fn batch_of_only_notifications_gets_no_response() {
         let response = handle_line(
             r#"[{"jsonrpc":"2.0","method":"server.ping"},{"jsonrpc":"2.0","method":"server.ping"}]"#,
-            &ping_only_dispatch,
+            ping_only_dispatch,
         );
         assert_eq!(response, None);
     }
@@ -351,7 +359,7 @@ mod tests {
     fn batch_answers_non_object_entry_with_invalid_request() {
         let response = handle_line(
             r#"[1,{"jsonrpc":"2.0","id":2,"method":"server.ping"}]"#,
-            &ping_only_dispatch,
+            ping_only_dispatch,
         )
         .unwrap();
         assert_eq!(response[0]["error"]["code"], json!(INVALID_REQUEST));
@@ -365,7 +373,7 @@ mod tests {
     fn error_data_is_sent_as_data_member() {
         let response = handle_line(
             r#"{"jsonrpc":"2.0","id":9,"method":"server.ping"}"#,
-            &|_method, _params| Err(RpcError::new(-32000, "busy").with_data(json!({"height": 7}))),
+            |_method, _params| Err(RpcError::new(-32000, "busy").with_data(json!({"height": 7}))),
         )
         .unwrap();
         assert_eq!(
@@ -378,7 +386,7 @@ mod tests {
     fn error_without_data_has_no_data_member() {
         let response = handle_line(
             r#"{"jsonrpc":"2.0","id":10,"method":"no.such.method"}"#,
-            &ping_only_dispatch,
+            ping_only_dispatch,
         )
         .unwrap();
         assert!(response["error"].get("data").is_none());
@@ -386,7 +394,7 @@ mod tests {
 
     #[test]
     fn empty_batch_is_invalid() {
-        let response = handle_line("[]", &ping_only_dispatch).unwrap();
+        let response = handle_line("[]", ping_only_dispatch).unwrap();
         assert_eq!(response["error"]["code"], json!(INVALID_REQUEST));
     }
 
@@ -395,7 +403,7 @@ mod tests {
         let requests =
             vec![json!({"jsonrpc": "2.0", "id": 1, "method": "server.ping"}); MAX_BATCH_SIZE + 1];
         let response =
-            handle_line(&Value::Array(requests).to_string(), &ping_only_dispatch).unwrap();
+            handle_line(&Value::Array(requests).to_string(), ping_only_dispatch).unwrap();
         assert!(response.is_object());
         assert_eq!(response["error"]["code"], json!(INVALID_REQUEST));
     }

@@ -5,6 +5,7 @@
 pub mod candidates;
 pub mod chain_info;
 pub mod dag;
+pub mod found_blocks;
 pub mod share;
 pub mod share_headers;
 pub mod shares;

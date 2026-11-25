@@ -113,6 +113,7 @@ mod tests {
     use crate::api::server::{AppConfig, AppState};
     use axum::extract::{Query, State};
     use p2poolv2_lib::accounting::stats::metrics;
+    use p2poolv2_lib::config::Chain;
     use p2poolv2_lib::monitoring_events::create_monitoring_event_channel;
     use p2poolv2_lib::node::actor::NodeHandle;
     use p2poolv2_lib::stratum::work::tracker::start_tracker_actor;
@@ -145,14 +146,14 @@ mod tests {
         let state = Arc::new(AppState {
             app_config: AppConfig {
                 pool_signature_length: 0,
-                network: bitcoin::Network::Signet,
+                chain: Chain::Signet,
                 cors_allowed: false,
             },
             chain_store_handle,
             metrics_handle,
             tracker_handle,
             node_handle,
-            monitoring_event_sender: create_monitoring_event_channel().0,
+            monitoring_event_sender: create_monitoring_event_channel(),
             auth_user: None,
             auth_token: None,
         });
@@ -186,8 +187,10 @@ mod tests {
         let (state, _temp_dir) = build_test_state().await;
         let store = state.chain_store_handle.store_handle().store();
         let genesis_hash = state.chain_store_handle.get_chain_tip().unwrap();
-        let txids = store.get_txids_for_blockhash(&genesis_hash);
-        let txid = txids.0[0];
+        let txid = store
+            .get_block_transaction_ids(&genesis_hash)
+            .unwrap()
+            .txids()[0];
 
         let query = Query(TransactionQuery {
             txid: txid.to_string(),
@@ -207,8 +210,10 @@ mod tests {
         let (state, _temp_dir) = build_test_state().await;
         let store = state.chain_store_handle.store_handle().store();
         let genesis_hash = state.chain_store_handle.get_chain_tip().unwrap();
-        let txids = store.get_txids_for_blockhash(&genesis_hash);
-        let txid = txids.0[0];
+        let txid = store
+            .get_block_transaction_ids(&genesis_hash)
+            .unwrap()
+            .txids()[0];
 
         let query = Query(TransactionQuery {
             txid: txid.to_string(),

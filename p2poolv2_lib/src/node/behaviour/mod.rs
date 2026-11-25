@@ -15,7 +15,8 @@ use libp2p::{
     swarm::NetworkBehaviour,
 };
 use request_response::{
-    ConsensusCodec, P2PoolRequestResponseProtocol, kad_protocol_string, protocol_string,
+    ConsensusCodec, P2PoolRequestResponseProtocol, SUPPORTED_PROTOCOL_VERSIONS,
+    kad_protocol_string, network_prologue,
 };
 use request_response::{RequestResponseBehaviour, RequestResponseEvent};
 use std::convert::Infallible;
@@ -62,7 +63,7 @@ impl P2PoolBehaviour {
         // Initialise Kademlia
         let store = MemoryStore::new(local_key.public().to_peer_id());
         let mut kad_config = kad::Config::new(libp2p::StreamProtocol::try_from_owned(
-            kad_protocol_string(config.stratum.network, genesis_hash),
+            kad_protocol_string(config.stratum.chain, genesis_hash),
         )?);
         kad_config.set_query_timeout(tokio::time::Duration::from_secs(60));
 
@@ -71,7 +72,7 @@ impl P2PoolBehaviour {
         kademlia_behaviour.set_mode(Some(kad::Mode::Server));
 
         let identify_config = identify::Config::new(
-            protocol_string(config.stratum.network, genesis_hash),
+            network_prologue(config.stratum.chain, genesis_hash),
             local_key.public(),
         )
         .with_agent_version(format!("p2poolv2/{}", env!("CARGO_PKG_VERSION")))
@@ -96,10 +97,16 @@ impl P2PoolBehaviour {
             ping: ping_behaviour,
             request_response: RequestResponseBehaviour::with_codec(
                 ConsensusCodec,
-                std::iter::once((
-                    P2PoolRequestResponseProtocol::new(config.stratum.network, genesis_hash),
-                    ProtocolSupport::Full,
-                )),
+                SUPPORTED_PROTOCOL_VERSIONS.into_iter().map(|version| {
+                    (
+                        P2PoolRequestResponseProtocol::new(
+                            config.stratum.chain,
+                            genesis_hash,
+                            version,
+                        ),
+                        ProtocolSupport::Full,
+                    )
+                }),
                 libp2p::request_response::Config::default(),
             ),
             limits,

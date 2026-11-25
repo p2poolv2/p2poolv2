@@ -13,7 +13,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 #[cfg(not(test))]
 use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::ShareBlock;
-use crate::shares::validation::ShareValidator;
+use crate::shares::validation::{ShareValidator, validate_coinbase_only_at_index_zero};
 use std::error::Error;
 use tokio::sync::oneshot;
 use tracing::{debug, error, warn};
@@ -69,7 +69,7 @@ pub async fn handle_share_block(
     }
 
     // If new block not in store, run minimal PoW check for dos prevention
-    if let Err(validation_error) = share_validator.validate_share_header(&share_block.header) {
+    if let Err(validation_error) = share_validator.validate_header_on_arrival(&share_block.header) {
         warn!("Rejecting share block {block_hash} with invalid header: {validation_error}");
         return Err(format!("Invalid share header: {validation_error}").into());
     }
@@ -103,6 +103,17 @@ pub async fn handle_share_block(
         return Err(
             format!("Share block body does not match its header: {validation_error}").into(),
         );
+    }
+
+    // A coinbase-shaped transaction after index 0 makes the block itself
+    // invalid, since the header commits to it. Reject it here: storing writes
+    // no outputs for such a transaction, so a stored copy could never be
+    // rebuilt, validated and marked Invalid.
+    if let Err(validation_error) = validate_coinbase_only_at_index_zero(&share_block) {
+        warn!(
+            "Rejecting share block {block_hash} with a coinbase after index 0: {validation_error}"
+        );
+        return Err(format!("Share block has a coinbase after index 0: {validation_error}").into());
     }
 
     // Send to BlockReceiver actor for dependency buffering, ASERT
@@ -139,7 +150,10 @@ mod tests {
     use crate::node::validation_worker::ValidationReceiver;
     use crate::shares::share_block::ShareHeader;
     use crate::shares::validation::{MockDefaultShareValidator, ValidationError};
-    use crate::test_utils::{empty_share_block_from_header, load_share_headers_test_data};
+    use crate::test_utils::{
+        TestShareBlockBuilder, empty_share_block_from_header, load_share_headers_test_data,
+        test_coinbase_transaction,
+    };
     use mockall::predicate::*;
 
     /// Create test validation, block receiver, and block fetcher handles.
@@ -179,7 +193,7 @@ mod tests {
 
         let mut mock_validator = MockDefaultShareValidator::default();
         mock_validator
-            .expect_validate_share_header()
+            .expect_validate_header_on_arrival()
             .returning(|_| Ok(()));
         mock_validator
             .expect_validate_coinbase_proof()
@@ -334,7 +348,7 @@ mod tests {
 
         let mut mock_validator = MockDefaultShareValidator::default();
         mock_validator
-            .expect_validate_share_header()
+            .expect_validate_header_on_arrival()
             .returning(|_| {
                 Err(ValidationError::consensus(
                     "Insufficient work: block hash does not meet share target",
@@ -407,7 +421,7 @@ mod tests {
 
         let mut mock_validator = MockDefaultShareValidator::default();
         mock_validator
-            .expect_validate_share_header()
+            .expect_validate_header_on_arrival()
             .returning(|_| Ok(()));
         mock_validator
             .expect_validate_coinbase_proof()
@@ -471,7 +485,7 @@ mod tests {
 
         let mut mock_validator = MockDefaultShareValidator::default();
         mock_validator
-            .expect_validate_share_header()
+            .expect_validate_header_on_arrival()
             .returning(|_| Ok(()));
         mock_validator
             .expect_validate_coinbase_proof()
@@ -526,7 +540,7 @@ mod tests {
 
         let mut mock_validator = MockDefaultShareValidator::default();
         mock_validator
-            .expect_validate_share_header()
+            .expect_validate_header_on_arrival()
             .returning(|_| Ok(()));
         mock_validator
             .expect_validate_coinbase_proof()
@@ -621,5 +635,87 @@ mod tests {
             BlockFetcherEvent::BlockRequestCompleted(hash) => assert_eq!(hash, block_hash),
             other => panic!("Expected BlockRequestCompleted, got: {other}"),
         }
+    }
+
+    /// A block whose header commits to a coinbase-shaped transaction after
+    /// index 0 is rejected before it is buffered or stored.
+    ///
+    /// The store refuses such transactions, so the block is rejected here with
+    /// a clear error rather than failing to store in the BlockReceiver. The
+    /// other arrival checks are mocked to pass; the coinbase position check is
+    /// the real one.
+    #[tokio::test]
+    async fn test_handle_share_block_coinbase_after_index_zero_rejected_before_buffering() {
+        let mut chain_store_handle = ChainStoreHandle::default();
+        let share_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(
+                "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5".to_string(),
+            )
+            .add_transaction(test_coinbase_transaction(1))
+            .build();
+        let block_hash = share_block.block_hash();
+
+        chain_store_handle
+            .expect_share_block_exists()
+            .with(eq(block_hash))
+            .returning(|_| false);
+
+        let mut mock_validator = MockDefaultShareValidator::default();
+        mock_validator
+            .expect_validate_header_on_arrival()
+            .returning(|_| Ok(()));
+        mock_validator
+            .expect_validate_coinbase_proof()
+            .returning(|_, _| Ok(()));
+        mock_validator
+            .expect_validate_block_size()
+            .returning(|_| Ok(()));
+        mock_validator
+            .expect_validate_body_matches_header()
+            .returning(|_| Ok(()));
+
+        let (validation_tx, mut validation_rx) = validation_worker::create_validation_channel();
+        let (block_receiver_handle, mut block_receiver_rx) = create_block_receiver_channel();
+        let (block_fetcher_handle, _block_fetcher_rx) = create_block_fetcher_channel();
+
+        //* Stand in for the BlockReceiver: accept a buffered block, and report
+        //* whether one arrived once the handle is dropped
+        let block_receiver = tokio::spawn(async move {
+            match block_receiver_rx.recv().await {
+                Some(BlockReceiverEvent::ShareBlockReceived { result_tx, .. }) => {
+                    let _ = result_tx.send(Ok(()));
+                    true
+                }
+                _ => false,
+            }
+        });
+
+        let result = handle_share_block(
+            share_block,
+            &chain_store_handle,
+            validation_tx,
+            &block_receiver_handle,
+            &block_fetcher_handle,
+            &mock_validator,
+        )
+        .await;
+        drop(block_receiver_handle);
+        let buffered = block_receiver.await.unwrap();
+
+        assert!(
+            !buffered,
+            "a block with a coinbase after index 0 must not be buffered"
+        );
+        assert!(
+            validation_rx.try_recv().is_err(),
+            "no validation event expected for a block rejected on arrival"
+        );
+        let error = result
+            .expect_err("expected the block to be rejected")
+            .to_string();
+        assert!(
+            error.contains("only index 0"),
+            "expected a coinbase position rejection, got: {error}"
+        );
     }
 }

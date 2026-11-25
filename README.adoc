@@ -135,7 +135,8 @@ bitcoin-cli -signet getaddressinfo "$ADDR" | jq -r .witness_program \
 
 `witness_program` is the 32 byte taproot output key; `p2poolv2_cli address`
 encodes it under the share chain prefix for the network you name (`main`,
-`testnet4`, `signet` or `regtest`, as Bitcoin Core names them). Check
+`testnet4`, `signet` or `regtest`, as Bitcoin Core names them). For testnet5
+use `testnet4`, which has the same address formats. Check
 `"ismine": true` and `"solvable": true` in the `getaddressinfo` output, or you
 are assigning shares to a key you cannot sign with.
 
