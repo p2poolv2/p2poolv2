@@ -10,7 +10,6 @@
 //! running these commands.
 
 use super::DbCommands;
-use super::db_query::open_store;
 use bitcoin::BlockHash;
 use p2poolv2_lib::store::Store;
 use p2poolv2_lib::store::block_tx_metadata::{ChainMembership, Status};
@@ -29,17 +28,19 @@ fn open_store_readwrite(db_path: &str) -> Result<Store, Box<dyn Error>> {
 pub fn execute(command: &DbCommands, db_path: &str) -> Result<(), Box<dyn Error>> {
     match command {
         DbCommands::CleanupDenseHeights => cleanup_dense_heights(&open_store_readwrite(db_path)?),
-        DbCommands::Version => print_schema_version(&open_store(db_path)?),
+        DbCommands::Version => print_schema_version(db_path),
     }
 }
 
-/// Print the store's schema version next to the one this binary uses.
+/// Print the schema version of the store at `db_path` next to the one this
+/// binary uses.
 ///
-/// The store is opened read-only, which fails if store version
-/// doesn't match version in code. So a successful open prints
-/// matching versions or an empty store.
-fn print_schema_version(store: &Store) -> Result<(), Box<dyn Error>> {
-    match store.schema_version()? {
+/// Reads the version without checking it, so it reports a store at any
+/// version, older or newer than this binary's.
+fn print_schema_version(db_path: &str) -> Result<(), Box<dyn Error>> {
+    let version = Store::read_schema_version(db_path)
+        .map_err(|error| format!("Failed to open database at {db_path}: {error}"))?;
+    match version {
         StoredSchemaVersion::Version(version) => println!("Store schema version: {version}"),
         StoredSchemaVersion::Fresh => println!("Store schema version: none (empty store)"),
     }

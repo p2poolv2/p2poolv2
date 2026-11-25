@@ -214,7 +214,8 @@ mod tests {
     use p2poolv2_lib::store::script_history::script_hash;
     use p2poolv2_lib::test_utils::{
         PUBKEY_2G, TestShareBlockBuilder, build_confirmed_test_chain, confirm_test_block,
-        make_test_share_program, setup_test_chain_store_handle, test_funding_transaction,
+        funding_outpoint, make_test_share_program, setup_test_chain_store_handle,
+        test_funding_transaction,
     };
 
     #[tokio::test]
@@ -521,7 +522,7 @@ mod tests {
         let next_block = TestShareBlockBuilder::new()
             .prev_share_blockhash(blocks[2].block_hash().to_string())
             .time(blocks[2].header.time + 1)
-            .add_transaction(test_funding_transaction(3))
+            .add_transaction(test_funding_transaction(funding_outpoint(&blocks[2]), 3))
             .build();
         confirm_test_block(&chain_store_handle, &next_block).await;
 
@@ -564,7 +565,7 @@ mod tests {
             .prev_share_blockhash(blocks[2].block_hash().to_string())
             .time(blocks[2].header.time + 1)
             .miner_pubkey(PUBKEY_2G)
-            .add_transaction(test_funding_transaction(3))
+            .add_transaction(test_funding_transaction(funding_outpoint(&blocks[2]), 3))
             .build();
         confirm_test_block(&chain_store_handle, &next_block).await;
 

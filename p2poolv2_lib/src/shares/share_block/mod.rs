@@ -26,6 +26,7 @@ use p2poolv2_wallet::witness_program_codec;
 use serde::{Deserialize, Serialize};
 pub use share_transaction::{
     DuplicatePrevoutError, ShareTransaction, SpendingPrevouts, extract_spending_prevouts,
+    first_coinbase_after_index_zero,
 };
 use std::error::Error;
 

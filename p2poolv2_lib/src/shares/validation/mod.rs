@@ -30,7 +30,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::coinbase_proof::CoinbaseProof;
 use crate::shares::share_block::{
     ShareBlock, ShareTransaction, SpendingPrevouts, extract_spending_prevouts,
-    is_terminal_blockhash,
+    first_coinbase_after_index_zero, is_terminal_blockhash,
 };
 use crate::shares::share_commitment::ShareCommitment;
 use crate::shares::transactions::coinbase::{
@@ -225,6 +225,30 @@ pub fn is_within_payout_depth(block_height: u32, tip_height: u32) -> bool {
     block_height > tip_height.saturating_sub(PAYOUT_DEPTH as u32)
 }
 
+/// Validate that no transaction after the share coinbase is
+/// coinbase-shaped.
+///
+/// The coinbase is the transaction at index 0. Any transaction with a
+/// single null-prevout input is coinbase-shaped, so a peer can put one
+/// at a later index without copying anything. It is not part of
+/// `validate_body_matches_header`: the header commits to it, so the block
+/// itself is bad, not a bad copy of it.
+///
+/// Reads only the block, so `handle_share_block` runs it before the block
+/// is buffered or stored; the store would refuse it anyway (see
+/// `add_sharechain_txs`). Both validation tiers run it too, so such a block
+/// is Invalid at any depth, including below the PPLNS depth, where
+/// transactions are not otherwise validated.
+pub fn validate_coinbase_only_at_index_zero(share: &ShareBlock) -> Result<(), ValidationError> {
+    match first_coinbase_after_index_zero(&share.transactions) {
+        Some((position, transaction)) => Err(ValidationError::consensus(format!(
+            "Share transaction {} at index {position} is a coinbase; only index 0 may be",
+            transaction.compute_txid()
+        ))),
+        None => Ok(()),
+    }
+}
+
 /// Look up a block's height and the candidate tip height from the store,
 /// then determine whether the block is in the PPLNS zone.
 ///
@@ -291,7 +315,8 @@ pub trait ShareValidator {
 
     /// Validate a share block that is below the PPLNS depth (in the
     /// prune zone). Only checks the coinbase proof, that the body matches
-    /// the header, PoW, uncles, block size, and transaction count. Skips
+    /// the header, that no transaction after the coinbase is coinbase-shaped,
+    /// PoW, uncles, block size, and transaction count. Skips
     /// the bitcoin payout, transaction structure, and script validation
     /// since these blocks will not participate in PPLNS accounting.
     fn validate_below_pplns_depth(
@@ -1287,6 +1312,7 @@ impl ShareValidator for DefaultShareValidator {
         }
         self.validate_coinbase_proof(&share.header, &share.template_merkle_branches)?;
         self.validate_body_matches_header(share)?;
+        validate_coinbase_only_at_index_zero(share)?;
         self.validate_with_pool_difficulty(&share.header, chain_store_handle)?;
         self.validate_uncles(&share.header, chain_store_handle)?;
         self.validate_uncle_bodies_present(share, chain_store_handle)?;
@@ -1307,6 +1333,7 @@ impl ShareValidator for DefaultShareValidator {
         }
         self.validate_coinbase_proof(&share.header, &share.template_merkle_branches)?;
         self.validate_body_matches_header(share)?;
+        validate_coinbase_only_at_index_zero(share)?;
         self.validate_with_pool_difficulty(&share.header, chain_store_handle)?;
         self.validate_uncles(&share.header, chain_store_handle)?;
         self.validate_block_size(share)?;
@@ -2560,6 +2587,38 @@ mod tests {
         assert_eq!(error.kind(), FailureKind::Consensus);
         assert!(
             error.to_string().contains("witness root"),
+            "unexpected error: {error}"
+        );
+    }
+
+    /// Below the PPLNS depth transactions are not validated, so a coinbase
+    /// copy after index 0 that the header commits to used to pass. It is
+    /// rejected as a bad block, not dropped as a bad copy: the header binds it.
+    #[test]
+    fn test_validate_below_pplns_depth_rejects_coinbase_after_index_zero() {
+        let mut chain_store_handle = ChainStoreHandle::default();
+        let share_block = TestShareBlockBuilder::new()
+            .prev_share_blockhash(
+                "0000000086704a35f17580d06f76d4c02d2b1f68774800675fb45f0411205bb5".to_string(),
+            )
+            .add_transaction(test_coinbase_transaction(1))
+            .build();
+        assert!(
+            validator()
+                .validate_body_matches_header(&share_block)
+                .is_ok()
+        );
+
+        chain_store_handle
+            .expect_has_status()
+            .returning(|_, _| false);
+
+        let error = validator()
+            .validate_below_pplns_depth(&share_block, &chain_store_handle)
+            .unwrap_err();
+        assert_eq!(error.kind(), FailureKind::Consensus);
+        assert!(
+            error.to_string().contains("only index 0"),
             "unexpected error: {error}"
         );
     }

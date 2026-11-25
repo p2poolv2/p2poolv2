@@ -155,6 +155,10 @@ relative to the candidate tip:
 - Uncle validity
 - Block size
 - Transaction count
+- No coinbase-shaped transaction after index 0 (any transaction with a
+  single null-prevout input); both tiers run this, so such a block is
+  Invalid at any depth. Peer blocks are also rejected for it on arrival,
+  and the store refuses to write one
 
 Skips: coinbase structure, merkle root, witness commitment,
 transaction structure, script verification, prevout validation, MTP,
@@ -192,6 +196,12 @@ height of the oldest coinbase ancestor in the output's spending chain.
 - Coinbase outputs: `coinbase_root_height = block_height`
 - Spending tx outputs: `coinbase_root_height = min(coinbase_root_height
   of all inputs)`
+- The coinbase is the transaction at index 0, by position. A
+  coinbase-shaped transaction at a later index could copy another
+  block's coinbase and overwrite the height its outputs record, so
+  `add_sharechain_txs` refuses such transactions with
+  `CoinbaseAfterIndexZero` and writes nothing. Every output row is
+  therefore a function of its txid, and rewriting it is harmless.
 
 Computed at write time in `add_sharechain_txs`. In-block spending
 chains (output created and spent within the same block) use a
@@ -306,7 +316,8 @@ Relevant code:
 | `FoundBlocks` | kept forever | Never pruned (`metrics.md`) |
 | `Uncles` | kept | Small, and derived from headers |
 | `BlockTxids`, `BitcoinTxids`, `BitcoinCoinbase` | deleted below the prune target | Body data. Nothing writes `BitcoinTxids` yet; its key is deleted anyway so a future writer cannot leak data |
-| `Tx`, `Inputs`, `Outputs`, `TxidsBlocks`, `SpendsIndex` | deleted below the prune target, unless a kept block still includes the txid | Body data that can be shared between blocks |
+| `Tx`, `Inputs` | deleted below the prune target, unless a kept block holds the same wtxid | Body data that can be shared between blocks |
+| `Outputs`, `TxidsBlocks`, `SpendsIndex` | deleted below the prune target, unless a kept block still includes the txid | Body data that can be shared between blocks |
 | candidate `BlockHeight` entries | deleted at every height below the prune target | Far below the confirmed tip they duplicate the confirmed entries |
 
 Out of scope:
@@ -372,23 +383,29 @@ For each chunk:
 
 1. **Enumerate.** Use the `h:` height lists to find every block at each
    height, including forks and uncles. Genesis (height 0) is never pruned.
-2. **Find bodies.** Read `BlockTxids` with one `multi_get`. Blocks with no
-   entry are header-only and have nothing to delete.
+2. **Find bodies.** Read `BlockTxids` with one `multi_get`: each block's
+   `(txid, wtxid)` pairs. Blocks with no entry are header-only and have
+   nothing to delete.
 3. **Reference check.** Read `TxidsBlocks` for the txids, then the
    referencing blocks' heights from `BlockMetadata`. A referencer is kept
    when its height is at or above the chunk end, or when its metadata or
    height is missing (kept to be safe).
-   - A txid with no kept referencer is deleted.
+   - A txid with no kept referencer is deleted, with every wtxid the
+     pruned blocks hold for it.
    - A txid with a kept referencer has its `TxidsBlocks` list rewritten
-     without the pruned blocks.
+     without the pruned blocks. Its outputs stay, and each pruned wtxid is
+     deleted unless a kept block holds that same wtxid (read from the kept
+     blocks' `BlockTxids`). A kept block whose `BlockTxids` entry is
+     missing keeps every wtxid of the txid.
 
    Share coinbase txids are unique, because the coinbase `script_sig`
    pushes the weak bitcoin block hash (`shares/transactions/coinbase.rs`).
    Sharing only happens for a non-coinbase transaction included in several
    blocks.
 4. **Delete transactions.** Read the input and output counts from `Tx`
-   metadata, then delete `Tx[txid]`, `Inputs[txid:i]`, `Outputs[txid:o]`,
-   `SpendsIndex[txid:o]` and `TxidsBlocks[txid]`.
+   metadata, then delete `Tx[wtxid]` and `Inputs[wtxid:i]` for each deleted
+   wtxid, and `Outputs[txid:o]`, `SpendsIndex[txid:o]` and
+   `TxidsBlocks[txid]` for each deleted txid.
 5. **Delete per-block data:** `BlockTxids`, `BitcoinTxids` and
    `BitcoinCoinbase`.
 6. **Delete the candidate index entry** (`height:c` in `BlockHeight`) at

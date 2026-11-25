@@ -201,16 +201,22 @@ pub async fn confirm_test_block(chain_store_handle: &ChainStoreHandle, block: &S
     chain_store_handle.organise_block().await.unwrap();
 }
 
-/// A coinbase-shaped transaction paying `value` sats, distinct for each
-/// value. Adding one to a block gives the block a transaction no other block
-/// holds, which `TestShareBlockBuilder` blocks otherwise lack.
+/// A transaction with one input spending `spent` and one output paying
+/// `value` sats to an empty script.
+///
+/// Tests add it after a block's coinbase to give the block a transaction no
+/// other block has. Each `(spent, value)` pair gives a different txid.
+///
+/// The store looks up `spent` when it stores the block, so `spent` must be
+/// an output stored earlier: another block's coinbase output
+/// (`coinbase_outpoint`) or funding output (`funding_outpoint`).
 #[cfg(any(test, feature = "test-utils"))]
-pub fn test_funding_transaction(value: u64) -> bitcoin::Transaction {
+pub fn test_funding_transaction(spent: bitcoin::OutPoint, value: u64) -> bitcoin::Transaction {
     bitcoin::Transaction {
         version: bitcoin::transaction::Version::ONE,
         lock_time: bitcoin::absolute::LockTime::ZERO,
         input: vec![bitcoin::TxIn {
-            previous_output: bitcoin::OutPoint::new(bitcoin::Txid::all_zeros(), u32::MAX),
+            previous_output: spent,
             script_sig: bitcoin::ScriptBuf::new(),
             sequence: bitcoin::Sequence::MAX,
             witness: bitcoin::Witness::new(),
@@ -222,11 +228,38 @@ pub fn test_funding_transaction(value: u64) -> bitcoin::Transaction {
     }
 }
 
+/// Output 0 of `block`'s coinbase: its payout to the miner.
+#[cfg(any(test, feature = "test-utils"))]
+pub fn coinbase_outpoint(block: &ShareBlock) -> bitcoin::OutPoint {
+    bitcoin::OutPoint::new(block.transactions[0].compute_txid(), 0)
+}
+
+/// Output 0 of the funding transaction that `build_confirmed_test_chain`
+/// puts after `block`'s coinbase. Its script is empty, so spending it touches
+/// no miner's script history.
+#[cfg(any(test, feature = "test-utils"))]
+pub fn funding_outpoint(block: &ShareBlock) -> bitcoin::OutPoint {
+    bitcoin::OutPoint::new(block.transactions[1].compute_txid(), 0)
+}
+
+/// The output the funding transaction of the chain block at `height` spends:
+/// the genesis coinbase for block 1, else the previous block's funding
+/// output. `blocks` holds the chain built so far, genesis at 0.
+#[cfg(any(test, feature = "test-utils"))]
+pub fn chain_funding_source(blocks: &[ShareBlock], height: usize) -> bitcoin::OutPoint {
+    if height == 1 {
+        coinbase_outpoint(&blocks[0])
+    } else {
+        funding_outpoint(&blocks[height - 1])
+    }
+}
+
 /// Set up `genesis_for_tests` and confirm a linear chain of `length` blocks
 /// above it.
 ///
-/// The block at height `h` carries `test_funding_transaction(h)`, so every
-/// block holds a transaction no other block has, and a one-node coinbase
+/// The block at height `h` carries a `test_funding_transaction` of `h` sats
+/// spending `chain_funding_source`, so every block holds a transaction no
+/// other block has and only block 1 spends a miner's output, and a one-node coinbase
 /// merkle branch of byte `h`, so every block's stored branch is distinct
 /// and non-empty. Returns the blocks indexed by height, genesis at 0.
 ///
@@ -250,7 +283,10 @@ pub async fn build_confirmed_test_chain(
         let mut block = TestShareBlockBuilder::new()
             .prev_share_blockhash(blocks[height - 1].block_hash().to_string())
             .time(1_700_000_000 + height as u32)
-            .add_transaction(test_funding_transaction(height as u64))
+            .add_transaction(test_funding_transaction(
+                chain_funding_source(&blocks, height),
+                height as u64,
+            ))
             .build();
         block.template_merkle_branches = vec![TxMerkleNode::from_byte_array([height as u8; 32])];
         confirm_test_block(chain_store_handle, &block).await;

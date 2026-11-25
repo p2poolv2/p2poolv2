@@ -76,6 +76,12 @@ const MIGRATIONS: &[Migration] = &[ /* ... */ ];
   writable open and in a unit test, so a store can never skip a migration.
 - Pending migrations run in order.
 
+### Migrations so far
+
+| Version | Module | Change |
+|---------|--------|--------|
+| 2 | `key_by_wtxid` | `Tx` and `Inputs` rows rekeyed from txid to wtxid; each block's `BlockTxids` value rewritten from a txid list to `(txid, wtxid)` pairs. Values are copied unchanged. A transaction without witness data has wtxid == txid, so its rows already have their version 2 keys and are left alone. Rows are not checked against block headers or repaired. Fails, committing nothing, if a block lists a transaction whose rows are missing or rebuild to another txid |
+
 ### Atomicity
 
 - `run` reads the old layout and puts every write into the batch it is

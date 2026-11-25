@@ -56,7 +56,7 @@ pub(crate) fn transaction_get(
     let verbose = parse_verbose(param(params, 1, "verbose"))?;
     let location = confirmed_location(chain_store_handle, &txid)?;
     let (transaction, output_origins) = chain_store_handle
-        .get_tx_with_output_origins(&txid)
+        .get_tx_with_output_origins_in_block(&location.blockhash, &txid)
         .map_err(|error| match error {
             StoreError::NotFound(_) => transaction_not_found(&txid),
             error => store_read_error(error),
@@ -232,8 +232,8 @@ mod tests {
     use bitcoin::{Amount, OutPoint, ScriptBuf, Sequence, Witness};
     use p2poolv2_lib::address::Address;
     use p2poolv2_lib::test_utils::{
-        TestShareBlockBuilder, build_confirmed_test_chain, make_test_share_address,
-        setup_test_chain_store_handle, test_funding_transaction,
+        TestShareBlockBuilder, build_confirmed_test_chain, funding_outpoint,
+        make_test_share_address, setup_test_chain_store_handle, test_funding_transaction,
     };
 
     #[tokio::test]
@@ -326,7 +326,7 @@ mod tests {
         let unconfirmed = TestShareBlockBuilder::new()
             .prev_share_blockhash(blocks[2].block_hash().to_string())
             .time(blocks[2].header.time)
-            .add_transaction(test_funding_transaction(99))
+            .add_transaction(test_funding_transaction(funding_outpoint(&blocks[2]), 99))
             .build();
         chain_store_handle
             .add_share_block_and_organise_header(unconfirmed.clone())
