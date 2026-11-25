@@ -55,14 +55,17 @@
 
         craneLib = (crane.mkLib pkgs).overrideToolchain rust;
 
-        # craneLib.filterCargoSources only keeps .rs and .toml files by default.
-        # Include .dat genesis files so include_bytes! can find them at build time.
-        datFilter = path: _type: builtins.match ".*\\.dat$" path != null;
-        cargoAndDat = path: type: (craneLib.filterCargoSources path type) || (datFilter path type);
-        src = pkgs.lib.cleanSourceWith {
-          src = ./.;
-          filter = cargoAndDat;
-          name = "p2poolv2-source";
+        unfilteredRoot = ./.;
+        src = nixpkgs.lib.fileset.toSource {
+            root = unfilteredRoot;
+            fileset = nixpkgs.lib.fileset.unions [
+                # craneLib.filterCargoSources only keeps .rs and .toml files by default.
+                (craneLib.fileset.commonCargoSources unfilteredRoot)
+                # Include .dat genesis files so include_bytes! can find them at build time.
+                (nixpkgs.lib.fileset.maybeMissing ./p2poolv2_lib/src/shares/genesis)
+                # Include api server static files
+                (nixpkgs.lib.fileset.maybeMissing ./p2poolv2_api/static)
+            ];
         };
 
         # Version from the root Cargo.toml, shared by every package.
