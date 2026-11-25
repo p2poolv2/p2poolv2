@@ -31,11 +31,14 @@ use tracing::{debug, error, info};
 ///
 /// {"id": 1, "method": "mining.submit", "params": ["username", "jobid", "extranonce2", "nTime", "nonce"]}
 /// Example message:
-/// {"id": 1, "method": "mining.submit", "params": ["username", "4f", "fe36a31b", "504e86ed", "e9695791"]}
+/// {"id": 1, "method": "mining.submit", "params": ["username", "4f", "fe36a31b00000000", "504e86ed", "e9695791"]}
 /// We can also receive messages with version_mask as the last parameter
 /// {"id": 1, "method": "mining.submit", "params": ["username", "jobid", "extranonce2", "nTime", "nonce", "version_mask"]}
 /// Example message:
-/// {"id": 1, "method": "mining.submit", "params": ["username", "4f", "fe36a31b", "504e86ed", "e9695791", "1fffe000"]}
+/// {"id": 1, "method": "mining.submit", "params": ["username", "4f", "fe36a31b00000000", "504e86ed", "e9695791", "1fffe000"]}
+///
+/// The extranonce2 must be exactly EXTRANONCE2_SIZE bytes (16 hex chars), else
+/// the submission is rejected with an invalid params error.
 ///
 /// Handling version mask, we check mask is valid and then apply it to the block header
 ///
@@ -1241,7 +1244,7 @@ mod handle_submit_tests {
             4,
             "worker".to_string(),
             "1".to_string(),
-            "00000000".to_string(),
+            "0000000000000000".to_string(),
             "504e86ed".to_string(),
             "e9695791".to_string(),
         );
@@ -1285,10 +1288,9 @@ mod handle_submit_tests {
         assert_eq!(response.result, None);
         let err = response.error.as_ref().unwrap();
         assert_eq!(err.code, 20, "should be OtherUnknown (code 20)");
-        assert!(
-            err.message.starts_with("Invalid parameters provided:"),
-            "error message should contain the validation failure reason, got: {}",
-            err.message
+        assert_eq!(
+            err.message,
+            "Invalid parameters provided: Failed to build coinbase transaction"
         );
     }
 
@@ -1459,7 +1461,7 @@ mod handle_submit_tests {
     }
 
     #[tokio::test]
-    async fn test_handle_submit_extranonce2_too_short_returns_error_not_panic() {
+    async fn test_handle_submit_rejects_short_extranonce2() {
         let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
         session.subscribed = true;
         let tracker_handle = start_tracker_actor();
@@ -1505,7 +1507,7 @@ mod handle_submit_tests {
             .await
             .unwrap();
 
-        let ctx = StratumContext {
+        let stratum_context = StratumContext {
             tracker_handle: tracker_handle.clone(),
             bitcoindrpc_client: BitcoindRpcClient::new(
                 &bitcoinrpc_config.url,
@@ -1527,16 +1529,18 @@ mod handle_submit_tests {
             miner_address: None,
         };
 
-        let messages = handle_submit(submit, &mut session, ctx).await.unwrap();
+        let messages = handle_submit(submit, &mut session, stratum_context)
+            .await
+            .unwrap();
         let response = match &messages[..] {
-            [Message::Response(r)] => r,
+            [Message::Response(response_message)] => response_message,
             _ => panic!("expected Response"),
         };
         assert_eq!(response.result, None);
-        let err = response.error.as_ref().unwrap();
-        assert_eq!(err.code, 20, "should be OtherUnknown (code 20)");
+        let error = response.error.as_ref().unwrap();
+        assert_eq!(error.code, 20, "should be OtherUnknown (code 20)");
         assert_eq!(
-            err.message,
+            error.message,
             "Invalid parameters provided: extranonce2 must be 8 bytes"
         );
 
@@ -1547,7 +1551,7 @@ mod handle_submit_tests {
     }
 
     #[tokio::test]
-    async fn test_handle_submit_extranonce2_too_long_returns_error_not_panic() {
+    async fn test_handle_submit_rejects_long_extranonce2() {
         let mut session = Session::<DifficultyAdjuster>::new(1, 1, None, DEFAULT_VERSION_MASK);
         session.subscribed = true;
         let tracker_handle = start_tracker_actor();
@@ -1593,7 +1597,7 @@ mod handle_submit_tests {
             .await
             .unwrap();
 
-        let ctx = StratumContext {
+        let stratum_context = StratumContext {
             tracker_handle: tracker_handle.clone(),
             bitcoindrpc_client: BitcoindRpcClient::new(
                 &bitcoinrpc_config.url,
@@ -1615,16 +1619,18 @@ mod handle_submit_tests {
             miner_address: None,
         };
 
-        let messages = handle_submit(submit, &mut session, ctx).await.unwrap();
+        let messages = handle_submit(submit, &mut session, stratum_context)
+            .await
+            .unwrap();
         let response = match &messages[..] {
-            [Message::Response(r)] => r,
+            [Message::Response(response_message)] => response_message,
             _ => panic!("expected Response"),
         };
         assert_eq!(response.result, None);
-        let err = response.error.as_ref().unwrap();
-        assert_eq!(err.code, 20, "should be OtherUnknown (code 20)");
+        let error = response.error.as_ref().unwrap();
+        assert_eq!(error.code, 20, "should be OtherUnknown (code 20)");
         assert_eq!(
-            err.message,
+            error.message,
             "Invalid parameters provided: extranonce2 must be 8 bytes"
         );
 
