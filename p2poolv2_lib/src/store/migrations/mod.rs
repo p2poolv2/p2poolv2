@@ -293,9 +293,13 @@ fn validate_migration_chain(
     Ok(())
 }
 
-/// Read `SCHEMA_VERSION_KEY`, or `None` when it has never been written.
+/// Read `SCHEMA_VERSION_KEY`, or `None` when it has never been written or
+/// the store has no `Metadata` column family (`Store::read_schema_version`
+/// opens a store with only the column families on disk).
 fn read_schema_version_key(db: &DB) -> Result<Option<u32>, StoreError> {
-    let metadata_cf = db.cf_handle(&ColumnFamily::Metadata).unwrap();
+    let Some(metadata_cf) = db.cf_handle(&ColumnFamily::Metadata) else {
+        return Ok(None);
+    };
     let Some(bytes) = db.get_cf(&metadata_cf, SCHEMA_VERSION_KEY)? else {
         return Ok(None);
     };
@@ -316,9 +320,12 @@ fn write_schema_version(db: &DB, version: u32) -> Result<(), StoreError> {
 }
 
 /// Whether the store has a genesis confirmed at height 0, read with the
-/// frozen version 1 key (see `VERSION_1_CONFIRMED_GENESIS_KEY`).
+/// frozen version 1 key (see `VERSION_1_CONFIRMED_GENESIS_KEY`). A store
+/// with no `BlockHeight` column family has none.
 fn has_genesis(db: &DB) -> Result<bool, StoreError> {
-    let block_height_cf = db.cf_handle(&ColumnFamily::BlockHeight).unwrap();
+    let Some(block_height_cf) = db.cf_handle(&ColumnFamily::BlockHeight) else {
+        return Ok(false);
+    };
     Ok(db
         .get_cf(&block_height_cf, VERSION_1_CONFIRMED_GENESIS_KEY)?
         .is_some())
@@ -343,6 +350,7 @@ mod tests {
     use super::*;
     use crate::store::Store;
     use crate::test_utils::genesis_for_tests;
+    use rocksdb::{IteratorMode, Options};
     use tempfile::tempdir;
 
     const MARKER_KEY: &[u8] = b"test_migration_marker";
@@ -600,6 +608,156 @@ mod tests {
             Store::read_schema_version(&path).unwrap(),
             StoredSchemaVersion::Version(CURRENT_SCHEMA_VERSION + 1)
         );
+    }
+
+    /// A read-only open that leaves out a column family on disk deletes that
+    /// column family's files when it closes, corrupting the store. A store
+    /// with a column family this binary does not know, as a newer binary
+    /// would add, must keep it through `Store::read_schema_version`, which
+    /// still reports the version.
+    #[test]
+    fn test_read_schema_version_keeps_an_unknown_column_family() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().to_str().unwrap().to_string();
+        drop(Store::new(path.clone(), false).unwrap());
+
+        //* Add a column family this binary does not know, with a row, flushed to disk
+        let mut all_column_families = DB::list_cf(&Options::default(), &path).unwrap();
+        all_column_families.push("from_a_newer_binary".to_string());
+        let mut options = Options::default();
+        options.create_missing_column_families(true);
+        let db = DB::open_cf(&options, &path, &all_column_families).unwrap();
+        let unknown_cf = db.cf_handle("from_a_newer_binary").unwrap();
+        db.put_cf(&unknown_cf, b"key", b"value").unwrap();
+        db.flush_cf(&unknown_cf).unwrap();
+        drop(unknown_cf);
+        drop(db);
+
+        assert_eq!(
+            Store::read_schema_version(&path).unwrap(),
+            StoredSchemaVersion::Version(CURRENT_SCHEMA_VERSION)
+        );
+
+        //* The store still opens, and the unknown column family keeps its row
+        let db = DB::open_cf(&Options::default(), &path, &all_column_families).unwrap();
+        let unknown_cf = db.cf_handle("from_a_newer_binary").unwrap();
+        assert_eq!(db.iterator_cf(&unknown_cf, IteratorMode::Start).count(), 1);
+    }
+
+    /// A read-only `Store::new` refuses a store with a column family this
+    /// binary does not know, saying a newer binary wrote it, and leaves that
+    /// column family intact.
+    #[test]
+    fn test_read_only_open_refuses_an_unknown_column_family() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().to_str().unwrap().to_string();
+        drop(Store::new(path.clone(), false).unwrap());
+
+        //* Add a column family this binary does not know, with a row, flushed to disk
+        let mut all_column_families = DB::list_cf(&Options::default(), &path).unwrap();
+        all_column_families.push("from_a_newer_binary".to_string());
+        let mut options = Options::default();
+        options.create_missing_column_families(true);
+        let db = DB::open_cf(&options, &path, &all_column_families).unwrap();
+        let unknown_cf = db.cf_handle("from_a_newer_binary").unwrap();
+        db.put_cf(&unknown_cf, b"key", b"value").unwrap();
+        db.flush_cf(&unknown_cf).unwrap();
+        drop(unknown_cf);
+        drop(db);
+
+        let error = Store::new(path.clone(), true).err().unwrap();
+        assert!(matches!(error, StoreError::Migration(_)), "{error}");
+        assert!(error.to_string().contains("from_a_newer_binary"), "{error}");
+        assert!(error.to_string().contains("newer"), "{error}");
+
+        //* The store still opens, and the unknown column family keeps its row
+        let db = DB::open_cf(&Options::default(), &path, &all_column_families).unwrap();
+        let unknown_cf = db.cf_handle("from_a_newer_binary").unwrap();
+        assert_eq!(db.iterator_cf(&unknown_cf, IteratorMode::Start).count(), 1);
+    }
+
+    /// A store missing one of this binary's column families, as a store from
+    /// an older binary can be, still reports its version.
+    #[test]
+    fn test_read_schema_version_reports_a_store_missing_a_column_family() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().to_str().unwrap().to_string();
+        drop(Store::new(path.clone(), false).unwrap());
+
+        //* Drop a column family this binary uses
+        let all_column_families = DB::list_cf(&Options::default(), &path).unwrap();
+        let db = DB::open_cf(&Options::default(), &path, &all_column_families).unwrap();
+        db.drop_cf(ColumnFamily::FoundBlocks.as_ref()).unwrap();
+        drop(db);
+
+        assert_eq!(
+            Store::read_schema_version(&path).unwrap(),
+            StoredSchemaVersion::Version(CURRENT_SCHEMA_VERSION)
+        );
+    }
+
+    /// A store without the `BlockHeight` column family has no genesis; with
+    /// no version recorded either it is reported as fresh.
+    #[test]
+    fn test_read_schema_version_reports_an_unversioned_store_missing_block_height_as_fresh() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().to_str().unwrap().to_string();
+        drop(Store::new(path.clone(), false).unwrap());
+
+        //* Delete the version, so the reader checks for a genesis, then drop
+        //* the column family that check reads
+        let all_column_families = DB::list_cf(&Options::default(), &path).unwrap();
+        let db = DB::open_cf(&Options::default(), &path, &all_column_families).unwrap();
+        let metadata_cf = db.cf_handle(ColumnFamily::Metadata.as_ref()).unwrap();
+        db.delete_cf(&metadata_cf, SCHEMA_VERSION_KEY).unwrap();
+        drop(metadata_cf);
+        db.drop_cf(ColumnFamily::BlockHeight.as_ref()).unwrap();
+        drop(db);
+
+        assert_eq!(
+            Store::read_schema_version(&path).unwrap(),
+            StoredSchemaVersion::Fresh
+        );
+    }
+
+    /// A store without the `Metadata` column family records no version; with
+    /// no genesis either it is reported as fresh.
+    #[test]
+    fn test_read_schema_version_reports_a_store_missing_metadata_as_fresh() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().to_str().unwrap().to_string();
+        drop(Store::new(path.clone(), false).unwrap());
+
+        //* Drop the column family that holds the schema version
+        let all_column_families = DB::list_cf(&Options::default(), &path).unwrap();
+        let db = DB::open_cf(&Options::default(), &path, &all_column_families).unwrap();
+        db.drop_cf(ColumnFamily::Metadata.as_ref()).unwrap();
+        drop(db);
+
+        assert_eq!(
+            Store::read_schema_version(&path).unwrap(),
+            StoredSchemaVersion::Fresh
+        );
+    }
+
+    /// A read-only `Store::new` refuses a store missing one of this binary's
+    /// column families, naming it, instead of RocksDB's bare message.
+    #[test]
+    fn test_read_only_open_refuses_a_store_missing_a_column_family() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().to_str().unwrap().to_string();
+        drop(Store::new(path.clone(), false).unwrap());
+
+        //* Drop a column family this binary uses
+        let all_column_families = DB::list_cf(&Options::default(), &path).unwrap();
+        let db = DB::open_cf(&Options::default(), &path, &all_column_families).unwrap();
+        db.drop_cf(ColumnFamily::FoundBlocks.as_ref()).unwrap();
+        drop(db);
+
+        let error = Store::new(path, true).err().unwrap();
+        assert!(matches!(error, StoreError::Migration(_)), "{error}");
+        assert!(error.to_string().contains("found_blocks"), "{error}");
+        assert!(error.to_string().contains("start the node"), "{error}");
     }
 
     #[test]
