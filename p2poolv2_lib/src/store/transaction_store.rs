@@ -574,13 +574,14 @@ impl Store {
     /// outputs get the minimum coinbase_root_height across their inputs.
     ///
     /// The coinbase is `transactions[0]`, by position, and also
-    /// shape. A coinbase-shaped transaction at a later index is a
-    /// copy of another block's coinbase, which a share can carry
-    /// before validation rejects it; it writes no outputs, so it can
-    /// never change the `coinbase_root_height` for the original
-    /// coinbase.  With that rule in place every output row is a
-    /// function of its txid alone, so rewriting one never results in
-    /// root height of a previous tx being changed.
+    /// shape. A coinbase-shaped transaction at a later index writes no
+    /// outputs, so it can never change the `coinbase_root_height` of a
+    /// coinbase with the same txid. With that rule in place every output
+    /// row is a function of its txid alone, so rewriting one never
+    /// results in root height of a previous tx being changed. A block
+    /// that has such a transaction cannot be read back, so peer blocks
+    /// are rejected for it on arrival (`handle_share_block`), before they
+    /// reach this function.
     pub(crate) fn add_sharechain_txs(
         &self,
         transactions: &[ShareTransaction],

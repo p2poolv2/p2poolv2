@@ -225,6 +225,37 @@ pub fn is_within_payout_depth(block_height: u32, tip_height: u32) -> bool {
     block_height > tip_height.saturating_sub(PAYOUT_DEPTH as u32)
 }
 
+/// Validate that no transaction after the share coinbase is
+/// coinbase-shaped.
+///
+/// The coinbase is the transaction at index 0. Any transaction with a
+/// single null-prevout input is coinbase-shaped, so a peer can put one
+/// at a later index without copying anything. It is not part of
+/// `validate_body_matches_header`: the header commits to it, so the block
+/// itself is bad, not a bad copy of it.
+///
+/// Reads only the block, so `handle_share_block` runs it before the block
+/// is buffered or stored. It has to: storing writes no outputs for such a
+/// transaction (see `add_sharechain_txs`), so a stored block could not be
+/// rebuilt and validated. Both validation tiers run it too, so such a block
+/// is Invalid at any depth, including below the PPLNS depth, where
+/// transactions are not otherwise validated.
+pub fn validate_coinbase_only_at_index_zero(share: &ShareBlock) -> Result<(), ValidationError> {
+    let coinbase_shaped_txs = share
+        .transactions
+        .iter()
+        .enumerate()
+        .skip(1)
+        .find(|(_position, transaction)| transaction.0.is_coinbase());
+    match coinbase_shaped_txs {
+        Some((position, transaction)) => Err(ValidationError::consensus(format!(
+            "Share transaction {} at index {position} is a coinbase; only index 0 may be",
+            transaction.compute_txid()
+        ))),
+        None => Ok(()),
+    }
+}
+
 /// Look up a block's height and the candidate tip height from the store,
 /// then determine whether the block is in the PPLNS zone.
 ///
@@ -632,35 +663,6 @@ impl DefaultShareValidator {
             steps += 1;
         }
         Ok((ancestors, uncles_listed_by_ancestors))
-    }
-
-    /// Validate that no transaction after the share coinbase is
-    /// coinbase-shaped.
-    ///
-    /// The coinbase is the transaction at index 0. A coinbase-shaped
-    /// transaction at a later index can only be a copy of another share's
-    /// coinbase, since a share coinbase carries its weak block hash. Both
-    /// validation tiers run this, so such a block is Invalid at any depth,
-    /// including below the PPLNS depth, where transactions are not otherwise
-    /// validated. It is not part of `validate_body_matches_header`: the header
-    /// commits to the copy, so the block itself is bad, not a bad copy of it.
-    fn validate_coinbase_only_at_index_zero(
-        &self,
-        share: &ShareBlock,
-    ) -> Result<(), ValidationError> {
-        let coinbase_shaped_txs = share
-            .transactions
-            .iter()
-            .enumerate()
-            .skip(1)
-            .find(|(_position, transaction)| transaction.0.is_coinbase());
-        match coinbase_shaped_txs {
-            Some((position, transaction)) => Err(ValidationError::consensus(format!(
-                "Share transaction {} at index {position} is a coinbase; only index 0 may be",
-                transaction.compute_txid()
-            ))),
-            None => Ok(()),
-        }
     }
 
     /// Validate that the total number of transactions does not exceed TXS_COUNT_LIMIT.
@@ -1317,7 +1319,7 @@ impl ShareValidator for DefaultShareValidator {
         }
         self.validate_coinbase_proof(&share.header, &share.template_merkle_branches)?;
         self.validate_body_matches_header(share)?;
-        self.validate_coinbase_only_at_index_zero(share)?;
+        validate_coinbase_only_at_index_zero(share)?;
         self.validate_with_pool_difficulty(&share.header, chain_store_handle)?;
         self.validate_uncles(&share.header, chain_store_handle)?;
         self.validate_uncle_bodies_present(share, chain_store_handle)?;
@@ -1338,7 +1340,7 @@ impl ShareValidator for DefaultShareValidator {
         }
         self.validate_coinbase_proof(&share.header, &share.template_merkle_branches)?;
         self.validate_body_matches_header(share)?;
-        self.validate_coinbase_only_at_index_zero(share)?;
+        validate_coinbase_only_at_index_zero(share)?;
         self.validate_with_pool_difficulty(&share.header, chain_store_handle)?;
         self.validate_uncles(&share.header, chain_store_handle)?;
         self.validate_block_size(share)?;
