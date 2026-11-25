@@ -26,6 +26,10 @@ const methods = {
     getbestblockhash: function () {
         return gbt.previousblockhash;
     },
+    // P2Poolv2 checks at startup that bitcoind is 29.0 or newer.
+    getnetworkinfo: function () {
+        return { version: 290000 };
+    },
     validateaddress: function (params) {
         const address = params && params[0] ? params[0] : "";
         return {

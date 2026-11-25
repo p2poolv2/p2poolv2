@@ -234,7 +234,7 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
     };
     info!("Latest tip {} at height {}", tip, height);
 
-    if let Err(error) = preflight::wait_for_bitcoin_node_synced(
+    if let Err(error) = preflight::wait_for_bitcoin_node_ready(
         &config.bitcoinrpc,
         Duration::from_secs(300),
         exit_sender.subscribe(),
@@ -294,7 +294,7 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
         .await
             && *exit_receiver_gbt.borrow() == ShutdownReason::None
         {
-            tracing::error!("Failed to fetch block template. Shutting down. \n {e}");
+            tracing::error!("Block template setup failed. Shutting down. \n {e}");
             let _ = exit_sender_gbt.send(ShutdownReason::Error);
         }
     });

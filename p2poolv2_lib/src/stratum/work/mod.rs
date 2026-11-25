@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 pub mod block_template;
+pub mod block_weight;
 pub mod coinbase;
 pub mod difficulty;
 pub(crate) mod error;

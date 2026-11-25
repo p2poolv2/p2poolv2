@@ -335,7 +335,7 @@ than 2 hours behind. Either way the share comes back when a descendant
 names it as parent and the missing-parent handling fetches it again.
 
 Initial block download cannot cause drops: the node does not start until
-bitcoind has finished it (`wait_for_bitcoin_node_synced` in
+bitcoind has finished it (`wait_for_bitcoin_node_ready` in
 `p2poolv2_node/src/preflight.rs`).
 
 **Example.** Shares `A -> B -> C -> D`. B is the first share after a new

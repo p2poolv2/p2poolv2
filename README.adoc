@@ -55,12 +55,24 @@ for 500 coinbase outputs. This is required before we ship our atomic
 swap based payout mechanism. With space to accomodate 500 miners, we
 can start running P2Poolv2 with direct payments from coinbase.
 
-For 500 P2WPKH outputs use `blockmaxweight` to 3930000.
+P2Poolv2 requires Bitcoin Core 29.0 or newer. For 500 outputs of the
+largest accepted type (a 40-byte witness program, 51 bytes each) set
+`blockreservedweight` to 104000 and leave `blockmaxweight` at its
+default.
 
 [,config]
 ----
-blockmaxweight=3930000
+blockreservedweight=104000
 ----
+
+At startup the node checks that bitcoind is 29.0 or newer, and logs
+the required version and exits if it is not. Each job is then checked
+for room for the coinbase the node builds for it. If a block template
+leaves too little, a found block would be rejected, so the node logs
+the `blockreservedweight` should be set and shuts down. A light
+mempool always leaves room, so a low `blockreservedweight` only shows
+up once bitcoind's templates are full, or once the coinbase gains
+enough payees.
 
 Finally, you need to mine 32 blocks before you can run p2poolv2 node
 to talk to bitcoind. This is because BIP34 requires coinbase to

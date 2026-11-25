@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use super::block_template::{BlockTemplate, parse_flags};
+use super::block_weight::check_coinbase_fits;
 use super::coinbase::{
     LOCKTIME_LENGTH, build_bitcoin_coinbase_transaction, get_timestamp_bytes, split_coinbase,
 };
@@ -306,6 +307,11 @@ impl PreparedNotifyParamsBuilder {
     /// coinbase1 is static (same for all miners). coinbase2 is split around its
     /// two per-miner parts -- the nsecs push at the front and the commitment
     /// hash bytes before the locktime -- into a static middle and locktime.
+    ///
+    /// Returns an error when the template does not leave enough block weight
+    /// for the coinbase, since a block found on it would be rejected. The
+    /// notifier stops the node on that error so the operator sets
+    /// `blockreservedweight` in bitcoind.
     pub fn build(self) -> Result<PreparedNotifyParams, WorkError> {
         let coinbaseaux = parse_flags(self.template.coinbaseaux.get("flags").cloned())?;
         let witness_commitment = self
@@ -335,6 +341,10 @@ impl PreparedNotifyParamsBuilder {
             0u64,
             None,
         )?;
+
+        //* The per-miner nsecs, extranonce and commitment hash are fixed size,
+        //* so this coinbase weighs the same as every miner's.
+        check_coinbase_fits(&self.template, &coinbase)?;
 
         let (coinbase1, coinbase2_full) = split_coinbase(&coinbase)?;
 
@@ -601,6 +611,51 @@ mod tests {
         assert!(
             prepared.coinbase2_offset + prepared.coinbase2_placeholder_len
                 <= prepared.json_template.len()
+        );
+    }
+
+    #[test]
+    fn test_build_accepts_one_payee_in_template_filled_to_default_reservation() {
+        //* bitcoind with the default 8,000 WU reservation and a full mempool:
+        //* the template's transactions weigh 4,000,000 - 8,000 WU. A coinbase
+        //* with one payee fits in what is left.
+        let mut template = test_template();
+        template.transactions[0].weight = 4_000_000 - 8_000;
+
+        let result = test_notify_params_builder(Arc::new(template), false).build();
+
+        assert!(result.is_ok(), "unexpected error: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_build_fails_when_coinbase_does_not_fit_template() {
+        //* The same full template, but 200 payees: the coinbase is heavier
+        //* than the 8,000 WU bitcoind left, so a found block would be
+        //* rejected. build fails, which stops the notifier and the node.
+        let mut template = test_template();
+        template.transactions[0].weight = 4_000_000 - 8_000;
+        let payout = OutputPair {
+            address: test_address(),
+            amount: bitcoin::Amount::from_sat(template.coinbasevalue / 200),
+        };
+
+        let result = PreparedNotifyParamsBuilder::new(
+            Arc::new(template),
+            vec![payout; 200],
+            b"test_pool",
+            false,
+        )
+        .bits(CompactTarget::from_consensus(0x1d00ffff))
+        .build();
+
+        let Err(error) = result else {
+            panic!("a coinbase heavier than the space left should fail the build");
+        };
+        assert_eq!(
+            error.message,
+            "bitcoind block template at height 505 leaves 8000 WU of block weight for the \
+             coinbase, but the P2Poolv2 coinbase needs 26156 WU, so a found block would be \
+             rejected. Set blockreservedweight=104000 in bitcoin.conf and restart bitcoind."
         );
     }
 

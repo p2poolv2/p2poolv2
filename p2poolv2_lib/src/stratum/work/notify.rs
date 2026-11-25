@@ -584,7 +584,7 @@ mod tests {
             noncerange: "".to_string(),
             sigoplimit: 0,
             sizelimit: 0,
-            weightlimit: 0,
+            weightlimit: 4000000,
         };
 
         let original_output_pairs = vec![
