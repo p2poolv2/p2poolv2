@@ -893,4 +893,16 @@ mod tests {
 
         assert_eq!(new_difficulty, 439);
     }
+
+    #[test]
+    fn accounting_unaccounted_shares_caps_at_max_instead_of_overflowing() {
+        // No maximum difficulty configured, like the sample config.
+        let mut adjuster = DifficultyAdjuster::new(u64::MAX, 1, None);
+        adjuster.unaccounted_shares = u64::MAX;
+
+        let difficulty = adjuster.account_for_unaccounted_shares();
+
+        assert_eq!(difficulty, u64::MAX);
+        assert_eq!(adjuster.unaccounted_shares, 0);
+    }
 }
