@@ -36,6 +36,7 @@ use p2poolv2_lib::stratum::work::prepared_notify::PreparedNotifyParams;
 use p2poolv2_lib::stratum::work::tracker::start_tracker_actor;
 use p2poolv2_lib::stratum::zmq_listener::{ZmqListener, ZmqListenerTrait};
 use signal::{ShutdownReason, setup_signal_handler};
+use std::fs;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
@@ -200,6 +201,13 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
             return Err(ExitCode::FAILURE);
         }
     };
+    match fs::canonicalize(&config.store.path) {
+        Ok(store_directory) => info!("Using store directory {}", store_directory.display()),
+        Err(error) => warn!(
+            "Using store directory {}, could not resolve its full path: {error}",
+            config.store.path
+        ),
+    }
 
     let (write_tx, write_rx) = write_channel();
     let store_writer = StoreWriter::new(store.clone(), write_rx);
