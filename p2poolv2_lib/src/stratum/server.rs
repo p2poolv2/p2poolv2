@@ -23,7 +23,7 @@ use crate::stratum::session_timeout::{self, check_session_timeouts};
 use crate::stratum::work::prepared_notify::{PreparedNotifyParams, build_notify_from_prepared};
 use crate::stratum::work::tracker::JobTracker;
 use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
-use bitcoindrpc::{BitcoinRpcConfig, BitcoindRpcClient};
+use bitcoindrpc::BitcoindRpcClient;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -252,22 +252,11 @@ impl StratumServer {
         &mut self,
         ready_tx: Option<oneshot::Sender<()>>,
         tracker_handle: Arc<JobTracker>,
-        bitcoinrpc_config: BitcoinRpcConfig,
+        bitcoindrpc_client: BitcoindRpcClient,
         metrics: metrics::MetricsHandle,
         template_rx: watch::Receiver<Option<Arc<PreparedNotifyParams>>>,
     ) -> Result<(), Box<dyn std::error::Error + Send>> {
         info!("Starting Stratum server at {}:{}", self.hostname, self.port);
-
-        let bitcoindrpc_client = BitcoindRpcClient::new(
-            &bitcoinrpc_config.url,
-            &bitcoinrpc_config.username,
-            &bitcoinrpc_config.password,
-        )
-        .map_err(|e| -> Box<dyn std::error::Error + Send> {
-            Box::new(std::io::Error::other(format!(
-                "Failed to create BitcoindRpcClient: {e}"
-            )))
-        })?;
 
         if !wait_for_chain_sync(
             &self.chain_store_handle,
@@ -758,7 +747,7 @@ mod stratum_server_tests {
                 .start(
                     Some(ready_tx),
                     tracker_handle.clone(),
-                    bitcoinrpc_config,
+                    bitcoinrpc_config.client(false).unwrap(),
                     metrics_handle,
                     template_rx,
                 )
@@ -2074,7 +2063,7 @@ mod stratum_server_tests {
                 .start(
                     Some(ready_tx),
                     tracker_handle.clone(),
-                    bitcoinrpc_config,
+                    bitcoinrpc_config.client(false).unwrap(),
                     metrics_handle,
                     template_rx,
                 )

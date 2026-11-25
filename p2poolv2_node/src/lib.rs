@@ -242,8 +242,15 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
     };
     info!("Latest tip {} at height {}", tip, height);
 
+    let rpc_client = match config.bitcoinrpc.client(false) {
+        Ok(client) => client,
+        Err(error) => {
+            error!("Failed to initialize Bitcoin RPC: {error}");
+            return Err(ExitCode::FAILURE);
+        }
+    };
     if let Err(error) = preflight::wait_for_bitcoin_node_ready(
-        &config.bitcoinrpc,
+        &rpc_client,
         Duration::from_secs(300),
         exit_sender.subscribe(),
     )
@@ -273,14 +280,13 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
     let stratum_config = config.stratum.clone().parse().unwrap();
     let network = stratum_config.network();
     build_fork_schedule(stratum_config.chain, &config.forks);
-    let bitcoinrpc_config = config.bitcoinrpc.clone();
 
     let (stratum_shutdown_tx, stratum_shutdown_rx) = tokio::sync::oneshot::channel();
     let (notify_tx, notify_rx) = mpsc::channel(NOTIFY_CHANNEL_CAPACITY);
     let tracker_handle = start_tracker_actor();
 
     let notify_tx_for_gbt = notify_tx.clone();
-    let bitcoinrpc_config_cloned = bitcoinrpc_config.clone();
+    let template_rpc_client = rpc_client.clone();
     let zmq_trigger_rx = match ZmqListener.start(&stratum_config.zmqpubhashblock) {
         Ok(rx) => rx,
         Err(e) => {
@@ -293,7 +299,7 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
     let exit_receiver_gbt = exit_sender.subscribe();
     tokio::spawn(async move {
         if let Err(e) = start_gbt(
-            bitcoinrpc_config_cloned,
+            template_rpc_client,
             notify_tx_for_gbt,
             GBT_POLL_INTERVAL,
             network,
@@ -400,7 +406,7 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
             .start(
                 None,
                 tracker_handle_cloned,
-                bitcoinrpc_config,
+                rpc_client,
                 metrics_cloned,
                 template_rx.clone(),
             )
@@ -496,4 +502,26 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
     };
 
     Ok((handles, runner))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::TcpListener;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn build_node_fails_when_bitcoin_rpc_is_unreachable() {
+        let store_dir = tempdir().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let rpc_address = listener.local_addr().unwrap();
+        drop(listener);
+        let mut config = Config::load("../config.sample.toml").unwrap();
+        config.store.path = store_dir.path().to_str().unwrap().to_string();
+        config.bitcoinrpc.url = format!("http://{rpc_address}");
+
+        let result = build_node(config).await;
+
+        assert_eq!(result.err(), Some(ExitCode::FAILURE));
+    }
 }

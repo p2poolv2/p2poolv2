@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Bitcoin RPC configuration and client debug output omit the endpoint URL and
+  credentials.
+
 - The `/pplns_shares` API endpoint takes `start_time` and `end_time` as unix
   seconds instead of RFC 3339 strings, e.g.
   `/pplns_shares?start_time=1760730000&end_time=1760730600`. Clients sending

@@ -6,7 +6,7 @@ use crate::stratum::work::block_template::BlockTemplate;
 use crate::stratum::work::error::WorkError;
 use crate::stratum::work::notify::{NotifyCmd, NotifySender};
 use bitcoin::hashes::{Hash, sha256d};
-use bitcoindrpc::{BitcoinRpcConfig, BitcoindRpcClient};
+use bitcoindrpc::BitcoindRpcClient;
 use std::sync::Arc;
 use tracing::{debug, error, instrument};
 
@@ -97,27 +97,13 @@ async fn get_block_template(
 /// Listen to zmqpubhashblock from bitcoind.
 /// Otherwise, poll for new block templates every poll_interval seconds.
 pub async fn start_gbt(
-    bitcoin_config: BitcoinRpcConfig,
+    bitcoind: BitcoindRpcClient,
     result_tx: NotifySender,
     poll_interval: u64,
     network: bitcoin::Network,
     mut zmq_trigger_rx: tokio::sync::mpsc::Receiver<()>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Create the RPC client once and reuse it for all requests
-    let bitcoind = match BitcoindRpcClient::new(
-        &bitcoin_config.url,
-        &bitcoin_config.username,
-        &bitcoin_config.password,
-    ) {
-        Ok(client) => client,
-        Err(e) => {
-            error!("Failed to connect to bitcoind: {}", e);
-            return Err(Box::new(WorkError {
-                message: format!("Failed to connect to bitcoind: {e}"),
-            }));
-        }
-    };
-
     // Print network difficulty at startup
     if let Ok(difficulty) = bitcoind.get_difficulty().await {
         debug!("Bitcoin network difficulty: {}", difficulty);
@@ -434,7 +420,7 @@ mod gbt_server_tests {
 
         // Start GBT server
         let result = start_gbt(
-            bitcoinrpc_config,
+            bitcoinrpc_config.client(false).unwrap(),
             template_tx,
             1,
             bitcoin::Network::Signet,
@@ -488,7 +474,7 @@ mod gbt_server_tests {
 
         // Start GBT server
         let result = start_gbt(
-            bitcoinrpc_config,
+            bitcoinrpc_config.client(false).unwrap(),
             template_tx,
             60,
             bitcoin::Network::Signet,

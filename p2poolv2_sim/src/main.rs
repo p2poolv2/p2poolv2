@@ -126,14 +126,7 @@ async fn main() -> ExitCode {
                         None
                     }
                 };
-                match (
-                    share_address,
-                    bitcoindrpc::BitcoindRpcClient::new(
-                        &node_config.bitcoinrpc.url,
-                        &node_config.bitcoinrpc.username,
-                        &node_config.bitcoinrpc.password,
-                    ),
-                ) {
+                match (share_address, node_config.bitcoinrpc.client(false)) {
                     (Some(share_address), Ok(sim_rpc)) => {
                         let emitter = SimEmitter::new(
                             handles.emissions_tx.clone(),

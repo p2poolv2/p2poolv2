@@ -90,7 +90,7 @@ async fn test_stratum_server_subscribe() {
             .start(
                 Some(ready_tx),
                 tracker_handle,
-                bitcoinrpc_config,
+                bitcoinrpc_config.client(false).unwrap(),
                 metrics_handle,
                 template_rx,
             )
