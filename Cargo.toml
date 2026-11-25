@@ -74,6 +74,7 @@ thiserror = "2.0.8"
 serde_json = "1.0.135"
 zmq = "0.10"
 bitcoin = { version = "0.32.5", features = ["serde", "rand-std"] }
+bdk_wallet = { version = "3.2.0", default-features = false, features = ["std", "rusqlite"] }
 bitcoinconsensus = { version = "0.106.0" }
 base64 = "0.23.1"
 tokio-util = { version = "0.7.15", features = ["codec"] }
@@ -98,3 +99,10 @@ tower = "0.5"
 rand = "0.10"
 temp-env = "0.3.6"
 test-log = { version = "0.2.17", features = ["trace"] }
+
+# Temporary: bdk_chain with a widened rusqlite range, so rusqlite 0.41
+# (bundled SQLite 3.54) can resolve RUSTSEC-2026-0459. Drop once a
+# bdk_chain 0.23.x release includes the change.
+[patch.crates-io]
+bdk_chain = { git = "https://github.com/p2poolv2/bdk", rev = "61c47900f2f43555ec8eca2e21790015fdf7fb5d" }
+bdk_core = { git = "https://github.com/p2poolv2/bdk", rev = "61c47900f2f43555ec8eca2e21790015fdf7fb5d" }
