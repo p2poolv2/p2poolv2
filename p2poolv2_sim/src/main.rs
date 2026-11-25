@@ -126,7 +126,12 @@ async fn main() -> ExitCode {
                         None
                     }
                 };
-                match (share_address, node_config.bitcoinrpc.client(false)) {
+                match (
+                    share_address,
+                    node_config
+                        .bitcoinrpc
+                        .client(node_config.network.is_onion_only()),
+                ) {
                     (Some(share_address), Ok(sim_rpc)) => {
                         let emitter = SimEmitter::new(
                             handles.emissions_tx.clone(),

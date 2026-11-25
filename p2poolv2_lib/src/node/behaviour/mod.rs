@@ -76,6 +76,7 @@ impl P2PoolBehaviour {
             local_key.public(),
         )
         .with_agent_version(format!("p2poolv2/{}", env!("CARGO_PKG_VERSION")))
+        .with_hide_listen_addrs(config.network.is_onion_only())
         .with_push_listen_addr_updates(true);
         let identify_behaviour = identify::Behaviour::new(identify_config);
 

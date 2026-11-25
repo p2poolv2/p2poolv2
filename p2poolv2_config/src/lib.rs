@@ -5,6 +5,10 @@
 use bitcoin::address::NetworkChecked;
 use bitcoin::{Address, Network};
 use bitcoindrpc::BitcoinRpcConfig;
+use config::{
+    Config as LayeredConfig, ConfigError as LayeredConfigError, Environment, File, Source,
+    ValueKind,
+};
 use p2poolv2_wallet::Address as ShareAddress;
 use serde::Deserialize;
 use std::marker::PhantomData;
@@ -365,6 +369,7 @@ where
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct NetworkConfig {
     pub listen_address: String,
     /// Peers to dial at startup and reconnect to with backoff. Optional;
@@ -390,6 +395,9 @@ pub struct NetworkConfig {
     /// Optional external address override for nodes behind NAT.
     /// If set, this address is advertised to peers via the identify protocol.
     /// Format: Multiaddr string, e.g. "/ip4/203.0.113.1/tcp/6884"
+    /// With `onlynet = ["onion"]` it must be the node's onion address, e.g.
+    /// "/onion3/<56 base32 characters>:56886", like Bitcoin Core's
+    /// `-externalip` for an onion service.
     #[serde(default)]
     pub external_address: Option<String>,
     // Fall back to the built-in DNS seeds for this network when no peer is
@@ -398,7 +406,35 @@ pub struct NetworkConfig {
     // to rely only on dial_peers.
     #[serde(default = "default_dns_seed")]
     pub dns_seed: bool,
+    /// SOCKS5 proxy for outbound peer connections, like Bitcoin Core's
+    /// `-proxy`: the tor daemon's SOCKS port as an IP literal and port, for
+    /// example "127.0.0.1:9050". A hostname is rejected, because resolving
+    /// it would itself be a DNS lookup outside Tor. Used only together with
+    /// `onlynet = ["onion"]`.
+    /// A proxy outside loopback exposes the clear
+    /// SOCKS hop and destination onion names to the intervening network.
+    #[serde(default)]
+    pub proxy: Option<String>,
+    /// Networks to make peer connections on, like Bitcoin Core's `-onlynet`.
+    /// Empty (the default) keeps plain TCP networking. `["onion"]` makes the
+    /// node Tor-only: every peer connection goes through `proxy` to an onion
+    /// address and nothing is dialed directly. No other value is supported
+    /// yet.
+    /// This transport applies that rule to outbound peer dials; inbound onion
+    /// peers arrive through the separately configured loopback listener.
+    #[serde(default)]
+    pub onlynet: Vec<String>,
 }
+
+impl NetworkConfig {
+    /// Whether `onlynet` asks for Tor-only networking.
+    pub fn is_onion_only(&self) -> bool {
+        self.onlynet == [ONLYNET_ONION]
+    }
+}
+
+/// The `onlynet` value for Tor-only networking, as Bitcoin Core spells it.
+pub const ONLYNET_ONION: &str = "onion";
 
 fn default_dns_seed() -> bool {
     true
@@ -429,6 +465,8 @@ impl Default for NetworkConfig {
             blocked_ips: vec![],
             external_address: None,
             dns_seed: true,
+            proxy: None,
+            onlynet: vec![],
         }
     }
 }
@@ -650,6 +688,7 @@ pub struct ForksConfig {
 #[allow(dead_code)]
 impl Config {
     pub fn load(path: &str) -> Result<Self, config::ConfigError> {
+        validate_configuration_roots(path, &["sim"])?;
         config::Config::builder()
             .add_source(config::File::with_name(path))
             // Nesting uses `__` so that a single `_` stays part of a field name.
@@ -826,9 +865,86 @@ impl Config {
     }
 }
 
+/// Validate the root keys in the regular node configuration sources.
+///
+/// `additional_sections` lets another binary accept its own top-level
+/// sections while reusing the node configuration. Unknown file sections and
+/// nested environment sections are rejected before deserialization so a
+/// misspelled privacy section cannot silently select the clearnet defaults.
+pub fn validate_configuration_roots(
+    path: &str,
+    additional_sections: &[&str],
+) -> Result<(), LayeredConfigError> {
+    //* Load the file independently so unknown sections cannot be masked.
+    let file_configuration = LayeredConfig::builder()
+        .add_source(File::with_name(path))
+        .build()?;
+    validate_top_level_keys(
+        &file_configuration,
+        additional_sections,
+        false,
+        "configuration file",
+    )?;
+
+    //* Load the environment independently so misspelled nested sections fail.
+    let environment_configuration = LayeredConfig::builder()
+        .add_source(
+            Environment::with_prefix("P2POOL")
+                .prefix_separator("_")
+                .separator("__"),
+        )
+        .build()?;
+    validate_top_level_keys(
+        &environment_configuration,
+        additional_sections,
+        true,
+        "P2POOL environment",
+    )
+}
+
+/// Reject unknown root keys while allowing the node sections, caller-owned
+/// sections, and legacy scalar environment keys.
+fn validate_top_level_keys(
+    configuration: &LayeredConfig,
+    additional_sections: &[&str],
+    allow_scalar_unknown_keys: bool,
+    source_name: &str,
+) -> Result<(), LayeredConfigError> {
+    let mut unknown_keys = configuration
+        .collect()?
+        .into_iter()
+        .filter_map(|(key, value)| {
+            let known_section =
+                is_node_config_section(&key) || additional_sections.contains(&key.as_str());
+            let privacy_sensitive_scalar = key.starts_with("network_");
+            let allowed_scalar = allow_scalar_unknown_keys
+                && !privacy_sensitive_scalar
+                && !matches!(value.kind, ValueKind::Table(_));
+            (!known_section && !allowed_scalar).then_some(key)
+        })
+        .collect::<Vec<_>>();
+    unknown_keys.sort();
+    if unknown_keys.is_empty() {
+        Ok(())
+    } else {
+        Err(LayeredConfigError::Message(format!(
+            "unknown top-level key in {source_name}: {}",
+            unknown_keys.join(", ")
+        )))
+    }
+}
+
+fn is_node_config_section(key: &str) -> bool {
+    matches!(
+        key,
+        "network" | "store" | "stratum" | "bitcoinrpc" | "logging" | "api" | "electrum" | "forks"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{env, fs, process};
     use temp_env::with_var;
     use tokio_test::assert_err;
 
@@ -1025,6 +1141,116 @@ mod tests {
         assert!(config.network.dns_seed);
     }
 
+    /// The sample config leaves `proxy` and `onlynet` commented out, so the
+    /// node keeps plain TCP networking.
+    #[test]
+    fn tor_defaults_to_disabled_when_proxy_and_onlynet_absent() {
+        let config = Config::load("../config.sample.toml").unwrap();
+        assert_eq!(config.network.proxy, None);
+        assert!(config.network.onlynet.is_empty());
+        assert!(!config.network.is_onion_only());
+    }
+
+    #[test]
+    fn regular_node_accepts_a_shared_config_with_a_sim_section() {
+        let contents = format!(
+            "{}\n[sim]\nenabled = false\nminer_address = \"unused\"\n\
+             hashrate = 1.0\nblock_to_share_ratio = 1\n",
+            include_str!("../../config.sample.toml")
+        );
+        let config_path =
+            env::temp_dir().join(format!("p2poolv2-shared-sim-config-{}.toml", process::id()));
+        fs::write(&config_path, contents).unwrap();
+
+        let result = Config::load(config_path.to_str().unwrap());
+        fs::remove_file(config_path).unwrap();
+
+        result.unwrap();
+    }
+
+    #[test]
+    fn misspelled_network_section_is_rejected() {
+        let contents =
+            include_str!("../../config.sample.toml").replacen("[network]", "[netwrok]", 1);
+        let config_path =
+            env::temp_dir().join(format!("p2poolv2-netwrok-config-{}.toml", process::id()));
+        fs::write(&config_path, contents).unwrap();
+
+        let result = Config::load(config_path.to_str().unwrap());
+        fs::remove_file(config_path).unwrap();
+        let error = result.unwrap_err();
+
+        assert!(error.to_string().contains("netwrok"));
+    }
+
+    #[test]
+    fn misspelled_network_proxy_is_rejected() {
+        let contents = include_str!("../../config.sample.toml").replacen(
+            "# proxy = \"127.0.0.1:9050\"",
+            "proxxy = \"127.0.0.1:9050\"",
+            1,
+        );
+        let config_path =
+            env::temp_dir().join(format!("p2poolv2-proxxy-config-{}.toml", process::id()));
+        fs::write(&config_path, contents).unwrap();
+
+        let result = Config::load(config_path.to_str().unwrap());
+        fs::remove_file(config_path).unwrap();
+        let error = result.unwrap_err();
+
+        assert!(error.to_string().contains("proxxy"));
+    }
+
+    #[test]
+    fn misspelled_network_onlynet_is_rejected() {
+        let contents = include_str!("../../config.sample.toml").replacen(
+            "# onlynet = [\"onion\"]",
+            "only_net = [\"onion\"]",
+            1,
+        );
+        let config_path =
+            env::temp_dir().join(format!("p2poolv2-only-net-config-{}.toml", process::id()));
+        fs::write(&config_path, contents).unwrap();
+
+        let result = Config::load(config_path.to_str().unwrap());
+        fs::remove_file(config_path).unwrap();
+        let error = result.unwrap_err();
+
+        assert!(error.to_string().contains("only_net"));
+    }
+
+    #[test]
+    fn proxy_and_onlynet_values_are_parsed() {
+        let network: NetworkConfig = config::Config::builder()
+            .add_source(config::File::from_str(
+                "listen_address = \"/ip4/127.0.0.1/tcp/56886\"\n\
+                 max_pending_incoming = 10\nmax_pending_outgoing = 10\n\
+                 max_established_incoming = 50\nmax_established_outgoing = 50\n\
+                 max_established_per_peer = 2\nmax_workbase_per_second = 10\n\
+                 max_userworkbase_per_second = 10\nmax_miningshare_per_second = 100\n\
+                 max_inventory_per_second = 100\nmax_transaction_per_second = 100\n\
+                 max_requests_per_second = 100\ndial_timeout_secs = 30\n\
+                 proxy = \"127.0.0.1:9050\"\nonlynet = [\"onion\"]\n",
+                config::FileFormat::Toml,
+            ))
+            .build()
+            .unwrap()
+            .try_deserialize()
+            .unwrap();
+        assert_eq!(network.proxy, Some("127.0.0.1:9050".to_string()));
+        assert_eq!(network.onlynet, vec!["onion".to_string()]);
+        assert!(network.is_onion_only());
+    }
+
+    #[test]
+    fn onlynet_with_another_network_is_not_onion_only() {
+        let network = NetworkConfig {
+            onlynet: vec!["onion".to_string(), "ipv4".to_string()],
+            ..NetworkConfig::default()
+        };
+        assert!(!network.is_onion_only());
+    }
+
     /// The sample config leaves `[electrum]` commented out, so the server is
     /// off and every field takes its default.
     #[test]
@@ -1121,6 +1347,70 @@ mod tests {
             let config = Config::load("../config.sample.toml").unwrap();
             assert_ne!(config.api.port, 59999);
         });
+    }
+
+    #[test]
+    fn env_override_rejects_a_misspelled_network_section() {
+        with_var("P2POOL_NETWROK__ONLYNET", Some("onion"), || {
+            let error = Config::load("../config.sample.toml").unwrap_err();
+            assert!(error.to_string().contains("netwrok"));
+        });
+    }
+
+    #[test]
+    fn env_override_rejects_a_misspelled_network_field() {
+        with_var("P2POOL_NETWORK__ONLY_NET", Some("onion"), || {
+            let error = Config::load("../config.sample.toml").unwrap_err();
+            assert!(error.to_string().contains("only_net"));
+        });
+    }
+
+    #[test]
+    fn env_override_rejects_single_underscore_network_field() {
+        with_var("P2POOL_NETWORK_ONLYNET", Some("onion"), || {
+            let error = Config::load("../config.sample.toml").unwrap_err();
+            assert!(error.to_string().contains("network_onlynet"));
+        });
+    }
+
+    #[test]
+    fn process_config_environment_key_remains_accepted() {
+        with_var("P2POOL_CONFIG", Some("/etc/p2poolv2/config.toml"), || {
+            Config::load("../config.sample.toml").unwrap();
+        });
+    }
+
+    #[test]
+    fn process_static_dir_environment_key_remains_accepted() {
+        with_var("P2POOL_STATIC_DIR", Some("/var/www/dashboard"), || {
+            Config::load("../config.sample.toml").unwrap();
+        });
+    }
+
+    #[test]
+    fn nested_process_config_environment_key_is_rejected() {
+        with_var("P2POOL_CONFIG__TYPO", Some("unexpected"), || {
+            let error = Config::load("../config.sample.toml").unwrap_err();
+            assert!(error.to_string().contains("config"));
+        });
+    }
+
+    #[test]
+    fn nested_process_static_dir_environment_key_is_rejected() {
+        with_var("P2POOL_STATIC_DIR__TYPO", Some("unexpected"), || {
+            let error = Config::load("../config.sample.toml").unwrap_err();
+            assert!(error.to_string().contains("static_dir"));
+        });
+    }
+
+    #[test]
+    fn docker_sample_config_still_loads() {
+        Config::load("../config-docker.sample.toml").unwrap();
+    }
+
+    #[test]
+    fn load_test_config_still_loads() {
+        Config::load("../load-tests/jmeter-testing/config-load-test.toml").unwrap();
     }
 
     /// The exact keys docker/docker-compose.p2poolv2.yml sets, asserted

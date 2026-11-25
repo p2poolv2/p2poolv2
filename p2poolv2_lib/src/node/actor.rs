@@ -53,7 +53,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinSet;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 /// NodeHandle provides an interface to interact with a Node running in a separate task
 #[derive(Clone)]
@@ -138,11 +138,12 @@ impl NodeHandle {
         Ok(rx.await?)
     }
 
-    /// Add an IP to the runtime blocklist.
+    /// Add an IP to the runtime blocklist. Fails in Tor-only mode, where
+    /// every onion peer arrives from loopback.
     pub async fn block_ip(&self, ip: std::net::IpAddr) -> Result<(), Box<dyn Error + Send + Sync>> {
         let (tx, rx) = oneshot::channel();
         self.command_tx.send(Command::BlockIp(ip, tx)).await?;
-        Ok(rx.await?)
+        rx.await?.map_err(|message| message.into())
     }
 
     /// Remove an IP from the runtime blocklist.
@@ -197,7 +198,7 @@ impl NodeHandle {
                         let _ = reply.send(Vec::new());
                     }
                     Command::BlockIp(_, reply) => {
-                        let _ = reply.send(());
+                        let _ = reply.send(Ok(()));
                     }
                     Command::UnblockIp(_, reply) => {
                         let _ = reply.send(());
@@ -260,7 +261,7 @@ impl NodeHandle {
                         let _ = reply.send(peer_infos.clone());
                     }
                     Command::BlockIp(_, reply) => {
-                        let _ = reply.send(());
+                        let _ = reply.send(Ok(()));
                     }
                     Command::UnblockIp(_, reply) => {
                         let _ = reply.send(());
@@ -714,9 +715,12 @@ impl NodeActor {
                 }
             }
             Command::BlockIp(ip, tx) => {
-                info!("Blocking IP {ip} via runtime command");
-                self.node.connection_tracker.block_ip(ip);
-                let _ = tx.send(());
+                let result = self.node.block_ip(ip);
+                match &result {
+                    Ok(()) => info!("Blocking IP {ip} via runtime command"),
+                    Err(message) => warn!("Refused to block IP {ip}: {message}"),
+                }
+                let _ = tx.send(result);
             }
             Command::UnblockIp(ip, tx) => {
                 info!("Unblocking IP {ip} via runtime command");
@@ -904,5 +908,36 @@ mod tests {
             BlockHash::from_str("00000000a3bbe4fd1da16a29dbdaba01cc35d6fc74ee17f794cf3aab94f7aaa0")
                 .unwrap();
         assert!(!confirmed_tip_progressed(None, tip));
+    }
+
+    #[tokio::test]
+    async fn test_stub_node_handle_accepts_block_ip() {
+        let node_handle = NodeHandle::new_for_test();
+        let result = node_handle.block_ip("203.0.113.5".parse().unwrap()).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_stub_node_handle_with_peers_accepts_block_ip() {
+        let (node_handle, _peer_ids) = NodeHandle::new_for_test_with_peer_count(2);
+        let result = node_handle.block_ip("203.0.113.5".parse().unwrap()).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_node_handle_block_ip_returns_refusal() {
+        let (command_tx, mut command_rx) = mpsc::channel(32);
+        let node_handle = NodeHandle { command_tx };
+        let handle =
+            tokio::spawn(async move { node_handle.block_ip("127.0.0.1".parse().unwrap()).await });
+
+        if let Some(Command::BlockIp(_, reply)) = command_rx.recv().await {
+            let _ = reply.send(Err("refused".to_string()));
+        } else {
+            panic!("Expected BlockIp command");
+        }
+
+        let error = handle.await.unwrap().unwrap_err();
+        assert_eq!(error.to_string(), "refused");
     }
 }

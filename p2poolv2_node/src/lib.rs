@@ -22,6 +22,7 @@ use p2poolv2_lib::config::Config;
 use p2poolv2_lib::forks::build_fork_schedule;
 use p2poolv2_lib::monitoring_events::create_monitoring_event_channel;
 use p2poolv2_lib::node::actor::NodeHandle;
+use p2poolv2_lib::node::validate_tor_config;
 use p2poolv2_lib::pool_difficulty::PoolDifficulty;
 use p2poolv2_lib::shares::chain::chain_store_handle::ChainStoreHandle;
 use p2poolv2_lib::shares::share_block::ShareBlock;
@@ -190,6 +191,13 @@ async fn stop_electrum_server(electrum_task: JoinHandle<()>) {
 /// `NodeHandles::emissions_tx` and `NodeHandles::template_rx` before
 /// calling `NodeRunner::run()`.
 pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), ExitCode> {
+    // Before anything connects out: the preflight RPC sync check and the ZMQ
+    // listener below run before the p2p node is built.
+    if let Err(message) = validate_tor_config(&config) {
+        error!("Invalid Tor configuration: {message}");
+        return Err(ExitCode::FAILURE);
+    }
+
     let exit_sender = watch::Sender::new(ShutdownReason::None);
     let sig_handle = setup_signal_handler(exit_sender.clone());
 
@@ -242,7 +250,7 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
     };
     info!("Latest tip {} at height {}", tip, height);
 
-    let rpc_client = match config.bitcoinrpc.client(false) {
+    let rpc_client = match config.bitcoinrpc.client(config.network.is_onion_only()) {
         Ok(client) => client,
         Err(error) => {
             error!("Failed to initialize Bitcoin RPC: {error}");
@@ -509,6 +517,25 @@ mod tests {
     use super::*;
     use std::net::TcpListener;
     use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn build_node_refuses_remote_bitcoin_rpc_in_onion_only_mode() {
+        let store_dir = tempdir().unwrap();
+        let mut config = Config::load("../config.sample.toml").unwrap();
+        let store_path = store_dir.path().join("store.db");
+        config.store.path = store_path.to_str().unwrap().to_string();
+        config.bitcoinrpc.url = "http://203.0.113.5:8332".to_string();
+        config.network.dns_seed = false;
+        config.network.proxy = Some("127.0.0.1:9050".to_string());
+        config.network.onlynet = vec!["onion".to_string()];
+        let validation_error = validate_tor_config(&config).unwrap_err();
+        assert!(validation_error.contains("bitcoinrpc.url"));
+
+        let result = build_node(config).await;
+
+        assert_eq!(result.err(), Some(ExitCode::FAILURE));
+        assert!(!store_path.exists());
+    }
 
     #[tokio::test]
     async fn build_node_fails_when_bitcoin_rpc_is_unreachable() {

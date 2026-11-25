@@ -9,10 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Opt-in onion-only P2P transport with `network.onlynet = ["onion"]` and
+  `network.proxy`. Outbound dials use Tor format-zero stream isolation with a
+  unique nonce per dial.
 - Testnet5 DNS seed `seed.p2pool.testnet5.roose.io`.
 
 ### Changed
 
+- Configuration loading rejects unknown top-level sections and unknown
+  `[network]` fields instead of silently ignoring misspellings. Operators
+  carrying old configurations must remove the obsolete
+  `rate_limit_window_secs` and `peer_inactivity_timeout_secs` network keys.
 - Bitcoin RPC configuration and client debug output omit the endpoint URL and
   credentials.
 

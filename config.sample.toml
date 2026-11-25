@@ -29,6 +29,28 @@ dial_timeout_secs = 30
 # is advertised to peers instead of auto-detecting from identify observations.
 # external_address = "/ip4/203.0.113.1/tcp/6884"
 
+# Onion-only P2P is opt-in. Set the following in this [network] section.
+# Dial peers use the remote service's port; external_address is your own
+# service and is optional. Peer hostname resolution happens at the proxy.
+# onlynet = ["onion"]
+# proxy = "127.0.0.1:9050"
+# dns_seed = false
+# dial_peers = ["/onion3/<56-character-peer-name>:56886"]
+# external_address = "/onion3/<56-character-own-name>:56886"
+#
+# To receive inbound peers, use a fresh onion service and forward its public
+# port to your actual loopback listen_address. For the listener above, torrc:
+#   HiddenServiceDir /var/lib/tor/p2poolv2/
+#   HiddenServicePort 56886 127.0.0.1:6884
+#
+# Keep Bitcoin RPC and TCP ZMQ endpoints on loopback; ZMQ also supports local
+# IPC. For a remote Bitcoin node, provide a local forwarder. blocked_ips must
+# be empty because startup rejects IP blocklists in onion-only mode.
+#
+# Keep the SOCKS proxy on loopback when possible. With a proxy on another
+# host, the clear hop to it exposes Tor use and destination onion names to the
+# intervening network.
+
 [store]
 path = "./store.db"
 pplns_ttl_days = 7

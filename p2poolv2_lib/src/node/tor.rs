@@ -19,9 +19,19 @@
 //!
 //! Inbound peers reach the node through an onion service run by tor, which
 //! forwards to the loopback `listen_address`. Listening on anything other
-//! than loopback is refused.
+//! than loopback is refused. The onion address to advertise is
+//! `network.external_address`, as with Bitcoin Core's `-externalip`.
+//!
+//! The Bitcoin RPC and ZMQ clients cannot use a proxy, so in Tor mode both
+//! must point at a loopback IP literal (or a local `ipc://` socket for ZMQ).
+//! Reaching a remote bitcoind is left to the operator, for example through a
+//! client-authorized onion service and a local forwarder. The node refuses to
+//! start otherwise; see [`validate_tor_config`], which runs before anything
+//! connects.
 
+use crate::config::{Config, NetworkConfig};
 use bitcoin::secp256k1::rand;
+use bitcoindrpc::loopback_rpc_url;
 use futures::future::BoxFuture;
 use libp2p::Multiaddr;
 use libp2p::core::transport::{DialOpts, ListenerId, Transport, TransportError, TransportEvent};
@@ -34,7 +44,10 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream as TokioTcpStream;
-use tracing::debug;
+use tracing::{debug, warn};
+
+/// The setting that turns Tor-only mode on, as error messages spell it.
+const ONION_ONLY_SETTING: &str = "network.onlynet = [\"onion\"]";
 /// SOCKS protocol version 5 (RFC 1928).
 const SOCKS_VERSION: u8 = 0x05;
 /// Authentication method "no authentication required".
@@ -65,12 +78,202 @@ const SOCKS_REPLY_SUCCEEDED: u8 = 0x00;
 const ONION3_ADDRESS_BYTES: usize = 35;
 /// RFC 4648 base32 alphabet in lower case, as used in onion hostnames.
 const BASE32_LOWER: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
+
+/// Validated Tor settings used to build the transport and advertise the node.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TorSettings {
+    pub(crate) proxy: SocketAddr,
+    pub(crate) onion_address: Option<Multiaddr>,
+}
+
 /// An onion destination for a SOCKS5 CONNECT: `<56 chars>.onion` and a port.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct OnionTarget {
     pub(crate) hostname: String,
     pub(crate) port: u16,
 }
+
+/// Checks a whole config for Tor-only operation. Does nothing for plain TCP
+/// networking (neither `network.onlynet` nor `network.proxy` set). Call it
+/// before starting anything that connects out, because it also covers the
+/// Bitcoin RPC and ZMQ endpoints, which are used before the peer-to-peer node
+/// exists.
+pub fn validate_tor_config(config: &Config) -> Result<(), String> {
+    if tor_settings(&config.network)?.is_some() {
+        validate_tor_bitcoin_rpc_url(&config.bitcoinrpc.url)?;
+        validate_tor_zmq_endpoint(&config.stratum.zmqpubhashblock)?;
+    }
+    Ok(())
+}
+
+/// The Tor settings of a network config. None for plain TCP networking, the
+/// validated settings for `onlynet = ["onion"]`. A proxy without `onlynet`,
+/// or any other `onlynet`, is an error: sending clearnet peers through the
+/// proxy is not supported, and nothing is downgraded silently.
+pub(crate) fn tor_settings(network: &NetworkConfig) -> Result<Option<TorSettings>, String> {
+    match (network.onlynet.is_empty(), &network.proxy) {
+        (true, None) => Ok(None),
+        (true, Some(_)) => Err(format!(
+            "network.proxy requires {ONION_ONLY_SETTING}: sending clearnet peers through the proxy is not supported"
+        )),
+        (false, _) => validate_onion_only_network(network).map(Some),
+    }
+}
+
+/// The Bitcoin RPC client connects directly and resolves hostnames itself,
+/// so with Tor the URL must name a loopback IP literal.
+fn validate_tor_bitcoin_rpc_url(url: &str) -> Result<(), String> {
+    loopback_rpc_url(url)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+/// The ZMQ subscriber connects directly, so with Tor the endpoint must be a
+/// loopback IP literal over tcp, or a local ipc socket. An empty endpoint
+/// makes no connection and is left to the ZMQ listener to report.
+fn validate_tor_zmq_endpoint(endpoint: &str) -> Result<(), String> {
+    if endpoint.is_empty()
+        || endpoint
+            .strip_prefix("ipc://")
+            .is_some_and(|path| !path.is_empty())
+    {
+        return Ok(());
+    }
+    if endpoint
+        .strip_prefix("tcp://")
+        .and_then(|socket| socket.parse::<SocketAddr>().ok())
+        .is_some_and(|socket| socket.ip().is_loopback() && socket.port() != 0)
+    {
+        return Ok(());
+    }
+    Err(format!(
+        "stratum.zmqpubhashblock must use a loopback TCP socket address or a local IPC endpoint with {ONION_ONLY_SETTING}"
+    ))
+}
+
+/// Checks a network config that sets `onlynet` for Tor-only operation and
+/// returns the parsed settings. Every option that would reach the clearnet,
+/// resolve names locally, or advertise an IP address is an error.
+fn validate_onion_only_network(network: &NetworkConfig) -> Result<TorSettings, String> {
+    if !network.is_onion_only() {
+        return Err(format!(
+            "network.onlynet {:?} is not supported: only {ONION_ONLY_SETTING} (Tor-only) is",
+            network.onlynet
+        ));
+    }
+    let proxy = match &network.proxy {
+        Some(proxy) => parse_proxy(proxy)?,
+        None => {
+            return Err(format!(
+                "{ONION_ONLY_SETTING} requires network.proxy, the tor SOCKS5 port, for example 127.0.0.1:9050"
+            ));
+        }
+    };
+    if network.dns_seed {
+        return Err(format!(
+            "{ONION_ONLY_SETTING} requires network.dns_seed = false: DNS seeds are clearnet lookups"
+        ));
+    }
+    if !network.blocked_ips.is_empty() {
+        return Err(format!(
+            "network.blocked_ips cannot be used with {ONION_ONLY_SETTING}: every inbound onion peer arrives through the loopback forwarder"
+        ));
+    }
+    validate_tor_listen_address(&network.listen_address)?;
+    validate_tor_dial_peers(&network.dial_peers)?;
+    let onion_address = match &network.external_address {
+        Some(external_address) => Some(parse_onion_external_address(
+            external_address,
+            &network.listen_address,
+        )?),
+        None => None,
+    };
+    Ok(TorSettings {
+        proxy,
+        onion_address,
+    })
+}
+
+/// Parses the SOCKS5 proxy as an IP literal and port. A non-loopback proxy
+/// is allowed (for a tor gateway on a trusted network) but warned about,
+/// because the hop to it is outside Tor.
+fn parse_proxy(proxy: &str) -> Result<SocketAddr, String> {
+    let address = proxy.parse::<SocketAddr>().map_err(|error| {
+        format!("network.proxy must be an IP address and port such as 127.0.0.1:9050: {error}")
+    })?;
+    if address.port() == 0 {
+        return Err("network.proxy port must not be zero".to_string());
+    }
+    if !address.ip().is_loopback() {
+        warn!(
+            "network.proxy {address} is not on loopback; the clear SOCKS hop, including destination onion names, is exposed to the intervening network"
+        );
+    }
+    Ok(address)
+}
+
+/// The listen address must be empty (outbound only) or loopback TCP, which
+/// the onion service forwards to.
+fn validate_tor_listen_address(listen_address: &str) -> Result<(), String> {
+    if listen_address.is_empty() {
+        return Ok(());
+    }
+    let address = listen_address.parse::<Multiaddr>().map_err(|error| {
+        format!("network.listen_address '{listen_address}' is not a valid multiaddr: {error}")
+    })?;
+    if loopback_tcp_port(&address).is_some_and(|port| port != 0) {
+        Ok(())
+    } else {
+        Err(format!(
+            "network.listen_address '{listen_address}' must be loopback TCP with {ONION_ONLY_SETTING}, for example /ip4/127.0.0.1/tcp/56886"
+        ))
+    }
+}
+
+/// Every configured dial peer must be an onion address.
+fn validate_tor_dial_peers(dial_peers: &[String]) -> Result<(), String> {
+    for dial_peer in dial_peers {
+        let address = dial_peer.parse::<Multiaddr>().map_err(|error| {
+            format!("network.dial_peers entry '{dial_peer}' is not a valid multiaddr: {error}")
+        })?;
+        if onion_target(&address).is_none() {
+            return Err(format!(
+                "network.dial_peers entry '{dial_peer}' is not an /onion3 address; only onion peers are allowed with {ONION_ONLY_SETTING}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Parses the external address to advertise in Tor-only mode. It must be a
+/// bare `/onion3` address, and advertising it needs a listener for the onion
+/// service.
+fn parse_onion_external_address(
+    external_address: &str,
+    listen_address: &str,
+) -> Result<Multiaddr, String> {
+    let address = external_address.parse::<Multiaddr>().map_err(|error| {
+        format!("network.external_address '{external_address}' is not a valid multiaddr: {error}")
+    })?;
+    let mut protocols = address.iter();
+    let is_bare_onion = matches!(
+        protocols.next(),
+        Some(Protocol::Onion3(onion)) if onion.port() != 0
+    ) && protocols.next().is_none();
+    if !is_bare_onion {
+        return Err(format!(
+            "network.external_address '{external_address}' must be the node's own /onion3/<address>:<port> with {ONION_ONLY_SETTING}"
+        ));
+    }
+    if listen_address.is_empty() {
+        return Err(
+            "network.external_address requires a loopback network.listen_address for the onion service to forward to"
+                .to_string(),
+        );
+    }
+    Ok(address)
+}
+
 /// True for `/ip4/127.x.x.x/tcp/<port>` and `/ip6/::1/tcp/<port>`.
 fn is_loopback_tcp(address: &Multiaddr) -> bool {
     loopback_tcp_port(address).is_some()
@@ -452,6 +655,342 @@ mod tests {
         let address: Multiaddr = format!("{ONION_MULTIADDR}/tcp/1").parse().unwrap();
         assert_eq!(onion_target(&address), None);
     }
+
+    #[test]
+    fn tor_settings_accepts_onion_only_config() {
+        let network = NetworkConfig {
+            listen_address: "/ip4/127.0.0.1/tcp/56886".to_string(),
+            dns_seed: false,
+            dial_peers: vec![ONION_MULTIADDR.to_string()],
+            proxy: Some("127.0.0.1:9050".to_string()),
+            onlynet: vec!["onion".to_string()],
+            external_address: Some(ONION_MULTIADDR.to_string()),
+            ..NetworkConfig::default()
+        };
+        let settings = tor_settings(&network).unwrap().unwrap();
+        assert_eq!(settings.proxy, "127.0.0.1:9050".parse().unwrap());
+        assert_eq!(
+            settings.onion_address,
+            Some(ONION_MULTIADDR.parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn tor_settings_is_none_for_plain_tcp_networking() {
+        assert_eq!(tor_settings(&NetworkConfig::default()), Ok(None));
+    }
+
+    #[test]
+    fn tor_settings_accepts_outbound_only_without_listener_or_external_address() {
+        let network = NetworkConfig {
+            listen_address: String::new(),
+            dns_seed: false,
+            dial_peers: vec![ONION_MULTIADDR.to_string()],
+            proxy: Some("127.0.0.1:9050".to_string()),
+            onlynet: vec!["onion".to_string()],
+            ..NetworkConfig::default()
+        };
+        let settings = tor_settings(&network).unwrap().unwrap();
+        assert_eq!(settings.onion_address, None);
+    }
+
+    #[test]
+    fn tor_settings_rejects_proxy_without_onlynet() {
+        let network = NetworkConfig {
+            proxy: Some("127.0.0.1:9050".to_string()),
+            ..NetworkConfig::default()
+        };
+        let error = tor_settings(&network).unwrap_err();
+        assert!(error.contains("network.proxy requires network.onlynet"));
+    }
+
+    #[test]
+    fn tor_settings_rejects_onlynet_other_than_onion() {
+        let network = NetworkConfig {
+            dns_seed: false,
+            proxy: Some("127.0.0.1:9050".to_string()),
+            onlynet: vec!["ipv4".to_string()],
+            ..NetworkConfig::default()
+        };
+        let error = tor_settings(&network).unwrap_err();
+        assert!(error.contains("network.onlynet [\"ipv4\"] is not supported"));
+    }
+
+    #[test]
+    fn tor_settings_rejects_onlynet_mixing_onion_and_ipv4() {
+        let network = NetworkConfig {
+            dns_seed: false,
+            proxy: Some("127.0.0.1:9050".to_string()),
+            onlynet: vec!["onion".to_string(), "ipv4".to_string()],
+            ..NetworkConfig::default()
+        };
+        let error = tor_settings(&network).unwrap_err();
+        assert!(error.contains("is not supported"));
+    }
+
+    #[test]
+    fn tor_settings_rejects_onlynet_onion_without_proxy() {
+        let network = NetworkConfig {
+            dns_seed: false,
+            onlynet: vec!["onion".to_string()],
+            ..NetworkConfig::default()
+        };
+        let error = tor_settings(&network).unwrap_err();
+        assert!(error.contains("requires network.proxy"));
+    }
+
+    #[test]
+    fn tor_settings_rejects_dns_seed() {
+        let network = NetworkConfig {
+            dns_seed: true,
+            proxy: Some("127.0.0.1:9050".to_string()),
+            onlynet: vec!["onion".to_string()],
+            ..NetworkConfig::default()
+        };
+        let error = tor_settings(&network).unwrap_err();
+        assert!(error.contains("dns_seed"));
+    }
+
+    #[test]
+    fn tor_settings_rejects_clearnet_dial_peer() {
+        let network = NetworkConfig {
+            dns_seed: false,
+            dial_peers: vec!["/ip4/203.0.113.5/tcp/56886".to_string()],
+            proxy: Some("127.0.0.1:9050".to_string()),
+            onlynet: vec!["onion".to_string()],
+            ..NetworkConfig::default()
+        };
+        let error = tor_settings(&network).unwrap_err();
+        assert!(error.contains("dial_peers"));
+    }
+
+    #[test]
+    fn tor_settings_rejects_dns_dial_peer() {
+        let network = NetworkConfig {
+            dns_seed: false,
+            dial_peers: vec!["/dns4/peer.example.com/tcp/56886".to_string()],
+            proxy: Some("127.0.0.1:9050".to_string()),
+            onlynet: vec!["onion".to_string()],
+            ..NetworkConfig::default()
+        };
+        let error = tor_settings(&network).unwrap_err();
+        assert!(error.contains("dial_peers"));
+    }
+
+    #[test]
+    fn tor_settings_rejects_public_listen_address() {
+        let network = NetworkConfig {
+            listen_address: "/ip4/0.0.0.0/tcp/56886".to_string(),
+            dns_seed: false,
+            proxy: Some("127.0.0.1:9050".to_string()),
+            onlynet: vec!["onion".to_string()],
+            ..NetworkConfig::default()
+        };
+        let error = tor_settings(&network).unwrap_err();
+        assert!(error.contains("listen_address"));
+    }
+
+    #[test]
+    fn tor_settings_rejects_ip_external_address() {
+        let network = NetworkConfig {
+            listen_address: "/ip4/127.0.0.1/tcp/56886".to_string(),
+            dns_seed: false,
+            proxy: Some("127.0.0.1:9050".to_string()),
+            onlynet: vec!["onion".to_string()],
+            external_address: Some("/ip4/203.0.113.5/tcp/56886".to_string()),
+            ..NetworkConfig::default()
+        };
+        let error = tor_settings(&network).unwrap_err();
+        assert!(error.contains("external_address"));
+    }
+
+    #[test]
+    fn tor_settings_rejects_external_address_without_listener() {
+        let network = NetworkConfig {
+            listen_address: String::new(),
+            dns_seed: false,
+            proxy: Some("127.0.0.1:9050".to_string()),
+            onlynet: vec!["onion".to_string()],
+            external_address: Some(ONION_MULTIADDR.to_string()),
+            ..NetworkConfig::default()
+        };
+        let error = tor_settings(&network).unwrap_err();
+        assert!(error.contains("listen_address"));
+    }
+
+    #[test]
+    fn tor_settings_rejects_blocked_ips() {
+        let network = NetworkConfig {
+            dns_seed: false,
+            proxy: Some("127.0.0.1:9050".to_string()),
+            onlynet: vec!["onion".to_string()],
+            blocked_ips: vec!["203.0.113.5".to_string()],
+            ..NetworkConfig::default()
+        };
+        let error = tor_settings(&network).unwrap_err();
+        assert!(error.contains("blocked_ips"));
+    }
+
+    #[test]
+    fn tor_settings_rejects_hostname_proxy() {
+        let network = NetworkConfig {
+            dns_seed: false,
+            proxy: Some("localhost:9050".to_string()),
+            onlynet: vec!["onion".to_string()],
+            ..NetworkConfig::default()
+        };
+        let error = tor_settings(&network).unwrap_err();
+        assert!(error.contains("network.proxy"));
+    }
+
+    #[test]
+    fn tor_settings_does_not_echo_malformed_proxy_credentials() {
+        let network = NetworkConfig {
+            dns_seed: false,
+            proxy: Some("socks5://private-user:private-password@127.0.0.1:9050".to_string()),
+            onlynet: vec!["onion".to_string()],
+            ..NetworkConfig::default()
+        };
+        let error = tor_settings(&network).unwrap_err();
+        assert!(!error.contains("private-user"));
+        assert!(!error.contains("private-password"));
+    }
+
+    #[test]
+    fn tor_settings_rejects_zero_proxy_port() {
+        let network = NetworkConfig {
+            dns_seed: false,
+            proxy: Some("127.0.0.1:0".to_string()),
+            onlynet: vec!["onion".to_string()],
+            ..NetworkConfig::default()
+        };
+        let error = tor_settings(&network).unwrap_err();
+        assert!(error.contains("port must not be zero"));
+    }
+
+    #[test]
+    fn tor_settings_rejects_zero_listen_port() {
+        let network = NetworkConfig {
+            listen_address: "/ip4/127.0.0.1/tcp/0".to_string(),
+            dns_seed: false,
+            proxy: Some("127.0.0.1:9050".to_string()),
+            onlynet: vec!["onion".to_string()],
+            ..NetworkConfig::default()
+        };
+        let error = tor_settings(&network).unwrap_err();
+        assert!(error.contains("listen_address"));
+    }
+
+    #[test]
+    fn tor_settings_rejects_zero_external_port() {
+        let network = NetworkConfig {
+            listen_address: "/ip4/127.0.0.1/tcp/56886".to_string(),
+            dns_seed: false,
+            proxy: Some("127.0.0.1:9050".to_string()),
+            onlynet: vec!["onion".to_string()],
+            external_address: Some(ONION_MULTIADDR.replace(":56886", ":0")),
+            ..NetworkConfig::default()
+        };
+        let error = tor_settings(&network).unwrap_err();
+        assert!(error.contains("external_address"));
+    }
+
+    #[test]
+    fn tor_settings_rejects_zero_dial_peer_port() {
+        let network = NetworkConfig {
+            dns_seed: false,
+            dial_peers: vec![ONION_MULTIADDR.replace(":56886", ":0")],
+            proxy: Some("127.0.0.1:9050".to_string()),
+            onlynet: vec!["onion".to_string()],
+            ..NetworkConfig::default()
+        };
+        let error = tor_settings(&network).unwrap_err();
+        assert!(error.contains("dial_peers"));
+    }
+
+    #[test]
+    fn bitcoin_rpc_url_accepts_ipv4_loopback() {
+        assert!(validate_tor_bitcoin_rpc_url("http://127.0.0.1:18352").is_ok());
+    }
+
+    #[test]
+    fn bitcoin_rpc_url_accepts_ipv6_loopback() {
+        assert!(validate_tor_bitcoin_rpc_url("http://[::1]:18352").is_ok());
+    }
+
+    #[test]
+    fn bitcoin_rpc_url_accepts_userinfo_and_path() {
+        assert!(
+            validate_tor_bitcoin_rpc_url("https://user:secret@127.0.0.1:18352/wallet/a").is_ok()
+        );
+    }
+
+    #[test]
+    fn bitcoin_rpc_url_rejects_clearnet_ip() {
+        let error = validate_tor_bitcoin_rpc_url("http://203.0.113.5:18352").unwrap_err();
+        assert!(error.contains("bitcoinrpc.url"));
+    }
+
+    #[test]
+    fn bitcoin_rpc_url_rejects_localhost_hostname() {
+        assert!(validate_tor_bitcoin_rpc_url("http://localhost:18352").is_err());
+    }
+
+    #[test]
+    fn bitcoin_rpc_url_rejects_onion_hostname() {
+        assert!(validate_tor_bitcoin_rpc_url(&format!("http://{ONION_HOSTNAME}:18352")).is_err());
+    }
+
+    #[test]
+    fn bitcoin_rpc_url_rejects_other_scheme() {
+        assert!(validate_tor_bitcoin_rpc_url("ftp://127.0.0.1:18352").is_err());
+    }
+
+    #[test]
+    fn bitcoin_rpc_url_error_does_not_echo_password() {
+        let error =
+            validate_tor_bitcoin_rpc_url("http://user:secret@203.0.113.5:18352").unwrap_err();
+        assert!(!error.contains("secret"));
+    }
+
+    #[test]
+    fn zmq_endpoint_accepts_tcp_loopback() {
+        assert!(validate_tor_zmq_endpoint("tcp://127.0.0.1:28335").is_ok());
+    }
+
+    #[test]
+    fn zmq_endpoint_accepts_ipc_socket() {
+        assert!(validate_tor_zmq_endpoint("ipc:///run/bitcoind/hashblock").is_ok());
+    }
+
+    #[test]
+    fn zmq_endpoint_accepts_ipv6_loopback() {
+        assert!(validate_tor_zmq_endpoint("tcp://[::1]:28335").is_ok());
+    }
+
+    #[test]
+    fn zmq_endpoint_rejects_invalid_port() {
+        assert!(validate_tor_zmq_endpoint("tcp://127.0.0.1:invalid").is_err());
+    }
+
+    #[test]
+    fn zmq_endpoint_rejects_trailing_content_without_echoing_it() {
+        let error =
+            validate_tor_zmq_endpoint("tcp://127.0.0.1:28335/private-test-value").unwrap_err();
+        assert!(!error.contains("private-test-value"));
+    }
+
+    #[test]
+    fn zmq_endpoint_rejects_clearnet_ip() {
+        let error = validate_tor_zmq_endpoint("tcp://203.0.113.5:28335").unwrap_err();
+        assert!(error.contains("zmqpubhashblock"));
+    }
+
+    #[test]
+    fn zmq_endpoint_rejects_hostname() {
+        assert!(validate_tor_zmq_endpoint("tcp://bitcoind.lan:28335").is_err());
+    }
+
     #[tokio::test]
     async fn socks5_connect_sends_onion_hostname_for_remote_resolution() {
         let (proxy, proxy_handle) = spawn_fake_socks5_proxy(
@@ -681,6 +1220,19 @@ mod tests {
         let address: Multiaddr = "/ip4/127.0.0.1/tcp/0".parse().unwrap();
         assert!(transport.listen_on(ListenerId::next(), address).is_ok());
     }
+
+    #[test]
+    fn tor_settings_accepts_proxy_off_loopback() {
+        let network = NetworkConfig {
+            dns_seed: false,
+            proxy: Some("192.0.2.10:9050".to_string()),
+            onlynet: vec!["onion".to_string()],
+            ..NetworkConfig::default()
+        };
+        let settings = tor_settings(&network).unwrap().unwrap();
+        assert_eq!(settings.proxy, "192.0.2.10:9050".parse().unwrap());
+    }
+
     #[test]
     fn is_loopback_tcp_accepts_ipv6_loopback() {
         let address: Multiaddr = "/ip6/::1/tcp/56886".parse().unwrap();
