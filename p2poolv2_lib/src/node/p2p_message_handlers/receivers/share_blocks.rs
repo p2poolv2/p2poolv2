@@ -640,10 +640,10 @@ mod tests {
     /// A block whose header commits to a coinbase-shaped transaction after
     /// index 0 is rejected before it is buffered or stored.
     ///
-    /// Storing writes no outputs for such a transaction, so the store could not
-    /// rebuild the block and validation would never mark it Invalid: it would
-    /// sit HeaderValid on the candidate chain. The other arrival checks are
-    /// mocked to pass; the coinbase position check is the real one.
+    /// The store refuses such transactions, so the block is rejected here with
+    /// a clear error rather than failing to store in the BlockReceiver. The
+    /// other arrival checks are mocked to pass; the coinbase position check is
+    /// the real one.
     #[tokio::test]
     async fn test_handle_share_block_coinbase_after_index_zero_rejected_before_buffering() {
         let mut chain_store_handle = ChainStoreHandle::default();

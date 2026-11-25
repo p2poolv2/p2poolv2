@@ -30,7 +30,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::coinbase_proof::CoinbaseProof;
 use crate::shares::share_block::{
     ShareBlock, ShareTransaction, SpendingPrevouts, extract_spending_prevouts,
-    is_terminal_blockhash,
+    first_coinbase_after_index_zero, is_terminal_blockhash,
 };
 use crate::shares::share_commitment::ShareCommitment;
 use crate::shares::transactions::coinbase::{
@@ -235,19 +235,12 @@ pub fn is_within_payout_depth(block_height: u32, tip_height: u32) -> bool {
 /// itself is bad, not a bad copy of it.
 ///
 /// Reads only the block, so `handle_share_block` runs it before the block
-/// is buffered or stored. It has to: storing writes no outputs for such a
-/// transaction (see `add_sharechain_txs`), so a stored block could not be
-/// rebuilt and validated. Both validation tiers run it too, so such a block
+/// is buffered or stored; the store would refuse it anyway (see
+/// `add_sharechain_txs`). Both validation tiers run it too, so such a block
 /// is Invalid at any depth, including below the PPLNS depth, where
 /// transactions are not otherwise validated.
 pub fn validate_coinbase_only_at_index_zero(share: &ShareBlock) -> Result<(), ValidationError> {
-    let coinbase_shaped_txs = share
-        .transactions
-        .iter()
-        .enumerate()
-        .skip(1)
-        .find(|(_position, transaction)| transaction.0.is_coinbase());
-    match coinbase_shaped_txs {
+    match first_coinbase_after_index_zero(&share.transactions) {
         Some((position, transaction)) => Err(ValidationError::consensus(format!(
             "Share transaction {} at index {position} is a coinbase; only index 0 may be",
             transaction.compute_txid()

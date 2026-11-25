@@ -1316,8 +1316,9 @@ mod tests {
     }
 
     /// A share Y can carry a copy of share X's coinbase with another witness:
-    /// the txid leaves the witness out, so it is the same txid. Storing Y
-    /// must not change the block X rebuilds to.
+    /// the txid leaves the witness out, so it is the same txid. The copy is
+    /// coinbase-shaped after index 0, so storing Y is refused, and X still
+    /// rebuilds to its own block.
     #[test]
     fn test_coinbase_copy_with_other_witness_leaves_original_block_intact() {
         let temp_dir = tempdir().unwrap();
@@ -1331,13 +1332,19 @@ mod tests {
             .add_transaction(copy)
             .build();
 
-        //* Store X, then Y carrying the altered copy of X's coinbase
+        //* Store X, then try Y carrying the altered copy of X's coinbase
         let mut batch = Store::get_write_batch();
         store.add_share_block(&original, &mut batch).unwrap();
         store.commit_batch(batch).unwrap();
         let mut batch = Store::get_write_batch();
-        store.add_share_block(&copier, &mut batch).unwrap();
-        store.commit_batch(batch).unwrap();
+        let result = store.add_share_block(&copier, &mut batch);
+        assert!(
+            matches!(
+                result,
+                Err(StoreError::CoinbaseAfterIndexZero { position: 1, .. })
+            ),
+            "unexpected: {result:?}"
+        );
 
         //* X still rebuilds with its own coinbase witness
         assert_eq!(

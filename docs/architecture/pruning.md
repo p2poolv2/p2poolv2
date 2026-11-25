@@ -155,9 +155,10 @@ relative to the candidate tip:
 - Uncle validity
 - Block size
 - Transaction count
-- No coinbase-shaped transaction after index 0 (a copy of another
-  share's coinbase); both tiers run this, so such a block is Invalid at
-  any depth
+- No coinbase-shaped transaction after index 0 (any transaction with a
+  single null-prevout input); both tiers run this, so such a block is
+  Invalid at any depth. Peer blocks are also rejected for it on arrival,
+  and the store refuses to write one
 
 Skips: coinbase structure, merkle root, witness commitment,
 transaction structure, script verification, prevout validation, MTP,
@@ -196,11 +197,11 @@ height of the oldest coinbase ancestor in the output's spending chain.
 - Spending tx outputs: `coinbase_root_height = min(coinbase_root_height
   of all inputs)`
 - The coinbase is the transaction at index 0, by position. A
-  coinbase-shaped transaction at a later index is a copy of another
-  block's coinbase (a share can carry one before validation rejects it).
-  It writes no outputs, so it cannot change the height the block whose
-  coinbase it is records, whichever block arrives first. Every output
-  row is therefore a function of its txid, and rewriting it is harmless.
+  coinbase-shaped transaction at a later index could copy another
+  block's coinbase and overwrite the height its outputs record, so
+  `add_sharechain_txs` refuses such transactions with
+  `CoinbaseAfterIndexZero` and writes nothing. Every output row is
+  therefore a function of its txid, and rewriting it is harmless.
 
 Computed at write time in `add_sharechain_txs`. In-block spending
 chains (output created and spent within the same block) use a

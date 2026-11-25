@@ -5,6 +5,7 @@
 use super::{ColumnFamily, Store, writer::StoreError};
 use crate::shares::share_block::{
     ShareTransaction, SpendingPrevouts, Txids, extract_spending_prevouts,
+    first_coinbase_after_index_zero,
 };
 use crate::store::block_tx_metadata::{ChainMembership, Status, TxMetadata};
 use bitcoin::consensus::encode::VarInt;
@@ -45,6 +46,18 @@ pub(crate) fn outpoint_key(txid: &Txid, index: u32) -> String {
 /// separate rows.
 pub(crate) fn input_key(wtxid: &Wtxid, index: u32) -> String {
     format!("{wtxid}:{index}")
+}
+
+/// Refuse share transactions that have a coinbase-shaped transaction after
+/// index 0, naming the first one.
+fn refuse_coinbase_after_index_zero(transactions: &[ShareTransaction]) -> Result<(), StoreError> {
+    match first_coinbase_after_index_zero(transactions) {
+        Some((position, transaction)) => Err(StoreError::CoinbaseAfterIndexZero {
+            txid: transaction.compute_txid(),
+            position,
+        }),
+        None => Ok(()),
+    }
 }
 
 /// The two ids of one transaction. The txid finds its outputs and the
@@ -574,20 +587,21 @@ impl Store {
     /// outputs get the minimum coinbase_root_height across their inputs.
     ///
     /// The coinbase is `transactions[0]`, by position, and also
-    /// shape. A coinbase-shaped transaction at a later index writes no
-    /// outputs, so it can never change the `coinbase_root_height` of a
-    /// coinbase with the same txid. With that rule in place every output
-    /// row is a function of its txid alone, so rewriting one never
-    /// results in root height of a previous tx being changed. A block
-    /// that has such a transaction cannot be read back, so peer blocks
-    /// are rejected for it on arrival (`handle_share_block`), before they
-    /// reach this function.
+    /// shape. Returns `CoinbaseAfterIndexZero`, writing nothing, if a
+    /// transaction at a later index is coinbase-shaped: its outputs would
+    /// overwrite the `coinbase_root_height` of a coinbase with the same
+    /// txid. With that rule in place every output row is a function of
+    /// its txid alone, so rewriting one never results in root height of
+    /// a previous tx being changed. Peer blocks are rejected for it on
+    /// arrival (`handle_share_block`); this refusal keeps the rule for
+    /// every other path into the store.
     pub(crate) fn add_sharechain_txs(
         &self,
         transactions: &[ShareTransaction],
         block_height: u32,
         batch: &mut rocksdb::WriteBatch,
     ) -> Result<Vec<TransactionIds>, StoreError> {
+        refuse_coinbase_after_index_zero(transactions)?;
         let inputs_cf = self.db.cf_handle(&ColumnFamily::Inputs).unwrap();
         let outputs_cf = self.db.cf_handle(&ColumnFamily::Outputs).unwrap();
         let mut all_ids = Vec::with_capacity(transactions.len());
@@ -612,25 +626,22 @@ impl Store {
             }
 
             let is_coinbase = position == 0 && tx.0.is_coinbase();
-            //* Write outputs, unless this is a coinbase-shaped copy after index 0
-            if position == 0 || !tx.0.is_coinbase() {
-                let coinbase_root_height = if is_coinbase {
-                    block_height
-                } else {
-                    self.min_coinbase_root_height_for_inputs(tx, &outputs_cf, &batch_heights)?
-                };
+            let coinbase_root_height = if is_coinbase {
+                block_height
+            } else {
+                self.min_coinbase_root_height_for_inputs(tx, &outputs_cf, &batch_heights)?
+            };
 
-                for (i, output) in tx.output.iter().enumerate() {
-                    let output_key = outpoint_key(&txid, i as u32);
-                    batch_heights.insert(output_key.clone(), coinbase_root_height);
-                    let stored = StoredTxOut {
-                        tx_out: output.clone(),
-                        is_coinbase,
-                        coinbase_root_height,
-                    };
-                    let serialized = consensus::serialize(&stored);
-                    batch.put_cf::<&[u8], Vec<u8>>(&outputs_cf, output_key.as_ref(), serialized);
-                }
+            for (i, output) in tx.output.iter().enumerate() {
+                let output_key = outpoint_key(&txid, i as u32);
+                batch_heights.insert(output_key.clone(), coinbase_root_height);
+                let stored = StoredTxOut {
+                    tx_out: output.clone(),
+                    is_coinbase,
+                    coinbase_root_height,
+                };
+                let serialized = consensus::serialize(&stored);
+                batch.put_cf::<&[u8], Vec<u8>>(&outputs_cf, output_key.as_ref(), serialized);
             }
         }
         Ok(all_ids)
@@ -1516,10 +1527,10 @@ mod tests {
     }
 
     /// A share Y may carry a copy of another share X's coinbase after its own.
-    /// The copy is coinbase-shaped, but only the block whose coinbase it is
-    /// may set its outputs' `coinbase_root_height`.
+    /// Storing the copy's outputs would overwrite X's, so Y's transactions are
+    /// refused, and X's coinbase outputs keep X's `coinbase_root_height`.
     #[test]
-    fn test_coinbase_copy_in_later_block_keeps_original_coinbase_root_height() {
+    fn test_add_sharechain_txs_refuses_coinbase_copy_after_index_zero() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
         let original = TestShareBlockBuilder::new().nonce(1).build();
@@ -1531,23 +1542,30 @@ mod tests {
             original_coinbase_txid
         );
 
-        //* Store X at height 7, then Y at height 9 carrying X's coinbase at index 1
+        //* Store X at height 7
         let mut batch = Store::get_write_batch();
         store
             .add_sharechain_txs(&original.transactions, 7, &mut batch)
             .unwrap();
         store.commit_batch(batch).unwrap();
-        let mut batch = Store::get_write_batch();
-        store
-            .add_sharechain_txs(
-                &[copier.transactions[0].clone(), original_coinbase],
-                9,
-                &mut batch,
-            )
-            .unwrap();
-        store.commit_batch(batch).unwrap();
 
-        //* X's coinbase outputs still carry X's height, not Y's
+        //* Y at height 9 carrying X's coinbase at index 1 is refused
+        let mut batch = Store::get_write_batch();
+        let result = store.add_sharechain_txs(
+            &[copier.transactions[0].clone(), original_coinbase],
+            9,
+            &mut batch,
+        );
+        assert!(
+            matches!(
+                result,
+                Err(StoreError::CoinbaseAfterIndexZero { txid, position: 1 })
+                    if txid == original_coinbase_txid
+            ),
+            "unexpected: {result:?}"
+        );
+
+        //* X's coinbase outputs still carry X's height
         let (_transaction, output_origins) = store
             .get_tx_with_output_origins_by_wtxid(&original.transactions[0].compute_wtxid())
             .unwrap();
@@ -1560,55 +1578,34 @@ mod tests {
         );
     }
 
-    /// Y can reach a node before X does. The copy must not claim X's coinbase
-    /// outputs then either, or X could never set them.
+    /// The refusal happens before anything is written, so a caller's batch
+    /// holds no row of the refused transactions, not even of the valid
+    /// coinbase at index 0.
     #[test]
-    fn test_coinbase_copy_stored_first_writes_no_outputs() {
+    fn test_add_sharechain_txs_refuses_coinbase_after_index_zero_before_writing() {
         let temp_dir = tempdir().unwrap();
         let store = Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap();
-        let original = TestShareBlockBuilder::new().nonce(1).build();
-        let copier = TestShareBlockBuilder::new().nonce(2).build();
-        let original_coinbase = original.transactions[0].clone();
-        let original_coinbase_txid = original_coinbase.compute_txid();
-        assert_ne!(
-            copier.transactions[0].compute_txid(),
-            original_coinbase_txid
+        let first = TestShareBlockBuilder::new().nonce(1).build();
+        let second = TestShareBlockBuilder::new().nonce(2).build();
+
+        let mut batch = Store::get_write_batch();
+        let result = store.add_sharechain_txs(
+            &[
+                first.transactions[0].clone(),
+                second.transactions[0].clone(),
+            ],
+            9,
+            &mut batch,
         );
 
-        //* Store Y at height 9 carrying X's coinbase at index 1, before X exists
-        let mut batch = Store::get_write_batch();
-        store
-            .add_sharechain_txs(
-                &[copier.transactions[0].clone(), original_coinbase],
-                9,
-                &mut batch,
-            )
-            .unwrap();
-        store.commit_batch(batch).unwrap();
-
-        //* No output row exists for X's coinbase until X is stored
-        let missing = store.get_output(&original_coinbase_txid, 0);
         assert!(
-            matches!(missing, Err(StoreError::NotFound(_))),
-            "unexpected: {missing:?}"
+            matches!(
+                result,
+                Err(StoreError::CoinbaseAfterIndexZero { position: 1, .. })
+            ),
+            "unexpected: {result:?}"
         );
-
-        //* Storing X at height 7 then gives its outputs X's height
-        let mut batch = Store::get_write_batch();
-        store
-            .add_sharechain_txs(&original.transactions, 7, &mut batch)
-            .unwrap();
-        store.commit_batch(batch).unwrap();
-        let (_transaction, output_origins) = store
-            .get_tx_with_output_origins_by_wtxid(&original.transactions[0].compute_wtxid())
-            .unwrap();
-        assert_eq!(
-            output_origins[0],
-            OutputOrigin {
-                is_coinbase: true,
-                coinbase_root_height: 7,
-            }
-        );
+        assert!(batch.is_empty(), "refused transactions must write nothing");
     }
 
     #[test]
