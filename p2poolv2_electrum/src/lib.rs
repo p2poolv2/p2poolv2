@@ -12,8 +12,8 @@ mod protocol;
 mod session;
 mod supervisor;
 mod tcp_server;
-#[cfg(test)]
-mod test_utils;
+#[cfg(any(test, feature = "test-utils"))]
+pub mod test_utils;
 mod tip;
 
 pub use error::ElectrumServerError;

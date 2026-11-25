@@ -8,6 +8,8 @@
 //! a connection handler over an in-memory duplex stream, and a line
 //! oriented client for either.
 
+#![cfg_attr(not(test), expect(dead_code))]
+
 use crate::connection::handle_connection;
 use crate::error::ElectrumServerError;
 use crate::protocol::{METHOD_NOT_FOUND, RpcError};
@@ -129,7 +131,7 @@ pub(crate) fn ping_only_dispatch(method: &str, _params: &Value) -> Result<Value,
 
 /// Spawn `run_server` with `test_config` and wait until it is listening.
 /// The server task owns its monitoring channel, which no test sends on.
-pub(crate) async fn start_test_server(
+pub async fn start_test_server(
     chain_store_handle: ChainStoreHandle,
     shutdown: CancellationToken,
 ) -> (SocketAddr, JoinHandle<Result<(), ElectrumServerError>>) {
