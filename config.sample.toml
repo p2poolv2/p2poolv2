@@ -50,6 +50,9 @@ dial_timeout_secs = 30
 # Keep the SOCKS proxy on loopback when possible. With a proxy on another
 # host, the clear hop to it exposes Tor use and destination onion names to the
 # intervening network.
+#
+# CLI alternative (PEER is the remote name without .onion; PORT is its port):
+# p2poolv2 --config node.toml --no-clearnet-p2p --socks5 127.0.0.1:9050 --no-dns --addpeers "${PEER}.onion:${PORT}"
 
 [store]
 path = "./store.db"
