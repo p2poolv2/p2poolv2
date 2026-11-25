@@ -65,6 +65,9 @@
           name = "p2poolv2-source";
         };
 
+        # Version from the root Cargo.toml, shared by every package.
+        workspaceVersion = (craneLib.crateNameFromCargoToml { inherit src; }).version;
+
         # Common args shared across all crane builds
         commonArgs = {
           inherit src;
@@ -78,22 +81,9 @@
         };
 
         # First build only dependencies (used as a shared cache by subsequent
-        # builds).  Both the workspace and individual packages depend on this
-        # so the dependency tree is built once.
+        # builds).  Every binary links against this so the dependency tree is
+        # built once.
         depsOnly = craneLib.buildDepsOnly (commonArgs // { pname = "p2poolv2-deps"; });
-
-        # Build the entire workspace (all crates, including dev-dependencies).
-        # doCheck is false because the dev shell runs tests via `just test`.
-        workspace = craneLib.buildPackage (
-          commonArgs
-          // {
-            pname = "p2poolv2";
-            cargoArtifacts = depsOnly;
-            cargoExtraArgs = "--workspace";
-            inherit (craneLib.crateNameFromCargoToml { inherit src; }) version;
-            doCheck = false;
-          }
-        );
 
         # Individual binary packages, each depending on the shared deps-only
         # build to avoid rebuilding the dependency tree.
@@ -103,7 +93,7 @@
             pname = "p2poolv2_node";
             cargoArtifacts = depsOnly;
             cargoExtraArgs = "-p p2poolv2_node";
-            version = workspace.version;
+            version = workspaceVersion;
             doCheck = false;
           }
         );
@@ -114,7 +104,7 @@
             pname = "p2poolv2_sim";
             cargoArtifacts = depsOnly;
             cargoExtraArgs = "-p p2poolv2_sim --features sim";
-            version = workspace.version;
+            version = workspaceVersion;
             doCheck = false;
           }
         );
@@ -126,7 +116,6 @@
             rust
             pkgs.cargo-nextest
             pkgs.pkg-config
-            pkgs.cmake
             pkgs.rustPlatform.bindgenHook
             pkgs.just
 
@@ -139,10 +128,7 @@
           # Default package: the main node binary
           default = p2poolv2_node;
 
-          # Workspace build (all crates)
-          workspace = workspace;
-
-          # Main node binary (also available as workspace default)
+          # Main node binary
           p2poolv2_node = p2poolv2_node;
 
           # No-PoW load-test simulation binary
@@ -155,9 +141,8 @@
             type = "app";
             program = "${p2poolv2_node}/bin/p2poolv2";
           };
-        };
 
-        formatter = pkgs.nixpkgs-fmt;
+        };
       }
     );
 }
