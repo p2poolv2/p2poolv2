@@ -14,6 +14,7 @@ pub mod peer_reconnector;
 pub mod request_response_handler;
 pub mod request_sender;
 pub mod response_worker;
+mod tor;
 pub mod validation_worker;
 pub use crate::config::Config;
 pub mod actor;
@@ -57,7 +58,7 @@ use libp2p::{
 use std::collections::HashSet;
 use std::error::Error;
 use std::io;
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -137,6 +138,23 @@ fn base_transport(
         dial_filter::is_configured_or_not_dns(address, &configured_dns)
     })
     .boxed()
+}
+
+/// Selects the P2P transport. The Tor transport remains inert until the
+/// configuration validation commit passes a proxy address here.
+fn select_base_transport(
+    tor_proxy: Option<SocketAddr>,
+    tcp_config: TcpConfig,
+    dial_peers: &[String],
+    blocked_ips: BlockedIps,
+) -> Boxed<TcpStream> {
+    match tor_proxy {
+        Some(proxy) => {
+            info!("Tor-only networking: dialing onion peers through SOCKS5 proxy {proxy}");
+            tor::TorTransport::new(proxy, tcp_config).boxed()
+        }
+        None => base_transport(tcp_config, dial_peers, blocked_ips),
+    }
 }
 
 /// TCP that refuses to dial IPs on the blocklist.
@@ -254,12 +272,17 @@ impl Node {
         }
         let blocked_ips = BlockedIps::new(blocked_ips);
 
-        let transport = base_transport(tcp_config, &config.network.dial_peers, blocked_ips.clone())
-            .upgrade(libp2p::core::upgrade::Version::V1)
-            .authenticate(noise_config)
-            .multiplex(libp2p::yamux::Config::default())
-            .timeout(Duration::from_secs(dial_timeout_secs))
-            .boxed();
+        let transport = select_base_transport(
+            None,
+            tcp_config,
+            &config.network.dial_peers,
+            blocked_ips.clone(),
+        )
+        .upgrade(libp2p::core::upgrade::Version::V1)
+        .authenticate(noise_config)
+        .multiplex(libp2p::yamux::Config::default())
+        .timeout(Duration::from_secs(dial_timeout_secs))
+        .boxed();
 
         let mut swarm = SwarmBuilder::with_existing_identity(id_keys)
             .with_tokio()
