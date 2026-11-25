@@ -27,6 +27,9 @@ use crate::node::p2p_message_handlers::senders::send_share_block_broadcast;
 use crate::node::request_response_handler::block_fetcher::{
     BlockFetcher, create_block_fetcher_channel,
 };
+use crate::node::request_response_handler::tx_fetch::{
+    TxFetchError, TxFetchHandle, TxFetchReceiver, TxFetcher, create_tx_fetcher_channel,
+};
 use crate::node::request_sender::RequestSender;
 use crate::node::response_worker::{ResponseWorker, create_response_worker_channel};
 use crate::node::validation_worker::{ValidationWorker, create_validation_channel};
@@ -61,6 +64,9 @@ use tracing::{debug, error, info};
 pub struct NodeHandle {
     // The channel to send commands to the Node Actor
     command_tx: mpsc::Sender<Command>,
+    /// Handle to the transaction fetcher actor, exposing transport-only
+    /// transaction requests to callers outside the node event loop.
+    tx_fetch_handle: TxFetchHandle,
 }
 
 #[allow(dead_code)]
@@ -76,6 +82,7 @@ impl NodeHandle {
         pplns_window: Arc<RwLock<PplnsWindow>>,
     ) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error + Send + Sync>> {
         let (command_tx, command_rx) = mpsc::channel::<Command>(32);
+        let (tx_fetch_handle, tx_fetch_rx) = create_tx_fetcher_channel();
         let (node_actor, stopping_rx) = NodeActor::new(
             config,
             chain_store_handle,
@@ -85,6 +92,8 @@ impl NodeHandle {
             monitoring_event_sender,
             notify_tx,
             pplns_window,
+            tx_fetch_handle.clone(),
+            tx_fetch_rx,
         )
         .unwrap();
 
@@ -92,7 +101,13 @@ impl NodeHandle {
             node_actor.run().await;
         });
 
-        Ok((Self { command_tx }, stopping_rx))
+        Ok((
+            Self {
+                command_tx,
+                tx_fetch_handle,
+            },
+            stopping_rx,
+        ))
     }
 
     /// Get a list of connected peers
@@ -103,6 +118,25 @@ impl NodeHandle {
             Ok(peers) => Ok(peers),
             Err(e) => Err(e.into()),
         }
+    }
+
+    /// Request a share-chain transaction from `peer`.
+    ///
+    /// One flight per txid: duplicate requests join the flight and receive
+    /// the same outcome, whichever peer the flight is asking. With `None`,
+    /// an existing flight is joined; with no flight, no peer is asked and
+    /// the request resolves with [`TxFetchError::Unavailable`].
+    pub async fn request_transaction(
+        &self,
+        txid: bitcoin::Txid,
+        peer: Option<libp2p::PeerId>,
+    ) -> Result<bitcoin::Transaction, TxFetchError> {
+        let response_rx = self.tx_fetch_handle.request(txid, peer).await?;
+        response_rx.await.map_err(|recv_error| {
+            TxFetchError::Unavailable(format!(
+                "transaction fetcher dropped the pending request: {recv_error}"
+            ))
+        })?
     }
 
     /// Shutdown the node
@@ -175,6 +209,9 @@ impl NodeHandle {
 #[cfg(any(test, feature = "test-utils"))]
 impl NodeHandle {
     /// Create a stub NodeHandle for tests that responds to commands with defaults.
+    ///
+    /// The stub carries no transaction fetcher, so `request_transaction`
+    /// answers [`TxFetchError::Unavailable`].
     pub fn new_for_test() -> Self {
         let (command_tx, mut command_rx) = mpsc::channel::<Command>(32);
         tokio::spawn(async move {
@@ -211,13 +248,18 @@ impl NodeHandle {
                 }
             }
         });
-        Self { command_tx }
+        Self {
+            command_tx,
+            tx_fetch_handle: create_tx_fetcher_channel().0,
+        }
     }
 
     /// Create a stub NodeHandle for tests pre-loaded with a set of generated peers.
     ///
     /// Returns the handle and the string representations of the generated peer IDs
     /// so callers can assert on expected values without depending on libp2p directly.
+    /// The stub carries no transaction fetcher, so `request_transaction`
+    /// answers [`TxFetchError::Unavailable`].
     pub fn new_for_test_with_peer_count(count: usize) -> (Self, Vec<String>) {
         use crate::node::connection_tracker::{ConnectionDirection, PeerInfoResponse};
 
@@ -274,7 +316,13 @@ impl NodeHandle {
                 }
             }
         });
-        (Self { command_tx }, peer_id_strings)
+        (
+            Self {
+                command_tx,
+                tx_fetch_handle: create_tx_fetcher_channel().0,
+            },
+            peer_id_strings,
+        )
     }
 }
 
@@ -338,6 +386,8 @@ impl NodeActor {
         monitoring_event_sender: MonitoringEventSender,
         notify_tx: NotifySender,
         pplns_window: Arc<RwLock<PplnsWindow>>,
+        tx_fetch_handle: TxFetchHandle,
+        tx_fetch_rx: TxFetchReceiver,
     ) -> Result<(Self, oneshot::Receiver<()>), Box<dyn Error>> {
         // Create organise channel
         let (organise_tx, organise_rx) = create_organise_channel();
@@ -382,6 +432,7 @@ impl NodeActor {
             monitoring_event_sender.clone(),
             share_validator.clone(),
             response_worker_tx,
+            tx_fetch_handle.clone(),
         )?;
 
         // Spawn organise worker
@@ -455,6 +506,7 @@ impl NodeActor {
             chain_store_handle.clone(),
             node.swarm_tx.clone(),
             block_fetcher_tx_for_response,
+            tx_fetch_handle.clone(),
             validation_tx_for_response,
             block_receiver_tx_for_response,
             share_validator.clone(),
@@ -468,6 +520,17 @@ impl NodeActor {
             })
             .id();
         worker_names.insert(response_id, "Response worker");
+
+        // Spawn transaction fetcher; it places its own GetData::Txid
+        // requests on the wire through swarm_tx, like BlockFetcher.
+        let tx_fetcher = TxFetcher::new(tx_fetch_rx, node.swarm_tx.clone());
+        let tx_fetcher_id = workers
+            .spawn(async move {
+                tx_fetcher.run().await;
+                Ok(())
+            })
+            .id();
+        worker_names.insert(tx_fetcher_id, "Transaction fetcher");
 
         // Spawn emission worker - turns stratum shares into share blocks
         let emission_worker = EmissionWorker::new(
@@ -821,7 +884,10 @@ mod tests {
     #[tokio::test]
     async fn test_node_handle_get_pplns_shares_sends_correct_command() {
         let (command_tx, mut command_rx) = mpsc::channel(32);
-        let node_handle = NodeHandle { command_tx };
+        let node_handle = NodeHandle {
+            command_tx,
+            tx_fetch_handle: create_tx_fetcher_channel().0,
+        };
 
         let query = GetPplnsShareQuery {
             limit: 42,
@@ -867,7 +933,10 @@ mod tests {
         let (command_tx, command_rx) = mpsc::channel(1);
         drop(command_rx); // Close the receiver to cause send error
 
-        let node_handle = NodeHandle { command_tx };
+        let node_handle = NodeHandle {
+            command_tx,
+            tx_fetch_handle: create_tx_fetcher_channel().0,
+        };
 
         let query = GetPplnsShareQuery {
             limit: 10,

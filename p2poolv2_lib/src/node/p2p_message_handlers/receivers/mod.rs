@@ -11,6 +11,7 @@ pub mod inventory;
 pub mod request_missing_blocks;
 pub mod share_blocks;
 pub mod share_headers;
+pub mod transaction;
 
 pub use getblocks::handle_getblocks;
 pub use getdata::handle_getdata_block;
@@ -19,3 +20,4 @@ pub use handshake::handle_handshake;
 pub use inventory::handle_inventory;
 pub use share_blocks::handle_share_block;
 pub use share_headers::handle_share_headers;
+pub use transaction::{handle_transaction_not_found, handle_transaction_received};

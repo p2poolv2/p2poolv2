@@ -2,11 +2,13 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+pub mod fetch_transaction;
 pub mod getheaders;
 pub mod handshake;
 pub mod inventory;
 pub mod share_block;
 
+pub use fetch_transaction::send_getdata_tx;
 pub use getheaders::{build_getheaders_message, send_getheaders};
 pub use handshake::build_handshake_message;
 pub use inventory::send_block_inventory;
