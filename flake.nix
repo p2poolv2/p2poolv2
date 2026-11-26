@@ -98,6 +98,11 @@
             cargoExtraArgs = "-p p2poolv2_node";
             version = workspaceVersion;
             doCheck = false;
+
+            postInstall = ''
+                # copy the static files into the output
+                cp -r p2poolv2_api/static $out/
+            '';
           }
         );
 
