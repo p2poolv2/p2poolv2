@@ -307,6 +307,9 @@ at your option.
 
 === Contribution
 
+P2Poolv2 uses the Collective Code Construction Contract (C4). See
+link:CONTRIBUTING.md[CONTRIBUTING.md] before sending a patch.
+
 Unless you explicitly state otherwise, any contribution intentionally
 submitted for inclusion in P2Poolv2 by you, as defined in the Apache-2.0
 license, shall be dual licensed as above, without any additional terms or
