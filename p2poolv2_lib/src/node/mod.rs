@@ -42,7 +42,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::ShareBlock;
 use crate::shares::validation::ShareValidator;
 use behaviour::request_response::network_prologue;
-use behaviour::{P2PoolBehaviour, P2PoolBehaviourEvent};
+use behaviour::{DialOutsideTransportBoundary, P2PoolBehaviour, P2PoolBehaviourEvent};
 use libp2p::PeerId;
 use libp2p::SwarmBuilder;
 use libp2p::core::transport::{Boxed, Transport};
@@ -55,7 +55,7 @@ use libp2p::tcp::tokio::{TcpStream, Transport as TcpTransport};
 use libp2p::{
     Multiaddr, Swarm,
     kad::{Event as KademliaEvent, QueryResult},
-    swarm::{SwarmEvent, dial_opts::DialOpts},
+    swarm::{DialError, SwarmEvent, dial_opts::DialOpts},
 };
 use std::collections::HashSet;
 use std::error::Error;
@@ -642,9 +642,22 @@ impl Node {
                 error,
                 connection_id,
             } => {
-                error!(
-                    "Failed to connect to peer: {peer_id:?}, error: {error}, connection_id: {connection_id}"
+                let outside_transport_boundary = matches!(
+                    &error,
+                    DialError::Denied { cause }
+                        if cause
+                            .downcast_ref::<DialOutsideTransportBoundary>()
+                            .is_some()
                 );
+                if outside_transport_boundary {
+                    debug!(
+                        "Skipped peer outside configured transport boundary: {peer_id:?}, connection_id: {connection_id}"
+                    );
+                } else {
+                    error!(
+                        "Failed to connect to peer: {peer_id:?}, error: {error}, connection_id: {connection_id}"
+                    );
+                }
                 self.peer_reconnector
                     .record_connection_failure(connection_id);
                 Ok(())
@@ -844,7 +857,9 @@ impl Node {
 #[cfg(test)]
 mod tests {
     use super::ChainStoreHandle;
+    use super::DialOutsideTransportBoundary;
     use super::P2PoolBehaviourEvent;
+    use super::base_transport;
     use super::dns_or_tcp_transport;
     use super::validate_tor_config;
     use crate::config::{
@@ -853,6 +868,7 @@ mod tests {
     };
     use crate::monitoring_events::create_monitoring_event_channel;
     use crate::node::Node;
+    use crate::node::connection_tracker::BlockedIps;
     use crate::node::p2p_message_handlers::receivers::block_receiver::create_block_receiver_channel;
     use crate::node::request_response_handler::block_fetcher::create_block_fetcher_channel;
     use crate::node::response_worker::create_response_worker_channel;
@@ -865,7 +881,7 @@ mod tests {
     use libp2p::core::transport::{DialOpts as TransportDialOpts, ListenerId, PortUse, Transport};
     use libp2p::identify;
     use libp2p::ping::Failure;
-    use libp2p::swarm::{ConnectionId, DialError, SwarmEvent};
+    use libp2p::swarm::{ConnectionDenied, ConnectionId, DialError, SwarmEvent};
     use libp2p::tcp::Config as TcpConfig;
     use libp2p::tcp::tokio::Transport as TcpTransport;
     use libp2p::{Multiaddr, PeerId, TransportError};
@@ -1153,6 +1169,59 @@ mod tests {
         ));
     }
 
+    #[tokio::test]
+    async fn test_plain_tcp_transport_refuses_onion_address() {
+        let mut transport = base_transport(TcpConfig::default(), &[], BlockedIps::default());
+        let onion_address: Multiaddr =
+            "/onion3/2gzyxa5ihm7nsggfxnu52rck2vv4rvmdlkiu3zzui5du4xyclen53wyd:56886"
+                .parse()
+                .unwrap();
+        let dial_options = TransportDialOpts {
+            role: Endpoint::Dialer,
+            port_use: PortUse::New,
+        };
+
+        let dial = transport.dial(onion_address, dial_options).unwrap();
+
+        assert!(dial.await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_onion_only_discovery_clearnet_candidate_opens_no_connection() {
+        let proxy_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target_port = target_listener.local_addr().unwrap().port();
+        let mut config = build_test_config("", None);
+        config.network.proxy = Some(proxy_listener.local_addr().unwrap().to_string());
+        config.network.onlynet = vec!["onion".to_string()];
+        config.bitcoinrpc.url = "http://127.0.0.1:8332".to_string();
+        let mut node = build_test_node(config);
+        let remote_peer = PeerId::random();
+        let clearnet_address: Multiaddr =
+            format!("/ip4/127.0.0.1/tcp/{target_port}").parse().unwrap();
+        node.swarm
+            .behaviour_mut()
+            .kademlia
+            .add_address(&remote_peer, clearnet_address);
+
+        assert!(matches!(
+            node.swarm.dial(remote_peer),
+            Err(DialError::NoAddresses)
+        ));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), proxy_listener.accept())
+                .await
+                .is_err(),
+            "A clearnet discovery candidate reached the SOCKS proxy"
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), target_listener.accept())
+                .await
+                .is_err(),
+            "A clearnet discovery candidate opened a direct TCP connection"
+        );
+    }
+
     /// A dial_peer hostname that resolves to a blocked IP is refused by the
     /// transport before any TCP connection is opened. The listener stands in
     /// for the peer: it must never see a connection.
@@ -1218,6 +1287,21 @@ mod tests {
             node.peer_reconnector.addresses_to_reconnect(&[]),
             vec![address]
         );
+    }
+
+    #[tokio::test]
+    async fn test_outgoing_transport_boundary_error_is_handled() {
+        let config = build_test_config("", None);
+        let mut node = build_test_node(config);
+        let event = SwarmEvent::OutgoingConnectionError {
+            connection_id: ConnectionId::new_unchecked(7),
+            peer_id: None,
+            error: DialError::Denied {
+                cause: ConnectionDenied::new(DialOutsideTransportBoundary),
+            },
+        };
+
+        node.handle_swarm_event(event).unwrap();
     }
 
     #[tokio::test]
@@ -1622,19 +1706,14 @@ mod tests {
         let mut node = build_test_node(config);
         let clearnet_peer: Multiaddr = "/ip4/203.0.113.5/tcp/56886".parse().unwrap();
 
-        node.swarm.dial(clearnet_peer).unwrap();
-        let error = tokio::time::timeout(Duration::from_secs(10), async {
-            loop {
-                if let SwarmEvent::OutgoingConnectionError { error, .. } =
-                    node.swarm.select_next_some().await
-                {
-                    return error;
-                }
-            }
-        })
-        .await
-        .expect("the clearnet dial should fail");
+        let error = node.swarm.dial(clearnet_peer).unwrap_err();
 
-        assert!(matches!(error, DialError::Transport(_)));
+        assert!(matches!(
+            error,
+            DialError::Denied { cause }
+                if cause
+                    .downcast_ref::<DialOutsideTransportBoundary>()
+                    .is_some()
+        ));
     }
 }

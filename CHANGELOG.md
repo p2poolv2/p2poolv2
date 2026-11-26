@@ -14,7 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unique nonce per dial. The node accepts `--no-clearnet-p2p`, `--socks5`,
   `--no-dns`, and `--addpeers` as shortcuts for the same network settings. See
   `docs/tor.md` for the possible cost: slower share propagation and a higher
-  uncle rate.
+  uncle rate. In onion-only mode, peer discovery filters non-onion addresses
+  before dialing them.
 - Testnet5 DNS seed `seed.p2pool.testnet5.roose.io`.
 
 ### Changed
