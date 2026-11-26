@@ -92,6 +92,56 @@ async fn test_api_server_without_authentication() -> Result<(), ApiError> {
 }
 
 #[tokio::test]
+async fn test_api_server_accepts_hostname() -> Result<(), ApiError> {
+    let (chain_store_handle, temp_dir) = setup_test_chain_store_handle(true).await;
+    let tracker_handle = start_tracker_actor();
+    let metrics_handle = start_metrics(temp_dir.path().to_str().unwrap().to_string())
+        .await
+        .map_err(|error| ApiError::ServerError(error.to_string()))?;
+    let api_config = ApiConfig {
+        hostname: "localhost".into(),
+        port: 0,
+        auth_user: None,
+        auth_token: None,
+        auth_password: None,
+        cors_allowed: false,
+    };
+    let node_handle = NodeHandle::new_for_test();
+
+    let (shutdown_tx, actual_port) = start_api_server(
+        api_config,
+        chain_store_handle,
+        metrics_handle,
+        tracker_handle,
+        node_handle,
+        create_monitoring_event_channel(),
+        Chain::Signet,
+        Some("p2poolv2".to_string()),
+    )
+    .await
+    .map_err(|error| ApiError::ServerError(error.to_string()))?;
+
+    let response = Client::new()
+        .get(format!("http://localhost:{actual_port}/health"))
+        .send()
+        .await
+        .map_err(|error| ApiError::ServerError(error.to_string()))?;
+
+    assert!(
+        response.status().is_success(),
+        "Health endpoint did not return 200 OK"
+    );
+    let body = response
+        .text()
+        .await
+        .map_err(|error| ApiError::ServerError(error.to_string()))?;
+    assert_eq!(body, "OK", "Health endpoint returned unexpected body");
+
+    let _ = shutdown_tx.send(());
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_api_server_with_authentication() -> Result<(), ApiError> {
     let (chain_store_handle, temp_dir) = setup_test_chain_store_handle(true).await;
     let tracker_handle = start_tracker_actor();

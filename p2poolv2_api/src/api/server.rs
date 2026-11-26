@@ -24,8 +24,8 @@ use p2poolv2_lib::{
 };
 use serde::Deserialize;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::oneshot;
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
@@ -182,16 +182,9 @@ pub async fn start_api_server(
     });
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-    let addr = SocketAddr::new(
-        std::net::IpAddr::V4(config.hostname.parse().unwrap()),
-        config.port,
-    );
     let app = build_router(app_state, app_config);
 
-    let listener = match tokio::net::TcpListener::bind(addr).await {
-        Ok(listener) => listener,
-        Err(e) => return Err(e),
-    };
+    let listener = tokio::net::TcpListener::bind((config.hostname.as_str(), config.port)).await?;
 
     let actual_port = listener.local_addr()?.port();
     info!(
