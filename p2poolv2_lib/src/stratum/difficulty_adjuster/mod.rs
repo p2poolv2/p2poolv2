@@ -103,12 +103,15 @@ pub trait DifficultyAdjusterTrait {
 
     /// Update the last decay timestamp and apply decay to unaccounted shares
     /// Returns seconds elapsed since the last decay
+    /// When the last decay was too recent, adds current difficulty to
+    /// unaccounted shares, capped at u64::MAX, and returns an error.
     fn update_last_decay_timestamp(
         &mut self,
         current_timestamp: SystemTime,
     ) -> Result<f64, Box<dyn std::error::Error>>;
 
-    /// Return the sum of unaccounted for shares and current difficulty
+    /// Return the sum of unaccounted for shares and current difficulty,
+    /// capped at u64::MAX instead of overflowing.
     /// Sets unaccounted for shares to zero.
     fn account_for_unaccounted_shares(&mut self) -> u64;
 
@@ -380,7 +383,17 @@ impl DifficultyAdjusterTrait for DifficultyAdjuster {
             if self.last_decay_timestamp.is_none() {
                 self.last_decay_timestamp = Some(current_timestamp);
             }
-            self.unaccounted_shares += self.current_difficulty;
+            self.unaccounted_shares = self
+                .unaccounted_shares
+                .checked_add(self.current_difficulty)
+                .unwrap_or_else(|| {
+                    // Keep this at debug. A remote miner can trigger it on every
+                    // share submission (huge password difficulty plus rapid
+                    // submits), so warn or higher would let one connection
+                    // flood the node log.
+                    debug!("unaccounted_shares would overflow u64; capping at u64::MAX");
+                    u64::MAX
+                });
             debug!("Skipping update, last decay was too recent.");
             return Err("Last decay was too recent".into());
         }
@@ -391,7 +404,16 @@ impl DifficultyAdjusterTrait for DifficultyAdjuster {
     }
 
     fn account_for_unaccounted_shares(&mut self) -> u64 {
-        let difficulty = self.current_difficulty + self.unaccounted_shares;
+        let difficulty = self
+            .current_difficulty
+            .checked_add(self.unaccounted_shares)
+            .unwrap_or_else(|| {
+                // Keep this at debug. A remote miner can drive this path
+                // repeatedly with a huge password difficulty, so warn or higher
+                // would let one connection flood the node log.
+                debug!("accounting unaccounted_shares would overflow u64; capping at u64::MAX");
+                u64::MAX
+            });
         debug!(
             "Total difficulty unaccounted for: {} = current_difficulty {} + unaccounted_shares {}",
             difficulty, self.current_difficulty, self.unaccounted_shares
@@ -436,6 +458,31 @@ impl DifficultyAdjusterTrait for DifficultyAdjuster {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn huge_start_difficulty_with_rapid_shares_does_not_overflow() {
+        // No maximum difficulty configured, like the sample config.
+        let mut adjuster = DifficultyAdjuster::new(u64::MAX, 1, None);
+        let now = SystemTime::now();
+        // args: share_diff, job_id, suggested_difficulty, timestamp
+        //* First share only initialises timestamps.
+        assert_eq!(
+            adjuster.record_share_submission(1, 0, None, now),
+            (None, true)
+        );
+        //* Second share inside the decay interval adds u64::MAX to unaccounted shares.
+        assert_eq!(
+            adjuster.record_share_submission(1, 1, None, now),
+            (None, false)
+        );
+        assert_eq!(adjuster.unaccounted_shares, u64::MAX);
+        //* Third share would overflow; unaccounted shares stay capped at u64::MAX.
+        assert_eq!(
+            adjuster.record_share_submission(1, 2, None, now),
+            (None, false)
+        );
+        assert_eq!(adjuster.unaccounted_shares, u64::MAX);
+    }
 
     #[test]
     fn test_new_difficulty_adjuster() {
@@ -867,5 +914,17 @@ mod tests {
         let new_difficulty = adjuster.calculate_new_difficulty(None, time_since_first_share);
 
         assert_eq!(new_difficulty, 439);
+    }
+
+    #[test]
+    fn accounting_unaccounted_shares_caps_at_max_instead_of_overflowing() {
+        // No maximum difficulty configured, like the sample config.
+        let mut adjuster = DifficultyAdjuster::new(u64::MAX, 1, None);
+        adjuster.unaccounted_shares = u64::MAX;
+
+        let difficulty = adjuster.account_for_unaccounted_shares();
+
+        assert_eq!(difficulty, u64::MAX);
+        assert_eq!(adjuster.unaccounted_shares, 0);
     }
 }

@@ -138,12 +138,36 @@ pub(crate) fn include_address_and_cut(
 ///
 /// Entries are sorted by address string to ensure the remainder from
 /// integer truncation is always assigned to the same deterministic address.
+///
+/// # Errors
+///
+/// Returns an error, possibly leaving `distribution` partly filled, when:
+/// - the difficulties sum to zero,
+/// - the difficulties sum past `u128::MAX`,
+/// - `total_amount` in sats times one address's difficulty exceeds `u128::MAX`.
+///
+/// # Overflow bound
+///
+/// Whenever this returns `Ok`, the result is identical to plain unchecked
+/// arithmetic, and the overflow errors cannot fire for a share chain PPLNS
+/// window, so the checks do not change consensus. A window holds at most
+/// `PPLNS_WINDOW_SHARES` (120,960) shares. Each weighs `DIFFICULTY_SCALE` (10)
+/// times its difficulty, plus 10 times the difficulty of each of at most
+/// `MAX_UNCLES` (3) uncles, so the total is at most 40 * 120,960 * the largest
+/// share difficulty. With sats capped by the 21M BTC supply (2.1e15), the
+/// product stays below `u128::MAX` (3.4e38) for share difficulties up to about
+/// 3.3e16, about 200 times current bitcoin mainnet difficulty.
 pub(crate) fn append_proportional_distribution(
     address_difficulty_map: &HashMap<Address, u128>,
     total_amount: bitcoin::Amount,
     distribution: &mut Vec<OutputPair>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let total_difficulty: u128 = address_difficulty_map.values().sum();
+    let total_difficulty = address_difficulty_map
+        .values()
+        .try_fold(0u128, |acc, difficulty| acc.checked_add(*difficulty))
+        .ok_or_else(|| {
+            "Total difficulty overflows u128 when computing proportional payout".to_string()
+        })?;
     if total_difficulty == 0 {
         return Err(
             "Invalid total difficulty (0) when computing proportional payout"
@@ -166,7 +190,15 @@ pub(crate) fn append_proportional_distribution(
             // Last address gets remainder from truncation
             total_amount - distributed_amount
         } else {
-            let amount_sats = (total_sats * *difficulty / total_difficulty) as u64;
+            let amount_sats = total_sats
+                .checked_mul(*difficulty)
+                .ok_or_else(|| {
+                    format!(
+                        "Difficulty {difficulty} too large to compute a proportional payout of {total_sats} sats"
+                    )
+                })?
+                / total_difficulty;
+            let amount_sats = amount_sats as u64;
             bitcoin::Amount::from_sat(amount_sats)
         };
 
@@ -283,5 +315,270 @@ mod tests {
         assert_eq!(distribution.len(), 1);
         assert_eq!(distribution[0].address, address);
         assert_eq!(distribution[0].amount, total_amount);
+    }
+
+    #[test]
+    fn uneven_weights_truncate_and_last_address_takes_remainder() {
+        //* Addresses sort as 34aq < ar0s < w508, so w508 is last.
+        let address_a = parse_address_from_string("bc1q34aq5drpuwy3wgl9lhup9892qp6svr8ldzyy7c");
+        let address_b = parse_address_from_string("bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq");
+        let address_c = parse_address_from_string("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4");
+        let mut address_difficulty_map = HashMap::with_capacity(3);
+        address_difficulty_map.insert(address_a.clone(), 1);
+        address_difficulty_map.insert(address_b.clone(), 2);
+        address_difficulty_map.insert(address_c.clone(), 4);
+        let mut distribution = Vec::new();
+
+        append_proportional_distribution(
+            &address_difficulty_map,
+            Amount::from_sat(100),
+            &mut distribution,
+        )
+        .unwrap();
+
+        //* Exact shares are 14.29, 28.57 and 57.14. The first two truncate,
+        //* and the last address takes the 0.86 sat lost to truncation.
+        assert_eq!(
+            distribution,
+            vec![
+                OutputPair {
+                    address: address_a,
+                    amount: Amount::from_sat(14),
+                },
+                OutputPair {
+                    address: address_b,
+                    amount: Amount::from_sat(28),
+                },
+                OutputPair {
+                    address: address_c,
+                    amount: Amount::from_sat(58),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn max_money_split_by_realistic_difficulties_sums_to_input() {
+        let address_a = parse_address_from_string("bc1q34aq5drpuwy3wgl9lhup9892qp6svr8ldzyy7c");
+        let address_b = parse_address_from_string("bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq");
+        let address_c = parse_address_from_string("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4");
+        let mut address_difficulty_map = HashMap::with_capacity(3);
+        address_difficulty_map.insert(address_a.clone(), 7);
+        address_difficulty_map.insert(address_b.clone(), 999_999);
+        address_difficulty_map.insert(address_c.clone(), 999_997);
+        let mut distribution = Vec::new();
+
+        append_proportional_distribution(
+            &address_difficulty_map,
+            Amount::MAX_MONEY,
+            &mut distribution,
+        )
+        .unwrap();
+
+        //* Exact shares end in .017, .5 and .5 sats. The first two truncate,
+        //* and the last address gets the extra sat.
+        assert_eq!(
+            distribution,
+            vec![
+                OutputPair {
+                    address: address_a,
+                    amount: Amount::from_sat(7_349_988_975),
+                },
+                OutputPair {
+                    address: address_b,
+                    amount: Amount::from_sat(1_049_997_375_003_937),
+                },
+                OutputPair {
+                    address: address_c,
+                    amount: Amount::from_sat(1_049_995_275_007_088),
+                },
+            ]
+        );
+        let distributed: Amount = distribution.iter().map(|pair| pair.amount).sum();
+        assert_eq!(distributed, Amount::MAX_MONEY);
+    }
+
+    #[test]
+    fn zero_amount_pays_zero_to_every_address() {
+        let address_a = parse_address_from_string("bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq");
+        let address_b = parse_address_from_string("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4");
+        let mut address_difficulty_map = HashMap::with_capacity(2);
+        address_difficulty_map.insert(address_a.clone(), 3);
+        address_difficulty_map.insert(address_b.clone(), 5);
+        let mut distribution = Vec::new();
+
+        append_proportional_distribution(&address_difficulty_map, Amount::ZERO, &mut distribution)
+            .unwrap();
+
+        assert_eq!(
+            distribution,
+            vec![
+                OutputPair {
+                    address: address_a,
+                    amount: Amount::ZERO,
+                },
+                OutputPair {
+                    address: address_b,
+                    amount: Amount::ZERO,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn insertion_order_does_not_change_distribution() {
+        let address_a = parse_address_from_string("bc1q34aq5drpuwy3wgl9lhup9892qp6svr8ldzyy7c");
+        let address_b = parse_address_from_string("bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq");
+        let address_c = parse_address_from_string("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4");
+        let mut forward_map = HashMap::with_capacity(3);
+        forward_map.insert(address_a.clone(), 1);
+        forward_map.insert(address_b.clone(), 2);
+        forward_map.insert(address_c.clone(), 4);
+        let mut reversed_map = HashMap::with_capacity(3);
+        reversed_map.insert(address_c, 4);
+        reversed_map.insert(address_b, 2);
+        reversed_map.insert(address_a, 1);
+        let mut from_forward = Vec::new();
+        let mut from_reversed = Vec::new();
+
+        append_proportional_distribution(&forward_map, Amount::from_sat(100), &mut from_forward)
+            .unwrap();
+        append_proportional_distribution(&reversed_map, Amount::from_sat(100), &mut from_reversed)
+            .unwrap();
+
+        assert_eq!(from_forward, from_reversed);
+    }
+
+    #[test]
+    fn empty_map_returns_error() {
+        let address_difficulty_map: HashMap<Address, u128> = HashMap::new();
+        let mut distribution = Vec::new();
+
+        let result = append_proportional_distribution(
+            &address_difficulty_map,
+            Amount::from_sat(100),
+            &mut distribution,
+        );
+
+        assert!(result.is_err());
+        assert!(distribution.is_empty());
+    }
+
+    #[test]
+    fn all_zero_difficulties_return_error() {
+        let mut address_difficulty_map = HashMap::with_capacity(2);
+        address_difficulty_map.insert(
+            parse_address_from_string("bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq"),
+            0,
+        );
+        address_difficulty_map.insert(
+            parse_address_from_string("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"),
+            0,
+        );
+        let mut distribution = Vec::new();
+
+        let result = append_proportional_distribution(
+            &address_difficulty_map,
+            Amount::from_sat(100),
+            &mut distribution,
+        );
+
+        assert!(result.is_err());
+        assert!(distribution.is_empty());
+    }
+
+    #[test]
+    fn total_difficulty_overflow_returns_error() {
+        let mut address_difficulty_map = HashMap::with_capacity(2);
+        address_difficulty_map.insert(
+            parse_address_from_string("bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq"),
+            u128::MAX,
+        );
+        address_difficulty_map.insert(
+            parse_address_from_string("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4"),
+            u128::MAX,
+        );
+        let mut distribution = Vec::new();
+
+        let error = append_proportional_distribution(
+            &address_difficulty_map,
+            Amount::from_sat(100_000_000),
+            &mut distribution,
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("Total difficulty overflows u128"),
+            "unexpected error: {error}"
+        );
+        assert!(distribution.is_empty());
+    }
+
+    /// Regression case found by proptest: the smallest difficulty whose
+    /// product with `total_sats` exceeds u128::MAX, one past the limit.
+    #[test]
+    fn per_entry_multiply_overflow_returns_error() {
+        //* Sorts first, so its share is computed with checked_mul rather
+        //* than taken as the remainder.
+        let first_address = parse_address_from_string("bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq");
+        let last_address = parse_address_from_string("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4");
+        let mut address_difficulty_map = HashMap::with_capacity(2);
+        address_difficulty_map.insert(first_address, 192_336_064_273_108_915_463_945);
+        address_difficulty_map.insert(last_address, 0);
+        let mut distribution = Vec::new();
+
+        let error = append_proportional_distribution(
+            &address_difficulty_map,
+            Amount::from_sat(1_769_207_289_371_130),
+            &mut distribution,
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("too large to compute a proportional payout"),
+            "unexpected error: {error}"
+        );
+        assert!(distribution.is_empty());
+    }
+
+    #[test]
+    fn largest_non_overflowing_product_succeeds() {
+        //* 2,753,074,036,095 = 3 * 5 * 17 * 257 * 641 * 65537 divides u128::MAX,
+        //* so total_sats * difficulty is exactly u128::MAX.
+        let total_sats: u64 = 2_753_074_036_095;
+        let difficulty = u128::MAX / total_sats as u128;
+        let first_address = parse_address_from_string("bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq");
+        let last_address = parse_address_from_string("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4");
+        let mut address_difficulty_map = HashMap::with_capacity(2);
+        address_difficulty_map.insert(first_address.clone(), difficulty);
+        address_difficulty_map.insert(last_address.clone(), difficulty);
+        let mut distribution = Vec::new();
+
+        append_proportional_distribution(
+            &address_difficulty_map,
+            Amount::from_sat(total_sats),
+            &mut distribution,
+        )
+        .unwrap();
+
+        //* Equal weights split the odd amount in half; the last address
+        //* takes the 1 sat truncation remainder.
+        assert_eq!(
+            distribution,
+            vec![
+                OutputPair {
+                    address: first_address,
+                    amount: Amount::from_sat(1_376_537_018_047),
+                },
+                OutputPair {
+                    address: last_address,
+                    amount: Amount::from_sat(1_376_537_018_048),
+                },
+            ]
+        );
     }
 }
