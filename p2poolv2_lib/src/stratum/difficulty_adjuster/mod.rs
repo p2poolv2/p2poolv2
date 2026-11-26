@@ -384,7 +384,11 @@ impl DifficultyAdjusterTrait for DifficultyAdjuster {
                 .unaccounted_shares
                 .checked_add(self.current_difficulty)
                 .unwrap_or_else(|| {
-                    tracing::warn!("unaccounted_shares would overflow u64; capping at u64::MAX");
+                    // Keep this at debug. A remote miner can trigger it on every
+                    // share submission (huge password difficulty plus rapid
+                    // submits), so warn or higher would let one connection
+                    // flood the node log.
+                    debug!("unaccounted_shares would overflow u64; capping at u64::MAX");
                     u64::MAX
                 });
             debug!("Skipping update, last decay was too recent.");
@@ -401,9 +405,10 @@ impl DifficultyAdjusterTrait for DifficultyAdjuster {
             .current_difficulty
             .checked_add(self.unaccounted_shares)
             .unwrap_or_else(|| {
-                tracing::warn!(
-                    "accounting unaccounted_shares would overflow u64; capping at u64::MAX"
-                );
+                // Keep this at debug. A remote miner can drive this path
+                // repeatedly with a huge password difficulty, so warn or higher
+                // would let one connection flood the node log.
+                debug!("accounting unaccounted_shares would overflow u64; capping at u64::MAX");
                 u64::MAX
             });
         debug!(
