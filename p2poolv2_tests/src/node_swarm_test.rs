@@ -10,7 +10,9 @@ use p2poolv2_lib::store::Store;
 use p2poolv2_lib::store::writer::{StoreHandle, StoreWriter, write_channel};
 use p2poolv2_lib::stratum::emission::Emission;
 use p2poolv2_lib::stratum::work::notify::NotifyCmd;
+use p2poolv2_lib::test_utils::unused_local_address;
 use p2poolv2_lib::{node::actor::NodeHandle, shares::share_block::ShareBlock};
+use std::net::IpAddr;
 use std::sync::{Arc, RwLock};
 
 use std::time::Duration;
@@ -441,4 +443,95 @@ async fn test_three_nodes_share_sync() {
         .shutdown()
         .await
         .expect("Failed to shutdown node 3");
+}
+
+#[tokio::test]
+async fn test_clearnet_node_blocks_ip_through_its_handle() {
+    let config =
+        common::default_test_config().with_listen_address("/ip4/127.0.0.1/tcp/0".to_string());
+    let temp_dir = tempdir().unwrap();
+    let store = Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap());
+    let (write_tx, write_rx) = write_channel();
+    let store_writer = StoreWriter::new(store.clone(), write_rx);
+    tokio::task::spawn_blocking(move || store_writer.run());
+    let store_handle = StoreHandle::new(store, write_tx);
+    let chain_store_handle = ChainStoreHandle::new(store_handle, config.stratum.network());
+    chain_store_handle
+        .init_or_setup_genesis(ShareBlock::build_genesis_for_network(config.stratum.chain).unwrap())
+        .await
+        .unwrap();
+    let (_shares_tx, shares_rx) = tokio::sync::mpsc::channel::<Emission>(10);
+    let stats_dir = tempdir().unwrap();
+    let metrics = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+        .await
+        .unwrap();
+    let (notify_tx, _notify_rx) = tokio::sync::mpsc::channel::<NotifyCmd>(10);
+    let (node_handle, _stop_rx) = NodeHandle::new(
+        config,
+        chain_store_handle,
+        shares_rx,
+        metrics,
+        create_monitoring_event_channel(),
+        notify_tx,
+        Arc::new(RwLock::new(PplnsWindow::new(bitcoin::Network::Signet))),
+    )
+    .await
+    .expect("Failed to create node");
+    let ip: IpAddr = "203.0.113.5".parse().unwrap();
+
+    node_handle.block_ip(ip).await.unwrap();
+
+    assert_eq!(node_handle.get_blocked_ips().await.unwrap(), vec![ip]);
+    node_handle
+        .shutdown()
+        .await
+        .expect("Failed to shutdown node");
+}
+
+#[tokio::test]
+async fn test_onion_only_node_refuses_to_block_ip_through_its_handle() {
+    let listen_address = unused_local_address().await;
+    let listen_address = format!("/ip4/127.0.0.1/tcp/{}", listen_address.port());
+    let mut config = common::default_test_config().with_listen_address(listen_address);
+    config.bitcoinrpc.url = "http://127.0.0.1:8332".to_string();
+    config.network.proxy = Some("127.0.0.1:9050".to_string());
+    config.network.onlynet = vec!["onion".to_string()];
+    let temp_dir = tempdir().unwrap();
+    let store = Arc::new(Store::new(temp_dir.path().to_str().unwrap().to_string(), false).unwrap());
+    let (write_tx, write_rx) = write_channel();
+    let store_writer = StoreWriter::new(store.clone(), write_rx);
+    tokio::task::spawn_blocking(move || store_writer.run());
+    let store_handle = StoreHandle::new(store, write_tx);
+    let chain_store_handle = ChainStoreHandle::new(store_handle, config.stratum.network());
+    chain_store_handle
+        .init_or_setup_genesis(ShareBlock::build_genesis_for_network(config.stratum.chain).unwrap())
+        .await
+        .unwrap();
+    let (_shares_tx, shares_rx) = tokio::sync::mpsc::channel::<Emission>(10);
+    let stats_dir = tempdir().unwrap();
+    let metrics = metrics::start_metrics(stats_dir.path().to_str().unwrap().to_string())
+        .await
+        .unwrap();
+    let (notify_tx, _notify_rx) = tokio::sync::mpsc::channel::<NotifyCmd>(10);
+    let (node_handle, _stop_rx) = NodeHandle::new(
+        config,
+        chain_store_handle,
+        shares_rx,
+        metrics,
+        create_monitoring_event_channel(),
+        notify_tx,
+        Arc::new(RwLock::new(PplnsWindow::new(bitcoin::Network::Signet))),
+    )
+    .await
+    .expect("Failed to create node");
+    let ip: IpAddr = "127.0.0.1".parse().unwrap();
+
+    let error = node_handle.block_ip(ip).await.unwrap_err();
+
+    assert!(error.to_string().contains("IP blocking is not available"));
+    assert!(node_handle.get_blocked_ips().await.unwrap().is_empty());
+    node_handle
+        .shutdown()
+        .await
+        .expect("Failed to shutdown node");
 }

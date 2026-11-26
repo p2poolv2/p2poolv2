@@ -42,8 +42,9 @@ pub enum Command {
     GetPplnsShares(GetPplnsShareQuery, oneshot::Sender<Vec<SimplePplnsShare>>),
     /// Get enriched info for all connected peers
     GetPeerInfos(oneshot::Sender<Vec<PeerInfoResponse>>),
-    /// Add an IP to the runtime blocklist
-    BlockIp(IpAddr, oneshot::Sender<()>),
+    /// Add an IP to the runtime blocklist. Replies with an error when the
+    /// node refuses, as it does in Tor-only mode.
+    BlockIp(IpAddr, oneshot::Sender<Result<(), String>>),
     /// Remove an IP from the runtime blocklist
     UnblockIp(IpAddr, oneshot::Sender<()>),
     /// List all blocked IPs

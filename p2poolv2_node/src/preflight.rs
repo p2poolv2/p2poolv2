@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use crate::signal::ShutdownReason;
-use bitcoindrpc::{BitcoinRpcConfig, BitcoindRpcClient, BitcoindRpcError};
+use bitcoindrpc::{BitcoindRpcClient, BitcoindRpcError};
 use p2poolv2_lib::stratum::work::block_weight::{
     MINIMUM_BITCOIND_VERSION, RECOMMENDED_RESERVED_WEIGHT,
 };
@@ -109,22 +109,15 @@ fn warn_to_check_reserved_weight() {
 /// `PreflightError::ShutdownRequested` instead of sleeping out the full
 /// interval.
 pub async fn wait_for_bitcoin_node_ready(
-    bitcoinrpc_config: &BitcoinRpcConfig,
+    bitcoind: &BitcoindRpcClient,
     poll_interval: Duration,
     mut shutdown_rx: watch::Receiver<ShutdownReason>,
 ) -> Result<(), PreflightError> {
-    let bitcoind = BitcoindRpcClient::new(
-        &bitcoinrpc_config.url,
-        &bitcoinrpc_config.username,
-        &bitcoinrpc_config.password,
-    )
-    .map_err(|e| PreflightError::Rpc(e.into()))?;
-
-    check_version(&bitcoind).await?;
+    check_version(bitcoind).await?;
     warn_to_check_reserved_weight();
 
     loop {
-        match check_synced(&bitcoind).await {
+        match check_synced(bitcoind).await {
             Ok(()) => return Ok(()),
             Err(PreflightError::NotSynced) => {
                 warn!(
@@ -147,6 +140,7 @@ pub async fn wait_for_bitcoin_node_ready(
 mod tests {
     use super::*;
     use base64::Engine;
+    use bitcoindrpc::BitcoinRpcConfig;
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
         matchers::{body_partial_json, header, method, path},
@@ -296,9 +290,12 @@ mod tests {
             .await;
 
         let (_shutdown_tx, shutdown_rx) = watch::channel(ShutdownReason::None);
-        let result =
-            wait_for_bitcoin_node_ready(&bitcoinrpc_config, Duration::from_millis(10), shutdown_rx)
-                .await;
+        let result = wait_for_bitcoin_node_ready(
+            &bitcoinrpc_config.client(false).unwrap(),
+            Duration::from_millis(10),
+            shutdown_rx,
+        )
+        .await;
         assert!(
             result.is_ok(),
             "wait_for_bitcoin_node_ready should eventually succeed once the node is synced"
@@ -347,9 +344,12 @@ mod tests {
             .await;
 
         let (_shutdown_tx, shutdown_rx) = watch::channel(ShutdownReason::None);
-        let result =
-            wait_for_bitcoin_node_ready(&bitcoinrpc_config, Duration::from_secs(60), shutdown_rx)
-                .await;
+        let result = wait_for_bitcoin_node_ready(
+            &bitcoinrpc_config.client(false).unwrap(),
+            Duration::from_secs(60),
+            shutdown_rx,
+        )
+        .await;
 
         let Err(error) = result else {
             panic!("wait_for_bitcoin_node_ready should fail when bitcoind is older than 29.0");
@@ -378,9 +378,12 @@ mod tests {
             .await;
 
         let (_shutdown_tx, shutdown_rx) = watch::channel(ShutdownReason::None);
-        let result =
-            wait_for_bitcoin_node_ready(&bitcoinrpc_config, Duration::from_secs(60), shutdown_rx)
-                .await;
+        let result = wait_for_bitcoin_node_ready(
+            &bitcoinrpc_config.client(false).unwrap(),
+            Duration::from_secs(60),
+            shutdown_rx,
+        )
+        .await;
 
         let Err(error) = result else {
             panic!("wait_for_bitcoin_node_ready should fail when getnetworkinfo is forbidden");

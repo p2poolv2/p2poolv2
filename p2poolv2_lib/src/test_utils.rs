@@ -34,6 +34,16 @@ use bitcoin::{
 #[cfg(any(test, feature = "test-utils"))]
 use std::str::FromStr;
 
+// Imports for the fake SOCKS5 proxy (available with test-utils feature)
+#[cfg(any(test, feature = "test-utils"))]
+use std::net::SocketAddr;
+#[cfg(any(test, feature = "test-utils"))]
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+#[cfg(any(test, feature = "test-utils"))]
+use tokio::net::{TcpListener, TcpStream};
+#[cfg(any(test, feature = "test-utils"))]
+use tokio::task::JoinHandle;
+
 // Imports only needed for internal tests
 #[cfg(any(test, feature = "test-utils"))]
 use crate::accounting::OutputPair;
@@ -1072,4 +1082,127 @@ impl TestShareHeaderBuilder {
             coinbase_proof: CoinbaseProof::default(),
         }
     }
+}
+
+/// SOCKS5 method "no authentication required" (RFC 1928).
+#[cfg(any(test, feature = "test-utils"))]
+pub const FAKE_SOCKS_METHOD_NO_AUTH: u8 = 0x00;
+/// SOCKS5 method "username/password" (RFC 1929).
+#[cfg(any(test, feature = "test-utils"))]
+pub const FAKE_SOCKS_METHOD_USERNAME_PASSWORD: u8 = 0x02;
+/// SOCKS5 reply code "succeeded".
+#[cfg(any(test, feature = "test-utils"))]
+pub const FAKE_SOCKS_REPLY_SUCCEEDED: u8 = 0x00;
+
+/// What a fake SOCKS5 proxy saw from one client.
+#[cfg(any(test, feature = "test-utils"))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObservedSocksConnect {
+    /// Methods the client offered in its greeting.
+    pub offered_methods: Vec<u8>,
+    /// Username sent during username/password authentication, if any.
+    pub username: Option<String>,
+    /// Password sent during username/password authentication, if any.
+    pub password: Option<String>,
+    /// Address type of the CONNECT request (0x03 is a hostname).
+    pub address_type: u8,
+    /// Hostname in the CONNECT request.
+    pub hostname: String,
+    /// Port in the CONNECT request.
+    pub port: u16,
+}
+
+/// Starts a fake SOCKS5 proxy on loopback that serves `client_count`
+/// clients one after another. For each it selects `selected_method`, reads
+/// the username/password if that method is selected, reads a CONNECT request
+/// with a hostname, answers with `reply_code` and then sends `payload` as if
+/// from the destination. The handle yields what every client sent.
+#[cfg(any(test, feature = "test-utils"))]
+pub async fn spawn_fake_socks5_proxy(
+    selected_method: u8,
+    reply_code: u8,
+    payload: &'static [u8],
+    client_count: usize,
+) -> (SocketAddr, JoinHandle<Vec<ObservedSocksConnect>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        let mut observed = Vec::with_capacity(client_count);
+        while observed.len() < client_count {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            observed.push(
+                serve_fake_socks5_client(&mut stream, selected_method, reply_code, payload).await,
+            );
+        }
+        observed
+    });
+    (address, handle)
+}
+
+/// Runs the server side of one SOCKS5 exchange for [`spawn_fake_socks5_proxy`].
+#[cfg(any(test, feature = "test-utils"))]
+async fn serve_fake_socks5_client(
+    stream: &mut TcpStream,
+    selected_method: u8,
+    reply_code: u8,
+    payload: &'static [u8],
+) -> ObservedSocksConnect {
+    let mut greeting_header = [0u8; 2];
+    stream.read_exact(&mut greeting_header).await.unwrap();
+    let mut offered_methods = vec![0u8; usize::from(greeting_header[1])];
+    stream.read_exact(&mut offered_methods).await.unwrap();
+    stream.write_all(&[0x05, selected_method]).await.unwrap();
+    let (username, password) = if selected_method == FAKE_SOCKS_METHOD_USERNAME_PASSWORD {
+        let (username, password) = read_fake_socks5_credentials(stream).await;
+        (Some(username), Some(password))
+    } else {
+        (None, None)
+    };
+    let mut header = [0u8; 4];
+    stream.read_exact(&mut header).await.unwrap();
+    let mut length = [0u8; 1];
+    stream.read_exact(&mut length).await.unwrap();
+    let mut hostname = vec![0u8; usize::from(length[0])];
+    stream.read_exact(&mut hostname).await.unwrap();
+    let mut port = [0u8; 2];
+    stream.read_exact(&mut port).await.unwrap();
+    stream
+        .write_all(&[0x05, reply_code, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
+        .await
+        .unwrap();
+    stream.write_all(payload).await.unwrap();
+    ObservedSocksConnect {
+        offered_methods,
+        username,
+        password,
+        address_type: header[3],
+        hostname: String::from_utf8(hostname).unwrap(),
+        port: u16::from_be_bytes(port),
+    }
+}
+
+/// Reads an RFC 1929 username/password request, accepts it, and returns both
+/// fields.
+#[cfg(any(test, feature = "test-utils"))]
+async fn read_fake_socks5_credentials(stream: &mut TcpStream) -> (String, String) {
+    let mut version_and_length = [0u8; 2];
+    stream.read_exact(&mut version_and_length).await.unwrap();
+    let mut username = vec![0u8; usize::from(version_and_length[1])];
+    stream.read_exact(&mut username).await.unwrap();
+    let mut password_length = [0u8; 1];
+    stream.read_exact(&mut password_length).await.unwrap();
+    let mut password = vec![0u8; usize::from(password_length[0])];
+    stream.read_exact(&mut password).await.unwrap();
+    stream.write_all(&[0x01, 0x00]).await.unwrap();
+    (
+        String::from_utf8(username).unwrap(),
+        String::from_utf8(password).unwrap(),
+    )
+}
+
+/// A loopback address with nothing listening, for "the proxy is down".
+#[cfg(any(test, feature = "test-utils"))]
+pub async fn unused_local_address() -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    listener.local_addr().unwrap()
 }

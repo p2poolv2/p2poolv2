@@ -2,9 +2,12 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+mod filtered_kademlia;
 pub mod request_response;
 use crate::config::Config;
 use bitcoin::BlockHash;
+pub(crate) use filtered_kademlia::DialOutsideTransportBoundary;
+use filtered_kademlia::FilteredKademlia;
 use libp2p::connection_limits;
 use libp2p::ping;
 use libp2p::request_response::ProtocolSupport;
@@ -30,7 +33,7 @@ const PING_INTERVAL_SECS: u64 = 30;
 #[derive(NetworkBehaviour)]
 #[behaviour(to_swarm = "P2PoolBehaviourEvent")]
 pub struct P2PoolBehaviour {
-    pub kademlia: kad::Behaviour<MemoryStore>,
+    pub kademlia: FilteredKademlia,
     pub identify: identify::Behaviour,
     pub ping: ping::Behaviour,
     pub request_response: RequestResponseBehaviour,
@@ -76,6 +79,7 @@ impl P2PoolBehaviour {
             local_key.public(),
         )
         .with_agent_version(format!("p2poolv2/{}", env!("CARGO_PKG_VERSION")))
+        .with_hide_listen_addrs(config.network.is_onion_only())
         .with_push_listen_addr_updates(true);
         let identify_behaviour = identify::Behaviour::new(identify_config);
 
@@ -92,7 +96,7 @@ impl P2PoolBehaviour {
         let ping_behaviour = ping::Behaviour::new(ping_config);
 
         let behaviour = P2PoolBehaviour {
-            kademlia: kademlia_behaviour,
+            kademlia: FilteredKademlia::new(kademlia_behaviour, config.network.is_onion_only()),
             identify: identify_behaviour,
             ping: ping_behaviour,
             request_response: RequestResponseBehaviour::with_codec(

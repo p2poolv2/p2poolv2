@@ -4,9 +4,12 @@
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use bitcoin::consensus::encode::serialize_hex;
+use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
+use reqwest::{ClientBuilder, Url, redirect::Policy};
 use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fmt;
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{debug, error};
@@ -38,6 +41,11 @@ struct JsonRpcError {
     message: String,
 }
 
+#[derive(Deserialize, Debug)]
+struct JsonRpcErrorResponse {
+    error: Option<JsonRpcError>,
+}
+
 #[derive(Deserialize, Clone)]
 #[allow(dead_code)]
 pub struct BitcoinRpcConfig {
@@ -46,13 +54,56 @@ pub struct BitcoinRpcConfig {
     pub password: String,
 }
 
+impl BitcoinRpcConfig {
+    /// Build a client with the node's selected RPC network policy.
+    pub fn client(&self, loopback_only: bool) -> Result<BitcoindRpcClient, BitcoindRpcError> {
+        if !loopback_only {
+            return BitcoindRpcClient::new(&self.url, &self.username, &self.password);
+        }
+        let endpoint = loopback_rpc_url(&self.url)?;
+        BitcoindRpcClient::build(
+            endpoint,
+            &self.username,
+            &self.password,
+            ClientBuilder::new().no_proxy().redirect(Policy::none()),
+            true,
+        )
+    }
+}
+
+/// Parse with the HTTP client's URL type and allow only HTTP(S) on a loopback IP.
+/// Do not include the input in errors: it can contain credentials.
+pub fn loopback_rpc_url(input: &str) -> Result<Url, BitcoindRpcError> {
+    Url::parse(input)
+        .ok()
+        .filter(|url| {
+            matches!(url.scheme(), "http" | "https")
+                && url
+                    .host_str()
+                    .and_then(|host| {
+                        host.trim_start_matches('[')
+                            .trim_end_matches(']')
+                            .parse::<IpAddr>()
+                            .ok()
+                    })
+                    .is_some_and(|address| address.is_loopback())
+        })
+        .ok_or_else(|| {
+            BitcoindRpcError::Other(
+                "bitcoinrpc.url must use HTTP(S) and a loopback IP address in onion-only mode"
+                    .to_string(),
+            )
+        })
+}
+
 /// Custom Debug to redact passwords
+/// The endpoint URL and username are redacted as well.
 impl std::fmt::Debug for BitcoinRpcConfig {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("BitcoinRpcConfig")
-            .field("url", &self.url)
-            .field("username", &self.username)
+            .field("url", &"[redacted]")
+            .field("username", &"[redacted]")
             .field("password", &"[redacted]")
             .finish()
     }
@@ -110,35 +161,57 @@ pub struct GetNetworkInfo {
     pub version: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 #[allow(dead_code)]
 pub struct BitcoindRpcClient {
     client: reqwest::Client,
-    url: String,
+    url: Url,
+    loopback_only: bool,
     request_id: Arc<AtomicU64>,
+}
+
+impl fmt::Debug for BitcoindRpcClient {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BitcoindRpcClient")
+            .field("url", &"[redacted]")
+            .field("loopback_only", &self.loopback_only)
+            .finish_non_exhaustive()
+    }
 }
 
 impl BitcoindRpcClient {
     pub fn new(url: &str, username: &str, password: &str) -> Result<Self, BitcoindRpcError> {
-        let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert(
-            reqwest::header::AUTHORIZATION,
-            format!(
-                "Basic {}",
-                STANDARD.encode(format!("{username}:{password}"))
-            )
-            .parse()
-            .map_err(|e| BitcoindRpcError::Other(format!("Invalid header: {e}")))?,
-        );
+        let endpoint = Url::parse(url)
+            .map_err(|_| BitcoindRpcError::Other("Invalid bitcoinrpc.url".to_string()))?;
+        Self::build(endpoint, username, password, ClientBuilder::new(), false)
+    }
 
-        let client = reqwest::Client::builder()
-            .default_headers(headers)
-            .build()
-            .map_err(|e| BitcoindRpcError::Other(format!("Failed to create HTTP client: {e}")))?;
+    fn build(
+        url: Url,
+        username: &str,
+        password: &str,
+        builder: ClientBuilder,
+        loopback_only: bool,
+    ) -> Result<Self, BitcoindRpcError> {
+        let mut headers = HeaderMap::new();
+        let mut authorization: HeaderValue = format!(
+            "Basic {}",
+            STANDARD.encode(format!("{username}:{password}"))
+        )
+        .parse()
+        .map_err(|error| BitcoindRpcError::Other(format!("Invalid header: {error}")))?;
+        authorization.set_sensitive(true);
+        headers.insert(AUTHORIZATION, authorization);
+
+        let client = builder.default_headers(headers).build().map_err(|error| {
+            BitcoindRpcError::Other(format!("Failed to create HTTP client: {error}"))
+        })?;
 
         Ok(Self {
             client,
-            url: url.to_string(),
+            url,
+            loopback_only,
             request_id: Arc::new(AtomicU64::new(0)),
         })
     }
@@ -156,15 +229,24 @@ impl BitcoindRpcClient {
             id,
         };
 
-        let response = match self.client.post(&self.url).json(&request).send().await {
-            Ok(resp) => resp,
-            Err(e) => {
-                let status_code = e.status().map(|s| s.as_u16());
+        let response = match self
+            .client
+            .post(self.url.clone())
+            .json(&request)
+            .send()
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                let error = error.without_url();
+                let status_code = error.status().map(|status| status.as_u16());
                 error!(
                     "HTTP request failed to bitcoin node: status={:?}, error={}",
-                    status_code, e
+                    status_code, error
                 );
-                return Err(BitcoindRpcError::Other(format!("HTTP request failed: {e}")));
+                return Err(BitcoindRpcError::Other(format!(
+                    "HTTP request failed: {error}"
+                )));
             }
         };
 
@@ -177,6 +259,20 @@ impl BitcoindRpcClient {
                 .text()
                 .await
                 .unwrap_or_else(|_| "Failed to read error body".to_string());
+            if self.loopback_only {
+                if let Ok(JsonRpcErrorResponse { error: Some(error) }) =
+                    serde_json::from_str(&error_body)
+                {
+                    return Err(BitcoindRpcError::RpcError {
+                        code: error.code,
+                        message: error.message,
+                    });
+                }
+                return Err(BitcoindRpcError::HttpError {
+                    status_code,
+                    message: "Local RPC request failed".to_string(),
+                });
+            }
             error!(
                 "Error reaching bitcoin node with status={:?}. Message={:?}",
                 status_code, error_body
@@ -348,10 +444,168 @@ impl BitcoindRpcClient {
 mod tests {
     use super::*;
     use bitcoin::CompactTarget;
+    use serde_json::{Value, json};
+    use std::{env, io::Write, net::TcpListener, process::Command, thread};
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
         matchers::{body_json, header, method, path},
     };
+
+    #[tokio::test]
+    async fn loopback_rpc_does_not_follow_redirects() {
+        let first = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(307)
+                    .insert_header("Location", "http://127.0.0.1:1/redirect-target"),
+            )
+            .expect(1)
+            .mount(&first)
+            .await;
+        let config = BitcoinRpcConfig {
+            url: first.uri(),
+            username: "test".into(),
+            password: "test".into(),
+        };
+        let client = config.client(true).unwrap();
+        let error = client.request::<String>("test", vec![]).await.unwrap_err();
+        assert!(matches!(
+            error,
+            BitcoindRpcError::HttpError {
+                status_code: 307,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn loopback_rpc_preserves_json_rpc_error_from_http_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(500).set_body_json(json!({
+                "result": null,
+                "error": {
+                    "code": -28,
+                    "message": "Loading block index"
+                },
+                "id": 0
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let config = BitcoinRpcConfig {
+            url: server.uri(),
+            username: "test".into(),
+            password: "test".into(),
+        };
+        let client = config.client(true).unwrap();
+
+        let error = client.request::<Value>("test", vec![]).await.unwrap_err();
+
+        assert!(matches!(
+            error,
+            BitcoindRpcError::RpcError {
+                code: -28,
+                message
+            } if message == "Loading block index"
+        ));
+    }
+
+    #[tokio::test]
+    async fn loopback_rpc_hides_non_json_http_error_body() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(
+                ResponseTemplate::new(500).set_body_string("private reverse proxy response"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let config = BitcoinRpcConfig {
+            url: server.uri(),
+            username: "test".into(),
+            password: "test".into(),
+        };
+        let client = config.client(true).unwrap();
+
+        let error = client.request::<Value>("test", vec![]).await.unwrap_err();
+
+        assert!(matches!(
+            error,
+            BitcoindRpcError::HttpError {
+                status_code: 500,
+                ref message
+            } if message == "Local RPC request failed"
+        ));
+        assert!(!error.to_string().contains("private reverse proxy response"));
+    }
+
+    #[test]
+    fn loopback_rpc_ignores_system_proxy_environment() {
+        if env::var_os("BITCOINDRPC_PROXY_TEST_CHILD").is_some() {
+            tokio::runtime::Runtime::new().unwrap().block_on(async {
+                let target = MockServer::start().await;
+                Mock::given(method("POST"))
+                    .and(path("/"))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                        "result": 42,
+                        "error": null
+                    })))
+                    .expect(1)
+                    .mount(&target)
+                    .await;
+                let config = BitcoinRpcConfig {
+                    url: target.uri(),
+                    username: "test".into(),
+                    password: "test".into(),
+                };
+                let proxied_client = config.client(false).unwrap();
+                let proxy_result = proxied_client.request::<u64>("getblockcount", vec![]).await;
+                assert!(proxy_result.is_err());
+                let client = config.client(true).unwrap();
+
+                let block_count: u64 = client.request("getblockcount", vec![]).await.unwrap();
+
+                assert_eq!(block_count, 42);
+            });
+            return;
+        }
+
+        let unavailable_proxy = TcpListener::bind("127.0.0.1:0").unwrap();
+        let proxy_url = format!("http://{}", unavailable_proxy.local_addr().unwrap());
+        let proxy_thread = thread::spawn(move || {
+            let (mut stream, _) = unavailable_proxy.accept().unwrap();
+            stream
+                .write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
+                .unwrap();
+        });
+        let status = Command::new(env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("tests::loopback_rpc_ignores_system_proxy_environment")
+            .arg("--nocapture")
+            .env("BITCOINDRPC_PROXY_TEST_CHILD", "1")
+            .env("HTTP_PROXY", &proxy_url)
+            .env("HTTPS_PROXY", &proxy_url)
+            .env("ALL_PROXY", &proxy_url)
+            .env_remove("NO_PROXY")
+            .env_remove("http_proxy")
+            .env_remove("https_proxy")
+            .env_remove("all_proxy")
+            .env_remove("no_proxy")
+            .status()
+            .unwrap();
+        proxy_thread.join().unwrap();
+
+        assert!(status.success());
+    }
+
+    #[test]
+    fn loopback_rpc_rejects_invalid_port_without_echoing_url() {
+        let error =
+            loopback_rpc_url("http://127.0.0.1:invalid/?token=private-test-value").unwrap_err();
+        assert!(error.to_string().contains("bitcoinrpc.url"));
+        assert!(!error.to_string().contains("private-test-value"));
+    }
 
     #[tokio::test]
     async fn test_bitcoin_client() {
@@ -788,5 +1042,56 @@ mod tests {
         } else {
             panic!("Expected BitcoindRpcError::HttpError, got {result:?}");
         }
+    }
+
+    #[test]
+    fn rpc_config_debug_output_redacts_url_and_credentials() {
+        let config = BitcoinRpcConfig {
+            url: "http://user:private-url@127.0.0.1:8332".to_string(),
+            username: "private-username".to_string(),
+            password: "private-password".to_string(),
+        };
+        let output = format!("{config:?}");
+        assert!(!output.contains("private-url"));
+        assert!(!output.contains("private-username"));
+        assert!(!output.contains("private-password"));
+    }
+
+    #[test]
+    fn rpc_client_debug_output_redacts_url_and_authorization() {
+        let encoded_credentials = STANDARD.encode("private-user:private-password");
+        let client = BitcoindRpcClient::new(
+            "http://private-user:private-url@127.0.0.1:8332/?token=private-token",
+            "private-user",
+            "private-password",
+        )
+        .unwrap();
+
+        let output = format!("{client:?}");
+
+        assert!(output.contains("[redacted]"));
+        assert!(!output.contains("private-url"));
+        assert!(!output.contains("private-token"));
+        assert!(!output.contains("private-user"));
+        assert!(!output.contains("private-password"));
+        assert!(!output.contains(&encoded_credentials));
+    }
+
+    #[tokio::test]
+    async fn failed_rpc_request_error_does_not_echo_url() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        let client = BitcoindRpcClient::new(
+            &format!("http://{address}/?token=private-test-value"),
+            "user",
+            "password",
+        )
+        .unwrap();
+        let error = client
+            .request::<Value>("getblockcount", vec![])
+            .await
+            .unwrap_err();
+        assert!(!error.to_string().contains("private-test-value"));
     }
 }

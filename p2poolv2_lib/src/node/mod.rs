@@ -2,23 +2,26 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+pub mod actor;
 mod address_filter;
 pub mod behaviour;
 pub mod connection_tracker;
 mod dial_filter;
 mod dns_seeds;
 pub mod emission_worker;
+pub mod messages;
 pub mod organise_worker;
 pub mod p2p_health;
+pub mod p2p_message_handlers;
 pub mod peer_reconnector;
 pub mod request_response_handler;
 pub mod request_sender;
 pub mod response_worker;
+mod tor;
 pub mod validation_worker;
+
 pub use crate::config::Config;
-pub mod actor;
-pub mod messages;
-pub mod p2p_message_handlers;
+pub use tor::validate_tor_config;
 
 use crate::accounting::payout::simple_pplns::SimplePplnsShare;
 use crate::monitoring_events::{MonitoringEvent, MonitoringEventSender, PeerResponse, PeerStatus};
@@ -39,7 +42,7 @@ use crate::shares::chain::chain_store_handle::ChainStoreHandle;
 use crate::shares::share_block::ShareBlock;
 use crate::shares::validation::ShareValidator;
 use behaviour::request_response::network_prologue;
-use behaviour::{P2PoolBehaviour, P2PoolBehaviourEvent};
+use behaviour::{DialOutsideTransportBoundary, P2PoolBehaviour, P2PoolBehaviourEvent};
 use libp2p::PeerId;
 use libp2p::SwarmBuilder;
 use libp2p::core::transport::{Boxed, Transport};
@@ -52,7 +55,7 @@ use libp2p::tcp::tokio::{TcpStream, Transport as TcpTransport};
 use libp2p::{
     Multiaddr, Swarm,
     kad::{Event as KademliaEvent, QueryResult},
-    swarm::{SwarmEvent, dial_opts::DialOpts},
+    swarm::{DialError, SwarmEvent, dial_opts::DialOpts},
 };
 use std::collections::HashSet;
 use std::error::Error;
@@ -139,6 +142,41 @@ fn base_transport(
     .boxed()
 }
 
+/// The transport below the noise and yamux upgrade: the Tor transport when
+/// Tor settings are present, otherwise the TCP and DNS transport. The two are
+/// never combined, so Tor-only mode has no direct dial path to fall back to.
+fn select_base_transport(
+    tor_settings: Option<&tor::TorSettings>,
+    tcp_config: TcpConfig,
+    dial_peers: &[String],
+    blocked_ips: BlockedIps,
+) -> Boxed<TcpStream> {
+    match tor_settings {
+        Some(settings) => {
+            info!(
+                "Tor-only networking: dialing onion peers through SOCKS5 proxy {}",
+                settings.proxy
+            );
+            tor::TorTransport::new(settings.proxy, tcp_config).boxed()
+        }
+        None => base_transport(tcp_config, dial_peers, blocked_ips),
+    }
+}
+
+/// In Tor-only mode the onion address, when configured, is the only external
+/// address. Returns true so that address confirmation from listen addresses
+/// and identify observations stays off: those would advertise IP addresses.
+fn advertise_tor_address(swarm: &mut Swarm<P2PoolBehaviour>, settings: &tor::TorSettings) -> bool {
+    match &settings.onion_address {
+        Some(onion_address) => {
+            info!("Advertising onion address {onion_address}");
+            swarm.add_external_address(onion_address.clone());
+        }
+        None => info!("Tor-only networking without an onion address: no address is advertised"),
+    }
+    true
+}
+
 /// TCP that refuses to dial IPs on the blocklist.
 fn blocked_ip_filtered_tcp(
     tcp_config: TcpConfig,
@@ -195,6 +233,9 @@ struct Node {
     /// DNS seeds to fall back on, or None when disabled in config or the
     /// network has none.
     dns_seeds: Option<dns_seeds::DnsSeeds>,
+    /// Whether the node runs Tor-only (`onlynet = ["onion"]`). Every inbound
+    /// onion peer then arrives from loopback, so IP blocking is refused.
+    tor_enabled: bool,
 }
 
 impl Node {
@@ -254,12 +295,21 @@ impl Node {
         }
         let blocked_ips = BlockedIps::new(blocked_ips);
 
-        let transport = base_transport(tcp_config, &config.network.dial_peers, blocked_ips.clone())
-            .upgrade(libp2p::core::upgrade::Version::V1)
-            .authenticate(noise_config)
-            .multiplex(libp2p::yamux::Config::default())
-            .timeout(Duration::from_secs(dial_timeout_secs))
-            .boxed();
+        validate_tor_config(&config).map_err(|message| -> Box<dyn Error> { message.into() })?;
+        let tor_settings = tor::tor_settings(&config.network)
+            .map_err(|message| -> Box<dyn Error> { message.into() })?;
+
+        let transport = select_base_transport(
+            tor_settings.as_ref(),
+            tcp_config,
+            &config.network.dial_peers,
+            blocked_ips.clone(),
+        )
+        .upgrade(libp2p::core::upgrade::Version::V1)
+        .authenticate(noise_config)
+        .multiplex(libp2p::yamux::Config::default())
+        .timeout(Duration::from_secs(dial_timeout_secs))
+        .boxed();
 
         let mut swarm = SwarmBuilder::with_existing_identity(id_keys)
             .with_tokio()
@@ -275,25 +325,26 @@ impl Node {
 
         let listen_port = address_filter::extract_listen_port(&config.network.listen_address);
 
-        let external_address_confirmed =
-            if let Some(ref external_addr_str) = config.network.external_address {
-                match external_addr_str.parse::<Multiaddr>() {
-                    Ok(external_addr) => {
-                        info!("Using configured external address: {}", external_addr);
-                        swarm.add_external_address(external_addr);
-                        true
-                    }
-                    Err(error) => {
-                        warn!(
-                            "Invalid external_address '{}' in config: {}",
-                            external_addr_str, error
-                        );
-                        false
-                    }
+        let external_address_confirmed = if let Some(settings) = &tor_settings {
+            advertise_tor_address(&mut swarm, settings)
+        } else if let Some(ref external_addr_str) = config.network.external_address {
+            match external_addr_str.parse::<Multiaddr>() {
+                Ok(external_addr) => {
+                    info!("Using configured external address: {}", external_addr);
+                    swarm.add_external_address(external_addr);
+                    true
                 }
-            } else {
-                false
-            };
+                Err(error) => {
+                    warn!(
+                        "Invalid external_address '{}' in config: {}",
+                        external_addr_str, error
+                    );
+                    false
+                }
+            }
+        } else {
+            false
+        };
 
         if !config.network.listen_address.is_empty() {
             match config.network.listen_address.parse() {
@@ -361,6 +412,7 @@ impl Node {
             listen_port,
             has_bootstrapped_kad: false,
             dns_seeds,
+            tor_enabled: tor_settings.is_some(),
         };
         node.attempt_reconnections();
         Ok(node)
@@ -381,6 +433,21 @@ impl Node {
             }
             None => {}
         }
+    }
+
+    /// Adds an IP to the runtime blocklist. Refused in Tor-only mode: every
+    /// inbound onion peer arrives from loopback, so blocking that address
+    /// would disconnect all of them, and blocking any other address does
+    /// nothing because no peer connects from it.
+    pub(crate) fn block_ip(&mut self, ip: IpAddr) -> Result<(), String> {
+        if self.tor_enabled {
+            return Err(
+                "IP blocking is not available with network.onlynet = [\"onion\"]: every inbound onion peer arrives through the loopback forwarder"
+                    .to_string(),
+            );
+        }
+        self.connection_tracker.block_ip(ip);
+        Ok(())
     }
 
     /// Returns a Vec of peer IDs that are currently connected to this node
@@ -575,9 +642,22 @@ impl Node {
                 error,
                 connection_id,
             } => {
-                error!(
-                    "Failed to connect to peer: {peer_id:?}, error: {error}, connection_id: {connection_id}"
+                let outside_transport_boundary = matches!(
+                    &error,
+                    DialError::Denied { cause }
+                        if cause
+                            .downcast_ref::<DialOutsideTransportBoundary>()
+                            .is_some()
                 );
+                if outside_transport_boundary {
+                    debug!(
+                        "Skipped peer outside configured transport boundary: {peer_id:?}, connection_id: {connection_id}"
+                    );
+                } else {
+                    error!(
+                        "Failed to connect to peer: {peer_id:?}, error: {error}, connection_id: {connection_id}"
+                    );
+                }
                 self.peer_reconnector
                     .record_connection_failure(connection_id);
                 Ok(())
@@ -777,28 +857,36 @@ impl Node {
 #[cfg(test)]
 mod tests {
     use super::ChainStoreHandle;
+    use super::DialOutsideTransportBoundary;
     use super::P2PoolBehaviourEvent;
+    use super::base_transport;
     use super::dns_or_tcp_transport;
+    use super::validate_tor_config;
     use crate::config::{
         ApiConfig, Chain, Config, ElectrumConfig, ForksConfig, LoggingConfig, NetworkConfig,
         StoreConfig, StratumConfig,
     };
     use crate::monitoring_events::create_monitoring_event_channel;
     use crate::node::Node;
+    use crate::node::connection_tracker::BlockedIps;
     use crate::node::p2p_message_handlers::receivers::block_receiver::create_block_receiver_channel;
     use crate::node::request_response_handler::block_fetcher::create_block_fetcher_channel;
     use crate::node::response_worker::create_response_worker_channel;
     use crate::node::validation_worker::create_validation_channel;
+    use crate::shares::validation::MockDefaultShareValidator;
+    use crate::test_utils::unused_local_address;
     use bitcoindrpc::BitcoinRpcConfig;
-    use futures::StreamExt;
+    use futures::{StreamExt, future::ready};
     use libp2p::core::Endpoint;
-    use libp2p::core::transport::{DialOpts as TransportDialOpts, PortUse, Transport};
+    use libp2p::core::transport::{DialOpts as TransportDialOpts, ListenerId, PortUse, Transport};
+    use libp2p::identify;
     use libp2p::ping::Failure;
-    use libp2p::swarm::{ConnectionId, DialError, SwarmEvent};
+    use libp2p::swarm::{ConnectionDenied, ConnectionId, DialError, SwarmEvent};
     use libp2p::tcp::Config as TcpConfig;
     use libp2p::tcp::tokio::Transport as TcpTransport;
     use libp2p::{Multiaddr, PeerId, TransportError};
     use std::io;
+    use std::net::IpAddr;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
     use tokio::time::advance;
@@ -826,6 +914,8 @@ mod tests {
             blocked_ips: vec![],
             external_address: None,
             dns_seed: false,
+            proxy: None,
+            onlynet: vec![],
         };
         network_config.dial_peers = vec![unreachable_peer];
         network_config.dial_timeout_secs = 2;
@@ -879,7 +969,7 @@ mod tests {
             validation_tx,
             block_receiver_handle,
             monitoring_tx,
-            Arc::new(crate::shares::validation::MockDefaultShareValidator::default()),
+            Arc::new(MockDefaultShareValidator::default()),
             response_worker_tx,
         )
         .expect("Node initialization failed");
@@ -947,6 +1037,8 @@ mod tests {
                 blocked_ips: vec![],
                 external_address,
                 dns_seed: false,
+                proxy: None,
+                onlynet: vec![],
             },
             bitcoinrpc: BitcoinRpcConfig {
                 url: "http://localhost:8332".to_string(),
@@ -994,7 +1086,7 @@ mod tests {
             validation_tx,
             block_receiver_handle,
             monitoring_tx,
-            Arc::new(crate::shares::validation::MockDefaultShareValidator::default()),
+            Arc::new(MockDefaultShareValidator::default()),
             response_worker_tx,
         )
         .expect("Node initialization failed")
@@ -1077,6 +1169,59 @@ mod tests {
         ));
     }
 
+    #[tokio::test]
+    async fn test_plain_tcp_transport_refuses_onion_address() {
+        let mut transport = base_transport(TcpConfig::default(), &[], BlockedIps::default());
+        let onion_address: Multiaddr =
+            "/onion3/2gzyxa5ihm7nsggfxnu52rck2vv4rvmdlkiu3zzui5du4xyclen53wyd:56886"
+                .parse()
+                .unwrap();
+        let dial_options = TransportDialOpts {
+            role: Endpoint::Dialer,
+            port_use: PortUse::New,
+        };
+
+        let dial = transport.dial(onion_address, dial_options).unwrap();
+
+        assert!(dial.await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_onion_only_discovery_clearnet_candidate_opens_no_connection() {
+        let proxy_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let target_port = target_listener.local_addr().unwrap().port();
+        let mut config = build_test_config("", None);
+        config.network.proxy = Some(proxy_listener.local_addr().unwrap().to_string());
+        config.network.onlynet = vec!["onion".to_string()];
+        config.bitcoinrpc.url = "http://127.0.0.1:8332".to_string();
+        let mut node = build_test_node(config);
+        let remote_peer = PeerId::random();
+        let clearnet_address: Multiaddr =
+            format!("/ip4/127.0.0.1/tcp/{target_port}").parse().unwrap();
+        node.swarm
+            .behaviour_mut()
+            .kademlia
+            .add_address(&remote_peer, clearnet_address);
+
+        assert!(matches!(
+            node.swarm.dial(remote_peer),
+            Err(DialError::NoAddresses)
+        ));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), proxy_listener.accept())
+                .await
+                .is_err(),
+            "A clearnet discovery candidate reached the SOCKS proxy"
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), target_listener.accept())
+                .await
+                .is_err(),
+            "A clearnet discovery candidate opened a direct TCP connection"
+        );
+    }
+
     /// A dial_peer hostname that resolves to a blocked IP is refused by the
     /// transport before any TCP connection is opened. The listener stands in
     /// for the peer: it must never see a connection.
@@ -1142,6 +1287,21 @@ mod tests {
             node.peer_reconnector.addresses_to_reconnect(&[]),
             vec![address]
         );
+    }
+
+    #[tokio::test]
+    async fn test_outgoing_transport_boundary_error_is_handled() {
+        let config = build_test_config("", None);
+        let mut node = build_test_node(config);
+        let event = SwarmEvent::OutgoingConnectionError {
+            connection_id: ConnectionId::new_unchecked(7),
+            peer_id: None,
+            error: DialError::Denied {
+                cause: ConnectionDenied::new(DialOutsideTransportBoundary),
+            },
+        };
+
+        node.handle_swarm_event(event).unwrap();
     }
 
     #[tokio::test]
@@ -1228,6 +1388,199 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn identify_peer_receives_only_configured_onion_address() {
+        let onion: Multiaddr =
+            "/onion3/2gzyxa5ihm7nsggfxnu52rck2vv4rvmdlkiu3zzui5du4xyclen53wyd:56886"
+                .parse()
+                .unwrap();
+        let listen_address = unused_local_address().await;
+        let listen_address = format!("/ip4/127.0.0.1/tcp/{}", listen_address.port());
+        let mut config = build_test_config(&listen_address, Some(onion.to_string()));
+        config.bitcoinrpc.url = "http://127.0.0.1:8332".to_string();
+        config.network.proxy = Some("127.0.0.1:9050".to_string());
+        config.network.onlynet = vec!["onion".to_string()];
+        let mut service = build_test_node(config);
+        let mut peer = build_test_node(build_test_config("", None));
+        let addresses = tokio::time::timeout(Duration::from_secs(10), async {
+            let listener = service
+                .swarm
+                .by_ref()
+                .filter_map(|event| {
+                    ready(match event {
+                        SwarmEvent::NewListenAddr { address, .. } => Some(address),
+                        _ => None,
+                    })
+                })
+                .next()
+                .await
+                .expect("service should report its loopback listener");
+            peer.swarm.dial(listener).unwrap();
+            loop {
+                tokio::select! {
+                    _ = service.swarm.select_next_some() => {}
+                    event = peer.swarm.select_next_some() => {
+                        if let SwarmEvent::Behaviour(P2PoolBehaviourEvent::Identify(
+                            identify::Event::Received { info, .. },
+                        )) = event {
+                            return info.listen_addrs;
+                        }
+                    }
+                }
+            }
+        })
+        .await
+        .expect("peer should receive Identify over the loopback listener");
+        assert_eq!(addresses, vec![onion]);
+    }
+
+    #[tokio::test]
+    async fn test_tor_onion_address_is_the_only_external_address() {
+        let listen_address = unused_local_address().await;
+        let listen_address = format!("/ip4/127.0.0.1/tcp/{}", listen_address.port());
+        let mut config = build_test_config(&listen_address, None);
+        config.bitcoinrpc.url = "http://127.0.0.1:8332".to_string();
+        config.network.proxy = Some("127.0.0.1:9050".to_string());
+        config.network.onlynet = vec!["onion".to_string()];
+        config.network.external_address = Some(
+            "/onion3/2gzyxa5ihm7nsggfxnu52rck2vv4rvmdlkiu3zzui5du4xyclen53wyd:56886".to_string(),
+        );
+        let node = build_test_node(config);
+
+        let external_addrs: Vec<_> = node.swarm.external_addresses().cloned().collect();
+        let expected: Multiaddr =
+            "/onion3/2gzyxa5ihm7nsggfxnu52rck2vv4rvmdlkiu3zzui5du4xyclen53wyd:56886"
+                .parse()
+                .unwrap();
+        assert_eq!(external_addrs, vec![expected]);
+        assert!(node.external_address_confirmed);
+    }
+
+    #[tokio::test]
+    async fn test_tor_routable_listen_addr_is_not_advertised() {
+        let listen_address = unused_local_address().await;
+        let listen_address = format!("/ip4/127.0.0.1/tcp/{}", listen_address.port());
+        let mut config = build_test_config(&listen_address, None);
+        config.bitcoinrpc.url = "http://127.0.0.1:8332".to_string();
+        config.network.proxy = Some("127.0.0.1:9050".to_string());
+        config.network.onlynet = vec!["onion".to_string()];
+        let mut node = build_test_node(config);
+
+        let event = SwarmEvent::NewListenAddr {
+            listener_id: ListenerId::next(),
+            address: "/ip4/203.0.113.9/tcp/56886".parse().unwrap(),
+        };
+        node.handle_swarm_event(event).unwrap();
+
+        assert_eq!(node.swarm.external_addresses().count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_tor_observed_address_is_not_advertised() {
+        let listen_address = unused_local_address().await;
+        let listen_address = format!("/ip4/127.0.0.1/tcp/{}", listen_address.port());
+        let mut config = build_test_config(&listen_address, None);
+        config.bitcoinrpc.url = "http://127.0.0.1:8332".to_string();
+        config.network.proxy = Some("127.0.0.1:9050".to_string());
+        config.network.onlynet = vec!["onion".to_string()];
+        let mut node = build_test_node(config);
+        node.listen_port = Some(56886);
+
+        let observed: Multiaddr = "/ip4/93.184.216.34/tcp/54321".parse().unwrap();
+        node.try_confirm_external_address(&observed);
+
+        assert_eq!(node.swarm.external_addresses().count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_tor_config_with_dns_seed_fails_node_start() {
+        let mut config = build_test_config("/ip4/127.0.0.1/tcp/56886", None);
+        config.bitcoinrpc.url = "http://127.0.0.1:8332".to_string();
+        config.network.dns_seed = true;
+        config.network.proxy = Some("127.0.0.1:9050".to_string());
+        config.network.onlynet = vec!["onion".to_string()];
+        let mut chain_store_handle = ChainStoreHandle::default();
+        chain_store_handle
+            .expect_clone()
+            .returning(ChainStoreHandle::default);
+        let (block_fetcher_tx, _block_fetcher_rx) = create_block_fetcher_channel();
+        let (validation_tx, _validation_rx) = create_validation_channel();
+        let (block_receiver_handle, _block_receiver_rx) = create_block_receiver_channel();
+        let monitoring_tx = create_monitoring_event_channel();
+        let (response_worker_tx, _response_worker_rx) = create_response_worker_channel();
+
+        let result = Node::new(
+            config,
+            chain_store_handle,
+            block_fetcher_tx,
+            validation_tx,
+            block_receiver_handle,
+            monitoring_tx,
+            Arc::new(MockDefaultShareValidator::default()),
+            response_worker_tx,
+        );
+
+        let error = result
+            .err()
+            .expect("Tor config with dns_seed must be refused");
+        assert!(error.to_string().contains("dns_seed"));
+    }
+
+    #[test]
+    fn test_validate_tor_config_ignores_bitcoin_endpoints_without_tor() {
+        let mut config = build_test_config("/ip4/127.0.0.1/tcp/0", None);
+        config.bitcoinrpc.url = "http://203.0.113.5:8332".to_string();
+        assert!(validate_tor_config(&config).is_ok());
+    }
+
+    #[test]
+    fn test_validate_tor_config_rejects_clearnet_bitcoin_rpc() {
+        let mut config = build_test_config("/ip4/127.0.0.1/tcp/56886", None);
+        config.bitcoinrpc.url = "http://203.0.113.5:8332".to_string();
+        config.network.proxy = Some("127.0.0.1:9050".to_string());
+        config.network.onlynet = vec!["onion".to_string()];
+        let error = validate_tor_config(&config).unwrap_err();
+        assert!(error.contains("bitcoinrpc.url"));
+    }
+
+    #[test]
+    fn test_validate_tor_config_rejects_clearnet_zmq() {
+        let mut config = build_test_config("/ip4/127.0.0.1/tcp/56886", None);
+        config.bitcoinrpc.url = "http://127.0.0.1:8332".to_string();
+        config.stratum.zmqpubhashblock = "tcp://203.0.113.5:28332".to_string();
+        config.network.proxy = Some("127.0.0.1:9050".to_string());
+        config.network.onlynet = vec!["onion".to_string()];
+        let error = validate_tor_config(&config).unwrap_err();
+        assert!(error.contains("zmqpubhashblock"));
+    }
+
+    #[tokio::test]
+    async fn test_tor_node_refuses_ip_blocking() {
+        let listen_address = unused_local_address().await;
+        let listen_address = format!("/ip4/127.0.0.1/tcp/{}", listen_address.port());
+        let mut config = build_test_config(&listen_address, None);
+        config.bitcoinrpc.url = "http://127.0.0.1:8332".to_string();
+        config.network.proxy = Some("127.0.0.1:9050".to_string());
+        config.network.onlynet = vec!["onion".to_string()];
+        let mut node = build_test_node(config);
+
+        let error = node.block_ip("127.0.0.1".parse().unwrap()).unwrap_err();
+
+        assert!(error.contains("IP blocking is not available"));
+        assert!(node.connection_tracker.get_blocked_ips().is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_clearnet_node_blocks_ip() {
+        let config = build_test_config("/ip4/127.0.0.1/tcp/0", None);
+        let mut node = build_test_node(config);
+        let ip: IpAddr = "203.0.113.5".parse().unwrap();
+
+        node.block_ip(ip).unwrap();
+
+        assert_eq!(node.connection_tracker.get_blocked_ips(), vec![ip]);
+    }
+
+    #[tokio::test]
     async fn test_new_listen_addr_resolves_ephemeral_port() {
         let config = build_test_config("/ip4/127.0.0.1/tcp/0", None);
         let mut node = build_test_node(config);
@@ -1235,7 +1588,7 @@ mod tests {
 
         let resolved_addr: libp2p::Multiaddr = "/ip4/127.0.0.1/tcp/45678".parse().unwrap();
         let event = SwarmEvent::NewListenAddr {
-            listener_id: libp2p::core::transport::ListenerId::next(),
+            listener_id: ListenerId::next(),
             address: resolved_addr,
         };
         node.handle_swarm_event(event).unwrap();
@@ -1340,5 +1693,27 @@ mod tests {
         node.handle_swarm_event(connection_closed(peer, 2, 0))
             .unwrap();
         assert!(!node.request_response_handler.has_peer(&peer));
+    }
+
+    #[tokio::test]
+    async fn test_tor_node_refuses_clearnet_dial() {
+        let listen_address = unused_local_address().await;
+        let listen_address = format!("/ip4/127.0.0.1/tcp/{}", listen_address.port());
+        let mut config = build_test_config(&listen_address, None);
+        config.bitcoinrpc.url = "http://127.0.0.1:8332".to_string();
+        config.network.proxy = Some("127.0.0.1:9050".to_string());
+        config.network.onlynet = vec!["onion".to_string()];
+        let mut node = build_test_node(config);
+        let clearnet_peer: Multiaddr = "/ip4/203.0.113.5/tcp/56886".parse().unwrap();
+
+        let error = node.swarm.dial(clearnet_peer).unwrap_err();
+
+        assert!(matches!(
+            error,
+            DialError::Denied { cause }
+                if cause
+                    .downcast_ref::<DialOutsideTransportBoundary>()
+                    .is_some()
+        ));
     }
 }
