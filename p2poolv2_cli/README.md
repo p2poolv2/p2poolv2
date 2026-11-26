@@ -161,6 +161,34 @@ p2poolv2_cli gen-auth myuser           # auto-generate password
 p2poolv2_cli gen-auth myuser mypass    # use provided password
 ```
 
+### wallet
+
+Descriptor wallet commands, not requiring a running node or config file.
+Each wallet is a SQLite file at `<datadir>/<network>/<name>.sqlite`, and
+`--datadir` (or `P2POOLV2_WALLET_DATADIR`) defaults to `~/.p2poolv2_wallet`.
+
+#### default
+
+Commands that use an existing wallet select it with `--wallet` (or
+`P2POOLV2_WALLET`), else use the default wallet. The network comes from
+`--network` (or `P2POOLV2_NETWORK`), else from the default wallet when it is
+the wallet used, else testnet5.
+
+The default wallet is saved in `<datadir>/wallet.toml`:
+
+```toml
+default_wallet = "alice"
+default_network = "testnet5"
+```
+
+```sh
+p2poolv2_cli wallet default set --wallet alice
+p2poolv2_cli wallet default show
+```
+
+`default set` checks only that the wallet file exists. A `wallet.toml` that is
+not valid is reported, never replaced; fix or delete it.
+
 ## Viewing DOT output
 
 The `--dot` flag (available on `shares` and `candidates` in `--db-path`
