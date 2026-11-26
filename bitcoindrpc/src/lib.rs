@@ -14,6 +14,33 @@ use tracing::{debug, error};
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
 
+/// The signet template rule. Declared only when requesting signet templates.
+const SIGNET_RULE: &str = "signet";
+
+/// Template rules P2Poolv2 declares in `getblocktemplate` and builds valid
+/// blocks for. bitcoind marks a rule it requires the client to understand
+/// with a `!` prefix, and a template requiring any rule outside this list is
+/// refused.
+///
+/// - `segwit`: the coinbase carries the BIP141 witness commitment.
+/// - `signet`: declared so signet bitcoind serves templates. The coinbase
+///   carries no signet solution, so found blocks are valid only on a signet
+///   whose challenge needs none (such as `OP_TRUE`).
+/// - `consensuscleanup`: BIP54. The coinbase always sets nLockTime to
+///   `height - 1` and a non-final nSequence, can never serialize to 64 bytes,
+///   and miner ntime is bounded by the template's `mintime`.
+pub const SUPPORTED_RULES: [&str; 3] = ["segwit", SIGNET_RULE, "consensuscleanup"];
+
+/// The rules to declare in a `getblocktemplate` request for `network`: every
+/// supported rule, with `signet` only on signet.
+fn getblocktemplate_rules(network: bitcoin::Network) -> Vec<&'static str> {
+    SUPPORTED_RULES
+        .iter()
+        .copied()
+        .filter(|rule| *rule != SIGNET_RULE || network == bitcoin::Network::Signet)
+        .collect()
+}
+
 /// JSON-RPC 1.0 request structure (Bitcoin Core format)
 #[derive(Serialize)]
 struct JsonRpcRequest {
@@ -225,29 +252,19 @@ impl BitcoindRpcClient {
 
     /// Get a block template from bitcoind rpc
     ///
-    /// Signet adds the signet rule. Every network declares the BIP 54
-    /// `consensuscleanup` rule: testnet5 marks it required (`!consensuscleanup`)
-    /// and refuses templates to clients that do not declare it, and the
-    /// coinbase we build already follows BIP 54. Nodes that do not know the
-    /// rule ignore it.
+    /// Declares the rules from `getblocktemplate_rules`. Signet adds the
+    /// signet rule. Every network declares the BIP 54 `consensuscleanup`
+    /// rule: testnet5 marks it required (`!consensuscleanup`) and refuses
+    /// templates to clients that do not declare it, and the coinbase we build
+    /// already follows BIP 54. Nodes that do not know the rule ignore it.
     pub async fn getblocktemplate(
         &self,
         network: bitcoin::Network,
     ) -> Result<String, BitcoindRpcError> {
-        let params = match network {
-            bitcoin::Network::Signet => {
-                vec![serde_json::json!({
-                    "capabilities": ["coinbasetxn", "coinbase/append", "workid"],
-                    "rules": ["segwit", "signet", "consensuscleanup"],
-                })]
-            }
-            _ => {
-                vec![serde_json::json!({
-                    "capabilities": ["coinbasetxn", "coinbase/append", "workid"],
-                    "rules": ["segwit", "consensuscleanup"],
-                })]
-            }
-        };
+        let params = vec![serde_json::json!({
+            "capabilities": ["coinbasetxn", "coinbase/append", "workid"],
+            "rules": getblocktemplate_rules(network),
+        })];
         debug!("Requesting getblocktemplate with params: {:?}", params);
 
         // Configure retry parameters

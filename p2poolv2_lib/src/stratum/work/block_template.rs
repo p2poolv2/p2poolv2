@@ -4,6 +4,7 @@
 
 use crate::stratum::work::error::WorkError;
 use bitcoin::script::PushBytesBuf;
+use bitcoindrpc::SUPPORTED_RULES;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -62,19 +63,10 @@ impl From<TemplateTransaction> for bitcoin::Transaction {
     }
 }
 
-/// Template rules P2Poolv2 builds valid blocks for. bitcoind marks a rule it
-/// requires the client to understand with a `!` prefix.
-///
-/// - `segwit`: the coinbase carries the BIP141 witness commitment.
-/// - `signet`: the template's signet challenge is met by the node.
-/// - `consensuscleanup`: BIP54. The coinbase always sets nLockTime to
-///   `height - 1` and a non-final nSequence, can never serialize to 64 bytes,
-///   and miner ntime is bounded by the template's `mintime`.
-const SUPPORTED_REQUIRED_RULES: [&str; 3] = ["segwit", "signet", "consensuscleanup"];
-
 impl BlockTemplate {
     /// Check that every rule the template marks required (`!` prefix) is one
-    /// P2Poolv2 implements.
+    /// P2Poolv2 implements (`bitcoindrpc::SUPPORTED_RULES`, the same list it
+    /// declares in `getblocktemplate`).
     ///
     /// A required rule we do not know changes what a valid block looks like,
     /// so mining on the template could produce invalid blocks. Returns an
@@ -84,7 +76,7 @@ impl BlockTemplate {
             .rules
             .iter()
             .filter_map(|rule| rule.strip_prefix('!'))
-            .filter(|rule| !SUPPORTED_REQUIRED_RULES.contains(rule))
+            .filter(|rule| !SUPPORTED_RULES.contains(rule))
             .collect();
         if unsupported.is_empty() {
             Ok(())
