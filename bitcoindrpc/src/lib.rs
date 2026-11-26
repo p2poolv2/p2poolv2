@@ -27,8 +27,8 @@ const SIGNET_RULE: &str = "signet";
 ///   carries no signet solution, so found blocks are valid only on a signet
 ///   whose challenge needs none (such as `OP_TRUE`).
 /// - `consensuscleanup`: BIP54. The coinbase always sets nLockTime to
-///   `height - 1` and a non-final nSequence, can never serialize to 64 bytes,
-///   and miner ntime is bounded by the template's `mintime`.
+///   `height - 1` and a non-final nSequence, and can never serialize to 64
+///   bytes.
 pub const SUPPORTED_RULES: [&str; 3] = ["segwit", SIGNET_RULE, "consensuscleanup"];
 
 /// The rules to declare in a `getblocktemplate` request for `network`: every

@@ -26,10 +26,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The node stops mining on a block template that marks required (`!`
   prefix) a rule P2Poolv2 does not implement, and logs an error naming the
   rule, instead of building blocks that may be invalid.
-- Stratum rejects a share whose ntime is below the template's `mintime`
-  ("Time too old") or more than two hours past its `curtime` ("Time too
-  new"), so a found block always meets BIP54's timewarp rule and bitcoind's
-  time limits.
 - Stratum rejects a share whose extranonce2 is not the 8 bytes announced in
   `mining.subscribe`, and a coinbase with bytes left over after decoding.
   The miner can no longer shift the coinbase's BIP54 nSequence and nLockTime.

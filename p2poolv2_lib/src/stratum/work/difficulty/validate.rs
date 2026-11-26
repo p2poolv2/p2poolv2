@@ -13,10 +13,6 @@ use hex::FromHex;
 use std::str::FromStr;
 use tracing::{debug, info};
 
-/// Bitcoin Core rejects a block whose timestamp is more than this many
-/// seconds ahead of its adjusted time (`MAX_FUTURE_BLOCK_TIME`).
-const MAX_FUTURE_BLOCK_TIME: u32 = 2 * 60 * 60;
-
 /// Share validation result
 ///
 /// Captures the header and coinbase, with a boolean to signal if block meets bitcoin difficulty
@@ -63,23 +59,6 @@ fn check_enonce2_length(enonce2: &str) -> Result<(), Error> {
     }
 }
 
-/// Check the miner's ntime makes a header bitcoind can accept.
-///
-/// `mintime` is the template's lower bound: it covers the median time past
-/// rule and, on BIP54 networks, the timewarp rule for the first block of a
-/// difficulty period. The upper bound is the template's `curtime` plus
-/// `MAX_FUTURE_BLOCK_TIME`; `curtime` is at most bitcoind's adjusted time, so
-/// this stays inside the node's future limit.
-fn check_ntime(n_time: u32, mintime: u32, curtime: u32) -> Result<(), Error> {
-    if n_time < mintime {
-        return Err(Error::InvalidParams("Time too old".into()));
-    }
-    if n_time > curtime.saturating_add(MAX_FUTURE_BLOCK_TIME) {
-        return Err(Error::InvalidParams("Time too new".into()));
-    }
-    Ok(())
-}
-
 /// Applies version mask received with submission, if the version_bits is compatible with version_mask from session
 /// If params don't include version_bits, it returns the original header version
 fn apply_version_mask(
@@ -111,9 +90,6 @@ fn apply_version_mask(
 ///
 /// The submitted extranonce2 must be exactly EXTRANONCE2_SIZE bytes, else an
 /// invalid params error is returned before the coinbase is built.
-///
-/// The submission is rejected when its ntime is outside the template's
-/// bounds (see `check_ntime`).
 ///
 /// Returns ValidationResult if validation was error free, else the error.
 pub fn validate_bitcoin_difficulty(
@@ -148,7 +124,6 @@ pub fn validate_bitcoin_difficulty(
         .ok_or_else(|| Error::InvalidParams("Missing ntime".into()))?;
     let n_time =
         u32::from_str_radix(ntime_str, 16).map_err(|_| Error::InvalidParams("Bad nTime".into()))?;
-    check_ntime(n_time, job.blocktemplate.mintime, job.blocktemplate.curtime)?;
 
     let version = apply_version_mask(job.blocktemplate.version, version_mask, &submission.params)?;
 
@@ -222,44 +197,6 @@ mod tests {
             matches!(result, Err(Error::InvalidParams(_))),
             "trailing bytes must be rejected with InvalidParams"
         );
-    }
-
-    #[test]
-    fn test_check_ntime_accepts_mintime() {
-        assert!(check_ntime(1_000, 1_000, 2_000).is_ok());
-    }
-
-    #[test]
-    fn test_check_ntime_accepts_curtime() {
-        assert!(check_ntime(2_000, 1_000, 2_000).is_ok());
-    }
-
-    #[test]
-    fn test_check_ntime_rejects_below_mintime() {
-        let error = check_ntime(999, 1_000, 2_000).unwrap_err();
-        assert_eq!(
-            error.to_string(),
-            "Invalid parameters provided: Time too old"
-        );
-    }
-
-    #[test]
-    fn test_check_ntime_accepts_max_future_time() {
-        assert!(check_ntime(2_000 + MAX_FUTURE_BLOCK_TIME, 1_000, 2_000).is_ok());
-    }
-
-    #[test]
-    fn test_check_ntime_rejects_beyond_max_future_time() {
-        let error = check_ntime(2_001 + MAX_FUTURE_BLOCK_TIME, 1_000, 2_000).unwrap_err();
-        assert_eq!(
-            error.to_string(),
-            "Invalid parameters provided: Time too new"
-        );
-    }
-
-    #[test]
-    fn test_check_ntime_upper_bound_does_not_overflow() {
-        assert!(check_ntime(u32::MAX, 1_000, u32::MAX - 1).is_ok());
     }
 
     #[test]
