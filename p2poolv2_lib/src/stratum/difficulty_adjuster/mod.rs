@@ -103,12 +103,15 @@ pub trait DifficultyAdjusterTrait {
 
     /// Update the last decay timestamp and apply decay to unaccounted shares
     /// Returns seconds elapsed since the last decay
+    /// When the last decay was too recent, adds current difficulty to
+    /// unaccounted shares, capped at u64::MAX, and returns an error.
     fn update_last_decay_timestamp(
         &mut self,
         current_timestamp: SystemTime,
     ) -> Result<f64, Box<dyn std::error::Error>>;
 
-    /// Return the sum of unaccounted for shares and current difficulty
+    /// Return the sum of unaccounted for shares and current difficulty,
+    /// capped at u64::MAX instead of overflowing.
     /// Sets unaccounted for shares to zero.
     fn account_for_unaccounted_shares(&mut self) -> u64;
 
@@ -460,11 +463,25 @@ mod tests {
     fn huge_start_difficulty_with_rapid_shares_does_not_overflow() {
         // No maximum difficulty configured, like the sample config.
         let mut adjuster = DifficultyAdjuster::new(u64::MAX, 1, None);
-        let now = std::time::SystemTime::now();
+        let now = SystemTime::now();
         // args: share_diff, job_id, suggested_difficulty, timestamp
-        for job_id in 0..3u64 {
-            adjuster.record_share_submission(1, job_id, None, now);
-        }
+        //* First share only initialises timestamps.
+        assert_eq!(
+            adjuster.record_share_submission(1, 0, None, now),
+            (None, true)
+        );
+        //* Second share inside the decay interval adds u64::MAX to unaccounted shares.
+        assert_eq!(
+            adjuster.record_share_submission(1, 1, None, now),
+            (None, false)
+        );
+        assert_eq!(adjuster.unaccounted_shares, u64::MAX);
+        //* Third share would overflow; unaccounted shares stay capped at u64::MAX.
+        assert_eq!(
+            adjuster.record_share_submission(1, 2, None, now),
+            (None, false)
+        );
+        assert_eq!(adjuster.unaccounted_shares, u64::MAX);
     }
 
     #[test]
