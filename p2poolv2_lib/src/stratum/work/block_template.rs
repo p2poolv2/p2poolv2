@@ -4,6 +4,7 @@
 
 use crate::stratum::work::error::WorkError;
 use bitcoin::script::PushBytesBuf;
+use bitcoindrpc::SUPPORTED_RULES;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -63,6 +64,32 @@ impl From<TemplateTransaction> for bitcoin::Transaction {
 }
 
 impl BlockTemplate {
+    /// Check that every rule the template marks required (`!` prefix) is one
+    /// P2Poolv2 implements (`bitcoindrpc::SUPPORTED_RULES`, the same list it
+    /// declares in `getblocktemplate`).
+    ///
+    /// A required rule we do not know changes what a valid block looks like,
+    /// so mining on the template could produce invalid blocks. Returns an
+    /// error naming the unsupported rules.
+    pub fn check_required_rules(&self) -> Result<(), WorkError> {
+        let unsupported: Vec<&str> = self
+            .rules
+            .iter()
+            .filter_map(|rule| rule.strip_prefix('!'))
+            .filter(|rule| !SUPPORTED_RULES.contains(rule))
+            .collect();
+        if unsupported.is_empty() {
+            Ok(())
+        } else {
+            Err(WorkError {
+                message: format!(
+                    "Block template requires unsupported rules: {}",
+                    unsupported.join(", ")
+                ),
+            })
+        }
+    }
+
     /// Decode all transactions from the template into bitcoin::Transaction
     /// Uses the From<&TemplateTransaction> implementation
     pub fn decode_transactions(&self) -> Vec<bitcoin::Transaction> {
@@ -170,6 +197,59 @@ mod tests {
         assert_eq!(
             btc_tx.output[0].value,
             bitcoin::Amount::from_btc(49.98985900).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_check_required_rules_accepts_signet_template() {
+        // Fixture rules: csv, !segwit, !signet, taproot
+        let template: BlockTemplate = serde_json::from_str(include_str!(
+            "../../../../p2poolv2_tests/test_data/gbt/signet/gbt-no-transactions.json"
+        ))
+        .unwrap();
+        assert!(template.check_required_rules().is_ok());
+    }
+
+    #[test]
+    fn test_check_required_rules_accepts_required_consensuscleanup() {
+        let mut template: BlockTemplate = serde_json::from_str(include_str!(
+            "../../../../p2poolv2_tests/test_data/gbt/signet/gbt-no-transactions.json"
+        ))
+        .unwrap();
+        template.rules = vec![
+            "csv".to_string(),
+            "!segwit".to_string(),
+            "taproot".to_string(),
+            "!consensuscleanup".to_string(),
+        ];
+        assert!(template.check_required_rules().is_ok());
+    }
+
+    #[test]
+    fn test_check_required_rules_ignores_unknown_optional_rule() {
+        let mut template: BlockTemplate = serde_json::from_str(include_str!(
+            "../../../../p2poolv2_tests/test_data/gbt/signet/gbt-no-transactions.json"
+        ))
+        .unwrap();
+        template.rules = vec!["!segwit".to_string(), "someoptionalrule".to_string()];
+        assert!(template.check_required_rules().is_ok());
+    }
+
+    #[test]
+    fn test_check_required_rules_rejects_unknown_required_rule() {
+        let mut template: BlockTemplate = serde_json::from_str(include_str!(
+            "../../../../p2poolv2_tests/test_data/gbt/signet/gbt-no-transactions.json"
+        ))
+        .unwrap();
+        template.rules = vec![
+            "!segwit".to_string(),
+            "!consensuscleanup".to_string(),
+            "!futurerule".to_string(),
+        ];
+        let error = template.check_required_rules().unwrap_err();
+        assert_eq!(
+            error.message,
+            "Block template requires unsupported rules: futurerule"
         );
     }
 }
