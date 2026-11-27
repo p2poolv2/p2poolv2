@@ -98,3 +98,5 @@ tower = "0.5"
 rand = "0.10"
 temp-env = "0.3.6"
 test-log = { version = "0.2.17", features = ["trace"] }
+tokio-rustls = "0.26"
+rcgen = "0.13"

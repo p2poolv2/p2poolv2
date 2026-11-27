@@ -36,6 +36,13 @@ pplns_ttl_days = 7
 [stratum]
 hostname = "0.0.0.0"
 port = 3333
+# Optional TLS listener for miners outside your LAN (stratum+ssl://host:tls_port).
+# The plain port above keeps working. Point these at your certificate chain and
+# private key in PEM form, for example from Let's Encrypt. The files are checked
+# for changes every minute and reloaded, so renewals need no restart.
+# tls_port = 3334
+# tls_cert_path = "/etc/letsencrypt/live/pool.example.com/fullchain.pem"
+# tls_key_path = "/etc/letsencrypt/live/pool.example.com/privkey.pem"
 start_difficulty = 10000
 minimum_difficulty = 100
 solo_address = "tb1qyazxde6558qj6z3d9np5e6msmrspwpf6k0qggk"

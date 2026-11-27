@@ -3056,6 +3056,7 @@ dependencies = [
  "p2poolv2_wallet",
  "proptest",
  "rand 0.10.3",
+ "rcgen",
  "rlimit",
  "rocksdb",
  "serde",
@@ -3066,6 +3067,7 @@ dependencies = [
  "test-log",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-rustls",
  "tokio-stream",
  "tokio-test",
  "tokio-util",
@@ -3899,6 +3901,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
 dependencies = [
  "aws-lc-rs",
+ "log",
  "once_cell",
  "rustls-pki-types",
  "rustls-webpki",

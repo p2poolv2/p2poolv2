@@ -138,6 +138,15 @@ pub struct StratumConfig<State = Raw> {
     pub pool_signature: Option<String>,
     /// Maximum concurrent stratum connections. Default: 90% of OS fd limit.
     pub max_connections: Option<u32>,
+    /// Optional port for the TLS listener. The plain `port` keeps working
+    /// unchanged; miners connect to this one with `stratum+ssl://`.
+    pub tls_port: Option<u16>,
+    /// PEM certificate chain for the TLS listener, for example a Let's Encrypt
+    /// `fullchain.pem`. Required together with `tls_port` and `tls_key_path`.
+    pub tls_cert_path: Option<String>,
+    /// PEM private key for the TLS listener, for example a Let's Encrypt
+    /// `privkey.pem`. Required together with `tls_port` and `tls_cert_path`.
+    pub tls_key_path: Option<String>,
     /// Wait for the share chain to be current before accepting stratum
     /// connections. Set to false when bootstrapping a new network.
     #[serde(default = "default_wait_for_chain_sync")]
@@ -161,6 +170,44 @@ pub struct StratumConfig<State = Raw> {
     _state: PhantomData<State>,
 }
 
+/// Check the optional TLS listener settings.
+///
+/// The three settings are all or nothing: a half configured listener would
+/// either serve plain stratum to miners that asked for TLS or fail at bind
+/// time with a message that does not name the missing key. The TLS port must
+/// also differ from the plain port, which keeps serving plain stratum.
+fn validate_tls_settings<State>(config: &StratumConfig<State>) -> Result<(), ConfigError> {
+    let tls_port_set = config.tls_port.is_some();
+    let tls_cert_path_set = config.tls_cert_path.is_some();
+    let tls_key_path_set = config.tls_key_path.is_some();
+    if !tls_port_set && !tls_cert_path_set && !tls_key_path_set {
+        return Ok(());
+    }
+    let mut missing_keys: Vec<&str> = Vec::with_capacity(3);
+    if !tls_port_set {
+        missing_keys.push("tls_port");
+    }
+    if !tls_cert_path_set {
+        missing_keys.push("tls_cert_path");
+    }
+    if !tls_key_path_set {
+        missing_keys.push("tls_key_path");
+    }
+    if !missing_keys.is_empty() {
+        let missing = missing_keys.join(", ");
+        return Err(ConfigError {
+            message: format!("TLS listener is missing {missing}"),
+        });
+    }
+    if config.tls_port == Some(config.port) {
+        let plain_port = config.port;
+        return Err(ConfigError {
+            message: format!("tls_port {plain_port} must differ from the plain port"),
+        });
+    }
+    Ok(())
+}
+
 impl StratumConfig<Raw> {
     /// Parse and validate addresses, converting from Raw to Parsed state
     pub fn parse(self) -> Result<StratumConfig<Parsed>, ConfigError> {
@@ -169,6 +216,8 @@ impl StratumConfig<Raw> {
                 message: format!("Pool signature length is limited to {MAX_POOL_SIGNATURE_LENGTH}"),
             });
         }
+
+        validate_tls_settings(&self)?;
 
         if let Some(donation) = self
             .donation
@@ -264,6 +313,9 @@ impl StratumConfig<Raw> {
             ignore_difficulty: self.ignore_difficulty,
             pool_signature: self.pool_signature,
             max_connections: self.max_connections,
+            tls_port: self.tls_port,
+            tls_cert_path: self.tls_cert_path,
+            tls_key_path: self.tls_key_path,
             wait_for_chain_sync: self.wait_for_chain_sync,
             mode: self.mode,
             bootstrap_address_parsed: Some(bootstrap_address_parsed),
@@ -335,6 +387,9 @@ impl StratumConfig<Raw> {
             ignore_difficulty: None,
             pool_signature: None,
             max_connections: None,
+            tls_port: None,
+            tls_cert_path: None,
+            tls_key_path: None,
             wait_for_chain_sync: true,
             mode: PoolMode::default(),
             bootstrap_address_parsed: None,
@@ -1431,6 +1486,65 @@ mod tests {
         config.mode = PoolMode::Hydrapool;
         let parsed = config.parse().unwrap();
         assert_eq!(parsed.mode, PoolMode::Hydrapool);
+    }
+
+    #[test]
+    fn tls_listener_with_all_three_keys_parses() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.tls_port = Some(3334);
+        config.tls_cert_path = Some("/etc/ssl/cert.pem".to_string());
+        config.tls_key_path = Some("/etc/ssl/key.pem".to_string());
+
+        let parsed = config.parse().unwrap();
+
+        assert_eq!(parsed.tls_port, Some(3334));
+        assert_eq!(parsed.tls_cert_path.as_deref(), Some("/etc/ssl/cert.pem"));
+        assert_eq!(parsed.tls_key_path.as_deref(), Some("/etc/ssl/key.pem"));
+    }
+
+    #[test]
+    fn tls_listener_with_only_the_certificate_path_is_rejected() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.tls_cert_path = Some("/etc/ssl/cert.pem".to_string());
+
+        let error = config.parse().unwrap_err();
+
+        assert!(
+            error.message.contains("tls_port") && error.message.contains("tls_key_path"),
+            "unexpected message: {}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn tls_port_equal_to_the_plain_port_is_rejected() {
+        let mut config = StratumConfig::<Raw>::new_for_test_default();
+        config.port = 3333;
+        config.tls_port = Some(3333);
+        config.tls_cert_path = Some("/etc/ssl/cert.pem".to_string());
+        config.tls_key_path = Some("/etc/ssl/key.pem".to_string());
+
+        let error = config.parse().unwrap_err();
+
+        assert!(
+            error.message.contains("tls_port"),
+            "unexpected message: {}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn tls_listener_absent_parses_as_before() {
+        let config = StratumConfig::<Raw>::new_for_test_default();
+        assert!(config.tls_port.is_none());
+        assert!(config.tls_cert_path.is_none());
+        assert!(config.tls_key_path.is_none());
+
+        let parsed = config.parse().unwrap();
+
+        assert!(parsed.tls_port.is_none());
+        assert!(parsed.tls_cert_path.is_none());
+        assert!(parsed.tls_key_path.is_none());
     }
 }
 

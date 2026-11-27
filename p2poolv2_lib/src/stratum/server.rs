@@ -20,15 +20,22 @@ use crate::stratum::message_handlers::handle_message;
 use crate::stratum::messages::{Request, Response};
 use crate::stratum::session::Session;
 use crate::stratum::session_timeout::{self, check_session_timeouts};
+use crate::stratum::tls::{
+    CERTIFICATE_RELOAD_INTERVAL, StratumTlsConfig, TLS_HANDSHAKE_TIMEOUT, build_tls_acceptor,
+    certificate_file_stamps, complete_handshake, load_certified_key, spawn_certificate_reloader,
+};
 use crate::stratum::work::prepared_notify::{PreparedNotifyParams, build_notify_from_prepared};
 use crate::stratum::work::tracker::JobTracker;
 use crate::utils::time_provider::{SystemTimeProvider, TimeProvider};
 use bitcoindrpc::{BitcoinRpcConfig, BitcoindRpcClient};
+use std::future::pending;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, split};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot, watch};
+use tokio_rustls::TlsAcceptor;
+use tokio_rustls::server::TlsStream;
 use tokio_stream::StreamExt;
 use tokio_util::codec::{FramedRead, LinesCodec};
 use tracing::{debug, error, info};
@@ -50,6 +57,8 @@ pub struct StratumServer {
     pub mode: PoolMode,
     /// Pool wide share chain address from `[stratum] miner_address`, if set.
     pub miner_address: Option<P2PoolAddress>,
+    /// Optional TLS listener settings from `[stratum] tls_port` and friends.
+    pub tls: Option<StratumTlsConfig>,
     shutdown_rx: oneshot::Receiver<()>,
     connections_handle: ClientConnectionsHandle,
     emissions_tx: EmissionSender,
@@ -79,6 +88,7 @@ pub struct StratumServerBuilder {
     chain_store_handle: Option<ChainStoreHandle>,
     mode: Option<PoolMode>,
     miner_address: Option<P2PoolAddress>,
+    tls: Option<StratumTlsConfig>,
 }
 
 impl StratumServerBuilder {
@@ -177,6 +187,12 @@ impl StratumServerBuilder {
         self
     }
 
+    /// Configure the optional TLS listener.
+    pub fn tls(mut self, tls: Option<StratumTlsConfig>) -> Self {
+        self.tls = tls;
+        self
+    }
+
     pub async fn build(self) -> Result<StratumServer, Box<dyn std::error::Error + Send + Sync>> {
         Ok(StratumServer {
             hostname: self.hostname.ok_or("hostname is required")?,
@@ -204,6 +220,7 @@ impl StratumServerBuilder {
             wait_for_chain_sync: self.wait_for_chain_sync.unwrap_or(true),
             mode: self.mode.unwrap_or_default(),
             miner_address: self.miner_address,
+            tls: self.tls,
             chain_store_handle: self
                 .chain_store_handle
                 .ok_or("chain store handle is required")?,
@@ -288,9 +305,33 @@ impl StratumServer {
             }
         };
 
+        let tls_listener = match &self.tls {
+            Some(tls_settings) => Some(start_tls_listener(tls_settings, &self.hostname).await?),
+            None => None,
+        };
+
         let max_connections = self.max_connections.unwrap_or_else(default_max_connections);
         info!("Stratum server max connections: {}", max_connections);
         let connection_semaphore = Arc::new(Semaphore::new(max_connections as usize));
+
+        let base_context = StratumContext {
+            tracker_handle: tracker_handle.clone(),
+            bitcoindrpc_client: bitcoindrpc_client.clone(),
+            start_difficulty: self.start_difficulty,
+            minimum_difficulty: self.minimum_difficulty,
+            maximum_difficulty: self.maximum_difficulty,
+            ignore_difficulty: self.ignore_difficulty,
+            validate_addresses: self.validate_addresses,
+            emissions_tx: self.emissions_tx.clone(),
+            pplns_shares_tx: self.pplns_shares_tx.clone(),
+            network: self.network,
+            metrics: metrics.clone(),
+            chain_store_handle: self.chain_store_handle.clone(),
+            mode: self.mode,
+            miner_address: self.miner_address,
+        };
+
+        let (tls_ready_tx, mut tls_ready_rx) = mpsc::channel(TLS_READY_CHANNEL_CAPACITY);
 
         if let Some(ready_tx) = ready_tx {
             info!(
@@ -310,27 +351,11 @@ impl StratumServer {
                         Ok((stream, addr)) => {
                             match connection_semaphore.clone().try_acquire_owned() {
                                 Ok(permit) => {
-                                    let ctx = StratumContext {
-                                        tracker_handle: tracker_handle.clone(),
-                                        bitcoindrpc_client: bitcoindrpc_client.clone(),
-                                        start_difficulty: self.start_difficulty,
-                                        minimum_difficulty: self.minimum_difficulty,
-                                        maximum_difficulty: self.maximum_difficulty,
-                                        ignore_difficulty: self.ignore_difficulty,
-                                        validate_addresses: self.validate_addresses,
-                                        emissions_tx: self.emissions_tx.clone(),
-                                        pplns_shares_tx: self.pplns_shares_tx.clone(),
-                                        network: self.network,
-                                        metrics: metrics.clone(),
-                                        chain_store_handle: self.chain_store_handle.clone(),
-                                        mode: self.mode,
-                                        miner_address: self.miner_address,
-                                    };
                                     accept_connection(
                                         stream,
                                         addr,
                                         &self.connections_handle,
-                                        ctx,
+                                        base_context.clone(),
                                         self.version_mask,
                                         template_rx.clone(),
                                         permit,
@@ -346,6 +371,44 @@ impl StratumServer {
                             error!("Connection failed: {}", e);
                         }
                     }
+                }
+                tls_connection = accept_tls_connection(&tls_listener) => {
+                    match tls_connection {
+                        Ok((stream, addr, tls_acceptor)) => {
+                            match connection_semaphore.clone().try_acquire_owned() {
+                                Ok(permit) => {
+                                    spawn_tls_handshake(
+                                        stream,
+                                        addr,
+                                        tls_acceptor,
+                                        permit,
+                                        tls_ready_tx.clone(),
+                                    );
+                                }
+                                Err(_) => {
+                                    debug!("Max connections reached, rejecting {}", addr);
+                                    drop(stream);
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            error!("TLS accept failed: {}", error);
+                        }
+                    }
+                }
+                Some(ready) = tls_ready_rx.recv() => {
+                    let TlsReadyConnection { stream, addr, permit } = ready;
+                    let (reader, writer) = split(stream);
+                    spawn_connection_handler(
+                        reader,
+                        writer,
+                        addr,
+                        &self.connections_handle,
+                        base_context.clone(),
+                        self.version_mask,
+                        template_rx.clone(),
+                        permit,
+                    ).await;
                 }
             }
         }
@@ -378,11 +441,111 @@ fn default_max_connections() -> u32 {
     }
 }
 
-/// Accepts a new stratum connection, spawning a handler task.
+/// Capacity of the channel that carries handshaken TLS connections back to
+/// the accept loop.
+const TLS_READY_CHANNEL_CAPACITY: usize = 64;
+
+/// A TLS connection that finished its handshake and is ready for stratum.
+struct TlsReadyConnection {
+    stream: TlsStream<TcpStream>,
+    addr: SocketAddr,
+    permit: OwnedSemaphorePermit,
+}
+
+/// Load the certificate, start the reloader and bind the TLS listener.
 ///
-/// Sets TCP_NODELAY, registers the connection, and spawns a tokio task that
-/// runs `handle_connection`. The semaphore permit is moved into the spawned
-/// task so it is released when the connection closes.
+/// Fails closed: a configured TLS listener whose certificate cannot be loaded
+/// stops the server instead of falling back to plain stratum.
+async fn start_tls_listener(
+    tls_settings: &StratumTlsConfig,
+    hostname: &str,
+) -> Result<(TcpListener, TlsAcceptor), Box<dyn std::error::Error + Send>> {
+    let initial_stamps = certificate_file_stamps(&tls_settings.cert_path, &tls_settings.key_path);
+    let initial_key = load_certified_key(&tls_settings.cert_path, &tls_settings.key_path).map_err(
+        |error| -> Box<dyn std::error::Error + Send> {
+            Box::new(std::io::Error::other(format!(
+                "Failed to load the TLS certificate: {error}"
+            )))
+        },
+    )?;
+    let current_key = spawn_certificate_reloader(
+        tls_settings.cert_path.clone(),
+        tls_settings.key_path.clone(),
+        initial_stamps,
+        initial_key,
+        CERTIFICATE_RELOAD_INTERVAL,
+    );
+    let tls_acceptor =
+        build_tls_acceptor(current_key).map_err(|error| -> Box<dyn std::error::Error + Send> {
+            Box::new(std::io::Error::other(format!(
+                "Failed to build the TLS acceptor: {error}"
+            )))
+        })?;
+    let tls_bind_address = format!("{}:{}", hostname, tls_settings.port);
+    let listener = match TcpListener::bind(&tls_bind_address).await {
+        Ok(listener) => listener,
+        Err(error) => {
+            error!("Failed to bind the TLS listener: {error}");
+            return Err(Box::new(error));
+        }
+    };
+    info!("Stratum TLS listener bound to {}", tls_bind_address);
+    Ok((listener, tls_acceptor))
+}
+
+/// Run the TLS handshake for one connection in its own task.
+///
+/// The handshake never runs in the accept loop: a client that connects and
+/// sends nothing would otherwise stall every other miner. On success the
+/// stream goes back to the accept loop, which registers it and spawns the
+/// handler; on failure or timeout the connection and its permit are dropped.
+/// TCP_NODELAY is set first, as on the plain path.
+fn spawn_tls_handshake(
+    stream: TcpStream,
+    addr: SocketAddr,
+    tls_acceptor: TlsAcceptor,
+    permit: OwnedSemaphorePermit,
+    ready_tx: mpsc::Sender<TlsReadyConnection>,
+) {
+    if let Err(error) = stream.set_nodelay(true) {
+        error!("Failed to set TCP_NODELAY for {}: {}", addr, error);
+    }
+    tokio::spawn(async move {
+        match complete_handshake(tls_acceptor, stream, TLS_HANDSHAKE_TIMEOUT, addr).await {
+            Some(tls_stream) => {
+                let ready = TlsReadyConnection {
+                    stream: tls_stream,
+                    addr,
+                    permit,
+                };
+                if ready_tx.send(ready).await.is_err() {
+                    debug!("TLS connection from {} dropped, server is gone", addr);
+                }
+            }
+            None => {
+                debug!("Dropping TLS connection from {}", addr);
+            }
+        }
+    });
+}
+
+/// Wait for the next TLS connection, or forever when no TLS listener is bound.
+async fn accept_tls_connection(
+    listener: &Option<(TcpListener, TlsAcceptor)>,
+) -> std::io::Result<(TcpStream, SocketAddr, TlsAcceptor)> {
+    match listener {
+        Some((tcp_listener, tls_acceptor)) => {
+            let (stream, addr) = tcp_listener.accept().await?;
+            Ok((stream, addr, tls_acceptor.clone()))
+        }
+        None => pending().await,
+    }
+}
+
+/// Accepts a new plain stratum connection, spawning a handler task.
+///
+/// Sets TCP_NODELAY, then hands the split halves to
+/// [`spawn_connection_handler`], which both the plain and the TLS paths use.
 async fn accept_connection(
     stream: TcpStream,
     addr: SocketAddr,
@@ -395,10 +558,42 @@ async fn accept_connection(
     if let Err(e) = stream.set_nodelay(true) {
         error!("Failed to set TCP_NODELAY for {}: {}", addr, e);
     }
+    let (reader, writer) = stream.into_split();
+    spawn_connection_handler(
+        reader,
+        writer,
+        addr,
+        connections_handle,
+        ctx,
+        version_mask,
+        template_rx,
+        connection_permit,
+    )
+    .await;
+}
+
+/// Register a connection and spawn the task that handles it.
+///
+/// Shared by the plain and TLS paths: both hand over a reader and a writer,
+/// which `handle_connection` consumes. The semaphore permit is moved into the
+/// spawned task so it is released when the connection closes.
+#[allow(clippy::too_many_arguments)]
+async fn spawn_connection_handler<R, W>(
+    reader: R,
+    writer: W,
+    addr: SocketAddr,
+    connections_handle: &ClientConnectionsHandle,
+    ctx: StratumContext,
+    version_mask: i32,
+    template_rx: watch::Receiver<Option<Arc<PreparedNotifyParams>>>,
+    connection_permit: OwnedSemaphorePermit,
+) where
+    R: AsyncRead + Unpin + Send + 'static,
+    W: AsyncWrite + Unpin + Send + 'static,
+{
     debug!("New connection from: {}", addr);
 
     let (message_rx, shutdown_rx) = connections_handle.add(addr).await;
-    let (reader, writer) = stream.into_split();
     let buf_reader = BufReader::new(reader);
 
     tokio::spawn(async move {
@@ -417,7 +612,7 @@ async fn accept_connection(
         .await
         .is_err()
         {
-            error!("Error occurred while handling connection {addr}. Closing connection.");
+            error!("Error handling connection {addr}, closing.");
         }
     });
 }
