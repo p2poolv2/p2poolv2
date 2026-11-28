@@ -30,6 +30,7 @@ use p2poolv2_lib::store::writer::{StoreHandle, StoreWriter, write_channel};
 use p2poolv2_lib::stratum::client_connections::start_connections_handler;
 use p2poolv2_lib::stratum::emission::Emission;
 use p2poolv2_lib::stratum::server::StratumServerBuilder;
+use p2poolv2_lib::stratum::tls::StratumTlsConfig;
 use p2poolv2_lib::stratum::work::gbt::start_gbt;
 use p2poolv2_lib::stratum::work::notify::start_notify;
 use p2poolv2_lib::stratum::work::prepared_notify::PreparedNotifyParams;
@@ -37,6 +38,7 @@ use p2poolv2_lib::stratum::work::tracker::start_tracker_actor;
 use p2poolv2_lib::stratum::zmq_listener::{ZmqListener, ZmqListenerTrait};
 use signal::{ShutdownReason, setup_signal_handler};
 use std::fs;
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
@@ -369,6 +371,22 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
     let exit_sender_stratum = exit_sender.clone();
     let exit_receiver_stratum = exit_sender.subscribe();
     let configured_miner_address = stratum_config.miner_address();
+    let stratum_tls_config = match (
+        stratum_config.tls_port,
+        stratum_config.tls_cert_path.as_deref(),
+        stratum_config.tls_key_path.as_deref(),
+    ) {
+        (Some(port), Some(cert_path), Some(key_path)) => Some(StratumTlsConfig {
+            port,
+            cert_path: PathBuf::from(cert_path),
+            key_path: PathBuf::from(key_path),
+        }),
+        (None, None, None) => None,
+        _ => {
+            error!("TLS listener needs tls_port, tls_cert_path and tls_key_path");
+            return Err(ExitCode::FAILURE);
+        }
+    };
 
     tokio::spawn(async move {
         let mut stratum_server = StratumServerBuilder::default()
@@ -392,6 +410,7 @@ pub async fn build_node(config: Config) -> Result<(NodeHandles, NodeRunner), Exi
             .chain_store_handle(chain_store_handle_for_stratum)
             .mode(stratum_config.mode)
             .miner_address(configured_miner_address)
+            .tls(stratum_tls_config)
             .build()
             .await
             .unwrap();
