@@ -228,7 +228,7 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
-      "description": "The coinbase from the latest share on the chain",
+      "description": "The 25 largest outputs of the coinbase in the node's latest stratum job. See the Latest Coinbase: All Outputs table for every output.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -269,7 +269,8 @@
             "lastNotNull"
           ],
           "fields": "",
-          "values": true
+          "values": true,
+          "limit": 25
         },
         "sort": "desc",
         "tooltip": {
@@ -281,9 +282,9 @@
       "pluginVersion": "12.2.0",
       "targets": [
         {
-          "editorMode": "builder",
+          "editorMode": "code",
           "exemplar": false,
-          "expr": "coinbase_output / 100000000",
+          "expr": "topk(25, coinbase_output) / 100000000",
           "format": "table",
           "instant": true,
           "legendFormat": "__auto",
@@ -295,7 +296,7 @@
           }
         }
       ],
-      "title": "Latest Coinbase",
+      "title": "Latest Coinbase: Top 25 Outputs",
       "transformations": [
         {
           "id": "labelsToFields",
@@ -307,9 +308,10 @@
             "excludeByName": {
               "Time": true,
               "__name__": true,
-              "index": true,
               "instance": true,
-              "job": true
+              "job": true,
+              "p2poolv2_instance": true,
+              "index": true
             },
             "includeByName": {},
             "indexByName": {},
@@ -393,6 +395,114 @@
         "type": "prometheus",
         "uid": "${DS_PROMETHEUS}"
       },
+      "description": "Every output of the coinbase in the node's latest stratum job, in BTC. Index is the output's position in the coinbase transaction. OP_RETURN outputs carry no value and are not listed.",
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "BTC"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 8
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 27
+      },
+      "id": 102,
+      "options": {
+        "footer": {
+          "show": true,
+          "reducer": [
+            "sum"
+          ],
+          "fields": [
+            "BTC"
+          ],
+          "countRows": false
+        },
+        "showHeader": true,
+        "sortBy": [
+          {
+            "desc": true,
+            "displayName": "BTC"
+          }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "editorMode": "code",
+          "exemplar": false,
+          "expr": "coinbase_output / 100000000",
+          "format": "table",
+          "instant": true,
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Latest Coinbase: All Outputs",
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "instance": true,
+              "job": true,
+              "p2poolv2_instance": true
+            },
+            "indexByName": {
+              "index": 0,
+              "address": 1,
+              "Value": 2
+            },
+            "renameByName": {
+              "index": "Index",
+              "address": "Address",
+              "Value": "BTC"
+            }
+          }
+        },
+        {
+          "id": "convertFieldType",
+          "options": {
+            "conversions": [
+              {
+                "targetField": "Index",
+                "destinationType": "number"
+              }
+            ],
+            "fields": {}
+          }
+        }
+      ],
+      "type": "table"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
       "description": "Only bitcoin blocks this node can decipher from the share chain are shown: blocks carried by confirmed shares and their uncles, recorded as the node runs and rebuilt when a node syncs. Blocks found before the current share chain started are not shown. Use the explorer link to check whether a block is still on the bitcoin main chain. Chains without a public explorer (testnet5) show no link.",
       "fieldConfig": {
         "defaults": {
@@ -462,7 +572,7 @@
         "h": 10,
         "w": 24,
         "x": 0,
-        "y": 27
+        "y": 37
       },
       "id": 101,
       "options": {
